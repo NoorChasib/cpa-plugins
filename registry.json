@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "auto-baseline",
+      "name": "Auto Baseline",
+      "description": "Learns the newest authentic Claude Code and Codex CLI client fingerprint from inbound requests and promotes it into claude-header-defaults / codex-header-defaults so the proxy's measured baseline follows the client you actually run.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "homepage": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "license": "MIT",
+      "tags": [
+        "Fingerprint",
+        "Baseline",
+        "Headers",
+        "Claude",
+        "Codex"
+      ]
+    }
+  ]
+}

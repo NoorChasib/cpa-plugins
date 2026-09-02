@@ -1,0 +1,98 @@
+# Merge this example into your existing CLIProxyAPI config.yaml.
+# Do not replace unrelated routing, auth, logging, model, or management settings.
+#
+# The plugin edits ONLY these keys of this same file when it promotes a baseline:
+#   claude-header-defaults.user-agent / .package-version / .runtime-version
+#   codex-header-defaults.user-agent
+# Everything else (comments, order, os/arch/timeout, beta-features, ...) is preserved.
+# A copy of the previous file is kept at config.yaml.auto-baseline.bak before each write.
+
+# Optional. When absent CPA uses its compiled defaults (2.1.220 / 0.94.0 / v26.3.0 in
+# v7.2.146); the plugin treats those as the effective baseline and only ever raises it.
+# claude-header-defaults:
+#   user-agent: "claude-cli/2.1.220 (external, cli)"
+#   package-version: "0.94.0"
+#   runtime-version: "v26.3.0"
+
+# Required for a learned Codex baseline to have ANY effect: CPA otherwise forces its
+# compiled Codex User-Agent on every outbound request regardless of codex-header-defaults.
+# codex:
+#   disable-codex-cloaking: true
+
+plugins:
+  enabled: true
+  dir: "plugins"
+
+  # Custom registry for this plugin. The built-in official registry remains
+  # available. Remove this source after moving to an official-store entry.
+  store-sources:
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-auto-baseline/main/registry.json"
+
+  configs:
+    auto-baseline:
+      enabled: true
+
+      # CPA plugin registration/load priority. Unrelated to fingerprint learning.
+      priority: 10
+
+      # Required first-install posture. The plugin computes and logs what it WOULD
+      # promote; switch to false once status shows the expected candidate.
+      dry-run: true
+
+      # Path of the config.yaml to edit. Default: the -config flag of the running
+      # CPA process (read from /proc/self/cmdline on Linux), else <cwd>/config.yaml,
+      # which is /CLIProxyAPI/config.yaml in the official Docker image.
+      # config-path: /CLIProxyAPI/config.yaml
+
+      # Where learned state (pending candidates, history, counters) is persisted.
+      # Relative paths resolve against the CPA working directory; the default lands
+      # inside the persisted plugin volume. Only platform-native shared-library
+      # files (*.so / *.dylib / *.dll) are loaded as plugins, so state.json here
+      # is harmless.
+      state-dir: "plugins/auto-baseline"
+
+      # Where config.yaml.auto-baseline.bak is written before each promotion.
+      # Defaults to state-dir; must be writable and should be persisted.
+      # backup-dir: "plugins/auto-baseline"
+
+      manage-claude: true
+      manage-codex: true
+
+      # Claude Code entrypoints whose fingerprints may be learned. sdk-ts/sdk-py are
+      # Agent SDK hosts (e.g. T3 Code) that drive the real Claude Code binary.
+      claude-entrypoints: [cli, sdk-cli, claude-vscode, sdk-ts, sdk-py]
+
+      # Require the claude-code-20250219 beta in anthropic-beta. count_tokens and
+      # helper requests omit it and simply do not count.
+      require-claude-code-beta: true
+
+      # Anti-poisoning quorum: the SAME tuple (version + package-version +
+      # runtime-version for Claude; full User-Agent for Codex) must be seen this many
+      # times inside the window. Requests without a session header are anonymous:
+      # they count toward min-observations but never toward min-distinct-sessions.
+      # The default of 1 therefore works for clients that omit the header; set 2
+      # when your clients send X-Claude-Code-Session-Id (Claude Code does) or a
+      # Codex Session_id / Thread-Id, so one spoofed session cannot reach quorum.
+      min-observations: 3
+      min-distinct-sessions: 1
+      observation-window: 24h
+
+      # Minimum spacing between config.yaml writes.
+      promotion-cooldown: 60s
+
+      # Never write a baseline below these versions, even if config.yaml carries an
+      # older explicit value. Defaults are the compiled defaults of the audited CPA
+      # build (v7.2.146). After upgrading CPA to a build with a NEWER compiled
+      # default, raise these to that build's default (or set an explicit baseline
+      # above) so the plugin cannot treat the old value as the effective baseline.
+      claude-min-version: 2.1.220
+      codex-min-version: 0.146.0
+
+      # Never promote a provider whose baseline in this file is implicit (compiled
+      # default assumed). Turn on after a CPA upgrade if you would rather write the
+      # baseline once by hand than trust the plugin's assumed defaults.
+      require-explicit-baseline: false
+
+      # Time zone for timestamps on the HTML status view only. Accepts an IANA name
+      # such as America/Los_Angeles or "local". Unknown names fall back to UTC.
+      display-timezone: UTC
