@@ -4,7 +4,7 @@
 
 The plugin was audited against CLIProxyAPI commit `81e1b5374f99c212f196f34956eeed964a46b8fa` (`v7.2.146-3-g81e1b53`). The compiled fingerprint defaults it assumes when `config.yaml` omits a field are those of that build: `claude-cli/2.1.220 (external, cli)` / `0.94.0` / `v26.3.0` and `codex-tui/0.146.0 (...)`. The status route reports this as `assumed_cpa_version` and the HTML view shows it next to the floors.
 
-**After a CPA upgrade** whose compiled default is newer than these, raise `claude-min-version` / `codex-min-version` to the new build's default (or set an explicit `claude-header-defaults` block). Otherwise the plugin keeps treating the older assumed value as the effective baseline and can write a version the new CPA already exceeds, an implicit downgrade. Also revalidate the `docs/architecture.md` file:line references.
+**CPA upgrades need no action.** The assumed default matters only while `config.yaml` has no baseline block. Once the plugin has promoted once, CPA reads the block instead of its compiled constant, so a newer image neither resets nor lowers the baseline and the plugin keeps comparing against the on-disk value. If a newer build compiles in a default above your client's version while the block is still absent, the plugin writes your client's real tuple, which corrects the outbound fingerprint to what you actually run. After a CPA upgrade, revalidate the `docs/architecture.md` file:line references if you maintain the plugin.
 
 ## The plugin does not load
 

@@ -58,7 +58,7 @@ Confirm no secrets, real management keys, or captured request bodies are in fixt
 ## 7. Tag and push
 
 ```bash
-VERSION=0.1.1
+VERSION=0.1.2
 git tag -a "v${VERSION}" -m "auto-baseline v${VERSION}"
 git push origin "v${VERSION}"
 ```
@@ -70,7 +70,7 @@ git push origin "v${VERSION}"
 ## 9. Verify published assets
 
 ```bash
-VERSION=0.1.1
+VERSION=0.1.2
 mkdir -p "dist/release-v${VERSION}" && cd "dist/release-v${VERSION}"
 gh release download "v${VERSION}" --repo NoorChasib/cpa-plugin-auto-baseline
 cd ../..

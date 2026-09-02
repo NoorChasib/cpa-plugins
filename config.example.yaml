@@ -80,17 +80,17 @@ plugins:
       # Minimum spacing between config.yaml writes.
       promotion-cooldown: 60s
 
-      # Never write a baseline below these versions, even if config.yaml carries an
-      # older explicit value. Defaults are the compiled defaults of the audited CPA
-      # build (v7.2.146). After upgrading CPA to a build with a NEWER compiled
-      # default, raise these to that build's default (or set an explicit baseline
-      # above) so the plugin cannot treat the old value as the effective baseline.
+      # Floors against spoofed ancient versions: never write a baseline below these,
+      # even if config.yaml carries an older explicit value. Defaults are the compiled
+      # defaults of the audited CPA build (v7.2.146). They do not need adjusting after
+      # CPA upgrades; once a baseline block exists in this file CPA uses it instead of
+      # its compiled constant, so an upgrade never resets or lowers the baseline.
       claude-min-version: 2.1.220
       codex-min-version: 0.146.0
 
-      # Never promote a provider whose baseline in this file is implicit (compiled
-      # default assumed). Turn on after a CPA upgrade if you would rather write the
-      # baseline once by hand than trust the plugin's assumed defaults.
+      # Optional stricter mode: never promote a provider whose baseline in this file
+      # is implicit (compiled default assumed). Only matters before the first
+      # promotion; leave false for hands-off operation.
       require-explicit-baseline: false
 
       # Time zone for timestamps on the HTML status view only. Accepts an IANA name

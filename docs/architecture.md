@@ -301,12 +301,15 @@ baseline.** No CPA change is required.
 
 1. **Compiled-default assumption.** When `config.yaml` omits a field the
    plugin assumes the defaults of `v7.2.146-3-g81e1b53` (shown in status as
-   the assumed CPA build, next to the floors). After upgrading CPA to a build
-   with a newer compiled default, the operator must raise
-   `claude-min-version` / `codex-min-version` to that build's default (or set
-   an explicit baseline); otherwise the plugin can regard the older assumed
-   value as the effective baseline and write a version CPA already exceeds,
-   an implicit downgrade.
+   the assumed CPA build, next to the floors). The assumption is live only
+   until the first promotion: from then on the block exists, CPA reads it in
+   preference to its compiled constant, and the plugin compares against the
+   on-disk value. A CPA upgrade therefore never resets or lowers a promoted
+   baseline. If a newer build compiles in a default above the client's real
+   version while the block is still absent, the plugin writes the client's
+   real tuple; that corrects the outbound fingerprint to the client actually
+   in use rather than downgrading it. `require-explicit-baseline: true` lets
+   an operator opt out of the assumption entirely.
 2. **Entrypoint-specific measured shapes.** Promoting the baseline to the
    observed version means native `cli` / `sdk-cli` / `claude-vscode` clients at
    that exact version pass through with their own measured shape, which is the
