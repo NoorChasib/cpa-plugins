@@ -54,15 +54,20 @@ type ApplyFunc func(path, backupDir string, candidate fingerprint.Candidate, che
 // ReadFunc is the config.yaml read seam.
 type ReadFunc func(path string) (configfile.Snapshot, error)
 
+// DryRunApplyFunc is the config.yaml dry-run edit seam. changed reports
+// whether the file was rewritten.
+type DryRunApplyFunc func(path, backupDir string, enabled bool, check func(configfile.Snapshot) error) (configfile.Snapshot, bool, error)
+
 // Deps are the engine's injected collaborators.
 type Deps struct {
 	Clock    clock.Clock
 	Log      func(level, message string)
 	RunAsync func(func())
-	// Apply / Read / DetectMode default to the configfile package.
-	Apply      ApplyFunc
-	Read       ReadFunc
-	DetectMode func() configfile.DeploymentMode
+	// Apply / ApplyDryRun / Read / DetectMode default to the configfile package.
+	Apply       ApplyFunc
+	ApplyDryRun DryRunApplyFunc
+	Read        ReadFunc
+	DetectMode  func() configfile.DeploymentMode
 }
 
 // Engine is the plugin's stateful core.
@@ -118,6 +123,13 @@ type Engine struct {
 	// awaitingReload records, per provider, when a written promotion is
 	// still waiting for CPA's hot reload to be observed.
 	awaitingReload map[fingerprint.Provider]time.Time
+	// dryRunPending is set after the dry-run toggle wrote config.yaml and
+	// until a reconfigure delivers the new value (or reverts it).
+	dryRunPending   bool
+	dryRunTarget    bool
+	dryRunWrittenAt time.Time
+	// applyDryRun is the config.yaml dry-run edit seam (tests inject fakes).
+	applyDryRun DryRunApplyFunc
 
 	stateLoaded     bool
 	stateError      string
@@ -158,6 +170,9 @@ func New(cfg config.Config, deps Deps) *Engine {
 	if deps.Read == nil {
 		deps.Read = configfile.Read
 	}
+	if deps.ApplyDryRun == nil {
+		deps.ApplyDryRun = configfile.ApplyDryRun
+	}
 	if deps.DetectMode == nil {
 		deps.DetectMode = configfile.DetectDeploymentMode
 	}
@@ -168,6 +183,7 @@ func New(cfg config.Config, deps Deps) *Engine {
 		log:            deps.Log,
 		runAsync:       deps.RunAsync,
 		apply:          deps.Apply,
+		applyDryRun:    deps.ApplyDryRun,
 		read:           deps.Read,
 		detect:         deps.DetectMode,
 		state:          statefile.New(),
@@ -294,6 +310,11 @@ func (e *Engine) Reconfigure(cfg config.Config) {
 	if rulesChanged {
 		e.learner.Reset()
 		e.mutations++
+	}
+	if e.dryRunPending && cfg.DryRun == e.dryRunTarget {
+		// CPA reloaded the file the toggle wrote: the runtime flag now
+		// matches the requested value.
+		e.dryRunPending = false
 	}
 	e.mu.Unlock()
 	wasFaulted, _ := e.isFaulted()
@@ -775,7 +796,7 @@ func (e *Engine) promoteProvider(provider fingerprint.Provider, forced *fingerpr
 			}
 		}
 	}
-	dryRun := e.cfg.DryRun
+	dryRun := e.effectiveDryRunLocked()
 	requireExplicit := e.cfg.RequireExplicitBaseline
 	path, backupDir := e.configPath, e.backupDir
 	floor := e.cfg.MinVersion(provider)
@@ -1060,6 +1081,157 @@ func (e *Engine) saveStateTo(dir string, force bool) {
 	if err != nil {
 		e.log("warn", "auto-baseline: failed to save state: "+sanitize.Error(err))
 	}
+}
+
+// effectiveDryRunLocked is the dry-run flag the promotion path obeys. A
+// pending switch TO dry-run takes effect immediately (the operator asked for
+// writes to stop; CPA's reload only catches the runtime config up), while a
+// pending switch to live writes waits for plugin.reconfigure, so nothing can
+// be written under a config CPA has not yet applied.
+func (e *Engine) effectiveDryRunLocked() bool {
+	return e.cfg.DryRun || (e.dryRunPending && e.dryRunTarget)
+}
+
+// DryRunOutcome is the result of SetDryRun.
+type DryRunOutcome struct {
+	// Status is the HTTP status the management route should answer with.
+	Status int    `json:"-"`
+	Result string `json:"status"`
+	Detail string `json:"detail"`
+	// DryRun is the value now on disk (after a successful write) or the
+	// current runtime value otherwise.
+	DryRun bool `json:"dry_run"`
+	// AwaitingReload is true after a successful write until CPA's reload
+	// delivers the new value through plugin.reconfigure.
+	AwaitingReload bool `json:"awaiting_reload"`
+}
+
+// SetDryRun edits plugins.configs.auto-baseline.dry-run in CPA's config.yaml
+// through the same read-modify-write discipline as a promotion (shape
+// refusals, backup, re-hash, in-place write + verify, deployment-mode and
+// writability guards). It refuses with 409 while a promotion write is in
+// flight and with 503 when writes are disabled. The runtime flag itself only
+// flips when CPA hot-reloads and reconfigures the plugin; until then status
+// reports the toggle as awaiting reload.
+func (e *Engine) SetDryRun(enabled bool) DryRunOutcome {
+	path, backupDir, current, early := e.beginDryRunToggle(enabled)
+	if early != nil {
+		return *early
+	}
+	defer e.workers.Done()
+	defer func() {
+		// Release the slot and honour any work that arrived while it was
+		// held: observations that reached quorum set rescan, and forces were
+		// queued. A real worker must process them.
+		e.mu.Lock()
+		e.promotionInFlight = false
+		pending := e.rescan || len(e.forcedQueue) > 0
+		e.rescan = false
+		e.mu.Unlock()
+		if pending {
+			e.startPromotionWorker()
+		}
+	}()
+	defer e.recoverWorker("dry-run toggle")
+
+	snap, changed, err := e.applyDryRun(path, backupDir, enabled, func(snap configfile.Snapshot) error {
+		if !snap.InstancePresent {
+			// Reported as the more actionable problem: nothing to toggle.
+			return configfile.ErrPluginSubtreeMissing
+		}
+		if !snap.PluginsEnabled || !snap.InstanceEnabled {
+			return &checkError{reason: DecisionPluginDisabledOnDisk, detail: "plugins.enabled or plugins.configs.auto-baseline.enabled is not true in config.yaml"}
+		}
+		return nil
+	})
+	if err != nil {
+		e.recordDryRunFailure(snap, enabled, err)
+		e.log("warn", fmt.Sprintf("auto-baseline: dry-run toggle failed: %s", sanitize.Error(err)))
+		status := 500
+		if errors.Is(err, configfile.ErrPluginSubtreeMissing) || errors.Is(err, configfile.ErrUnsupportedShape) || errors.Is(err, configfile.ErrDuplicateKey) || errors.Is(err, configfile.ErrMultiDocument) || errors.Is(err, configfile.ErrCycle) {
+			status = 422
+		}
+		var ce *checkError
+		if errors.As(err, &ce) {
+			status = 409
+		}
+		return DryRunOutcome{Status: status, Result: "error", Detail: sanitize.Error(err), DryRun: current}
+	}
+	if !changed {
+		// The file already carried the target: CPA will not reload, so do
+		// not arm a marker that could never be confirmed (and do not reset
+		// the warning clock of one that is already pending).
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.applySnapshotLocked(snap)
+		return DryRunOutcome{Status: 200, Result: "unchanged", Detail: fmt.Sprintf("config.yaml already carries dry-run: %t", enabled), DryRun: e.effectiveDryRunLocked(), AwaitingReload: e.dryRunPending}
+	}
+	now := e.clk.Now()
+	e.mu.Lock()
+	e.dryRunPending = true
+	e.dryRunTarget = enabled
+	e.dryRunWrittenAt = now
+	e.state.LastError = ""
+	e.state.LastErrorAt = time.Time{}
+	e.mutations++
+	e.mu.Unlock()
+	e.log("info", fmt.Sprintf("auto-baseline: dry-run set to %t in config.yaml by operator; CPA will hot-reload", enabled))
+	e.saveState(false)
+	detail := fmt.Sprintf("config.yaml updated; dry-run becomes %t when CPA reloads", enabled)
+	if enabled {
+		detail = "config.yaml updated; writes are suspended now and CPA will reload the flag"
+	}
+	return DryRunOutcome{Status: 200, Result: "ok", Detail: detail, DryRun: enabled, AwaitingReload: true}
+}
+
+// beginDryRunToggle validates the request and, when it may proceed, takes
+// the promotion-worker slot and a WaitGroup admission. Every exit path runs
+// under a deferred unlock.
+func (e *Engine) beginDryRunToggle(enabled bool) (path, backupDir string, current bool, early *DryRunOutcome) {
+	faulted, reason := e.isFaulted()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current = e.cfg.DryRun
+	if !e.started || e.stopped {
+		return "", "", current, &DryRunOutcome{Status: 503, Result: "unavailable", Detail: "plugin is disabled or stopped", DryRun: current}
+	}
+	if e.promotionInFlight {
+		return "", "", current, &DryRunOutcome{Status: 409, Result: "busy", Detail: "a promotion write is in flight; retry in a moment", DryRun: current}
+	}
+	if e.cfg.DryRun == enabled && !e.dryRunPending {
+		return "", "", current, &DryRunOutcome{Status: 200, Result: "unchanged", Detail: fmt.Sprintf("dry-run is already %t", enabled), DryRun: enabled}
+	}
+	// Reuse the write barrier, but the dry-run flag itself must not block
+	// its own toggle and a stopped engine was handled above.
+	blocked := ""
+	switch {
+	case faulted:
+		blocked = "plugin is faulted: " + reason
+	case e.modeUnsupported:
+		blocked = fmt.Sprintf("CPA runs in %s mode (%s) and config-path is not set; automatic writes are disabled", e.mode.Name, e.mode.Reason)
+	case !e.configExists || !e.configWritable:
+		blocked = e.configError
+	case !e.backupWritable:
+		blocked = e.backupError
+	}
+	if blocked != "" {
+		return "", "", current, &DryRunOutcome{Status: 503, Result: "unavailable", Detail: blocked, DryRun: current}
+	}
+	// Hold the worker slot so no promotion can start mid-edit.
+	e.promotionInFlight = true
+	e.workers.Add(1)
+	return e.configPath, e.backupDir, current, nil
+}
+
+// recordDryRunFailure records a failed toggle under the lock with a deferred
+// unlock so a panic inside cannot leave mu held.
+func (e *Engine) recordDryRunFailure(snap configfile.Snapshot, enabled bool, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if snap.Path != "" {
+		e.applySnapshotLocked(snap)
+	}
+	e.setErrorLocked(fmt.Errorf("set dry-run=%t: %w", enabled, err))
 }
 
 // Reset discards pending candidates (baselines and history are kept).

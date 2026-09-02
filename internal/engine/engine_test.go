@@ -45,15 +45,16 @@ func (l *logSink) count(sub string) int {
 func (l *logSink) contains(sub string) bool { return l.count(sub) > 0 }
 
 type harness struct {
-	t      *testing.T
-	config string
-	clk    *clock.Fake
-	logs   *logSink
-	cfg    config.Config
-	eng    *Engine
-	mode   configfile.DeploymentMode
-	apply  ApplyFunc
-	async  func(func())
+	t           *testing.T
+	config      string
+	clk         *clock.Fake
+	logs        *logSink
+	cfg         config.Config
+	eng         *Engine
+	mode        configfile.DeploymentMode
+	apply       ApplyFunc
+	dryRunApply DryRunApplyFunc
+	async       func(func())
 }
 
 // baseConfig enables the plugin on disk: the promotion worker refuses to
@@ -76,6 +77,10 @@ func withApply(apply ApplyFunc) harnessOption {
 
 func withMode(mode configfile.DeploymentMode) harnessOption {
 	return func(h *harness) { h.mode = mode }
+}
+
+func withDryRunApply(apply DryRunApplyFunc) harnessOption {
+	return func(h *harness) { h.dryRunApply = apply }
 }
 
 func withGoroutines() harnessOption {
@@ -106,11 +111,12 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 
 func (h *harness) newEngine(cfg config.Config) *Engine {
 	return New(cfg, Deps{
-		Clock:      h.clk,
-		Log:        h.logs.log,
-		RunAsync:   h.async,
-		Apply:      h.apply,
-		DetectMode: func() configfile.DeploymentMode { return h.mode },
+		Clock:       h.clk,
+		Log:         h.logs.log,
+		RunAsync:    h.async,
+		Apply:       h.apply,
+		ApplyDryRun: h.dryRunApply,
+		DetectMode:  func() configfile.DeploymentMode { return h.mode },
 	})
 }
 
@@ -1406,5 +1412,246 @@ func TestReconfigureWriteChangeDrainsAndGenerationAbortsStaleAttempt(t *testing.
 	h2.eng.mu.Unlock()
 	if err := h2.eng.preWriteAbort(gen, fingerprint.ProviderClaude, fingerprint.Candidate{}); !errors.Is(err, errGeneration) {
 		t.Errorf("preWriteAbort = %v, want errGeneration", err)
+	}
+}
+
+func TestSetDryRunTogglesConfigAndAwaitsReload(t *testing.T) {
+	h := newHarness(t, withConfig(func(c *config.Config) { c.DryRun = true }))
+	if err := os.WriteFile(h.config, []byte("port: 1\nplugins:\n  enabled: true\n  configs:\n    auto-baseline:\n      enabled: true\n      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.Start()
+	out := h.eng.SetDryRun(false)
+	if out.Status != 200 || out.Result != "ok" || !out.AwaitingReload || out.DryRun {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if text := h.readConfig(); !strings.Contains(text, "dry-run: false") {
+		t.Errorf("config not updated:\n%s", text)
+	}
+	if _, err := os.Stat(h.backupPath()); err != nil {
+		t.Errorf("backup missing: %v", err)
+	}
+	snap := h.status()
+	if !snap.DryRun || !snap.DryRunAwaitingReload || snap.DryRunTarget {
+		t.Errorf("status = dry_run=%t awaiting=%t target=%t", snap.DryRun, snap.DryRunAwaitingReload, snap.DryRunTarget)
+	}
+	if !h.logs.contains("dry-run set to false") {
+		t.Errorf("not logged: %v", h.logs.lines)
+	}
+	// Same value again while pending is still a write attempt (no-op on
+	// disk); a genuinely equal, non-pending value is "unchanged".
+	h.clk.Advance(reloadGracePeriod + time.Minute)
+	if w := h.status().Warnings; len(w) == 0 || !strings.Contains(strings.Join(w, "\n"), "dry-run was set to false") {
+		t.Errorf("no grace warning: %v", w)
+	}
+	// CPA reloads: reconfigure with the new value confirms the toggle.
+	live := h.cfg
+	live.DryRun = false
+	h.eng.Reconfigure(live)
+	snap = h.status()
+	if snap.DryRun || snap.DryRunAwaitingReload {
+		t.Errorf("not confirmed: dry_run=%t awaiting=%t", snap.DryRun, snap.DryRunAwaitingReload)
+	}
+	if out := h.eng.SetDryRun(false); out.Status != 200 || out.Result != "unchanged" {
+		t.Errorf("unchanged outcome = %+v", out)
+	}
+	// Switching back to dry-run works the same way.
+	if out := h.eng.SetDryRun(true); out.Status != 200 || !out.AwaitingReload {
+		t.Errorf("re-enable = %+v", out)
+	}
+	if !strings.Contains(h.readConfig(), "dry-run: true") {
+		t.Error("config not switched back")
+	}
+}
+
+func TestSetDryRunRefusals(t *testing.T) {
+	// 409 while a promotion write is in flight.
+	gate := newGatedApply(configfile.Apply)
+	h := newHarness(t, withGoroutines(), withApply(gate.apply))
+	h.eng.Start()
+	h.observeClaude("a", "b", "c")
+	gate.awaitEntry(t)
+	if out := h.eng.SetDryRun(true); out.Status != 409 {
+		t.Errorf("in-flight outcome = %+v", out)
+	}
+	close(gate.release)
+	h.waitWorkerIdle()
+
+	// 503 in an unsupported deployment mode.
+	h2 := newHarness(t, withMode(configfile.DeploymentMode{Name: "home", Reason: "-home-jwt flag"}), withConfig(func(c *config.Config) { c.ConfigPath = "" }))
+	h2.eng.Start()
+	if out := h2.eng.SetDryRun(true); out.Status != 503 || !strings.Contains(out.Detail, "home mode") {
+		t.Errorf("mode outcome = %+v", out)
+	}
+
+	// 422 when the plugin subtree is missing: never created.
+	h3 := newHarness(t)
+	if err := os.WriteFile(h3.config, []byte("port: 1\nplugins:\n  enabled: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h3.eng.Start()
+	out := h3.eng.SetDryRun(true)
+	if out.Status != 422 || !strings.Contains(out.Detail, "plugin_subtree_missing") {
+		t.Errorf("missing subtree outcome = %+v", out)
+	}
+	if got := h3.readConfig(); got != "port: 1\nplugins:\n  enabled: true\n" {
+		t.Errorf("subtree was created:\n%s", got)
+	}
+	if le := h3.status().LastError; !strings.Contains(le, "plugin_subtree_missing") {
+		t.Errorf("last error = %q", le)
+	}
+
+	// 503 when stopped.
+	h4 := newHarness(t)
+	h4.eng.Start()
+	h4.eng.Stop()
+	if out := h4.eng.SetDryRun(true); out.Status != 503 {
+		t.Errorf("stopped outcome = %+v", out)
+	}
+
+	// 409 when the plugin is disabled on disk (the same rule promotions use).
+	h5 := newHarness(t)
+	if err := os.WriteFile(h5.config, []byte("plugins:\n  enabled: false\n  configs:\n    auto-baseline:\n      enabled: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h5.eng.Start()
+	if out := h5.eng.SetDryRun(true); out.Status != 409 || !strings.Contains(out.Detail, DecisionPluginDisabledOnDisk) {
+		t.Errorf("disabled-on-disk outcome = %+v", out)
+	}
+}
+
+func TestPendingDryRunSuspendsWritesImmediately(t *testing.T) {
+	// Runtime is live; the operator switches to dry-run. Before CPA reloads,
+	// a quorum must NOT write baselines.
+	h := newHarness(t)
+	if err := os.WriteFile(h.config, []byte(baseConfig+"      dry-run: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.Start()
+	if out := h.eng.SetDryRun(true); out.Status != 200 || !out.AwaitingReload || !out.DryRun {
+		t.Fatalf("outcome = %+v", out)
+	}
+	h.observeClaude("a", "b", "c")
+	if strings.Contains(h.readConfig(), "claude-header-defaults") {
+		t.Fatalf("baseline written while a switch to dry-run was pending:\n%s", h.readConfig())
+	}
+	if lp := h.claude().LastPromotion; lp == nil || !lp.DryRun {
+		t.Errorf("expected a dry-run record, got %+v", lp)
+	}
+	// A forced promotion is also held to dry-run.
+	h.eng.ReportObservation(Report{Provider: "codex", UserAgent: codexUA, Force: true})
+	if strings.Contains(h.readConfig(), "codex-header-defaults") {
+		t.Error("forced promotion wrote while dry-run was pending")
+	}
+
+	// The other direction waits for reconfigure: runtime dry-run, operator
+	// switches to live; quorum before the reload must still not write.
+	h2 := newHarness(t, withConfig(func(c *config.Config) { c.DryRun = true }))
+	if err := os.WriteFile(h2.config, []byte(baseConfig+"      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h2.eng.Start()
+	if out := h2.eng.SetDryRun(false); out.Status != 200 || !out.AwaitingReload {
+		t.Fatalf("outcome = %+v", out)
+	}
+	h2.observeClaude("a", "b", "c")
+	if strings.Contains(h2.readConfig(), "claude-header-defaults") {
+		t.Fatal("baseline written before CPA applied the switch to live writes")
+	}
+	live := h2.cfg
+	live.DryRun = false
+	h2.eng.Reconfigure(live)
+	if !strings.Contains(h2.readConfig(), "claude-header-defaults") {
+		t.Error("promotion did not proceed after the reload applied live writes")
+	}
+}
+
+func TestSetDryRunHonoursWorkArrivingDuringToggle(t *testing.T) {
+	// Runtime is dry-run; the operator switches to live. While the toggle
+	// holds the worker slot, three observations reach quorum and set rescan;
+	// releasing the slot must launch a real worker. The write itself is a
+	// dry-run record here (the reload has not applied live writes yet), which
+	// is exactly what proves the worker ran.
+	h := newHarness(t, withConfig(func(c *config.Config) { c.DryRun = true }))
+	h.dryRunApply = func(path, backupDir string, enabled bool, check func(configfile.Snapshot) error) (configfile.Snapshot, bool, error) {
+		h.observeClaude("a", "b", "c")
+		h.eng.mu.Lock()
+		rescan := h.eng.rescan
+		h.eng.mu.Unlock()
+		if !rescan {
+			t.Error("observations during the toggle did not set rescan")
+		}
+		return configfile.ApplyDryRun(path, backupDir, enabled, check)
+	}
+	h.eng = h.newEngine(h.cfg)
+	if err := os.WriteFile(h.config, []byte(baseConfig+"      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.Start()
+	if out := h.eng.SetDryRun(false); out.Status != 200 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if lp := h.claude().LastPromotion; lp == nil || !lp.DryRun || lp.Observations != 3 {
+		t.Errorf("quorum reached during the toggle was lost: %+v", lp)
+	}
+	// Same for a force queued during the toggle.
+	var h3 *harness
+	h3 = newHarness(t, withConfig(func(c *config.Config) { c.DryRun = true }), withDryRunApply(func(path, backupDir string, enabled bool, check func(configfile.Snapshot) error) (configfile.Snapshot, bool, error) {
+		h3.eng.ReportObservation(Report{Provider: "codex", UserAgent: codexUA, Force: true})
+		return configfile.ApplyDryRun(path, backupDir, enabled, check)
+	}))
+	if err := os.WriteFile(h3.config, []byte(baseConfig+"      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h3.eng.Start()
+	h3.eng.SetDryRun(false)
+	if lp := h3.codex().LastPromotion; lp == nil || !lp.Forced || !lp.DryRun {
+		t.Errorf("force queued during the toggle was lost: %+v", lp)
+	}
+}
+
+func TestSetDryRunNoopDoesNotArmReloadMarker(t *testing.T) {
+	// Disk already says dry-run: true while the runtime is still live (CPA
+	// has not reloaded yet, or the file was edited by hand): writing again
+	// would be a no-op CPA never reloads, so no marker may be armed.
+	h := newHarness(t)
+	if err := os.WriteFile(h.config, []byte(baseConfig+"      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.eng.Start()
+	before := h.readConfig()
+	out := h.eng.SetDryRun(true)
+	if out.Status != 200 || out.Result != "unchanged" || out.AwaitingReload {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if h.readConfig() != before {
+		t.Error("no-op rewrote the file")
+	}
+	if s := h.status(); s.DryRunAwaitingReload {
+		t.Error("marker armed for a no-op")
+	}
+	if _, err := os.Stat(h.backupPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Error("backup written for a no-op")
+	}
+	// A pending marker's clock is not reset by a repeated no-op request.
+	h2 := newHarness(t)
+	if err := os.WriteFile(h2.config, []byte(baseConfig+"      dry-run: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h2.eng.Start()
+	if out := h2.eng.SetDryRun(true); out.Result != "ok" {
+		t.Fatalf("first toggle = %+v", out)
+	}
+	h2.eng.mu.Lock()
+	written := h2.eng.dryRunWrittenAt
+	h2.eng.mu.Unlock()
+	h2.clk.Advance(time.Minute)
+	if out := h2.eng.SetDryRun(true); out.Result != "unchanged" || !out.AwaitingReload {
+		t.Fatalf("repeat = %+v", out)
+	}
+	h2.eng.mu.Lock()
+	defer h2.eng.mu.Unlock()
+	if !h2.eng.dryRunWrittenAt.Equal(written) || !h2.eng.dryRunPending {
+		t.Error("repeat request reset the pending marker clock")
 	}
 }

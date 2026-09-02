@@ -33,6 +33,9 @@ const (
 	keyPackageVersion       = "package-version"
 	keyRuntimeVersion       = "runtime-version"
 	keyDisableCodexCloaking = "disable-codex-cloaking"
+	keyPlugins              = "plugins"
+	keyConfigs              = "configs"
+	keyDryRun               = "dry-run"
 
 	// BackupFileName is written into the backup directory before each write.
 	BackupFileName = "config.yaml.auto-baseline.bak"
@@ -63,6 +66,10 @@ var (
 	// ErrCycle is returned when aliases or merge keys form a cycle. Following
 	// it would overflow the stack and kill the host process.
 	ErrCycle = errors.New("unsupported_config_shape: alias or merge-key cycle in config file")
+	// ErrPluginSubtreeMissing is returned by the dry-run toggle when
+	// plugins.configs.auto-baseline does not exist: the plugin only ever
+	// edits keys inside a subtree the operator already created.
+	ErrPluginSubtreeMissing = errors.New("plugin_subtree_missing: plugins.configs.auto-baseline is not present in config.yaml")
 )
 
 // Traversal bounds for alias / merge-key resolution.
@@ -108,6 +115,14 @@ type Snapshot struct {
 	// reload without calling quiesce, so the file is the authority.
 	PluginsEnabled  bool
 	InstanceEnabled bool
+	// DryRun mirrors plugins.configs.auto-baseline.dry-run on disk (false
+	// when absent, like the plugin's own default). DryRunPresent reports
+	// whether the key exists.
+	DryRun        bool
+	DryRunPresent bool
+	// InstancePresent reports whether plugins.configs.auto-baseline exists
+	// at all; the dry-run toggle refuses to create it.
+	InstancePresent bool
 }
 
 // Blocked reports why the provider block cannot be compared against or
@@ -313,14 +328,14 @@ func parse(path string, raw []byte) (Snapshot, *yaml.Node, error) {
 		snap.DisableCodexCloaking = b
 	}
 
-	pluginsNode, err := resolvedLookup(root, "plugins")
+	pluginsNode, err := resolvedLookup(root, keyPlugins)
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
 	if b, ok := boolAt(pluginsNode, "enabled"); ok {
 		snap.PluginsEnabled = b
 	}
-	configsNode, err := resolvedLookup(pluginsNode, "configs")
+	configsNode, err := resolvedLookup(pluginsNode, keyConfigs)
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
@@ -328,8 +343,13 @@ func parse(path string, raw []byte) (Snapshot, *yaml.Node, error) {
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
+	snap.InstancePresent = instanceNode != nil && instanceNode.Kind == yaml.MappingNode
 	if b, ok := boolAt(instanceNode, "enabled"); ok {
 		snap.InstanceEnabled = b
+	}
+	if b, ok := boolAt(instanceNode, keyDryRun); ok {
+		snap.DryRun = b
+		snap.DryRunPresent = true
 	}
 	return snap, &doc, nil
 }
@@ -587,44 +607,66 @@ func effectiveCodex(block *yaml.Node) Effective {
 //
 // The returned Snapshot reflects the state read in step 1 (before the edit).
 func Apply(path, backupDir string, candidate fingerprint.Candidate, check func(Snapshot) error) (Snapshot, error) {
+	snap, _, err := applyEdit(path, backupDir, check, func(doc *yaml.Node, raw []byte) ([]byte, error) {
+		return render(doc, raw, candidate)
+	})
+	return snap, err
+}
+
+// ApplyDryRun sets plugins.configs.auto-baseline.dry-run in config.yaml with
+// the same read-modify-write discipline as Apply. It refuses when the plugin
+// subtree does not exist (ErrPluginSubtreeMissing) rather than creating it.
+// changed reports whether the file was actually rewritten; a file that
+// already carried the target value is left untouched (no backup, no write,
+// nothing for CPA's watcher to reload).
+func ApplyDryRun(path, backupDir string, enabled bool, check func(Snapshot) error) (snap Snapshot, changed bool, err error) {
+	return applyEdit(path, backupDir, check, func(doc *yaml.Node, raw []byte) ([]byte, error) {
+		return renderDryRun(doc, raw, enabled)
+	})
+}
+
+// applyEdit is the shared read-modify-write cycle behind Apply and
+// ApplyDryRun; edit produces the new bytes from the parsed document. changed
+// is false when the rendered bytes equal the file and nothing was written.
+func applyEdit(path, backupDir string, check func(Snapshot) error, edit func(doc *yaml.Node, raw []byte) ([]byte, error)) (Snapshot, bool, error) {
 	raw, err := readBounded(path)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, false, err
 	}
 	snap, doc, err := parse(path, raw)
 	if err != nil {
-		return snap, err
+		return snap, false, err
 	}
 	if check != nil {
 		if err := check(snap); err != nil {
-			return snap, err
+			return snap, false, err
 		}
 	}
-	updated, err := render(doc, raw, candidate)
+	updated, err := edit(doc, raw)
 	if err != nil {
-		return snap, err
+		return snap, false, err
 	}
 	if bytes.Equal(updated, raw) {
 		// Nothing to write; do not disturb the watcher.
-		return snap, nil
+		return snap, false, nil
 	}
 	if err := writeBackup(backupDir, raw); err != nil {
-		return snap, err
+		return snap, false, err
 	}
 	// Detect concurrent external edits right before the destructive write.
 	// The backup above may have taken time; re-read so the bytes we would
 	// restore on failure are the freshest known-good content.
 	current, err := readBounded(path)
 	if err != nil {
-		return snap, err
+		return snap, false, err
 	}
 	if hash(current) != snap.SHA256 {
-		return snap, ErrChanged
+		return snap, false, ErrChanged
 	}
 	if err := writeInPlace(path, updated, current); err != nil {
-		return snap, err
+		return snap, false, err
 	}
-	return snap, nil
+	return snap, true, nil
 }
 
 // render applies the edit to the parsed document and encodes it. raw is the
@@ -666,6 +708,80 @@ func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", candidate.Provider)
 	}
+	return encodeDocument(doc, raw)
+}
+
+// renderDryRun edits plugins.configs.auto-baseline.dry-run. Every mapping on
+// the path must already exist as a plain mapping (no alias, merge, sequence,
+// scalar); a missing subtree is refused rather than created.
+func renderDryRun(doc *yaml.Node, raw []byte, enabled bool) ([]byte, error) {
+	if doc == nil {
+		doc = &yaml.Node{}
+	}
+	root, err := ensureRoot(doc)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDuplicateKeys(root); err != nil {
+		return nil, err
+	}
+	node := root
+	for _, key := range []string{keyPlugins, keyConfigs, pluginID} {
+		next, err := lookupExplicit(node, key)
+		if err != nil {
+			return nil, err
+		}
+		if next == nil {
+			return nil, ErrPluginSubtreeMissing
+		}
+		if next.Kind != yaml.MappingNode || hasMergeKey(next) {
+			return nil, ErrUnsupportedShape
+		}
+		if err := checkDuplicateKeys(next); err != nil {
+			return nil, err
+		}
+		node = next
+	}
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	if err := setBoolScalar(node, keyDryRun, value); err != nil {
+		return nil, err
+	}
+	return encodeDocument(doc, raw)
+}
+
+// setBoolScalar is setScalar for a plain (unquoted) !!bool value.
+func setBoolScalar(mapping *yaml.Node, key, value string) error {
+	v, err := lookupExplicit(mapping, key)
+	if err != nil {
+		return err
+	}
+	if v != nil {
+		if v.Kind == yaml.AliasNode {
+			return ErrUnsupportedShape
+		}
+		if v.Kind != yaml.ScalarNode && !isEmptyScalar(v) {
+			return ErrUnsupportedShape
+		}
+		v.Kind = yaml.ScalarNode
+		v.Tag = "!!bool"
+		v.Value = value
+		v.Style = 0
+		v.Content = nil
+		return nil
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value},
+	)
+	return nil
+}
+
+// encodeDocument serializes doc with CPA's indentation, preserving the
+// original trailing-newline convention.
+func encodeDocument(doc *yaml.Node, raw []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)

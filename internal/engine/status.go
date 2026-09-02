@@ -21,10 +21,14 @@ type Snapshot struct {
 	Stopped     bool      `json:"stopped"`
 	// Faulted is set when a plugin goroutine panicked; writes are suspended
 	// until the next reconfigure.
-	Faulted         bool   `json:"faulted"`
-	FaultReason     string `json:"fault_reason,omitempty"`
-	DryRun          bool   `json:"dry_run"`
-	DisplayTimezone string `json:"display_timezone"`
+	Faulted     bool   `json:"faulted"`
+	FaultReason string `json:"fault_reason,omitempty"`
+	DryRun      bool   `json:"dry_run"`
+	// DryRunAwaitingReload is set after the dry-run toggle wrote config.yaml
+	// and until CPA's reload delivers DryRunTarget through plugin.reconfigure.
+	DryRunAwaitingReload bool   `json:"dry_run_awaiting_reload"`
+	DryRunTarget         bool   `json:"dry_run_target,omitempty"`
+	DisplayTimezone      string `json:"display_timezone"`
 
 	Config    ConfigStatus          `json:"config_file"`
 	Backup    BackupStatus          `json:"backup"`
@@ -128,15 +132,17 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 	}
 	now := e.clk.Now()
 	snap := Snapshot{
-		Plugin:          pluginID,
-		Version:         pluginVersion,
-		GeneratedAt:     now,
-		Enabled:         e.cfg.Enabled,
-		Stopped:         e.stopped || !e.started,
-		Faulted:         faulted,
-		FaultReason:     faultReason,
-		DryRun:          e.cfg.DryRun,
-		DisplayTimezone: e.cfg.DisplayTimezone,
+		Plugin:               pluginID,
+		Version:              pluginVersion,
+		GeneratedAt:          now,
+		Enabled:              e.cfg.Enabled,
+		Stopped:              e.stopped || !e.started,
+		Faulted:              faulted,
+		FaultReason:          faultReason,
+		DryRun:               e.cfg.DryRun,
+		DryRunAwaitingReload: e.dryRunPending,
+		DryRunTarget:         e.dryRunTarget,
+		DisplayTimezone:      e.cfg.DisplayTimezone,
 		Config: ConfigStatus{
 			Path:            e.configPath,
 			Source:          e.configSource,
@@ -180,6 +186,9 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 	}
 	if faulted {
 		snap.Warnings = append(snap.Warnings, "a plugin goroutine panicked; writes are suspended until the plugin is reconfigured: "+faultReason)
+	}
+	if e.dryRunPending && now.Sub(e.dryRunWrittenAt) > reloadGracePeriod {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf("dry-run was set to %t in config.yaml %s ago but CPA has not reloaded it; check the file watcher, the config path CPA actually uses, and home mode", e.dryRunTarget, now.Sub(e.dryRunWrittenAt).Truncate(time.Second)))
 	}
 	if e.modeUnsupported {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("CPA appears to run in %s mode (%s); the local config file is not the effective configuration and automatic writes are disabled. Set config-path explicitly or run a host-side updater.", e.mode.Name, e.mode.Reason))

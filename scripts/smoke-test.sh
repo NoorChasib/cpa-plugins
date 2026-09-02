@@ -2,7 +2,19 @@
 # End-to-end smoke test against a locally built CLIProxyAPI binary.
 #
 # Usage:
-#   scripts/smoke-test.sh <path-to-CLIProxyAPI-binary> [path-to-auto-baseline.so]
+#   scripts/smoke-test.sh <path-to-CLIProxyAPI-binary> [path-to-auto-baseline.so] [--browser]
+#
+# --browser adds a phase that proves the browser trust model over PLAIN HTTP
+# on a NON-LOOPBACK address: CPA is bound to 0.0.0.0 with
+# remote-management.allow-remote: true (management key "smoke-mgmt"; the
+# process is exposed on this host's interfaces for the duration of the run),
+# the redacted sidebar page is fetched at http://<host-ip>:<port>, and the
+# mutating routes are exercised with an Origin header and NO Sec-Fetch-Site,
+# exactly the header shape a browser produces against a plain-HTTP server.
+# If the agent-browser CLI is installed the phase reports it; driving it is
+# not implemented here (no browser was available when this script was
+# written, so no command sequence could be validated), and the phase always
+# runs the curl checks.
 #
 # Environment:
 #   CPA_SMOKE_PORT              fixed listen port (default: a free port)
@@ -25,14 +37,22 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CPA_BIN="${1:-}"
-PLUGIN_INPUT="${2:-${ROOT_DIR}/auto-baseline.so}"
+BROWSER_PHASE=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "${arg}" in
+    --browser) BROWSER_PHASE=true ;;
+    *) POSITIONAL+=("${arg}") ;;
+  esac
+done
+CPA_BIN="${POSITIONAL[0]:-}"
+PLUGIN_INPUT="${POSITIONAL[1]:-${ROOT_DIR}/auto-baseline.so}"
 TIMEOUT_SECONDS="${CPA_SMOKE_TIMEOUT_SECONDS:-60}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 ARTIFACT_DIR="${CPA_SMOKE_ARTIFACT_DIR:-${ROOT_DIR}/dist/smoke/${RUN_ID}}"
 
 if [[ -z "${CPA_BIN}" ]]; then
-  printf 'usage: %s <CLIProxyAPI binary> [auto-baseline.so]\n' "$0" >&2
+  printf 'usage: %s <CLIProxyAPI binary> [auto-baseline.so] [--browser]\n' "$0" >&2
   exit 2
 fi
 for command_name in curl python3 realpath; do
@@ -55,6 +75,23 @@ PLUGIN_INPUT="$(realpath "${PLUGIN_INPUT}")"
 TMP_DIR=""
 CPA_PID=""
 LOG_FILE="${ARTIFACT_DIR}/cpa.log"
+BIND_HOST="127.0.0.1"
+ALLOW_REMOTE=false
+HOST_IP=""
+if [[ "${BROWSER_PHASE}" == true ]]; then
+  # First non-loopback IPv4 (hostname -I may list IPv6 first), with an ip(8)
+  # fallback for hosts whose hostname -I is empty.
+  HOST_IP="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' | head -n1 || true)"
+  if [[ -z "${HOST_IP}" ]] && command -v ip >/dev/null 2>&1; then
+    HOST_IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | head -n1 || true)"
+  fi
+  if [[ -z "${HOST_IP}" ]]; then
+    printf -- '--browser requires a non-loopback IPv4 address; neither hostname -I nor ip -4 addr reported one\n' >&2
+    exit 2
+  fi
+  BIND_HOST="0.0.0.0"
+  ALLOW_REMOTE=true
+fi
 
 # shellcheck disable=SC2329
 cleanup() {
@@ -99,7 +136,7 @@ write_config() {
   local port="$1"
   cat >"${TMP_DIR}/config.yaml" <<YAML
 # smoke-test config (auto-baseline)
-host: "127.0.0.1"
+host: "${BIND_HOST}"
 port: ${port}
 auth-dir: "${TMP_DIR}/auth"
 api-keys:
@@ -107,7 +144,7 @@ api-keys:
 debug: true
 logging-to-file: false
 remote-management:
-  allow-remote: false
+  allow-remote: ${ALLOW_REMOTE}
   secret-key: "smoke-mgmt"
 # A placeholder Claude credential is REQUIRED for the interceptor to fire:
 # CPA resolves the model's provider (handlers_execution.go:54) before it runs
@@ -129,6 +166,7 @@ plugins:
       # so the stricter 2-session rule (default is 1) is exercised here.
       min-distinct-sessions: 2
       promotion-cooldown: 0s
+      dry-run: false
       state-dir: "${TMP_DIR}/plugins/auto-baseline"
 YAML
 }
@@ -315,3 +353,84 @@ curl --silent --fail --max-time 5 -H 'Authorization: Bearer smoke-mgmt' \
   "${BASE}/v0/management/plugins/auto-baseline/status/html" >"${ARTIFACT_DIR}/status.html"
 grep -Fq '<title>Auto Baseline' "${ARTIFACT_DIR}/status.html" || { printf 'HTML status view malformed\n' >&2; exit 1; }
 printf 'HTML status view rendered\n'
+
+if [[ "${BROWSER_PHASE}" != true ]]; then
+  exit 0
+fi
+
+########################################################################
+# --browser phase: plain-HTTP, non-loopback, same-origin trust model.
+########################################################################
+REMOTE="http://${HOST_IP}:${PORT}"
+BROWSER_LOG="${ARTIFACT_DIR}/browser-phase.txt"
+: >"${BROWSER_LOG}"
+say() { printf '%s\n' "$*" | tee -a "${BROWSER_LOG}"; }
+say "browser phase: CPA reachable at ${REMOTE} (non-loopback, plain HTTP)"
+
+if command -v agent-browser >/dev/null 2>&1; then
+  say "agent-browser is installed but this script does not drive it (no browser was available to validate a command sequence when the phase was written); running the curl checks"
+else
+  say "agent-browser is not installed; running the curl checks (they reproduce the exact header shape a browser sends to a plain-HTTP non-loopback origin: Origin present, no Sec-Fetch-Site)"
+fi
+
+# (1) Redacted sidebar page: 200, CSP with frame-ancestors 'self', "redacted view".
+HDRS="${ARTIFACT_DIR}/resource.headers"
+curl --silent --show-error --max-time 10 --dump-header "${HDRS}" --output "${ARTIFACT_DIR}/resource.html" "${REMOTE}/v0/resource/plugins/auto-baseline/status"
+grep -qiE '^HTTP/[0-9.]+ 200' "${HDRS}" || { say "resource route did not return 200"; cat "${HDRS}" >&2; exit 1; }
+grep -qiE "^content-security-policy:.*frame-ancestors 'self'" "${HDRS}" || { say "CSP missing frame-ancestors 'self'"; cat "${HDRS}" >&2; exit 1; }
+grep -qiE '^referrer-policy: *no-referrer' "${HDRS}" || { say "Referrer-Policy missing"; exit 1; }
+grep -qiE '^x-content-type-options: *nosniff' "${HDRS}" || { say "X-Content-Type-Options missing"; exit 1; }
+grep -Fq 'redacted view' "${ARTIFACT_DIR}/resource.html" || { say "resource page lacks the redacted pill"; exit 1; }
+if grep -Fq "${TMP_DIR}" "${ARTIFACT_DIR}/resource.html"; then say "resource page leaks a filesystem path"; exit 1; fi
+say "(1) GET ${REMOTE}/v0/resource/plugins/auto-baseline/status -> 200, CSP frame-ancestors 'self', redacted view, no paths"
+
+# (2) The upgrade fetch the page's script performs: same-origin GET of the
+# authenticated view with the recovered key -> 200 and "authenticated view".
+curl --silent --show-error --fail --max-time 10 -H 'Authorization: Bearer smoke-mgmt' -H "Origin: ${REMOTE}" \
+  --output "${ARTIFACT_DIR}/upgraded.html" "${REMOTE}/v0/management/plugins/auto-baseline/status/html"
+grep -Fq 'authenticated view' "${ARTIFACT_DIR}/upgraded.html" || { say "upgrade fetch did not return the authenticated view"; exit 1; }
+grep -Fq 'Switch to dry-run' "${ARTIFACT_DIR}/upgraded.html" || { say "authenticated view lacks the dry-run switch"; exit 1; }
+say "(2) same-origin upgrade fetch with the recovered key -> authenticated view rendered over plain HTTP"
+
+# (3) Dry-run switch through the CSRF gate with Origin only (no Sec-Fetch-Site).
+post_action() { # route body extra-curl-args...
+  local route="$1" body="$2"; shift 2
+  curl --silent --show-error --max-time 10 --output "${ARTIFACT_DIR}/last-action.json" --write-out '%{http_code}' \
+    -X POST -H 'Authorization: Bearer smoke-mgmt' -H 'X-Auto-Baseline-Action: 1' -H 'Content-Type: application/json' \
+    "$@" --data "${body}" "${REMOTE}/v0/management/plugins/auto-baseline${route}" || true
+}
+code="$(post_action /dry-run '{"enabled":true}' -H "Origin: ${REMOTE}")"
+[[ "${code}" == 200 ]] || { say "dry-run toggle with plain-http Origin -> HTTP ${code}: $(cat "${ARTIFACT_DIR}/last-action.json")"; exit 1; }
+say "(3a) POST /dry-run {enabled:true} with Origin ${REMOTE} and no Sec-Fetch-Site -> 200: $(cat "${ARTIFACT_DIR}/last-action.json")"
+grep -Fq 'dry-run: true' "${TMP_DIR}/config.yaml" || { say "config.yaml does not carry dry-run: true"; exit 1; }
+DEADLINE=$((SECONDS + TIMEOUT_SECONDS))
+until curl --silent --fail --max-time 5 -H 'Authorization: Bearer smoke-mgmt' "${REMOTE}/v0/management/plugins/auto-baseline/status" \
+  | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s["dry_run"] is True and s["dry_run_awaiting_reload"] is False else 1)'; do
+  if (( SECONDS >= DEADLINE )); then say "status did not show dry_run true after CPA reload"; exit 1; fi
+  sleep 0.5
+done
+say "(3b) CPA reloaded; status shows dry_run=true, awaiting_reload=false"
+code="$(post_action /dry-run '{"enabled":false}' -H "Origin: ${REMOTE}")"
+[[ "${code}" == 200 ]] || { say "switch back to live writes -> HTTP ${code}"; exit 1; }
+DEADLINE=$((SECONDS + TIMEOUT_SECONDS))
+until curl --silent --fail --max-time 5 -H 'Authorization: Bearer smoke-mgmt' "${REMOTE}/v0/management/plugins/auto-baseline/status" \
+  | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s["dry_run"] is False and s["dry_run_awaiting_reload"] is False else 1)'; do
+  if (( SECONDS >= DEADLINE )); then say "status did not show dry_run false after CPA reload"; exit 1; fi
+  sleep 0.5
+done
+say "(3c) POST /dry-run {enabled:false} -> 200; CPA reloaded; status shows dry_run=false (live writes)"
+
+# (4) Clear pending with the same header shape -> 200; hostile shapes -> 403.
+code="$(post_action /reset '' -H "Origin: ${REMOTE}")"
+[[ "${code}" == 200 ]] || { say "reset with plain-http Origin -> HTTP ${code}"; exit 1; }
+say "(4) POST /reset with Origin ${REMOTE} and no Sec-Fetch-Site -> 200"
+code="$(post_action /reset '' -H 'Origin: https://evil.example')"
+[[ "${code}" == 403 ]] || { say "https Origin without fetch metadata -> HTTP ${code}, want 403"; exit 1; }
+say "(4b) POST /reset with Origin https://evil.example -> 403"
+code="$(post_action /reset '' -H "Origin: ${REMOTE}" -H 'Sec-Fetch-Site: cross-site')"
+[[ "${code}" == 403 ]] || { say "Sec-Fetch-Site cross-site -> HTTP ${code}, want 403"; exit 1; }
+say "(4c) POST /reset with Sec-Fetch-Site: cross-site -> 403"
+code="$(curl --silent --max-time 10 --output /dev/null --write-out '%{http_code}' -X POST -H 'Authorization: Bearer smoke-mgmt' -H "Origin: ${REMOTE}" "${REMOTE}/v0/management/plugins/auto-baseline/reset" || true)"
+[[ "${code}" == 403 ]] || { say "reset without the action header -> HTTP ${code}, want 403"; exit 1; }
+say "(4d) POST /reset without X-Auto-Baseline-Action -> 403"
+say "browser phase PASSED (curl checks)"

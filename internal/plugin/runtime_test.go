@@ -12,7 +12,9 @@ import (
 
 	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/clock"
 	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/engine"
+	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
 	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
 )
 
 var t0 = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
@@ -184,7 +186,7 @@ func claudeHeaders(session string) map[string][]string {
 }
 
 func csrfHeaders(extra map[string][]string) map[string][]string {
-	out := map[string][]string{mutationRequestHeader: {mutationRequestHeaderValue}}
+	out := map[string][]string{actionRequestHeader: {actionRequestHeaderValue}}
 	for k, v := range extra {
 		out[k] = v
 	}
@@ -352,9 +354,9 @@ func TestDispatchRecoversFromHandlerPanic(t *testing.T) {
 	// Swap in an engine-less runtime state that makes the management path
 	// panic: a nil engine pointer stored behind a non-nil runtime would be
 	// caught earlier, so inject a panicking status renderer instead.
-	prev := renderStatusPageForTest
-	renderStatusPageForTest = func() []byte { panic("boom in resource page") }
-	defer func() { renderStatusPageForTest = prev }()
+	prev := renderResourcePageForTest
+	renderResourcePageForTest = func(engine.Snapshot) []byte { panic("boom in resource page") }
+	defer func() { renderResourcePageForTest = prev }()
 	raw := mustMarshal(t, hostapi.ManagementRequest{Method: "GET", Path: "/v0/resource/plugins/auto-baseline/status"})
 	env := decode(t, f.rt.Dispatch(hostapi.MethodManagementHandle, raw))
 	if env.OK || env.Error == nil || env.Error.Code != "plugin_panic" || !strings.Contains(env.Error.Message, "boom in resource page") {
@@ -423,7 +425,7 @@ func TestManagementRegistrationRouteCasing(t *testing.T) {
 		Resources []map[string]any `json:"resources"`
 	}
 	mustUnmarshal(t, env.Result, &raw)
-	if len(raw.Routes) != 4 {
+	if len(raw.Routes) != 5 {
 		t.Fatalf("routes = %v", raw.Routes)
 	}
 	for _, m := range raw.Routes {
@@ -486,7 +488,7 @@ func TestStatusHTMLRendersAndEscapes(t *testing.T) {
 		t.Fatalf("resp = %d %v", resp.StatusCode, resp.Headers)
 	}
 	body := string(resp.Body)
-	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.258", "claude-cli/2.1.220 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Request", "PDT", "Assumed CPA build", "floor 2.1.220", "backup dir writable"} {
+	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.258", "claude-cli/2.1.220 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Action", "PDT", "Assumed CPA build", "floor 2.1.220", "Backup dir", `<span class="pill info">authenticated view</span>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}
@@ -495,8 +497,13 @@ func TestStatusHTMLRendersAndEscapes(t *testing.T) {
 		t.Error("CSP header missing")
 	}
 	resp = f.manage("GET", "/v0/resource/plugins/auto-baseline/status/html", nil, nil)
-	if !strings.Contains(string(resp.Body), `data-auto-baseline-status="ready"`) || strings.Contains(string(resp.Body), "2.1.258") {
-		t.Error("resource path leaked the authenticated view")
+	if !strings.Contains(string(resp.Body), "redacted view") || strings.Contains(string(resp.Body), f.config) {
+		t.Error("resource path served the authenticated view")
+	}
+	for _, h := range []string{"Content-Security-Policy", "X-Content-Type-Options", "Cache-Control", "Referrer-Policy"} {
+		if len(resp.Headers[h]) == 0 {
+			t.Errorf("resource response missing %s", h)
+		}
 	}
 }
 
@@ -508,11 +515,7 @@ func TestRenderManagementStatusPageEscapesRenderedFields(t *testing.T) {
 		Warnings:    []string{"<img src=x onerror=alert(1)>"},
 		Config:      engine.ConfigStatus{Path: "/etc/<b>cpa</b>/config.yaml", Error: "<i>nope</i>"},
 	}
-	page, err := renderManagementStatusPage(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(page)
+	body := string(renderStatusPage(snap, true))
 	for _, raw := range []string{`<script>alert("x")</script>`, "<img src=x", "<b>cpa</b>", "<i>nope</i>"} {
 		if strings.Contains(body, raw) {
 			t.Errorf("unescaped %q in HTML", raw)
@@ -526,6 +529,32 @@ func TestRenderManagementStatusPageEscapesRenderedFields(t *testing.T) {
 	if !strings.Contains(body, "No promotions yet") {
 		t.Error("empty snapshot did not render")
 	}
+	// The redacted variant of the same snapshot drops the sensitive text
+	// entirely rather than escaping it, and hides the deployment topology.
+	snap.Config.Mode = "home"
+	snap.Config.ModeReason = "-home-jwt flag"
+	snap.Config.ModeUnsupported = true
+	if r := redactResourceStatus(snap); r.Config.Mode != "" || r.Config.ModeReason != "" || r.Config.ModeUnsupported {
+		t.Errorf("deployment mode not redacted: %+v", r.Config)
+	}
+	redacted := string(renderStatusPage(redactResourceStatus(snap), false))
+	if strings.Contains(redacted, "home mode") || strings.Contains(redacted, "home-jwt") {
+		t.Error("redacted page leaks the deployment mode")
+	}
+	for _, gone := range []string{"alert(", "img src", "cpa&lt;", "nope"} {
+		if strings.Contains(redacted, gone) {
+			t.Errorf("redacted page still contains %q", gone)
+		}
+	}
+	// data-* attributes on Promote now rows are attribute-escaped.
+	snap.Baselines = []engine.ProviderStatus{{Provider: fingerprint.ProviderClaude, Managed: true, Pending: []learner.Evidence{{Candidate: fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: fingerprint.MustParseVersion("2.1.258"), UserAgent: `x" onmouseover="alert(1)`, OS: "Linux", Arch: "x64"}}}}}
+	body = string(renderStatusPage(snap, true))
+	if strings.Contains(body, `data-user-agent="x" onmouseover`) {
+		t.Error("data attribute not escaped")
+	}
+	if !strings.Contains(body, "data-user-agent=\"x&#34; onmouseover=&#34;alert(1)\"") {
+		t.Errorf("expected attribute-escaped user agent in:\n%s", body[strings.Index(body, "data-user-agent"):strings.Index(body, "data-user-agent")+80])
+	}
 	if relativeTime(t0.Add(90*time.Second), t0) != "in 1m" || relativeTime(t0.Add(-25*time.Hour), t0) != "1d 1h ago" || relativeTime(t0, t0) != "now" {
 		t.Error("relativeTime formatting")
 	}
@@ -534,27 +563,100 @@ func TestRenderManagementStatusPageEscapesRenderedFields(t *testing.T) {
 	}
 }
 
-func TestResourceShellIsStatic(t *testing.T) {
+func TestResourcePageIsRedacted(t *testing.T) {
 	f := newFixture(t)
 	f.register("")
-	a := f.manage("GET", "/v0/resource/plugins/auto-baseline/status", csrfHeaders(nil), nil)
-	f.intercept(claudeHeaders("a"))
-	b := f.manage("GET", "/v0/resource/plugins/auto-baseline/status?reset=1", nil, nil)
-	if string(a.Body) != string(b.Body) || string(a.Body) != string(renderStatusPage()) {
-		t.Error("resource shell is not static")
+	f.intercept(claudeHeaders("11111111-2222-3333-4444-555555555555"))
+	// Force an error and a warning into the snapshot.
+	f.manage("POST", mgmtPrefix+managementDryRunPath, csrfHeaders(nil), []byte(`{"enabled":true}`))
+	resp := f.manage("GET", "/v0/resource/plugins/auto-baseline/status", csrfHeaders(nil), nil)
+	body := string(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(body, `<span class="pill">redacted view</span>`) || strings.Contains(body, `<span class="pill info">authenticated view</span>`) {
+		t.Fatalf("resource = %d, pills wrong", resp.StatusCode)
 	}
-	if strings.Contains(string(a.Body), "2.1.258") || strings.Contains(string(a.Body), f.config) {
-		t.Error("resource shell exposes data")
+	for _, leak := range []string{f.config, f.state, "11111111-2222", "smoke-key", "Bearer ", "config-path", "Last error", "mode</span>", "mode:"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("resource page leaks %q", leak)
+		}
 	}
-	if !strings.Contains(string(a.Body), "autoBaselineAuth") || !strings.Contains(string(a.Body), `managementPath("/status/html")`) {
-		t.Error("same-origin upgrade script missing")
+	for _, want := range []string{"2.1.258", "claude-cli/2.1.220 (external, cli)", "Assumed CPA build", "Requests seen", "autoBaselineAuth", `managementPath("/status/html")`, "session-note"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("resource page missing %q", want)
+		}
 	}
-	if f.claudePending() != 1 {
-		t.Fatal("precondition: one pending candidate")
+	if strings.Contains(body, "data-action=") {
+		t.Error("resource page carries action buttons")
 	}
-	resp := f.manage("POST", "/v0/resource/plugins/auto-baseline/reset", csrfHeaders(nil), nil)
-	if resp.StatusCode == 200 && f.claudePending() == 0 {
+	// Query parameters and POSTs never mutate through the resource path.
+	before := f.claudePending()
+	resp = f.manage("POST", "/v0/resource/plugins/auto-baseline/reset", csrfHeaders(nil), nil)
+	if resp.StatusCode == 200 && f.claudePending() != before {
 		t.Error("resource path performed a mutation")
+	}
+	// The authenticated view of the same snapshot shows paths and actions.
+	auth := string(f.manage("GET", mgmtPrefix+managementStatusPagePath, nil, nil).Body)
+	for _, want := range []string{"authenticated view", f.config, "data-action=\"promote\"", "data-action=\"dry-run\"", "data-action=\"reset\"", "data-action=\"refresh\"", "X-Auto-Baseline-Action", "Switch to dry-run"} {
+		if !strings.Contains(auth, want) {
+			t.Errorf("authenticated page missing %q", want)
+		}
+	}
+	if strings.Contains(auth, "11111111-2222") {
+		t.Error("authenticated page renders a session id")
+	}
+}
+
+func TestDryRunRoute(t *testing.T) {
+	f := newFixture(t)
+	f.register("dry-run: true\n")
+	if resp := f.manage("POST", mgmtPrefix+managementDryRunPath, nil, []byte(`{"enabled":false}`)); resp.StatusCode != 403 {
+		t.Errorf("no CSRF header -> %d", resp.StatusCode)
+	}
+	if resp := f.manage("POST", mgmtPrefix+managementDryRunPath, csrfHeaders(nil), []byte(`{}`)); resp.StatusCode != 400 {
+		t.Errorf("missing enabled -> %d", resp.StatusCode)
+	}
+	if resp := f.manage("POST", mgmtPrefix+managementDryRunPath, csrfHeaders(nil), []byte(`{"enabled":"yes"}`)); resp.StatusCode != 400 {
+		t.Errorf("bad type -> %d", resp.StatusCode)
+	}
+	// Without the plugin subtree on disk the toggle is refused, never created.
+	noSubtree := "port: 8317\napi-keys: [\"k\"]\nplugins:\n  enabled: true\n"
+	if err := os.WriteFile(f.config, []byte(noSubtree), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.lifecycle(hostapi.MethodPluginReconfigure, f.pluginYAML("dry-run: true\n"), hostapi.SchemaVersion)
+	resp := f.manage("POST", mgmtPrefix+managementDryRunPath, csrfHeaders(nil), []byte(`{"enabled":false}`))
+	if resp.StatusCode != 422 || !strings.Contains(string(resp.Body), "plugin_subtree_missing") {
+		t.Fatalf("missing subtree -> %d %s", resp.StatusCode, resp.Body)
+	}
+	if f.readConfig() != noSubtree {
+		t.Errorf("subtree created or config changed:\n%s", f.readConfig())
+	}
+	// Give the on-disk config a real plugin subtree and toggle.
+	if err := os.WriteFile(f.config, []byte(baseConfig+"      dry-run: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.lifecycle(hostapi.MethodPluginReconfigure, f.pluginYAML("dry-run: true\n"), hostapi.SchemaVersion)
+	resp = f.manage("POST", mgmtPrefix+managementDryRunPath, csrfHeaders(nil), []byte(`{"enabled":false}`))
+	if resp.StatusCode != 200 || !strings.Contains(string(resp.Body), `"awaiting_reload":true`) {
+		t.Fatalf("toggle -> %d %s", resp.StatusCode, resp.Body)
+	}
+	if !strings.Contains(f.readConfig(), "dry-run: false") {
+		t.Errorf("config not updated:\n%s", f.readConfig())
+	}
+	if s := f.statusJSON(); !s.DryRun || !s.DryRunAwaitingReload {
+		t.Errorf("status = dry_run=%t awaiting=%t", s.DryRun, s.DryRunAwaitingReload)
+	}
+	page := string(f.manage("GET", mgmtPrefix+managementStatusPagePath, nil, nil).Body)
+	if !strings.Contains(page, "dry-run change awaiting reload") {
+		t.Error("HTML lacks the awaiting-reload pill")
+	}
+	// CPA reload delivers the new value: confirmed and the button flips.
+	f.lifecycle(hostapi.MethodPluginReconfigure, f.pluginYAML(""), hostapi.SchemaVersion)
+	if s := f.statusJSON(); s.DryRun || s.DryRunAwaitingReload {
+		t.Errorf("after reload = dry_run=%t awaiting=%t", s.DryRun, s.DryRunAwaitingReload)
+	}
+	page = string(f.manage("GET", mgmtPrefix+managementStatusPagePath, nil, nil).Body)
+	if !strings.Contains(page, "Switch to dry-run") || strings.Contains(page, "Switch to live writes") {
+		t.Error("button label did not flip")
 	}
 }
 
@@ -566,8 +668,8 @@ func TestMutationCSRFGate(t *testing.T) {
 	}{
 		{"no header", nil, 403},
 		{"header only (non-browser client)", csrfHeaders(nil), 200},
-		{"lowercase header", map[string][]string{"x-auto-baseline-request": {"1"}}, 200},
-		{"wrong header value", map[string][]string{mutationRequestHeader: {"yes"}}, 403},
+		{"lowercase header", map[string][]string{"x-auto-baseline-action": {"1"}}, 200},
+		{"wrong header value", map[string][]string{actionRequestHeader: {"yes"}}, 403},
 		{"same-origin fetch", csrfHeaders(map[string][]string{"Sec-Fetch-Site": {"same-origin"}}), 200},
 		{"none fetch", csrfHeaders(map[string][]string{"Sec-Fetch-Site": {"none"}}), 200},
 		{"same-origin with https origin", csrfHeaders(map[string][]string{"Sec-Fetch-Site": {"same-origin"}, "Origin": {"https://cpa.example"}}), 200},

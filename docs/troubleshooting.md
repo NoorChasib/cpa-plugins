@@ -86,9 +86,17 @@ Another writer (the management console, CPA's secret-key hashing at startup, an 
 
 A missing `state.json` is normal on first start and produces no warning. A corrupt one (`state_file.error` says `decode state file`, schema mismatch, or oversize) makes the plugin start fresh with a logged warning; evidence must be re-collected. Individual restored candidates that fail validation are dropped and counted in `state_file.restored_dropped`. Baselines are always re-read from `config.yaml`, so nothing is downgraded.
 
-## observe or reset returns 403
+## observe, reset, or dry-run returns 403
 
-Both require `X-Auto-Baseline-Request: 1`. When a browser sends fetch metadata, only `Sec-Fetch-Site: same-origin` or `none` is accepted. Without fetch metadata (plain HTTP on a non-loopback host) a single well-formed `http://` `Origin` is accepted and any `https://`, `null`, or malformed `Origin` is refused. Non-browser clients only need the custom header.
+All three require `X-Auto-Baseline-Action: 1`. When a browser sends fetch metadata, only `Sec-Fetch-Site: same-origin` or `none` is accepted. Without fetch metadata (plain HTTP on a non-loopback host, the usual private-deployment case) the gate falls back to the `Origin` header: a single well-formed `http://` origin is accepted, because mixed-content blocking means only a plain-HTTP page can post to a plain-HTTP server, and any `https://`, `null`, multi-valued, or malformed origin is refused. So the sidebar actions work over plain `http://192.0.2.10:8317`-style URLs; if they return 403 there, the request reached CPA with a rewritten or stripped `Origin` (a reverse proxy in between) or without the action header. Non-browser clients only need the management key and the action header. `scripts/smoke-test.sh ... --browser` reproduces the accepted and refused shapes against a real CPA.
+
+## The sidebar page stays on the redacted view
+
+The redacted page upgrades itself only when the browser already holds a same-origin management session: the script reads the key the official management console stored in this origin's localStorage (`cli-proxy-auth`, with "Remember password" on) and fetches the authenticated view with it. It stays redacted when the console runs on a different origin or port than the CPA it manages, when the key was not remembered, or when the console has never been signed in from this browser; the note under the header says which. Sign in to the console served from the same origin with the key remembered and reload, or open `GET /v0/management/plugins/auto-baseline/status/html` through a client that supplies the management header. In Home mode CPA returns 404 for the resource route itself.
+
+## The dry-run switch says "awaiting reload" and never confirms
+
+The route only edits `config.yaml`; the runtime flag flips when CPA hot-reloads the file and reconfigures the plugin. If it stays pending for more than two minutes status warns: check that CPA logged `config file changed, reloading`, that the file the plugin edited is the one CPA watches (see the deployment-mode section), and that the edit did not get rewritten by another writer. `POST .../dry-run` answers 409 while a promotion write is in flight (retry), 422 when `plugins.configs.auto-baseline` is missing or the file shape is unsupported (the plugin never creates the subtree), and 503 when writes are disabled.
 
 ## Management routes return 404 or 503
 

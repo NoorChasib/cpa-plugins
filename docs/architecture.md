@@ -281,11 +281,17 @@ baseline.** No CPA change is required.
 - **What it cannot achieve**: downgrade; write arbitrary YAML (values are
   regex-bounded and double-quoted); write other keys; write when disabled or in
   dry-run; exfiltrate anything (the plugin makes no outbound network calls).
-- **Management routes**: status is read-only; `observe` and `reset` require a
-  non-simple custom header (`X-Auto-Baseline-Request: 1`) and same-origin fetch
-  metadata when present, closing cross-site form/CORS riding of ambient
-  reverse-proxy credentials. The unauthenticated resource route serves a static
-  shell with no data.
+- **Management routes**: status is read-only; `observe`, `reset`, and
+  `dry-run` require a non-simple custom header (`X-Auto-Baseline-Action: 1`)
+  and same-origin fetch metadata when present (a well-formed plain-`http://`
+  `Origin` when the browser sends none), closing cross-site form/CORS riding
+  of ambient reverse-proxy credentials. The unauthenticated resource route
+  serves a redacted view (baselines, candidate tuples, counters; no paths,
+  errors, or identifiers) that upgrades itself only with a management key the
+  browser already holds for the same origin. The `dry-run` route is the one
+  operator-driven write outside the baseline keys; it edits only
+  `plugins.configs.auto-baseline.dry-run`, through the same node surgery and
+  write discipline, and never creates the subtree.
 - **Data at rest**: `state.json` records session IDs (opaque UUIDs) and
   fingerprints, never credentials or request bodies; it is written 0600. Status
   routes expose counts, never session IDs, and only the baseline header values

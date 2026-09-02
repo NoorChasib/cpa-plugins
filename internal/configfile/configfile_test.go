@@ -823,3 +823,87 @@ func TestProbeDir(t *testing.T) {
 		t.Errorf("dir under a file accepted: %v %v", ok, err)
 	}
 }
+
+func TestApplyDryRun(t *testing.T) {
+	base := "port: 1\n# plugin block\nplugins:\n  enabled: true\n  configs:\n    auto-baseline:\n      enabled: true # keep\n      dry-run: true\n      min-observations: 3\n"
+	p := newPaths(t, base)
+	snap, err := Read(p.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.DryRun || !snap.DryRunPresent || !snap.InstancePresent {
+		t.Fatalf("read flags = %+v", snap)
+	}
+	if _, changed, err := ApplyDryRun(p.config, p.backup, false, nil); err != nil || !changed {
+		t.Fatalf("ApplyDryRun: changed=%t err=%v", changed, err)
+	}
+	text := mustReadFile(t, p.config)
+	for _, want := range []string{"# plugin block", "enabled: true # keep", "dry-run: false", "min-observations: 3", "port: 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `"false"`) {
+		t.Errorf("dry-run written as a string:\n%s", text)
+	}
+	if got := mustReadFile(t, BackupPath(p.backup)); got != base {
+		t.Errorf("backup = %q", got)
+	}
+	snap, err = Read(p.config)
+	if err != nil || snap.DryRun {
+		t.Fatalf("re-read dry_run = %v err=%v", snap.DryRun, err)
+	}
+	// Key absent: appended inside the existing subtree.
+	p2 := newPaths(t, "plugins:\n  enabled: true\n  configs:\n    auto-baseline:\n      enabled: true\n")
+	if _, changed, err := ApplyDryRun(p2.config, p2.backup, true, nil); err != nil || !changed {
+		t.Fatalf("append: changed=%t err=%v", changed, err)
+	}
+	if text := mustReadFile(t, p2.config); !strings.Contains(text, "    auto-baseline:\n      enabled: true\n      dry-run: true\n") {
+		t.Errorf("dry-run not appended:\n%s", text)
+	}
+	// No-op when already equal: reported as unchanged, nothing written.
+	before := mustReadFile(t, p2.config)
+	if err := os.Remove(BackupPath(p2.backup)); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := ApplyDryRun(p2.config, p2.backup, true, nil); err != nil || changed {
+		t.Fatalf("no-op: changed=%t err=%v", changed, err)
+	}
+	if mustReadFile(t, p2.config) != before {
+		t.Error("no-op rewrote the file")
+	}
+	if _, err := os.Stat(BackupPath(p2.backup)); !errors.Is(err, os.ErrNotExist) {
+		t.Error("no-op wrote a backup")
+	}
+}
+
+func TestApplyDryRunRefusals(t *testing.T) {
+	cases := map[string]struct {
+		content string
+		want    error
+	}{
+		"no plugins block":        {"port: 1\n", ErrPluginSubtreeMissing},
+		"no configs":              {"plugins:\n  enabled: true\n", ErrPluginSubtreeMissing},
+		"no instance":             {"plugins:\n  enabled: true\n  configs: {}\n", ErrPluginSubtreeMissing},
+		"instance is scalar":      {"plugins:\n  configs:\n    auto-baseline: yes\n", ErrUnsupportedShape},
+		"instance via alias":      {"d: &d\n  enabled: true\nplugins:\n  configs:\n    auto-baseline: *d\n", ErrUnsupportedShape},
+		"instance with merge key": {"d: &d\n  enabled: true\nplugins:\n  configs:\n    auto-baseline:\n      <<: *d\n", ErrUnsupportedShape},
+		"duplicate key":           {"plugins:\n  configs:\n    auto-baseline:\n      enabled: true\n      enabled: false\n", ErrDuplicateKey},
+		"multi document":          {"plugins:\n  configs:\n    auto-baseline:\n      enabled: true\n---\nx: 1\n", ErrMultiDocument},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := newPaths(t, tc.content)
+			_, _, err := ApplyDryRun(p.config, p.backup, false, nil)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if mustReadFile(t, p.config) != tc.content {
+				t.Error("file modified on refusal")
+			}
+			if _, err := os.Stat(BackupPath(p.backup)); !errors.Is(err, os.ErrNotExist) {
+				t.Error("backup written on refusal")
+			}
+		})
+	}
+}

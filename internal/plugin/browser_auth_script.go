@@ -26,6 +26,7 @@ const browserAuthScript = `
 	"use strict";
 	var SALT = "cli-proxy-api-webui::secure-storage";
 	var OBFUSCATION_PREFIX = "enc::v1::";
+	var PLUGIN_ID = "auto-baseline";
 
 	function keyBytes() {
 		var text = SALT;
@@ -88,7 +89,7 @@ const browserAuthScript = `
 	function managementPath(suffix) {
 		var path = global.location.pathname.replace(/\/+$/, "");
 		var prefix = "";
-		var markers = ["/v0/management/plugins/auto-baseline", "/v0/resource/plugins/auto-baseline"];
+		var markers = ["/v0/management/plugins/" + PLUGIN_ID, "/v0/resource/plugins/" + PLUGIN_ID];
 		for (var i = 0; i < markers.length; i++) {
 			var at = path.indexOf(markers[i]);
 			if (at >= 0) {
@@ -96,7 +97,7 @@ const browserAuthScript = `
 				break;
 			}
 		}
-		return prefix + "/v0/management/plugins/auto-baseline" + suffix;
+		return prefix + "/v0/management/plugins/" + PLUGIN_ID + suffix;
 	}
 
 	function authHeaders(extra) {
@@ -120,4 +121,157 @@ const browserAuthScript = `
 		authHeaders: authHeaders
 	};
 })(window);
+`
+
+// resourceBootstrapScript runs on the unauthenticated resource page. It tries
+// to fetch the authenticated management HTML view over the same origin using
+// only credentials the browser already holds, swaps it in on success, and
+// otherwise leaves the redacted view up with a short explanatory note.
+const resourceBootstrapScript = `
+(function () {
+	"use strict";
+	var note = document.getElementById("session-note");
+	function showNote(text) {
+		if (note) {
+			note.textContent = text;
+		}
+	}
+	var auth = window.autoBaselineAuth;
+	if (!auth || typeof window.fetch !== "function") {
+		return;
+	}
+	showNote("Checking for a same-origin management session…");
+	fetch(auth.managementPath("/status/html") + location.search, {
+		credentials: "same-origin",
+		headers: auth.authHeaders({})
+	})
+		.then(function (resp) {
+			if (resp.status === 401 || resp.status === 403) {
+				throw new Error("unauthenticated");
+			}
+			if (!resp.ok) {
+				throw new Error("HTTP " + resp.status);
+			}
+			var type = resp.headers.get("Content-Type") || "";
+			if (type.indexOf("text/html") !== 0) {
+				throw new Error("unexpected content type");
+			}
+			return resp.text();
+		})
+		.then(function (html) {
+			document.open();
+			document.write(html);
+			document.close();
+		})
+		.catch(function (err) {
+			if (err && err.message === "unauthenticated") {
+				showNote("No same-origin management session was found, so this redacted view is shown. Sign in to the management console served from this origin with the management key remembered, then reload.");
+			} else {
+				showNote("Could not load the authenticated status view (" + (err && err.message ? err.message : "error") + "); showing the redacted view.");
+			}
+		});
+})();
+`
+
+// managementActionsScript wires the Refresh, Clear pending, dry-run switch,
+// and per-row Promote now buttons on the authenticated view. Every mutating
+// action POSTs to a same-origin management route with the plugin action
+// header and any recoverable management key; the Promote now body is built
+// from the row's data-* attributes, which are rendered from the snapshot.
+const managementActionsScript = `
+(function () {
+	"use strict";
+	var auth = window.autoBaselineAuth;
+	var result = document.getElementById("action-result");
+	var buttons = document.querySelectorAll("button[data-action]");
+	if (!auth || !result || !buttons.length) {
+		return;
+	}
+	function setBusy(busy) {
+		for (var i = 0; i < buttons.length; i++) {
+			buttons[i].disabled = busy;
+		}
+	}
+	function describe(resp) {
+		return resp.json().then(function (body) {
+			if (body && typeof body.detail === "string" && body.detail) {
+				return body.detail;
+			}
+			if (body && typeof body.reason === "string" && body.reason) {
+				return body.reason;
+			}
+			if (body && typeof body.error === "string" && body.error) {
+				return body.error;
+			}
+			return "HTTP " + resp.status;
+		}, function () {
+			return "HTTP " + resp.status;
+		});
+	}
+	function post(route, body, busyText, okText) {
+		setBusy(true);
+		result.className = "result";
+		result.textContent = busyText;
+		var headers = auth.authHeaders({ "X-Auto-Baseline-Action": "1" });
+		var init = { method: "POST", credentials: "same-origin", headers: headers };
+		if (body !== null) {
+			headers["Content-Type"] = "application/json";
+			init.body = JSON.stringify(body);
+		}
+		fetch(auth.managementPath(route) + location.search, init)
+			.then(function (resp) {
+				if (resp.ok) {
+					result.className = "result ok";
+					result.textContent = okText + " Reloading…";
+					setTimeout(function () { location.reload(); }, 600);
+					return;
+				}
+				return describe(resp).then(function (detail) {
+					result.className = "result err";
+					result.textContent = "Request failed: " + detail;
+					setBusy(false);
+				});
+			})
+			.catch(function () {
+				result.className = "result err";
+				result.textContent = "Request failed: network error";
+				setBusy(false);
+			});
+	}
+	function run(button) {
+		var action = button.getAttribute("data-action");
+		if (action === "refresh") {
+			location.reload();
+			return;
+		}
+		if (action === "reset") {
+			post("/reset", null, "Clearing pending candidates…", "Pending candidates cleared.");
+			return;
+		}
+		if (action === "dry-run") {
+			var enabled = button.getAttribute("data-enabled") === "true";
+			post("/dry-run", { enabled: enabled },
+				enabled ? "Switching to dry-run…" : "Switching to live writes…",
+				enabled ? "Dry-run enabled in config.yaml; CPA is reloading." : "Live writes enabled in config.yaml; CPA is reloading.");
+			return;
+		}
+		if (action === "promote") {
+			post("/observe", {
+				provider: button.getAttribute("data-provider"),
+				user_agent: button.getAttribute("data-user-agent"),
+				package_version: button.getAttribute("data-package-version"),
+				runtime_version: button.getAttribute("data-runtime-version"),
+				os: button.getAttribute("data-os"),
+				arch: button.getAttribute("data-arch"),
+				session_id: "sidebar-operator",
+				force: true
+			}, "Queuing promotion…", "Promotion queued.");
+		}
+	}
+	for (var i = 0; i < buttons.length; i++) {
+		buttons[i].addEventListener("click", function (event) {
+			run(event.currentTarget);
+		});
+	}
+})();
 `

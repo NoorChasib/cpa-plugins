@@ -64,7 +64,7 @@ docker exec <container> uname -m     # x86_64 -> linux_amd64, aarch64 -> linux_a
 ### Install a release archive
 
 ```bash
-VERSION=0.1.0          # release version without the leading v
+VERSION=0.1.1          # release version without the leading v
 PLATFORM=linux_amd64   # or linux_arm64
 curl --fail --silent --show-error --location --remote-name \
   "https://github.com/NoorChasib/cpa-plugin-auto-baseline/releases/download/v${VERSION}/auto-baseline_${VERSION}_${PLATFORM}.zip"
@@ -94,7 +94,7 @@ docker restart <container>
 docker logs <container> 2>&1 | grep -E "auto-baseline|pluginhost"
 # expect:
 #   pluginhost: plugin loaded plugin_id=auto-baseline ...
-#   pluginhost: plugin registered plugin_id=auto-baseline plugin_name=Auto Baseline version=0.1.0 ...
+#   pluginhost: plugin registered plugin_id=auto-baseline plugin_name=Auto Baseline version=0.1.1 ...
 #   auto-baseline started: learning enabled (dry-run=true, config=/CLIProxyAPI/config.yaml via cwd default)
 
 curl --fail --silent --show-error -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" \

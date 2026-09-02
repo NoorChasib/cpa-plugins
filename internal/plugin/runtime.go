@@ -22,7 +22,7 @@ import (
 const (
 	PluginID      = "auto-baseline"
 	PluginName    = "Auto Baseline"
-	PluginVersion = "0.1.0"
+	PluginVersion = "0.1.1"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugin-auto-baseline"
 )
@@ -34,13 +34,15 @@ const (
 	managementStatusPagePath = "/plugins/" + PluginID + "/status/html"
 	managementObservePath    = "/plugins/" + PluginID + "/observe"
 	managementResetPath      = "/plugins/" + PluginID + "/reset"
+	managementDryRunPath     = "/plugins/" + PluginID + "/dry-run"
 	resourceStatusPath       = "/status"
 
-	// mutationRequestHeader makes mutating management requests non-simple in
+	// actionRequestHeader makes mutating management requests non-simple in
 	// browsers, preventing an ambient reverse-proxy management credential
-	// from being ridden by a cross-origin HTML form POST.
-	mutationRequestHeader      = "X-Auto-Baseline-Request"
-	mutationRequestHeaderValue = "1"
+	// from being ridden by a cross-origin HTML form POST. Same convention as
+	// the sibling plugins (X-Account-Health-Action, X-Reset-Priority-Refresh).
+	actionRequestHeader      = "X-Auto-Baseline-Action"
+	actionRequestHeaderValue = "1"
 
 	// maxObserveBodyBytes bounds the JSON body of the observe route.
 	maxObserveBodyBytes = 16 << 10
@@ -306,6 +308,7 @@ func managementRegistration() hostapi.ManagementRegistration {
 			{Method: "GET", Path: managementStatusPagePath, Description: "Auto-baseline status page (browser HTML)"},
 			{Method: "POST", Path: managementObservePath, Description: "Report a client fingerprint observation (host reporting)"},
 			{Method: "POST", Path: managementResetPath, Description: "Clear pending baseline candidates"},
+			{Method: "POST", Path: managementDryRunPath, Description: "Set plugins.configs.auto-baseline.dry-run in CPA's config.yaml"},
 		},
 		Resources: []hostapi.ResourceRoute{
 			{Path: resourceStatusPath, Menu: "Auto Baseline", Description: "Public read-only plugin information"},
@@ -325,25 +328,27 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 
 	path := strings.TrimRight(req.Path, "/")
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	eng := r.currentEngine()
 	if method == "GET" && isResourcePath(path) {
-		// Static read-only browser shell. Resource routes are NOT management-
-		// authenticated, so this handler exposes no snapshot, performs no
-		// mutations, and accepts no operations regardless of query parameters.
-		return okEnvelope(htmlResponse(200, renderStatusPageForTest()))
+		// Resource routes are NOT management-authenticated: render the
+		// redacted view (no paths, errors, or warnings) and never mutate,
+		// whatever the query string says. The embedded script upgrades the
+		// view client-side when the browser already holds a same-origin
+		// management session.
+		var snap engine.Snapshot
+		if eng != nil {
+			snap = redactResourceStatus(eng.Status(PluginID, PluginVersion))
+		}
+		return okEnvelope(htmlResponse(200, renderResourcePageForTest(snap)))
 	}
 
-	eng := r.currentEngine()
 	if eng == nil {
 		return okEnvelope(jsonResponse(503, map[string]string{"error": "plugin is not registered yet"}))
 	}
 
 	switch {
 	case method == "GET" && strings.HasSuffix(path, managementStatusPagePath) && !isResourcePath(path):
-		page, errPage := renderManagementStatusPage(eng.Status(PluginID, PluginVersion))
-		if errPage != nil {
-			return okEnvelope(jsonResponse(500, map[string]string{"error": "render status page failed"}))
-		}
-		return okEnvelope(htmlResponse(200, page))
+		return okEnvelope(htmlResponse(200, renderStatusPage(eng.Status(PluginID, PluginVersion), true)))
 
 	case method == "GET" && strings.HasSuffix(path, managementStatusPath) && !isResourcePath(path):
 		return okEnvelope(jsonResponse(200, eng.Status(PluginID, PluginVersion)))
@@ -375,6 +380,22 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 		eng.Reset()
 		return okEnvelope(jsonResponse(200, map[string]string{"status": "ok", "detail": "pending candidates cleared"}))
 
+	case method == "POST" && strings.HasSuffix(path, managementDryRunPath) && !isResourcePath(path):
+		if !mutationRequestAllowed(req.Headers) {
+			return okEnvelope(forbiddenResponse())
+		}
+		if len(req.Body) > maxObserveBodyBytes {
+			return okEnvelope(jsonResponse(413, map[string]string{"status": "error", "detail": "request body too large"}))
+		}
+		var body struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(req.Body, &body); err != nil || body.Enabled == nil {
+			return okEnvelope(jsonResponse(400, map[string]string{"status": "error", "detail": "body must be a JSON object {\"enabled\": true|false}"}))
+		}
+		outcome := eng.SetDryRun(*body.Enabled)
+		return okEnvelope(jsonResponse(outcome.Status, outcome))
+
 	default:
 		return okEnvelope(jsonResponse(404, map[string]string{"error": "unknown route"}))
 	}
@@ -383,12 +404,12 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 func forbiddenResponse() hostapi.ManagementResponse {
 	return jsonResponse(403, map[string]string{
 		"status": "forbidden",
-		"detail": "mutating routes require the " + mutationRequestHeader + " header and same-origin browser metadata",
+		"detail": "mutating routes require the " + actionRequestHeader + " header and same-origin browser metadata",
 	})
 }
 
-// mutationRequestAllowed implements the CSRF gate shared by observe and
-// reset. The custom non-simple header is mandatory: a cross-origin HTML form
+// mutationRequestAllowed implements the CSRF gate shared by observe, reset,
+// and dry-run. The custom non-simple header is mandatory: a cross-origin HTML form
 // cannot set it, and CPA's CORS layer only reflects it after a preflight that
 // this check also defends against.
 //
@@ -406,7 +427,7 @@ func forbiddenResponse() hostapi.ManagementResponse {
 // and is rejected. Requests carrying neither Origin nor fetch metadata are
 // non-browser management clients and are accepted.
 func mutationRequestAllowed(headers map[string][]string) bool {
-	if !headerHasToken(headers, mutationRequestHeader, mutationRequestHeaderValue) {
+	if !headerHasToken(headers, actionRequestHeader, actionRequestHeaderValue) {
 		return false
 	}
 	fetchSite, hasFetchSite := headerTokens(headers, "Sec-Fetch-Site")
@@ -527,6 +548,10 @@ func jsonResponse(status int, payload any) hostapi.ManagementResponse {
 	}
 }
 
+// htmlResponse carries the same header set as the sibling plugins: no-store
+// caching, nosniff, a CSP that allows only inline style/script and
+// same-origin fetches (frame-ancestors 'self' lets the management console
+// iframe the page from the CPA origin), and no referrer leakage.
 func htmlResponse(status int, body []byte) hostapi.ManagementResponse {
 	return hostapi.ManagementResponse{
 		StatusCode: status,
@@ -535,10 +560,16 @@ func htmlResponse(status int, body []byte) hostapi.ManagementResponse {
 			"Cache-Control":           {"no-store"},
 			"X-Content-Type-Options":  {"nosniff"},
 			"Content-Security-Policy": {"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"},
+			"Referrer-Policy":         {"no-referrer"},
 		},
 		Body: body,
 	}
 }
+
+// renderResourcePageForTest is the seam Dispatch uses for the resource page
+// so tests can inject a panicking handler and prove the recover boundary.
+// Production never reassigns it.
+var renderResourcePageForTest = func(snap engine.Snapshot) []byte { return renderStatusPage(snap, false) }
 
 func okEnvelope(result any) []byte {
 	raw, err := json.Marshal(result)

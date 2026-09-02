@@ -65,15 +65,58 @@ All keys live under `plugins.configs.auto-baseline`.
 
 Durations accept Go strings (`24h`, `60s`) or bare integers (seconds). Unknown or misspelled keys (for example `dry_run`) are rejected at registration so a typo cannot silently leave a default in place.
 
-## Status and management routes
+## Management routes
 
-| Route | Access | Behavior |
-| --- | --- | --- |
-| `GET /v0/management/plugins/auto-baseline/status` | Authenticated Management API | JSON snapshot: effective baselines, pending candidates with observation and session counts, last promotion, history, counters, config/state file status, warnings. |
-| `GET /v0/management/plugins/auto-baseline/status/html` | Authenticated Management API | Browser view of the same snapshot with a "Clear pending candidates" action. |
-| `POST /v0/management/plugins/auto-baseline/observe` | Authenticated + `X-Auto-Baseline-Request: 1` | Host reporting: `{provider, user_agent, package_version, runtime_version, os, arch, session_id, force}` goes through the same validation and quorum as an inbound request; `force: true` queues an immediate promotion after validation (never below the on-disk baseline or the floor; one queued entry per provider, executed by the promotion worker). Returns `202` when accepted (`queued: true` for a force), `422` with a reason bucket when rejected. |
-| `POST /v0/management/plugins/auto-baseline/reset` | Authenticated + `X-Auto-Baseline-Request: 1` | Clears pending candidates; baselines and history are kept. |
-| `GET /v0/resource/plugins/auto-baseline/status` | Unauthenticated resource route (sidebar menu "Auto Baseline") | Static read-only shell; upgrades itself client-side to the authenticated view when the browser already holds a same-origin management session. Returns 404 when CPA runs in Home mode (`internal/api/server_management.go:281` refuses every plugin resource route there); the authenticated routes still work. |
+Authenticated by CPA's normal management-key boundary:
+
+```text
+GET  /v0/management/plugins/auto-baseline/status
+GET  /v0/management/plugins/auto-baseline/status/html
+POST /v0/management/plugins/auto-baseline/observe
+POST /v0/management/plugins/auto-baseline/reset
+POST /v0/management/plugins/auto-baseline/dry-run
+```
+
+Browser resource (sidebar entry):
+
+```text
+GET /v0/resource/plugins/auto-baseline/status
+```
+
+| Route | Behavior |
+| --- | --- |
+| `GET .../status` | JSON snapshot: effective baselines, pending candidates with observation and session counts, last promotion, history, counters, config/backup/state file status, dry-run state (`dry_run`, `dry_run_awaiting_reload`), warnings. |
+| `GET .../status/html` | Authenticated browser view of the same snapshot with actions (below). |
+| `POST .../observe` | Host reporting: `{provider, user_agent, package_version, runtime_version, os, arch, session_id, force}` goes through the same validation and quorum as an inbound request; `force: true` queues an immediate promotion after validation (never below the on-disk baseline or the floor; one queued entry per provider). `202` when accepted (`queued: true` for a force), `422` with a reason bucket when rejected. |
+| `POST .../reset` | Clears pending candidates; baselines and history are kept. |
+| `POST .../dry-run` | Body `{"enabled": true|false}`. Edits only `plugins.configs.auto-baseline.dry-run` in CPA's `config.yaml` with the same node surgery, backup, re-hash, in-place write and verification as a promotion. CPA hot-reloads the file and the runtime flag flips when `plugin.reconfigure` arrives; until then status reports `dry_run_awaiting_reload`. `200` on success, `409` while a promotion write is in flight or when the plugin is disabled on disk, `422` when the subtree is missing or the file shape is unsupported (the plugin never creates `plugins.configs.auto-baseline`), `503` in an unsupported deployment mode or when the config/backup location is unusable. |
+
+### Sidebar and browser views
+
+CPA's Management Center lists the resource route as **Auto Baseline** in its sidebar and iframes it from the CPA origin. Resource routes are unauthenticated in current CPA, so the server response is always the **redacted** view: it hides the config, state and backup paths, error and warning text, and the deployment-mode reason; it shows the effective baselines, pending candidate tuples, quorum rules, promotion history, counters, and the assumed CPA build (none of which is secret). Session identifiers are never rendered on any view, only their counts.
+
+The redacted page carries a small inline script that upgrades the view purely client-side when the browser already holds a same-origin management session. It recovers the management key that the official management console (Cli-Proxy-API-Management-Center) persists in same-origin localStorage (the console's documented `enc::v1::` reversible obfuscation under `cli-proxy-auth`, or the legacy `managementKey` entry), fetches the authenticated `GET .../status/html` view over the same origin with `Authorization: Bearer`, and swaps it in. This is the same trust model used by the [reset-priority](https://github.com/NoorChasib/cpa-plugin-reset-priority) and [account-health-pushover](https://github.com/NoorChasib/cpa-plugin-account-health-pushover) plugins: the upgrade happens entirely in the operator's browser with credentials that browser already holds (a remembered console session, ambient reverse-proxy auth, or cookies), and the key is only ever sent to same-origin CPA management routes. When the console runs on a different origin, or no key is remembered (`Remember password` off) and no ambient auth exists, the fetch fails closed and the redacted view stays up with a short note.
+
+The authenticated HTML view at `GET .../status/html` requires the same management authentication as the JSON route. It shows exact paths, sanitized errors and warnings, per-provider baseline cards (effective version, explicit or implicit, floor, malformed/unsupported flags, awaiting-reload state), the pending-candidates table with observation and session progress, the promotion history with reload confirmation, counters, and four actions:
+
+- **Promote now** on each pending row queues an immediate promotion of that exact tuple (`POST .../observe` with `force: true`, body built from the row).
+- **Switch to live writes** / **Switch to dry-run** flips `dry-run` in `config.yaml` through `POST .../dry-run`; the label reflects the current runtime value and a pill shows while the change awaits CPA's reload.
+- **Clear pending** discards collected evidence (`POST .../reset`).
+- **Refresh** reloads the page.
+
+Timestamps are rendered in the configured `display-timezone` as `Tue Sep 1 2026 - 6:25:36 PM PDT`; hover any timestamp for the exact RFC3339 UTC instant. The JSON route always stays RFC3339 UTC.
+
+The hands-off workflow this enables: install with `dry-run: true`, open the sidebar, use Claude Code or Codex through the proxy until the pending row shows quorum met (or click Promote now), click **Switch to live writes** once, and never touch the YAML again. Every later version your client ships is learned and promoted automatically; the sidebar shows what was written and whether CPA reloaded it.
+
+At the audited CPA revision, management authentication is header-only (`Authorization: Bearer ...` or `X-Management-Key`); a query parameter is not a management credential, and ordinary address-bar navigation cannot add that header. Open the HTML route only through the sidebar upgrade, a browser/profile, or an authenticated reverse proxy that supplies the management header to both the page GET and its same-origin action POSTs. CPA refuses every plugin resource route in Home mode (`internal/api/server_management.go:281`, HTTP 404); the authenticated routes still work.
+
+### CSRF
+
+The three mutating routes are CSRF-gated. Browser requests carrying `Sec-Fetch-Site` are accepted only when the value is `same-origin` or `none` **and** the request includes `X-Auto-Baseline-Action: 1`; `same-site`, `cross-site`, and empty metadata are rejected with HTTP 403. Browsers omit fetch metadata entirely for requests to non-secure URLs (plain `http://` on a non-loopback host, which is how many private CPA deployments are reached). In that case the gate accepts a single well-formed `http://` `Origin` plus the action header, because mixed-content blocking means that is the only origin a legitimate browser page can produce against a plain-HTTP server; `https://`, `null`, multi-valued, and malformed origins without metadata are rejected. Over plain HTTP the plugin therefore cannot prove same-origin, only "came from some plain-HTTP page"; serving CPA over HTTPS (for example with `tailscale serve`) restores the strict check automatically. Non-browser clients such as `curl` send neither header and authenticate with the management key plus the action header alone. A fronting proxy that injects ambient management authentication must still enforce its own CSRF/origin policy for the entire Management API and must pass `Sec-Fetch-Site` unchanged.
+
+`scripts/smoke-test.sh ... --browser` exercises exactly this shape against a real CPA bound to a non-loopback address over plain HTTP (see [Build and validation](#build-and-validation)).
+
+Example API actions:
 
 ```bash
 export CPA_MANAGEMENT_KEY='<MANAGEMENT_KEY>'
@@ -81,19 +124,25 @@ export CPA_MANAGEMENT_KEY='<MANAGEMENT_KEY>'
 curl --fail --silent --show-error -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" \
   http://127.0.0.1:8317/v0/management/plugins/auto-baseline/status | jq .
 
+# Switch to live writes (CPA hot-reloads config.yaml)
+curl --fail --silent --show-error -X POST \
+  -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" -H "X-Auto-Baseline-Action: 1" \
+  -H "Content-Type: application/json" --data '{"enabled":false}' \
+  http://127.0.0.1:8317/v0/management/plugins/auto-baseline/dry-run
+
 # Report a fingerprint captured on the host (e.g. from a header dump)
 curl --fail --silent --show-error -X POST \
-  -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" \
-  -H "X-Auto-Baseline-Request: 1" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" -H "X-Auto-Baseline-Action: 1" \
+  -H "Content-Type: application/json" \
   --data '{"provider":"claude","user_agent":"claude-cli/2.1.258 (external, cli)","package_version":"0.112.1","runtime_version":"v26.3.0","os":"Linux","arch":"x64","session_id":"host-report"}' \
   http://127.0.0.1:8317/v0/management/plugins/auto-baseline/observe
 ```
 
-Mutating routes require the custom header. When a browser sends fetch metadata, only `Sec-Fetch-Site: same-origin` or `none` is accepted. Over plain HTTP on a non-loopback host browsers send no fetch metadata, so a well-formed `http://` `Origin` is accepted there (mixed-content blocking means only a plain-HTTP page can post to a plain-HTTP server) while `https://`, `null`, or malformed origins are rejected. Non-browser clients may omit both. No route or log ever includes API keys, tokens, request bodies, session IDs or the contents of `config.yaml` beyond the managed baseline values.
+No route or log ever includes API keys, tokens, request bodies, session IDs, or the contents of `config.yaml` beyond the managed baseline values. Do not paste the management key into shell history on shared systems; use an environment variable or secure prompt.
 
 ## Write safety
 
-- Only `claude-header-defaults.{user-agent,package-version,runtime-version}` and `codex-header-defaults.user-agent` are ever written. A file with a duplicate mapping key is refused (`duplicate_key`): CPA's own decoder rejects such a file, so it could never be hot-reloaded. A target that is a non-empty scalar, a sequence, an alias, reached through a YAML merge key (`<<`, recognized by its `!!merge` tag; a quoted `"<<"` is an ordinary key), part of an alias/merge cycle, or part of a multi-document file is refused (`unsupported_config_shape` / `multi_document_config`) rather than rewritten. Reads resolve aliases and merge keys with a cycle guard, so a malformed file cannot crash CPA.
+- Only `claude-header-defaults.{user-agent,package-version,runtime-version}`, `codex-header-defaults.user-agent`, and (through the operator-driven dry-run route only) `plugins.configs.auto-baseline.dry-run` are ever written. A file with a duplicate mapping key is refused (`duplicate_key`): CPA's own decoder rejects such a file, so it could never be hot-reloaded. A target that is a non-empty scalar, a sequence, an alias, reached through a YAML merge key (`<<`, recognized by its `!!merge` tag; a quoted `"<<"` is an ordinary key), part of an alias/merge cycle, or part of a multi-document file is refused (`unsupported_config_shape` / `multi_document_config`) rather than rewritten. Reads resolve aliases and merge keys with a cycle guard, so a malformed file cannot crash CPA.
 - Every write is preceded by a fresh read and a "strictly newer than on disk" check; the file hash is compared again after the backup and immediately before the write, and the read-modify-write is retried (up to 3 times) if another writer got there first. This narrows but cannot eliminate the race: other writers do not take a lock.
 - Writes rewrite the existing inode in place (write the new bytes, truncate to the new length, fsync, close), so a Docker single-file bind mount works and the file is never empty on disk between steps. If a write fails midway the previous bytes are written back best-effort. Crash atomicity still cannot be guaranteed on a single-file bind mount (no rename is possible); the backup exists for manual recovery.
 - The previous file is copied to `<backup-dir>/config.yaml.auto-baseline.bak` (mode 0600) first; an unwritable backup dir blocks promotion.
@@ -123,6 +172,8 @@ bash -n scripts/smoke-test.sh
 ```
 
 It starts CPA on a free port with a temporary config (placeholder Claude credential pointing at a closed local port, so no traffic leaves the host), sends three Claude Code 2.1.258-shaped requests from two session IDs, and asserts that `config.yaml` was promoted, that CPA logged the reload, and that the status route reports the new baseline. Evidence is kept under `dist/smoke/<run-id>/`.
+
+Add `--browser` to also prove the browser trust model over plain HTTP on a non-loopback address: CPA is bound to `0.0.0.0` with `remote-management.allow-remote: true` for the duration of the run (it is reachable on this host's interfaces while it runs), the redacted sidebar page and its same-origin upgrade are fetched at `http://<host-ip>:<port>`, the dry-run switch is flipped both ways through the CSRF gate with an `Origin` header and no `Sec-Fetch-Site` (the header shape a browser sends to a plain-HTTP origin) and confirmed through CPA's reload, and hostile shapes (`https://` origin, `cross-site`, missing action header) are asserted to return 403. No headless browser is driven: none was available when the phase was written, so the checks are `curl` reproductions of the browser's requests and the output says so.
 
 ## Operator acceptance checklist
 
