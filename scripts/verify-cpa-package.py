@@ -31,9 +31,9 @@ import (
     store "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 )
 const sourceURL = "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json"
-const releaseBase = "https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.0"
+const releaseBase = "https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.1"
 const apiBase = "https://api.github.com/repos/NoorChasib/cpa-plugin-token-usage/releases/"
-const archiveName = "token-usage_0.1.0_linux_amd64.zip"
+const archiveName = "token-usage_0.1.1_linux_amd64.zip"
 type local struct { root, dist string; corrupt bool }
 func (l local) Do(r *http.Request) (*http.Response, error) {
     // No real transport exists. Only the canonical metadata/files below are served.
@@ -47,8 +47,8 @@ func (l local) Do(r *http.Request) (*http.Response, error) {
     case releaseBase + "/checksums.txt":
         name = filepath.Join(l.dist, "checksums.txt")
         if l.corrupt { raw = []byte(strings.Repeat("0", 64) + "  " + archiveName + "\n") }
-    case apiBase + "latest", apiBase + "tags/v0.1.0":
-        fixture := store.Release{TagName: "v0.1.0"}
+    case apiBase + "latest", apiBase + "tags/v0.1.1":
+        fixture := store.Release{TagName: "v0.1.1"}
         for _, asset := range []string{archiveName, "checksums.txt", "registry.json"} {
             fixture.Assets = append(fixture.Assets, store.ReleaseAsset{Name: asset, BrowserDownloadURL: releaseBase + "/" + asset})
         }
@@ -66,7 +66,7 @@ func main() {
         registry, err := client.FetchRegistry(ctx); if err != nil { panic(err) }
         if registry.SchemaVersion != 2 || len(registry.Plugins) != 1 { panic("wrong registry") }
         plugin := registry.Plugins[0]
-        if plugin.ID != "token-usage" || plugin.Version != "0.1.0" { panic("wrong identity") }
+        if plugin.ID != "token-usage" || plugin.Version != "0.1.1" { panic("wrong identity") }
         expectedType := store.InstallTypeGitHubRelease
         if index == 1 { expectedType = store.InstallTypeDirect }
         if store.PluginInstallType(plugin) != expectedType { panic("wrong install type") }
@@ -76,7 +76,7 @@ func main() {
         }
         options := store.InstallOptions{PluginsDir: filepath.Join(os.Args[3], expectedType), GOOS: "linux", GOARCH: "amd64"}
         installed, err := client.Install(ctx, plugin, options); if err != nil { panic(err) }
-        if installed.Skipped || installed.Version != "0.1.0" || installed.InstallType != expectedType { panic("wrong initial install") }
+        if installed.Skipped || installed.Version != "0.1.1" || installed.InstallType != expectedType { panic("wrong initial install") }
         got, err := os.ReadFile(installed.Path); if err != nil { panic(err) }
         want, err := os.ReadFile(filepath.Join(os.Args[2], "token-usage.so")); if err != nil { panic(err) }
         if !bytes.Equal(got, want) { panic("installed library changed") }
@@ -85,9 +85,9 @@ func main() {
         unsupported := options; unsupported.GOARCH = "arm64"
         if _, err = client.Install(ctx, plugin, unsupported); err == nil { panic("unsupported platform accepted") }
         if index == 0 {
-            fixed, err := client.InstallVersion(ctx, plugin, "v0.1.0", "0.1.0", options)
+            fixed, err := client.InstallVersion(ctx, plugin, "v0.1.1", "0.1.1", options)
             if err != nil || !fixed.Skipped { panic("exact-tag installation failed") }
-            if _, err = client.InstallVersion(ctx, plugin, "v0.1.0", "0.2.0", options); err == nil { panic("wrong release version accepted") }
+            if _, err = client.InstallVersion(ctx, plugin, "v0.1.1", "0.2.0", options); err == nil { panic("wrong release version accepted") }
             bad := store.NewClient(local{os.Args[1], os.Args[2], true}, registryURL)
             if _, err = bad.Install(ctx, plugin, options); err == nil { panic("bad release checksum accepted") }
         } else {
@@ -105,7 +105,7 @@ def main():
     parser.add_argument("--cpa-source", type=Path, required=True)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
-    release.verify(args.dist, "0.1.0")
+    release.verify(args.dist, "0.1.1")
     with tempfile.TemporaryDirectory(prefix="token-usage-validator-") as directory:
         path = Path(directory)
         (path / "main.go").write_text(HARNESS)

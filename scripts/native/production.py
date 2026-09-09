@@ -81,7 +81,7 @@ def start(binary, directory, config, generation):
                 code, raw = spike.request(base, BASE + "status")
                 if code == 200:
                     status = json.loads(raw)
-                    assert status["storage"] == "sqlite" and status["version"] == "0.1.0", status
+                    assert status["storage"] == "sqlite" and status["version"] == "0.1.1", status
                     assert "fixture_records" not in status and "schema6_probe" not in status
                     no_leak(raw)
                     return proc, log, base, status
@@ -141,9 +141,14 @@ def auth_checks(base, interval):
             assert not any(word in raw for word in (b"reported_tokens", b"observed_events", b"oa-normal", b"claude-", b"usage.sqlite"))
         for prefix in ("/v0/resource/token-usage/", "/v0/resource/plugins/token-usage/"):
             code, raw = spike.request(base, prefix + route, key=None)
-            assert code == 404, ("public route", route, code)
+            if prefix == "/v0/resource/plugins/token-usage/" and route == "status":
+                assert code == 200 and raw.startswith(b"<!doctype html>"), (route, code)
+                for key in (None, spike.MANAGEMENT_KEY, "invalid-synthetic-key"):
+                    assert spike.request(base, prefix + route + "?ignored=canary", key=key) == (code, raw)
+            else:
+                assert code == 404, ("public route", route, code)
             no_leak(raw)
-            assert b"reported_tokens" not in raw and b"oa-normal" not in raw
+            assert b"oa-normal" not in raw
 
 
 def send(base, model, stream=False, case=None):

@@ -2,6 +2,7 @@
 # Required, non-publishing acceptance. Never reads operator configuration.
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+python3 "$ROOT/scripts/check-candidate.py"
 MODE=${1:-all}
 [[ "$MODE" == all || "$MODE" == spike ]] || { printf 'Expected all or spike mode.\n' >&2; exit 1; }
 CPA_PIN=7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974
@@ -27,7 +28,7 @@ tar -xzf "$WORK/cpa.tar.gz" --strip-components=1 -C "$WORK/source"
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
   -ldflags "-X main.Version=v7.2.155 -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
-  -ldflags '-s -w -X github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin.Version=0.1.0' -o "$WORK/token-usage-production.so" .
+  -ldflags '-s -w -X github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin.Version=0.1.1' -o "$WORK/token-usage-production.so" .
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -tags nativefixture -buildmode=c-shared -o "$WORK/token-usage.so" .
 # Runtime network isolation is mandatory. UID 0 avoids the host user's inotify
 # quota exhaustion; CHOWN touches only the fresh synthetic /tmp bind mount.

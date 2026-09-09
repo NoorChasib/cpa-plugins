@@ -141,8 +141,10 @@ func TestPrivateRoutesQueryValidationAndExactFilters(t *testing.T) {
 			t.Fatal("public Menu")
 		}
 	}
-	if manage(t, p, "/v0/resource/plugins/token-usage/status", nil).StatusCode != 404 {
-		t.Fatal("public route")
+	for _, path := range []string{"summary", "models"} {
+		if manage(t, p, "/v0/resource/plugins/token-usage/"+path, nil).StatusCode != 404 {
+			t.Fatal("private statistics acquired a public route")
+		}
 	}
 	for _, q := range []url.Values{nil, {"from": {"x"}, "to": {"y"}}, {"from": {"2026-09-09T00:00:00Z", "2026-09-09T01:00:00Z"}, "to": {"2026-09-09T12:00:00Z"}}, {"from": {"2026-09-09T00:00:00Z"}, "to": {"2026-09-10T12:00:00Z"}}, {"from": {"2026-09-09T00:00:00Z"}, "to": {"2026-09-09T12:00:00Z"}, "account": {"x"}}} {
 		if r := manage(t, p, "/v0/management/plugins/token-usage/summary", q); r.StatusCode != 400 {
@@ -169,8 +171,11 @@ func TestConfigurationHistoryTracksOnlySuccessfulInitialization(t *testing.T) {
 	if err := os.WriteFile(badPath, []byte("not a SQLite database"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Handle(protocol.MethodPluginRegister, registrationRequest(badPath)); err == nil {
-		t.Fatal("expected storage initialization failure")
+	if _, err := p.Handle(protocol.MethodPluginRegister, registrationRequest(badPath)); err != nil {
+		t.Fatalf("initial storage failure hid configuration metadata: %v", err)
+	}
+	if r := manage(t, p, "/v0/management/plugins/token-usage/status", nil); r.StatusCode != 503 {
+		t.Fatalf("expected visible storage initialization failure: %d %s", r.StatusCode, r.Body)
 	}
 	good := registrationRequest(filepath.Join(t.TempDir(), "private", "usage.sqlite"))
 	if _, err := p.Handle(protocol.MethodPluginRegister, good); err != nil {

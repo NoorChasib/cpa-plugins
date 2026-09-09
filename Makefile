@@ -1,12 +1,12 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
-VERSION ?= 0.1.0
+VERSION ?= 0.1.1
 DIST ?= dist
 GO ?= go
 PYTHON ?= python3
 LDFLAGS := -s -w -X github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin.Version=$(VERSION)
 
-.PHONY: fmt-check vet test test-race build c-shared ci smoke native-spike package-current package-tested checksums verify-release
+.PHONY: fmt-check vet test test-race build c-shared ci smoke native-spike browser-tools browser store-smoke package-current package-tested checksums verify-release
 fmt-check:
 	@files=$$(find . -name '*.go' -not -path './.git/*' -not -path './dist/*'); unformatted=$$(gofmt -l $$files); test -z "$$unformatted" || { printf 'Run gofmt on:\n%s\n' "$$unformatted" >&2; exit 1; }
 vet:
@@ -26,8 +26,20 @@ c-shared:
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 $(GO) build -trimpath -buildmode=c-shared -ldflags '$(LDFLAGS)' -o $(DIST)/token-usage.so .
 ci: fmt-check vet test test-race build c-shared
+browser-tools:
+	@test "$$(node --version)" = v26.8.1 && test "$$(npm --version)" = 11.19.0
+	npm --prefix scripts/browser ci --ignore-scripts --no-audit --no-fund
+	chmod u+x scripts/browser/node_modules/agent-browser/bin/agent-browser-linux-x64
+	bash scripts/browser/install-chrome.sh
+	bash scripts/browser/check-tools.sh
+browser:
+	bash scripts/browser/run.sh
 smoke:
 	bash scripts/native/run-smoke.sh
+# Requires the exact library accepted by make smoke; never silently rebuild it.
+store-smoke:
+	@test -n "$(CPA_SMOKE_WORK)" || { printf 'Set CPA_SMOKE_WORK to the fresh make smoke directory.\n' >&2; exit 1; }
+	bash -c 'source scripts/browser/check-tools.sh; $(PYTHON) scripts/native/store_smoke.py --library "$(CPA_SMOKE_WORK)/token-usage-production.so"'
 native-spike:
 	bash scripts/native/run-spike.sh
 package-current: c-shared

@@ -153,7 +153,8 @@ def request(base, path, key=MANAGEMENT_KEY, body=None):
         with OPENER.open(req, timeout=10) as response:
             return response.status, response.read()
     except HTTPError as error:
-        return error.code, error.read()
+        with error:
+            return error.code, error.read()
 
 
 def free_port():
@@ -219,9 +220,13 @@ def run_setting(binary, library, directory, upstream, enabled):
             code, raw = request(base, STATUS, key=key)
             assert code in (401, 403), ("unauthenticated status", code, raw)
             assert b"fixture_records" not in raw
-        for path in ("/v0/resource/token-usage/status", "/v0/resource/plugins/token-usage/status"):
-            code, raw = request(base, path, key=None)
-            assert code == 404, ("public resource", path, code)
+        code, raw = request(base, "/v0/resource/token-usage/status", key=None)
+        assert code == 404
+        code, shell = request(base, "/v0/resource/plugins/token-usage/status", key=None)
+        assert code == 200 and shell.startswith(b"<!doctype html>")
+        assert b"fixture_records" not in shell and b"schema6_probe" not in shell
+        for key in (None, MANAGEMENT_KEY, "invalid-synthetic-key"):
+            assert request(base, "/v0/resource/plugins/token-usage/status?ignored=canary", key=key) == (200, shell)
         for case, stream, expected, failed in CASES:
             body = {"model": "alias-" + case, "messages": [{"role": "user", "content": "synthetic fixture"}],
                     "max_tokens": 64, "stream": stream}

@@ -1,5 +1,79 @@
-Redistribution notices for the native Token Usage library.
-Project/baseline/CPA notices are in the accompanying LICENSE.
+Redistribution notices for the native Token Usage library and source fixtures.
+Project/baseline/CPA notices are also in the accompanying LICENSE.
+
+Sidebar references and console session compatibility
+====================================================
+Adapted visual tokens/base components and audited source patterns:
+
+- Account Health Pushover v0.4.0
+  https://github.com/NoorChasib/cpa-plugin-account-health-pushover
+  Revision: 870456ecdbf3a86c76c6274f1d02e14dadddabf4
+  Sources: internal/plugin/status_html.go, internal/plugin/browser_auth_script.go
+  Copyright (c) 2026 NoorChasib
+
+- Auto Baseline v0.1.2
+  https://github.com/NoorChasib/cpa-plugin-auto-baseline
+  Revision: a7f5946b90e41d2a89d800cb143561fae0b4d9ea
+  Sources: internal/plugin/status_html.go, internal/plugin/browser_auth_script.go,
+  internal/config/config.go
+  Copyright (c) 2026 Noor Chasib
+
+- Reset Priority v0.1.4
+  https://github.com/NoorChasib/cpa-plugin-reset-priority
+  Revision: d5dfcb2a8517d87c7741ec07100f6400c7db60c3
+  Sources: internal/plugin/status_page.go, internal/plugin/runtime.go,
+  internal/plugin/browser_auth_script.go
+  Copyright (c) 2026 Noor Chasib
+
+The Token Usage sidebar adapts the Account Health/Auto Baseline styling and
+Reset Priority fixed data-free shell concept. It does not copy a public
+operational snapshot or the fetched-HTML/document.write upgrade behavior.
+The constrained JSON/session controller and configuration lifecycle are adapted
+for Token Usage's distinct privacy and history requirements. Exact source
+links and the reuse/avoid rationale are in docs/sidebar-audit.md.
+
+- Official CLI Proxy API Management Center v1.22.15
+  https://github.com/router-for-me/Cli-Proxy-API-Management-Center
+  Revision: ed5f1c48e11ba7335f1e8f676f228c280196af85
+  Sources: src/stores/useAuthStore.ts,
+  src/services/storage/secureStorage.ts, src/utils/encryption.ts
+  Copyright (c) 2026 Router-For.ME
+
+The embedded page implements a constrained compatible reader for the console's
+remembered-session format and XOR/Base64 obfuscation (not secure encryption).
+The unmodified src/utils/encryption.ts and
+src/services/storage/secureStorage.ts files are copied into
+internal/plugin/frontendtests/upstream/ as encryption.ts and secureStorage.ts,
+with the upstream LICENSE adjacent. The browser tests strip TypeScript for
+execution; these source fixtures are not a frontend runtime dependency or a
+production credential/session setter.
+
+The above reference and console source material is provided under MIT:
+
+MIT License
+
+Copyright (c) 2026 NoorChasib
+Copyright (c) 2026 Noor Chasib
+Copyright (c) 2026 Router-For.ME
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 github.com/mattn/go-sqlite3 v1.14.52 (bundled SQLite is public domain)
 ======================================================================

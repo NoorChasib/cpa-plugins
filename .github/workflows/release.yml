@@ -1,30 +1,32 @@
-name: Publish verified Token Usage 0.1.0
+name: Publish verified Token Usage 0.1.1
 
 on:
   push:
-    tags: [v0.1.0]
+    tags: [v0.1.1]
 
 permissions:
   contents: read
 
 concurrency:
-  group: token-usage-release-v0.1.0
+  group: token-usage-release-v0.1.1
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.repository == 'NoorChasib/cpa-plugin-token-usage' && github.event_name == 'push' && github.ref == 'refs/tags/v0.1.0' && github.event.deleted == false
+    if: github.repository == 'NoorChasib/cpa-plugin-token-usage' && github.event_name == 'push' && github.ref == 'refs/tags/v0.1.1' && github.event.deleted == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     # The only writable job. GH_TOKEN is exported only for explicit gh steps.
     permissions:
       contents: write
     env:
       RELEASE_REPO: NoorChasib/cpa-plugin-token-usage
-      RELEASE_TAG: v0.1.0
-      RELEASE_VERSION: 0.1.0
+      RELEASE_TAG: v0.1.1
+      RELEASE_VERSION: 0.1.1
       GH_PROMPT_DISABLED: '1'
       GOTOOLCHAIN: local
+      # Test-only Chromium sandbox exception on the disposable hosted runner.
+      AGENT_BROWSER_ARGS: --no-sandbox
     defaults:
       run:
         shell: bash --noprofile --norc -euo pipefail {0}
@@ -43,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
-          python3 -c 'import json; assert json.load(open("registry.json"))["plugins"][0]["version"] == "0.1.0"'
+          python3 -c 'import json; assert json.load(open("registry.json"))["plugins"][0]["version"] == "0.1.1"'
       - name: Refuse any existing release or draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,8 +62,16 @@ jobs:
           cache: false
       - name: Require the selected Go toolchain
         run: test "$(go env GOVERSION)" = go1.27.1
+      - name: Install exact test-only Node, browser CLI, and Chrome with integrity checks
+        run: |
+          bash scripts/browser/install-node.sh "$RUNNER_TEMP/token-usage-node"
+          printf '%s\n' "$RUNNER_TEMP/token-usage-node/bin" >> "$GITHUB_PATH"
+      - name: Install locked browser tooling without lifecycle scripts
+        run: make browser-tools
       - name: Full formatting, static, unit, race, and build checks
         run: make ci VERSION="$RELEASE_VERSION"
+      - name: Required real browser session, rendering, CSP, and accessibility acceptance
+        run: make browser
       - name: Required pinned CPA native, production SQLite, and restart acceptance
         run: |
           make smoke | tee "$RUNNER_TEMP/native-smoke.log"
@@ -79,6 +89,12 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a") as out:
               out.write(f"CPA_SMOKE_WORK={work}\n")
           PY
+      - name: Required actual official-image store handler, default volume, restart, and native browser acceptance
+        run: |
+          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b
+          docker pull --platform linux/amd64 python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+          make store-smoke CPA_SMOKE_WORK="$CPA_SMOKE_WORK"
+          cmp "$CPA_SMOKE_WORK/token-usage-production.so" dist/token-usage.so
       - name: Package the exact tested bytes and rehearse both CPA installers
         run: |
           make package-tested checksums verify-release VERSION="$RELEASE_VERSION"
@@ -94,7 +110,7 @@ jobs:
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
           gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" --verify-tag --draft \
-            --title "Token Usage $RELEASE_VERSION" --notes-file docs/release-notes-0.1.0.md \
+            --title "Token Usage $RELEASE_VERSION" --notes-file docs/release-notes-0.1.1.md \
             "dist/token-usage_${RELEASE_VERSION}_linux_amd64.zip" dist/checksums.txt dist/registry.json
       - name: Download and revalidate the draft before publication
         env:
@@ -106,9 +122,9 @@ jobs:
           import os
           from pathlib import Path
           draft = json.loads((Path(os.environ["RUNNER_TEMP"]) / "draft.json").read_text())
-          assert draft["isDraft"] and draft["tagName"] == "v0.1.0"
+          assert draft["isDraft"] and draft["tagName"] == "v0.1.1"
           names = [asset["name"] for asset in draft["assets"]]
-          assert sorted(names) == ["checksums.txt", "registry.json", "token-usage_0.1.0_linux_amd64.zip"]
+          assert sorted(names) == ["checksums.txt", "registry.json", "token-usage_0.1.1_linux_amd64.zip"]
           PY
           downloaded=$(mktemp -d "$RUNNER_TEMP/release-download.XXXXXXXX")
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --dir "$downloaded"

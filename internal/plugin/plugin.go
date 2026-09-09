@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -19,19 +21,29 @@ import (
 
 const ID = "token-usage"
 
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 type Plugin struct {
-	lifecycle sync.Mutex
-	mu        sync.RWMutex
-	current   *collector.Collector
-	cfg       config.Config
-	terminal  bool
-	now       func() time.Time
-	fixture   fixtureRecorder
+	lifecycle                   sync.Mutex
+	mu                          sync.RWMutex
+	current                     *collector.Collector
+	cfg                         config.Config
+	terminal                    bool
+	storageInitializationFailed bool
+	now                         func() time.Time
+	fixture                     fixtureRecorder
+	// Immutable after construction. Never search for prior databases or derive
+	// this path from store metadata, credential directories, or later cwd changes.
+	defaultDatabasePath string
 }
 
-func New() *Plugin                              { return &Plugin{now: time.Now} }
+func New() *Plugin {
+	p := &Plugin{now: time.Now}
+	if cwd, err := os.Getwd(); err == nil {
+		p.defaultDatabasePath = filepath.Join(cwd, "plugins", "data", ID, "usage.sqlite")
+	}
+	return p
+}
 func (p *Plugin) runtime() *collector.Collector { p.mu.RLock(); defer p.mu.RUnlock(); return p.current }
 func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	if len(raw) > protocol.MaxRequestBytes {
@@ -54,7 +66,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 			{Method: http.MethodGet, Path: "/plugins/" + ID + "/status", Description: "Private collection health and coverage."},
 			{Method: http.MethodGet, Path: "/plugins/" + ID + "/summary", Description: "Private CPA-reported raw totals."},
 			{Method: http.MethodGet, Path: "/plugins/" + ID + "/models", Description: "Private provider/model raw totals."},
-		}}, nil
+		}, Resources: []protocol.ResourceRoute{{Path: "/status", Menu: "Token Usage", Description: "Token Usage statistics and collection health."}}}, nil
 	case protocol.MethodManagementHandle:
 		return p.management(raw), nil
 	case protocol.MethodUsageHandle:
@@ -89,6 +101,12 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if err != nil {
 		return protocol.Registration{}, err
 	}
+	if cfg.DatabasePath == "" {
+		cfg.DatabasePath = p.defaultDatabasePath
+		if cfg.DatabasePath == "" {
+			return protocol.Registration{}, errors.New("working directory unavailable; absolute database-path required")
+		}
+	}
 	p.lifecycle.Lock()
 	defer p.lifecycle.Unlock()
 	p.mu.RLock()
@@ -105,11 +123,21 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	current, err := collector.New(cfg, p.now)
 	if err != nil {
+		if old == nil {
+			// Keep valid configuration discoverable even if initial storage is
+			// unavailable. Do not bind history, retain an error/path, or start an
+			// in-memory collector; a corrected configuration may retry safely.
+			p.mu.Lock()
+			p.storageInitializationFailed = true
+			p.mu.Unlock()
+			return registration(), nil
+		}
 		return protocol.Registration{}, errors.New("storage initialization failed")
 	}
 	p.mu.Lock()
 	p.current = current
 	p.cfg = cfg
+	p.storageInitializationFailed = false
 	p.mu.Unlock()
 	return registration(), nil
 }
@@ -134,32 +162,46 @@ func (p *Plugin) management(raw []byte) protocol.ManagementResponse {
 	// Management headers/body may carry credentials; no field here decodes them.
 	var req struct {
 		Method, Path string
-		Query        url.Values
+		Query        json.RawMessage
 	}
 	if json.Unmarshal(raw, &req) != nil {
 		return failure(400, "invalid_request")
 	}
+	// CPA resources are not management-authenticated. This exact GET returns
+	// only fixed bytes, before inspecting query values or any collector state.
+	if req.Method == http.MethodGet && req.Path == "/v0/resource/plugins/"+ID+"/status" {
+		return sidebarResponse()
+	}
 	base := "/v0/management/plugins/" + ID
-	if req.Method != "GET" || (req.Path != base+"/status" && req.Path != base+"/summary" && req.Path != base+"/models") {
+	if req.Method != http.MethodGet || (req.Path != base+"/status" && req.Path != base+"/summary" && req.Path != base+"/models") {
 		return failure(404, "not_found")
 	}
-	c := p.runtime()
-	if c == nil {
-		return failure(503, "collection_unavailable")
+	var q url.Values
+	if len(req.Query) > 0 && json.Unmarshal(req.Query, &q) != nil {
+		return failure(400, "invalid_request")
+	}
+	if req.Path == base+"/status" && len(q) > 0 {
+		return failure(400, "invalid_query")
 	}
 	p.mu.RLock()
-	cfg := p.cfg
+	c, cfg, storageFailed := p.current, p.cfg, p.storageInitializationFailed
 	p.mu.RUnlock()
-	if req.Path == base+"/status" {
-		if len(req.Query) > 0 {
-			return failure(400, "invalid_query")
+	if c == nil {
+		if storageFailed {
+			if req.Path == base+"/status" {
+				return jsonResponse(503, map[string]any{"api_schema": 1, "source": "cpa_reported", "version": Version, "storage": "sqlite", "state": "unavailable", "error": "storage_unavailable", "collection": map[string]string{"state": "unavailable", "reason": "storage_initialization_failed"}, "upstream_completeness": "unknown"})
+			}
+			return failure(503, "storage_unavailable")
 		}
+		return failure(503, "collection_unavailable")
+	}
+	if req.Path == base+"/status" {
 		snapshot := c.Snapshot()
 		value := map[string]any{"api_schema": 1, "source": "cpa_reported", "version": Version, "storage": "sqlite", "state": snapshot["state"], "coverage": c.Coverage(), "collection": snapshot, "upstream_completeness": "unknown", "limitations": []string{"CPA delivery has no durable replay guarantee", "Claude split/cumulative streams can omit input/cache or later output", "Failed/disconnected streams can lose tokens or retain an earlier success", "Zero reported usage does not prove zero consumption"}, "limits": map[string]any{"queue_capacity": cfg.QueueCapacity, "batch_size": cfg.BatchSize, "raw_retention": cfg.RawRetention.String(), "max_disk_bytes": strconv.FormatInt(cfg.MaxDiskBytes, 10), "max_models": cfg.MaxModels, "query_timeout": cfg.QueryTimeout.String()}}
 		p.fixture.addStatus(value, snapshot)
 		return jsonResponse(200, value)
 	}
-	f, err := parseQuery(req.Query, req.Path == base+"/models", cfg, p.now())
+	f, err := parseQuery(q, req.Path == base+"/models", cfg, p.now())
 	if err != nil {
 		return failure(400, "invalid_query")
 	}
@@ -230,7 +272,7 @@ func parseQuery(q url.Values, models bool, cfg config.Config, now time.Time) (st
 	return f, nil
 }
 func registration() protocol.Registration {
-	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: "Token Usage", Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugin-token-usage", ConfigFields: []protocol.ConfigField{{Name: "database-path", Type: "string", Description: "Required absolute path in a dedicated private persistent directory."}}}, Capabilities: protocol.RegistrationCapabilities{UsagePlugin: true, ManagementAPI: true}}
+	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: "Token Usage", Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugin-token-usage", ConfigFields: []protocol.ConfigField{{Name: "database-path", Type: "string", Description: "Optional absolute path in a dedicated private persistent directory. Defaults to plugins/data/token-usage/usage.sqlite beneath CPA's captured working directory. Existing history is never moved automatically."}}}, Capabilities: protocol.RegistrationCapabilities{UsagePlugin: true, ManagementAPI: true}}
 }
 func failure(status int, code string) protocol.ManagementResponse {
 	return jsonResponse(status, map[string]string{"error": code})

@@ -1,10 +1,10 @@
 # Persistent runtime contract
 
-Implementation contract for the Linux amd64 raw-only MVP. CPA ABI/schema and upstream omissions remain documented in `upstream-compatibility.md`.
+Implementation contract for the Linux amd64 **Token Usage 0.1.1**: persistent raw-only accounting plus the read-only sidebar. Published v0.1.0 remains unchanged. CPA ABI/schema and upstream omissions remain documented in [upstream compatibility](upstream-compatibility.md); current versus historical verification is separated below.
 
 ## Configuration
 
-CPA passes the `plugins.configs.token-usage` mapping as base64 `config_yaml` in lifecycle RPC. Unknown keys and invalid values fail configuration. Only `database-path` is required. `enabled` and `priority` are recognized CPA-owned selection fields, not storage options.
+CPA passes the `plugins.configs.token-usage` mapping as base64 `config_yaml` in lifecycle RPC. A single nonempty YAML document is required and is bounded to 64 KiB, including metadata. Unknown real plug-in keys and invalid values fail configuration. No storage option is required for the standard layout. `enabled`, `priority`, and a `store` mapping are CPA-owned fields: the decode-only store node is discarded and selection metadata is normalized away before runtime equality checks. Store URLs/identifiers never become paths, credential-discovery hints or runtime options. Malformed documents or a non-mapping `store` still fail.
 
 ```yaml
 plugins:
@@ -13,7 +13,9 @@ plugins:
     token-usage:
       enabled: true
       priority: 20
-      database-path: /CLIProxyAPI/plugin-data/token-usage/usage.sqlite
+      # Optional override. Omit for <captured cwd>/plugins/data/token-usage/usage.sqlite.
+      # Preserve any existing explicit path when upgrading.
+      # database-path: /your/existing/private/token-usage/usage.sqlite
       queue-capacity: 8192
       batch-size: 256
       flush-interval: 1s
@@ -24,15 +26,39 @@ plugins:
       query-timeout: 5s
 ```
 
-Bounds: queue 1–65536; batch 1–4096 and no larger than queue; flush 10ms–10s; raw retention 1h–8760h; maintenance 1s–1h; disk budget 1 MiB–1 TiB; model cardinality 1–100000; query timeout 100ms–30s. The database path must be an explicit clean absolute path in a dedicated private directory. Existing final directory must be mode 0700; database/lock/SQLite companions must be regular, owned by this process's UID, mode 0600, and not symlinks. Known network filesystem types are refused; use a local filesystem supporting SQLite WAL, never a shared/network volume.
+Bounds: queue 1–65536; batch 1–4096 and no larger than queue; flush 10ms–10s; raw retention 1h–8760h; maintenance 1s–1h; disk budget 1 MiB–1 TiB; model cardinality 1–100000; query timeout 100ms–30s.
 
-Repeated identical configuration is idempotent while running. Storage/collector configuration changes, including path changes, require native restart: live changes fail rather than splitting history or changing retention guarantees silently. Host-owned enabled/priority changes do not constitute storage configuration changes. Quiesce closes admission, drains and joins the writer, then closes storage. The stopped collector remains reachable for status and late-delivery diagnostics: callbacks after admission closes increment `observed_events` and `dropped_stopped`, including oversized callbacks. A later register/reconfigure reopens the same configured path with a new collector; a different path remains prohibited until native restart. Final native shutdown prohibits any new worker.
+`Plugin.New()` captures the working directory once. An omitted/empty `database-path` resolves to `<captured cwd>/plugins/data/token-usage/usage.sqlite`, including on later same-config reopen. With the standard official-image working directory `/CLIProxyAPI`, this is `/CLIProxyAPI/plugins/data/token-usage/usage.sqlite`, beneath the existing `cliproxy-plugins` mount: **no Compose change or additional mount**. A custom `plugins.dir` is not discovered. Set an explicit override when a nonstandard working/plugin-directory layout would place the default outside the persistent mount. An unavailable captured working directory requires an explicit path; a later cwd is never substituted.
+
+An explicit path must be clean, absolute, at most 4096 bytes, non-root and NUL-free, in a dedicated private directory. It remains authoritative: no discovery, migration, merging, reset or fallback to a different database occurs. Removing a prior override is not a migration. Existing final directory must be owned by the CPA UID and mode `0700`; database/lock/SQLite companions must be regular, single-link files, owned by that UID, mode `0600`, and not symlinks. Ancestor symlinks and known network filesystem types are refused. Missing directories can be created privately; the shared plugins-volume root and existing unsafe modes are not recursively changed. Use a local filesystem supporting SQLite WAL and one active owner, never a shared/network database.
+
+Valid configuration with **initial storage-open failure** still returns registration metadata, capabilities, the sidebar registration and optional database-path config field. The plug-in retains only a failure flag, not a raw error/path. Status returns HTTP 503 with `api_schema: 1`, `source: "cpa_reported"`, `version: "0.1.1"`, `storage: "sqlite"`, `state: "unavailable"`, `error: "storage_unavailable"`, `collection: {state: "unavailable", reason: "storage_initialization_failed"}`, and unknown upstream completeness. Coverage/counters/limits are absent, not invented zeros; summary/models return 503 and admission fails. This is not an in-memory collector or permission to accept invalid options/protocols. The first successful collector alone establishes the prior config/history binding, so corrected valid configuration can retry before that success. A sidebar Refresh only rereads status; use the host's reconfigure/restart path to retry opening storage.
+
+After successful initialization, repeated identical configuration is idempotent while running. Storage/collector configuration changes, including path changes, require native restart: live changes fail rather than splitting history or changing retention guarantees silently. CPA-owned enabled/priority/store changes do not constitute storage configuration changes. Quiesce closes admission, drains and joins the writer, then closes storage. The stopped collector remains reachable for status and late-delivery diagnostics: callbacks after admission closes increment `observed_events` and `dropped_stopped`, including oversized callbacks. A later register/reconfigure reopens the same configured path with a new collector; a different path remains prohibited until native restart. Failed reopen after a previous success returns a sanitized storage-initialization error rather than abandoning that binding. Final native shutdown prohibits any new worker.
 
 The final diagnostic save samples counters once; callbacks racing that sample or arriving after it are **in-memory best effort only**, not guaranteed durable. They remain visible in stopped status until reconfigure/unload, but same-config reopen resumes the durable snapshot and may not include these late counts. No post-close background worker or database write is created to persist them. Status remains available while stopped; statistics return 503 after the store closes.
 
+## Sidebar resource and session contract
+
+Exactly one public resource is registered: `/status`, menu **Token Usage**, served by CPA at GET `/v0/resource/plugins/token-usage/status`. Dispatch matches the exact method/path before examining query values or collector state. HTML/CSS/JavaScript bytes are fixed across auth/data/error states, with **zero private runtime values**; public operational snapshots and public statistics are prohibited. Other resource spellings/methods do not dispatch private APIs. Registration uses ABI 1/RPC schema 6 `resources`/`ResourceRoute`; there is no extra management HTML endpoint.
+
+The page automatically calls the three private GETs below using the existing remembered same-origin console login. It accepts the audited plaintext or host/user-agent-bound `enc::v1::` XOR/Base64 format, which is obfuscation rather than encryption. A present modern `cli-proxy-auth` record is authoritative, including malformed/logged-out/remember-off states. Legacy-only recovery requires the modern record to be absent, literal legacy `isLoggedIn: true`, a usable key and a matching base. The normalized stored API base must equal the page's effective origin and reverse-proxy prefix; default-port URL normalization and terminal `/v0/management`/trailing slash removal do not relax scheme or prefix binding. In-memory-only parent sessions cannot be read. The stored URL is never a fetch destination.
+
+Key validation follows Fetch's **HTTP Headers ByteString** contract, not an ASCII-only allowlist. A key must be nonempty, bounded to 4096 characters, unchanged by trimming, free of CR/LF/NUL and other disallowed controls, and survive `new Headers({Authorization: 'Bearer ' + key})` unchanged. Valid internal spaces and representable Latin-1 header bytes are supported; unsupported non-ByteString Unicode is rejected before fetching. The Latin-1 browser fixture verifies the actual single header byte `0xe9`; it does **not** claim that an operator's UTF-8-encoded non-ASCII key will match CPA.
+
+Each allowlisted request rereads the session and uses explicit authorization, `mode: "same-origin"`, `credentials: "same-origin"`, `cache: "no-store"`, `redirect: "error"` and an abort signal with a 15-second deadline. Status is fetched and validated before summary/models. JSON MIME, bounded body (2 MiB), schema/source, types, interval and counters are checked before rendering. Storage/session changes and 401/403 stop requests and clear private DOM/filter values; stale responses cannot refill them. No polling/retry loop, credential form, parent/opener bridge, `postMessage`, credential persistence, URL key, key logging or external request is added.
+
+CSP uses hashes of the embedded script/style bytes with `default-src 'none'`, `connect-src 'self'`, `frame-ancestors 'self'`, `base-uri 'none'`, `form-action 'none'`, and `object-src 'none'`. Responses carry no-store, nosniff and no-referrer. Provider/model/provenance/error strings are rendered through text nodes, not HTML sinks or `document.write`. Installed same-origin scripts remain inherently trusted together; CSP is not isolation between mutually untrusted plug-ins. See [source pins and rationale](sidebar-audit.md).
+
+The read-only page has 24h/7d/30d presets ending at server `coverage.to`. For a preset whose requested start is at/before `coverage.from`, the range clips to available history. **If that start is the rolling retention edge (`coverage.from == coverage.retention_floor`), it proactively selects exactly `reported floor + 60 seconds`.** Before summary/models fetches, the page discloses the exact excluded `[reported floor,new from)` minute, the moving-boundary reason, that excluded usage is not estimated and that this is not the full retained window. Presets already inside coverage receive no arbitrary minute subtraction. Young/stable coverage (`coverage.from > retention_floor`) retains its exact initial timestamp, including equality with the requested start. If a one-minute margin leaves no nonempty interval, the UI requests explicit custom dates rather than inventing totals.
+
+Custom UTC `Z` timestamps retain nanoseconds. Empty fields reuse a suitable selected range or suggest a range safely inside coverage with the same visible margin disclosure where needed. **Typed custom dates are never automatically shifted**; valid dates inside that suggested minute remain exact, while expired/invalid ones stay entered and fail with guidance after status validation. Provider/model filters are exact and case-sensitive. UI pages use `limit=25` with bounded offsets; token/event formatting uses `BigInt`.
+
+On a later 416, statistics clear and returned coverage is shown. If nonempty, **Load range after retention edge** offers an explicit custom start exactly 60 seconds after the newly reported boundary, with the exclusion disclosed before clicking/fetching. This remains a fallback after the proactive preset selection, not the only place a minute is excluded. There is no automatic retry after 416 or estimate of omitted usage. Stopped/unavailable/no elapsed coverage do not generate zeros; valid empty covered queries can. Summary/models are separate sequential reads and can change between requests.
+
 ## Private API
 
-Only GET `/v0/management/plugins/token-usage/status`, `/summary`, and `/models`. Every route has empty `Menu`; no resources/UI/write routes. CPA supplies authentication. Status returns no raw observations in production and never exposes filesystem paths, keys, account identifiers, bodies, headers, or SQL errors.
+Only GET `/v0/management/plugins/token-usage/status`, `/summary`, and `/models`. Every private route has empty `Menu`; no write/reset/import routes. CPA supplies authentication. The public sidebar shell above contains no private API output. Status returns no raw observations in production and never exposes filesystem paths, keys, account identifiers, bodies, headers, or SQL errors.
 
 Summary/models require `from` and `to` in RFC3339 form with explicit timezone; timestamps normalize to UTC. The interval is exact `[from,to)` using reported request time (or flagged receipt fallback). `from < to`, maximum span is configured raw retention, and future upper bounds are rejected. Optional exact `provider` and `model` filters only. Models additionally supports `limit` (default 100, maximum 1000) and `offset` (default 0, maximum 100000); deterministic provider/model ordering. Duplicate, unknown, empty, or malformed parameters are rejected.
 
@@ -77,7 +103,15 @@ Selected `github.com/mattn/go-sqlite3 v1.14.52`, official release published 2026
 
 ## Completed runtime validation
 
-Passed with Go 1.27.1 / GCC 15.2.0 on Linux amd64:
+**Final candidate 0.1.1 local verification passed**, recorded under `/tmp/token-usage-final-validation.DMNvJwhB`. The browser gate executed **71 scenarios** with exactly one required test run/pass and zero axe light/dark violations or incomplete checks. Fixtures use real `store.MakeCoverage` with a clock advancing 2 ms per request: mature 720h/30d, 168h/7d and 24h-default selections load automatically with one status/summary/models sequence, exact disclosed retention headroom and no initial 416 retry. Young/stable coverage, typed custom dates and HTTP-header key bytes remain exact.
+
+The final `make ci` passed **39 Python contracts**, Go tests, production/nativefixture vet and race suites, and builds. Native smoke at `/tmp/token-usage-smoke.ubZRD0hP` passed **2 ABI probes, 30 nativefixture and 38 production HTTP executions**. Actual official-image store-install/generated-enabled-and-store-only-config/default-volume/registration/auth/SQLite/restart checks passed at `/tmp/token-usage-store-o7yk257l`, including initial unavailable-storage metadata/resource plus sanitized 503, fixed public bytes, actual HTTP security headers, positive CSP inline-script rejection and one-new-event persistence.
+
+The official image was `eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b`, Linux amd64, Debian bookworm/glibc 2.36, cwd `/CLIProxyAPI`, with one persistent plugins volume. The native page rendered 1 then 2 events through a pinned-codec synthetic remembered session and real CPA-authenticated JSON—not full console sign-in/sidebar navigation. Final packaging reused that exact accepted library without rebuilding; both CPA SDK installer modes, checksum rejection/idempotence and frozen-notice equality passed. **All required local gates are complete**, with final files saved under `dist/0.1.1/`; exact hashes and evidence are in [verification-sidebar.md](verification-sidebar.md). This records local prepublication evidence, not hosted release acceptance or an operator installation.
+
+### Historical v0.1.0 runtime validation
+
+The remainder of this section records the v0.1.0 stage, retained for accounting/lifecycle evidence rather than a current candidate claim. Passed with Go 1.27.1 / GCC 15.2.0 on Linux amd64:
 
 - `go test -count=1 ./...`
 - `go test -race -count=1 ./...`

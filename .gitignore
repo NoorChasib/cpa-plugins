@@ -1,4 +1,5 @@
 /dist/
+/scripts/browser/node_modules/
 *.so
 *.dylib
 *.dll

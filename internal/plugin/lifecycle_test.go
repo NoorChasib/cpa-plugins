@@ -120,6 +120,48 @@ func TestLateCallbackDuringDrainReachesFinalBestEffortSave(t *testing.T) {
 	}
 }
 
+func TestFailedReopenKeepsStoppedHistoryBindingAndLateAccounting(t *testing.T) {
+	p := newRegistered(t)
+	if _, err := p.Handle(protocol.MethodUsageHandle, []byte(validUsage)); err != nil {
+		t.Fatal(err)
+	}
+	waitCommitted(t, p, "1")
+	p.Handle(protocol.MethodPluginQuiesce, nil)
+	// A separate owner makes same-config reopening fail without corrupting the
+	// original file, so later recovery can prove the existing history survived.
+	owner, _, err := store.Open(p.cfg, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	request := registrationRequest(p.cfg.DatabasePath)
+	if _, err := p.Handle(protocol.MethodPluginReconfigure, request); err == nil {
+		t.Fatal("failed reopen incorrectly reported new bootstrap success")
+	}
+	if _, err := p.Handle(protocol.MethodUsageHandle, []byte(validUsage)); err == nil {
+		t.Fatal("failed reopen admitted to a closed collector")
+	}
+	p.RejectNativeUsage()
+	if r := manage(t, p, "/v0/management/plugins/token-usage/status", nil); r.StatusCode != 200 || !strings.Contains(string(r.Body), `"state":"stopped"`) || !strings.Contains(string(r.Body), `"dropped_stopped":"2"`) || !strings.Contains(string(r.Body), `"committed_events":"1"`) {
+		t.Fatalf("failed reopen hid stopped accounting: %d %s", r.StatusCode, r.Body)
+	}
+	for _, route := range []string{"summary", "models"} {
+		if r := manage(t, p, "/v0/management/plugins/token-usage/"+route, query()); r.StatusCode != 503 {
+			t.Fatalf("closed %s storage did not fail closed: %d %s", route, r.StatusCode, r.Body)
+		}
+	}
+	if _, err := p.Handle(protocol.MethodPluginReconfigure, registrationRequest(filepath.Join(t.TempDir(), "private", "other.sqlite"))); err == nil {
+		t.Fatal("failed reopen forgot the successful history binding")
+	}
+	owner.Close()
+	if _, err := p.Handle(protocol.MethodPluginReconfigure, request); err != nil {
+		t.Fatalf("same-config recovery failed: %v", err)
+	}
+	if r := manage(t, p, "/v0/management/plugins/token-usage/summary", query()); r.StatusCode != 200 || !strings.Contains(string(r.Body), `"observed_events":"1"`) {
+		t.Fatalf("same-config recovery lost durable history: %d %s", r.StatusCode, r.Body)
+	}
+}
+
 func TestConcurrentShutdownCountsEveryDeliveredCallback(t *testing.T) {
 	p := newRegistered(t)
 	old := p.runtime()

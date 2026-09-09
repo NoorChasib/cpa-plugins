@@ -55,7 +55,8 @@ def main():
             api.free(buffer.ptr, buffer.len)
 
     def register(path=database, schema=6, method=b"plugin.register"):
-        cfg = {"database-path": str(path), "batch-size": 1, "flush-interval": "10ms"}
+        cfg = {"database-path": str(path), "batch-size": 1, "flush-interval": "10ms",
+               "store": {"id": "token-usage", "version": "0.1.1", "install": {"type": "direct"}}}
         raw = json.dumps({"schema_version": schema, "config_yaml": base64.b64encode(json.dumps(cfg).encode()).decode()}).encode()
         return call(method, raw)
 
@@ -66,12 +67,22 @@ def main():
         return response["StatusCode"], json.loads(base64.b64decode(response["Body"]))
 
     try:
-        for raw in (b'{"schema_version":6,"config_yaml":""}', b'{"schema_version":6,"config_yaml":"invalid!"}'):
+        # Empty YAML is now a valid captured-CWD default. Keep malformed wire,
+        # unknown options, relative paths, and old schemas fail-closed.
+        for raw in (b'{"schema_version":6,"config_yaml":"invalid!"}',
+                    json.dumps({"schema_version": 6, "config_yaml": base64.b64encode(b"unknown: true").decode()}).encode()):
             assert call(b"plugin.register", raw)[0] != 0
         assert register("relative.sqlite")[0] != 0
         assert register(schema=5)[0] != 0
         rc, registration = register()
         assert rc == 0 and registration["result"]["schema_version"] == 6
+        rc, routes = call(b"management.register")
+        assert rc == 0
+        routes = routes["result"]
+        assert [(r["Method"], r["Path"], r["Menu"]) for r in routes["routes"]] == [
+            ("GET", "/plugins/token-usage/" + route, "") for route in ("status", "summary", "models")]
+        assert len(routes["resources"]) == 1 and routes["resources"][0]["Path"] == "/status"
+        assert routes["resources"][0]["Menu"] == "Token Usage"
         assert register()[0] == 0
         assert register(directory / "other.sqlite", method=b"plugin.reconfigure")[0] != 0
         for method, raw, length, null in [(None, b"{}", 2, False),

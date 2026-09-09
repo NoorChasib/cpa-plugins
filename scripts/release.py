@@ -15,8 +15,8 @@ MEMBERS = {"token-usage.so", "LICENSE", "THIRD-PARTY-NOTICES.txt"}
 
 
 def archive_name(version):
-    if version != "0.1.0":
-        raise ValueError("only the scoped 0.1.0 release is currently supported")
+    if version != "0.1.1":
+        raise ValueError("only the scoped 0.1.1 release is currently supported")
     return f"token-usage_{version}_linux_amd64.zip"
 
 
@@ -128,7 +128,7 @@ def verify(dist, version, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("package", "checksums", "verify"))
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default="0.1.1")
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
     try:

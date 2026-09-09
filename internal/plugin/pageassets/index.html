@@ -1,0 +1,57 @@
+<main class="page">
+  <header class="header">
+    <div>
+      <h1>Token Usage</h1>
+      <p class="subtitle">CPA-reported usage, collected locally.</p>
+      <div class="pills"><span id="collection-state" class="pill">Collection: checking session</span><span class="pill info">Source: CPA-reported</span><span class="pill">Upstream completeness: unknown</span></div>
+    </div>
+    <div class="actions"><button type="button" id="refresh" class="secondary">Refresh</button><span class="result">Last persisted <span id="last-persisted">—</span></span></div>
+  </header>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div id="notice" class="alert info" role="status">Checking your existing console session…</div>
+  <noscript><p class="alert">Enable JavaScript to load this page using your existing console session.</p></noscript>
+  <section id="workspace" aria-label="Token usage" aria-busy="false" hidden>
+    <form id="filters" class="card filters" novalidate>
+      <div class="filter-row">
+        <div class="field period-field"><label for="period">Period</label><select id="period" name="period"><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="custom">Custom UTC range</option></select></div>
+        <div class="field"><label for="provider">Provider <span class="optional">(exact match)</span></label><input id="provider" name="provider" type="text" maxlength="256" placeholder="All providers" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label for="model">Model <span class="optional">(exact match)</span></label><input id="model" name="model" type="text" maxlength="256" placeholder="All models" autocomplete="off" spellcheck="false"></div>
+        <button type="submit" id="apply">Apply filters</button>
+      </div>
+      <div id="custom-range" class="custom-range" hidden>
+        <div class="field"><label for="from">From (UTC, inclusive)</label><input id="from" name="from" type="text" maxlength="30" placeholder="2026-09-01T00:00:00Z" autocomplete="off" spellcheck="false" aria-describedby="range-help"></div>
+        <div class="field"><label for="to">To (UTC, exclusive)</label><input id="to" name="to" type="text" maxlength="30" placeholder="2026-09-02T00:00:00Z" autocomplete="off" spellcheck="false" aria-describedby="range-help"></div>
+        <p id="range-help" class="hint">Use an exact UTC timestamp: YYYY-MM-DDTHH:mm:ssZ, with up to 9 fractional-second digits. The end is excluded.</p>
+      </div>
+      <p class="hint filter-hint">Filters are case-sensitive. Presets end at the server’s reported coverage, not your device clock.</p>
+    </form>
+    <p id="interval" class="interval"></p>
+    <p id="range-note" class="alert warn" hidden></p>
+    <div id="statistics" hidden>
+      <div class="stats" role="group" aria-label="Totals for the selected interval">
+        <div class="stat"><div class="label">Input tokens</div><div class="value" id="input-total">—</div><div class="hint">Reported input, not cache-adjusted</div></div>
+        <div class="stat"><div class="label">Output tokens</div><div class="value" id="output-total">—</div><div class="hint">Reported output, not reasoning-adjusted</div></div>
+        <div class="stat"><div class="label">Observed events</div><div class="value" id="events-total">—</div><div class="hint">Usage events, not unique requests</div></div>
+      </div>
+      <details class="card totals-details"><summary>Raw counters and executor provenance</summary><div id="summary-details" class="details-body"></div></details>
+      <section class="section" aria-labelledby="models-heading">
+        <div class="section-head"><h2 id="models-heading">Usage by provider and model</h2><span class="count">Combined across executors</span></div>
+        <div class="card">
+          <div class="table-wrap" role="region" aria-label="Provider and model usage, horizontally scrollable" tabindex="0">
+            <table><caption class="sr-only">Raw CPA-reported usage for the selected interval and exact-match filters</caption><thead><tr><th scope="col">Provider</th><th scope="col">Model</th><th scope="col" class="num">Input</th><th scope="col" class="num">Output</th><th scope="col" class="num">Events</th><th scope="col">Details</th></tr></thead><tbody id="model-rows"></tbody></table>
+          </div>
+          <p id="empty" class="empty" hidden></p>
+          <nav class="pagination" aria-label="Model table pages"><span id="page-label" class="count"></span><div class="buttons"><button type="button" id="previous" class="secondary" disabled>Previous</button><button type="button" id="next" class="secondary" disabled>Next</button></div></nav>
+        </div>
+      </section>
+    </div>
+    <section class="section" aria-labelledby="health-heading">
+      <div class="section-head"><h2 id="health-heading">Coverage and collection</h2></div>
+      <div class="card health-card"><dl id="health" class="health-grid"></dl><details><summary>Local collection diagnostics</summary><div id="diagnostics" class="details-body"></div></details></div>
+    </section>
+  </section>
+  <footer class="footnote">
+    <p>These are raw counters reported by CPA, not a bill or a complete measure of consumption. Cache and reasoning counters can overlap with input, output, and reported total; they are not additive and are never added here.</p>
+    <p>CPA delivery has no durable replay guarantee. Split or cumulative streams can omit input/cache or later output; failed or disconnected streams can lose tokens or retain an earlier success. Zero reported usage does not prove zero consumption. Only retained, committed local history is queried.</p>
+  </footer>
+</main>

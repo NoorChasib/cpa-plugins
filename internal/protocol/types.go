@@ -69,7 +69,16 @@ type RegistrationCapabilities struct {
 }
 
 type ManagementRegistration struct {
-	Routes []ManagementRoute `json:"routes,omitempty"`
+	Routes    []ManagementRoute `json:"routes,omitempty"`
+	Resources []ResourceRoute   `json:"resources,omitempty"`
+}
+
+// Resources are public GET routes under /v0/resource/plugins/<pluginID>/.
+// Only the fixed, data-free sidebar shell belongs on this surface.
+type ResourceRoute struct {
+	Path        string
+	Menu        string
+	Description string
 }
 
 // Menu must stay empty: CPA converts a GET with Menu into a public resource.
