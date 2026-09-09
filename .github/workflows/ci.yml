@@ -1,0 +1,36 @@
+name: Build and native acceptance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: token-usage-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Official tag refs verified with git ls-remote on 2026-09-09.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Require the selected Go toolchain
+        run: test "$(go env GOVERSION)" = go1.27.1
+      - name: Unit, race, static, and native builds
+        run: make ci
+      - name: Required real pinned CPA native acceptance
+        run: make smoke
+      - name: Prepare and verify package without publishing
+        run: make package-current checksums verify-release VERSION=0.1.0
+      # No release, artifact upload, store update, workflow_dispatch, or publish job.
