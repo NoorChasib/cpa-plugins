@@ -9,14 +9,14 @@ import stat
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT = "https://github.com/NoorChasib/cpa-plugin-token-usage"
-SOURCE_URL = "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json"
+PROJECT = "https://github.com/NoorChasib/cpa-plugins"
+SOURCE_URL = "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
 MEMBERS = {"token-usage.so", "LICENSE", "THIRD-PARTY-NOTICES.txt"}
 
 
 def archive_name(version):
-    if version != "0.1.1":
-        raise ValueError("only the scoped 0.1.1 release is currently supported")
+    if version != "0.1.2":
+        raise ValueError("only the scoped 0.1.2 release is currently supported")
     return f"token-usage_{version}_linux_amd64.zip"
 
 
@@ -128,7 +128,7 @@ def verify(dist, version, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("package", "checksums", "verify"))
-    parser.add_argument("--version", default="0.1.1")
+    parser.add_argument("--version", default="0.1.2")
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
     try:

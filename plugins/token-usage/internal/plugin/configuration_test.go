@@ -67,7 +67,7 @@ func TestInitialStorageFailureKeepsMetadataAndStatusDiscoverableUntilRecovery(t 
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"api_schema": float64(1), "source": "cpa_reported", "version": "0.1.1", "storage": "sqlite", "state": "unavailable",
+		"api_schema": float64(1), "source": "cpa_reported", "version": Version, "storage": "sqlite", "state": "unavailable",
 		"error": "storage_unavailable", "collection": map[string]any{"state": "unavailable", "reason": "storage_initialization_failed"},
 		"upstream_completeness": "unknown",
 	}

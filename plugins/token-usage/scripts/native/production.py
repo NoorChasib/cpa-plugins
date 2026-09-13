@@ -81,7 +81,7 @@ def start(binary, directory, config, generation):
                 code, raw = spike.request(base, BASE + "status")
                 if code == 200:
                     status = json.loads(raw)
-                    assert status["storage"] == "sqlite" and status["version"] == "0.1.1", status
+                    assert status["storage"] == "sqlite" and status["version"] == "0.1.2", status
                     assert "fixture_records" not in status and "schema6_probe" not in status
                     no_leak(raw)
                     return proc, log, base, status

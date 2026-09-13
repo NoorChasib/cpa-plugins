@@ -64,3 +64,16 @@ The final preview uses Quota Cache 0.1.0, Account Health 0.4.1, and Reset Priori
 `scripts/package-quota-preview.py` checks native hashes and CPA-reported versions against the smoke evidence, packages the exact bytes, verifies ZIP contents, and generates direct-install URLs with archive hashes/sizes. The preview release includes `verification.json`, the catalog, and checksums. Stable catalog artifacts are unchanged.
 
 All five GitHub workflows passed at `ee02efe`, including full Token Usage native/browser/store acceptance and the new quota-cache integration workflow. Later preview version/source-link changes were rechecked locally as described above.
+
+
+## Preview 2: unified downloads and optional toggle
+
+All five runtime registrations now link to `NoorChasib/cpa-plugins`. Account Health 0.4.2 and Reset Priority 0.1.6 add the `use-quota-cache` boolean; Auto Baseline 0.1.3 and Token Usage 0.1.2 update their repository metadata. Quota Cache remains 0.1.0.
+
+- Consumer config tests cover default standalone operation, opt-in using the default path, custom paths, explicit opt-out overriding a path, and legacy path-only compatibility.
+- Existing cache consumer tests still require no direct-provider fallback when a cache disappears or its observations are invalid.
+- All four changed plugins passed their local unit, race, formatting, vet, and native build checks.
+- The official-image suite verifies all five repository links and runtime registration/status/restart. It then removes the cache library and snapshot and verifies that all four other plugins remain registered/effective with both cache mode enabled (waiting) and explicitly disabled (standalone). The roster is synthetic and empty; account-level fallback behavior is covered by consumer tests.
+- Root and preview catalogs contain identical entries with direct, SHA-256-pinned downloads from this repository only. Historical releases were copied byte-for-byte under namespaced tags, with every GitHub asset digest checked against the backup.
+
+Exact archive and library hashes are recorded in preview 2's `checksums.txt` and `verification.json`. Earlier sections above document preview 1, not the current binary versions.

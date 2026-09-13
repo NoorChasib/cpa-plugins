@@ -16,7 +16,17 @@ Open the README for the plugin you want. Each has a short installation/configura
 
 Already using these plugins? Start with [the migration guide](docs/migration.md). Keep your existing settings and data paths; a repository move does not require a fresh installation.
 
-The root `registry.json` combines the four existing store entries and continues to resolve their existing published releases. It is available as one store source at `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`. The [quota cache preview](docs/quota-cache-preview.md) provides new binaries through a separate opt-in source.
+Add this one source in CPA's Plugin Store:
+
+```text
+https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
+```
+
+All five catalog entries, download assets, and current native repository links use **NoorChasib/cpa-plugins**. Current packages target Linux amd64/glibc and include the optional [quota-cache preview](docs/quota-cache-preview.md). `preview/registry.json` is a compatibility alias with the same entries; if you already added that URL, keep it to avoid changing CPA's installed source identity.
+
+Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas.
+
+Historical releases and their original bytes are preserved under `legacy/<plugin>/<tag>` in this repository.
 
 ## Development
 
@@ -37,6 +47,6 @@ Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC 
 
 ## Shared quota polling
 
-[Quota Cache](plugins/quota-cache/README.md) and cache-only consumer support are available in an [installable preview](docs/quota-cache-preview.md). The stable store catalog still points to the original published versions. See the quota-cache README for configuration and the verification record for tested scope.
+[Quota Cache](plugins/quota-cache/README.md) and cache-only consumer support are available in an [installable preview](docs/quota-cache-preview.md). See the quota-cache README for configuration and the verification record for tested scope.
 
 CPA v7.2.155 has no native quota-provider capability. Its stock dashboard can still issue independent quota requests; installing this cache does not redirect those requests. Auto Baseline and Token Usage do not poll provider quota endpoints.

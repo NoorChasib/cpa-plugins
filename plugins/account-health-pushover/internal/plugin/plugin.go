@@ -29,7 +29,7 @@ const (
 	actionRequestHeaderValue = "1"
 )
 
-var Version = "0.4.1"
+var Version = "0.4.2"
 
 type Host = monitor.Host
 
@@ -452,7 +452,8 @@ func configFields() []protocol.ConfigField {
 		field("quota-warning-percent", "number", "Used-percentage that triggers the single per-window warning; 95 means 5% remaining (default 95)."),
 		field("quota-exhausted-percent", "number", "Used-percentage that counts as the weekly limit being reached (default 100)."),
 		field("quota-notification-priority", "integer", "Pushover priority for weekly quota messages, -2 through 1 (default 0)."),
-		field("quota-cache-path", "string", "Shared quota-cache snapshot path; when set, quota reads never contact providers directly."),
+		field("use-quota-cache", "boolean", "Use shared quota observations instead of direct requests. Optional; off by default. When on, wait for fresh data if the cache is unavailable."),
+		field("quota-cache-path", "string", "Optional shared snapshot path; default plugins/data/quota-cache/snapshot.json when use-quota-cache is on. Legacy path-only config also opts in; explicit false overrides it."),
 		field("quota-http-timeout", "string", "Timeout for each provider usage request (default 15s)."),
 	}
 }

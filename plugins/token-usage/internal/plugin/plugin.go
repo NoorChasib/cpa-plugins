@@ -21,7 +21,7 @@ import (
 
 const ID = "token-usage"
 
-var Version = "0.1.1"
+var Version = "0.1.2"
 
 type Plugin struct {
 	lifecycle                   sync.Mutex
@@ -272,7 +272,7 @@ func parseQuery(q url.Values, models bool, cfg config.Config, now time.Time) (st
 	return f, nil
 }
 func registration() protocol.Registration {
-	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: "Token Usage", Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugin-token-usage", ConfigFields: []protocol.ConfigField{{Name: "database-path", Type: "string", Description: "Optional absolute path in a dedicated private persistent directory. Defaults to plugins/data/token-usage/usage.sqlite beneath CPA's captured working directory. Existing history is never moved automatically."}}}, Capabilities: protocol.RegistrationCapabilities{UsagePlugin: true, ManagementAPI: true}}
+	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: "Token Usage", Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: []protocol.ConfigField{{Name: "database-path", Type: "string", Description: "Optional absolute path in a dedicated private persistent directory. Defaults to plugins/data/token-usage/usage.sqlite beneath CPA's captured working directory. Existing history is never moved automatically."}}}, Capabilities: protocol.RegistrationCapabilities{UsagePlugin: true, ManagementAPI: true}}
 }
 func failure(status int, code string) protocol.ManagementResponse {
 	return jsonResponse(status, map[string]string{"error": code})

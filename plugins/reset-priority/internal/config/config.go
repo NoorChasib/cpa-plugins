@@ -87,6 +87,7 @@ func (c Config) Manages(provider string) bool {
 // this plugin manages.
 type rawConfig struct {
 	QuotaCachePath string `yaml:"quota-cache-path"`
+	UseQuotaCache  *bool  `yaml:"use-quota-cache"`
 
 	Enabled           *bool      `yaml:"enabled"`
 	LoadPriority      any        `yaml:"priority"` // host-owned; ignored
@@ -191,6 +192,15 @@ func Parse(configYAML []byte) (Config, error) {
 	}
 
 	cfg.QuotaCachePath = strings.TrimSpace(raw.QuotaCachePath)
+	// An omitted toggle preserves preview-1's path-based opt-in. Explicit false
+	// restores standalone behavior even when a custom path remains configured.
+	if raw.UseQuotaCache != nil {
+		if !*raw.UseQuotaCache {
+			cfg.QuotaCachePath = ""
+		} else if cfg.QuotaCachePath == "" {
+			cfg.QuotaCachePath = "plugins/data/quota-cache/snapshot.json"
+		}
+	}
 	if raw.Enabled != nil {
 		cfg.Enabled = *raw.Enabled
 	}

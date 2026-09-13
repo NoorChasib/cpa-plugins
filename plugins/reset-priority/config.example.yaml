@@ -58,5 +58,8 @@ plugins:
       #   - claude
       #   - codex
 
-# Development candidate only: set plugins.configs.reset-priority.quota-cache-path
-# to /CLIProxyAPI/plugins/data/quota-cache/snapshot.json with the updated binary.
+# Optional shared quota observations (off by default):
+# Set plugins.configs.reset-priority.use-quota-cache: true
+# Optional custom snapshot path: quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+# Enabled cache mode waits for fresh observations; it never falls back to direct requests.
+# Explicit use-quota-cache: false overrides any saved quota-cache-path.

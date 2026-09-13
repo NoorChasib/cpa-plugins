@@ -23,7 +23,7 @@ import (
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.1.5"
+	PluginVersion = "0.1.6"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
@@ -470,7 +470,8 @@ func configFields() []hostapi.ConfigField {
 		{Name: "manage-claude", Type: "boolean", Description: "Manage Claude OAuth credentials (default true)."},
 		{Name: "manage-codex", Type: "boolean", Description: "Manage Codex OAuth credentials (default true)."},
 		{Name: "dry-run", Type: "boolean", Description: "Compute and report priorities without writing auth files (default false; recommended true for first install)."},
-		{Name: "quota-cache-path", Type: "string", Description: "Shared quota-cache snapshot path; disables direct quota polling when set."},
+		{Name: "use-quota-cache", Type: "boolean", Description: "Use shared quota observations instead of direct requests. Optional; off by default. When on, wait for fresh data if the cache is unavailable."},
+		{Name: "quota-cache-path", Type: "string", Description: "Optional shared snapshot path; default plugins/data/quota-cache/snapshot.json when use-quota-cache is on. Legacy path-only config also opts in; explicit false overrides it."},
 		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" for the host zone (default UTC). Presentation only."},
 	}
 }

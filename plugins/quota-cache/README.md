@@ -2,11 +2,11 @@
 
 One scheduled poller for Claude, Codex, and Grok regular weekly quota observations. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Opt-in preview:** [download and install the first preview](../../docs/quota-cache-preview.md). It includes Quota Cache 0.1.0, Account Health 0.4.1, and Reset Priority 0.1.5 for Linux amd64. All three updated binaries are needed for shared polling. The stable catalog continues to serve the prior consumer versions.
+**Opt-in preview:** [download and install preview 2](../../docs/quota-cache-preview.md). It includes Quota Cache 0.1.0, Account Health 0.4.2, and Reset Priority 0.1.6 for Linux amd64. All three updated binaries are needed for shared polling. The catalog also includes Auto Baseline 0.1.3 and Token Usage 0.1.2.
 
 ## Install and start
 
-Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/preview/registry.json` as your preview store source, then follow the [preview installation guide](../../docs/quota-cache-preview.md). Read the migration guide before switching already-installed plugins between sources.
+Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json` as your store source, then follow the [preview installation guide](../../docs/quota-cache-preview.md). Read the migration guide before switching already-installed plugins between sources.
 
 ### Build from source
 
@@ -34,10 +34,14 @@ plugins:
       poll-interval: 15m
       request-spacing: 10s
     account-health-pushover:
+      use-quota-cache: true
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
     reset-priority:
+      use-quota-cache: true
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
 ```
+
+Quota Cache is optional. Consumers default to standalone polling; enable `use-quota-cache` to opt in. Explicit false overrides a saved path and restores standalone polling. With the toggle on, missing or failed data waits without provider fallback.
 
 Install/start the cache first and wait for observations, then enable cache mode in the updated consumers. Preserve Account Health's existing `quota-alerts` preference; the cache does not enable notifications itself. Keep Reset Priority's existing dry-run setting.
 

@@ -47,11 +47,11 @@ plugins:
     account-health-pushover:
       enabled: true
       quota-alerts: true
-      quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      use-quota-cache: true
     reset-priority:
       enabled: true
       dry-run: true
-      quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      use-quota-cache: true
     auto-baseline:
       enabled: true
       dry-run: true
@@ -86,6 +86,7 @@ plugins:
         records = {entry['id']:entry for entry in registered['plugins']}
         for plugin in PLUGINS:
             assert records[plugin]['registered'] and records[plugin]['effective_enabled'], 'plugin inactive: '+plugin
+            assert records[plugin]['metadata']['github_repository'] == 'https://github.com/NoorChasib/cpa-plugins', 'legacy repository metadata: '+plugin
         for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
             get('plugins/'+plugin+'/status')
         try:
@@ -104,6 +105,29 @@ plugins:
         logs=run('docker','logs',container)
         assert '7.2.155' in logs, 'unexpected CPA runtime version'
         evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in PLUGINS}}
+        # Prove the other four register without the cache library or snapshot.
+        # Test both opted-in waiting and explicitly standalone configuration.
+        run('docker','stop',container)
+        (plugins/'quota-cache.so').unlink()
+        shutil.rmtree(plugins/'data/quota-cache')
+        for mode in (True, False):
+            config.write_text(config.read_text().replace('use-quota-cache: true', 'use-quota-cache: '+str(mode).lower()))
+            run('docker','start',container)
+            origin = 'http://'+run('docker','port',container,'8317/tcp').splitlines()[0]
+            deadline=time.monotonic()+45
+            while True:
+                try:
+                    absent = {p['id']:p for p in get('plugins')['plugins']}
+                    assert not absent.get('quota-cache', {}).get('registered', False), 'missing library unexpectedly registered'
+                    for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
+                        assert absent[plugin]['registered'] and absent[plugin]['effective_enabled']
+                        get('plugins/'+plugin+'/status')
+                    break
+                except Exception:
+                    if time.monotonic()>deadline: raise
+                    time.sleep(.1)
+            run('docker','stop',container)
+        evidence['optional_cache_modes'] = ['missing-cache-wait', 'standalone']
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('PASS: pinned CPA v7.2.155 loads all five native plugins; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')

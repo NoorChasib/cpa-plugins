@@ -6,8 +6,8 @@
       "name": "Account Health Pushover",
       "description": "Sends Pushover alerts when Claude, Codex, or Grok (xAI) OAuth credentials require reauthentication or become credential-unhealthy, and optionally when an account's weekly quota is almost used or exhausted.",
       "author": "NoorChasib",
-      "repository": "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
-      "homepage": "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover",
       "license": "MIT",
       "tags": [
         "monitoring",
@@ -16,15 +16,28 @@
         "claude",
         "codex",
         "grok"
-      ]
+      ],
+      "version": "0.4.2",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/account-health-pushover_0.4.2_linux_amd64.zip",
+            "sha256": "a50a4cdfdca83532f5c62368b4b5202d4ea89faf40c688470fdfcd176083342d",
+            "size": 7482727
+          }
+        ]
+      }
     },
     {
       "id": "auto-baseline",
       "name": "Auto Baseline",
       "description": "Learns the newest authentic Claude Code and Codex CLI client fingerprint from inbound requests and promotes it into claude-header-defaults / codex-header-defaults so the proxy's measured baseline follows the client you actually run.",
       "author": "NoorChasib",
-      "repository": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
-      "homepage": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/auto-baseline",
       "license": "MIT",
       "tags": [
         "Fingerprint",
@@ -32,15 +45,50 @@
         "Headers",
         "Claude",
         "Codex"
-      ]
+      ],
+      "version": "0.1.3",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/auto-baseline_0.1.3_linux_amd64.zip",
+            "sha256": "9c4b51f2ace0ee53073071491762a76e9ba4af4f572a950e9cd1688403a64c4f",
+            "size": 4269863
+          }
+        ]
+      }
+    },
+    {
+      "id": "quota-cache",
+      "name": "Quota Cache",
+      "description": "Serialized weekly quota polling with a persistent cache and provider-wide 429 cooldowns. Preview: Linux amd64 only.",
+      "author": "NoorChasib",
+      "license": "MIT",
+      "version": "0.1.0",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/quota-cache",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/quota-cache_0.1.0_linux_amd64.zip",
+            "sha256": "f34acd73a5872e957eb057bee570ff066cc5b73406bf1a8372acd5ee5de8cecd",
+            "size": 4345722
+          }
+        ]
+      }
     },
     {
       "id": "reset-priority",
       "name": "Reset Priority",
       "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
       "author": "NoorChasib",
-      "repository": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
-      "homepage": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/reset-priority",
       "license": "MIT",
       "tags": [
         "Scheduler",
@@ -48,19 +96,42 @@
         "Quota",
         "Claude",
         "Codex"
-      ]
+      ],
+      "version": "0.1.6",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/reset-priority_0.1.6_linux_amd64.zip",
+            "sha256": "3368e1e84ffe0d68076576d1f9217908e131f3bf22d4e79effaf9fafb0fdec05",
+            "size": 4192236
+          }
+        ]
+      }
     },
     {
       "id": "token-usage",
       "name": "Token Usage",
       "description": "Persistent CPA-reported raw token usage by provider/model. Linux amd64 only; not billing or lossless accounting.",
       "author": "NoorChasib",
-      "version": "0.1.1",
-      "repository": "https://github.com/NoorChasib/cpa-plugin-token-usage",
+      "version": "0.1.2",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
       "license": "MIT",
       "install": {
-        "type": "github-release"
-      }
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/token-usage_0.1.2_linux_amd64.zip",
+            "sha256": "3f1ec1aae36f914613b7bf612206f425a6ee0e723ef949934a68677f85cb5ca4",
+            "size": 3228501
+          }
+        ]
+      },
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/token-usage"
     }
   ]
 }

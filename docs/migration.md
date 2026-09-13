@@ -2,7 +2,7 @@
 
 ## What changes now
 
-The four plugin source repositories are consolidated. Plugin IDs, native library names, configuration keys, routes, and existing data defaults are preserved. The combined catalog currently points at the same published releases in the old repositories. Switching catalogs alone is not a binary upgrade and does not enable shared quota caching.
+The four plugin source repositories are consolidated. Plugin IDs, native library names, configuration keys, routes, and existing data defaults are preserved. The current catalog hosts all five plugin packages in the unified repository, including the quota-cache preview. Shared quota caching remains opt-in via `use-quota-cache: true` in each participating consumer.
 
 Do not uninstall/reinstall merely because source code moved. CPA's store metadata includes source identity; switching the source must be checked against your installed CPA version before treating it as a transparent update.
 
@@ -63,7 +63,7 @@ For an intentionally disabled plugin, keep it disabled/uninstalled until you are
 
 These rules are grounded in CPA tag v7.2.155 (`7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974`): `validatePluginStoreInstallSource`, `DeletePlugin`, and `enablePluginConfigLocked`. The live deployment's actual config/volume paths still require inspection. Rehearse the complete source-switch sequence on a disposable copy before a production switch if your deployment has custom storage or startup automation.
 
-The combined stable catalog continues to serve existing release artifacts. Switching to it does not by itself install the new quota cache or updated cache consumers.
+The root and preview catalogs now contain the same five packages, all hosted in the unified repository. Keep the source URL you already installed from; switching between these two URLs still changes CPA source identity. Install Quota Cache only if wanted; it does not automatically enable cache mode in consumers.
 
 ## 4. When new binaries are released
 
@@ -98,8 +98,8 @@ The initial imports retain history and use these source heads:
 | Reset Priority | main | `d5dfcb2a8517d87c7741ec07100f6400c7db60c3` | v0.1.4 |
 | Token Usage | feature/token-usage-sidebar | `c08159fbb8d2ae86f36c2a2fc5ddf38274155a62` | v0.1.1 |
 
-Published release tags were checked with GitHub on 2026-09-13. Source heads and hosted release bytes are separate evidence. Old repositories/releases remain intact. Existing local uncommitted work consisted only of the consolidation spec, copied to root `docs/`.
+Published release tags were checked with GitHub on 2026-09-13. Source heads and hosted release bytes are separate evidence. Historical release assets are preserved under `legacy/<plugin>/<tag>` in the unified repository; old source repositories are being retired. Existing local uncommitted work consisted only of the consolidation spec, copied to root `docs/`.
 
 ## Release workflow transition
 
-Root `.github/workflows/*-ci.yml` files run the adapted checks. Original plugin-local workflow files remain non-executing reference material for existing contract tests; GitHub discovers workflows only at the repository root. No old generic release triggers have been enabled in the new repo. A verified new publication workflow is required before producing new hosted binaries.
+Root `.github/workflows/*-ci.yml` files run the adapted checks. Original plugin-local workflow files remain non-executing reference material for existing contract tests; GitHub discovers workflows only at the repository root. No old generic release triggers have been enabled in the new repo. The root `scripts/package-quota-preview.py` packages the exact libraries verified by `scripts/quota-cache-smoke.py`; plugin-local release workflows are not the unified publication path.

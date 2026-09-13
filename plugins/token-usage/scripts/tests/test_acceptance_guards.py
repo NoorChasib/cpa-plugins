@@ -137,7 +137,7 @@ class GoBrowserGate(unittest.TestCase):
 
 class CandidateVersionGuard(unittest.TestCase):
     def test_all_active_versions_match_canonical_registry(self):
-        self.assertEqual(candidate.validate(), "0.1.1")
+        self.assertEqual(candidate.validate(), "0.1.2")
 
     def test_mixed_native_build_and_future_registry_bump_fail_in_fixture_copy(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -156,7 +156,7 @@ class CandidateVersionGuard(unittest.TestCase):
                     candidate.validate(root)
                 target.write_text(original)
             registry = root / "registry.json"
-            registry.write_text(registry.read_text().replace('"0.1.1"', '"0.1.2"'))
+            registry.write_text(registry.read_text().replace('"0.1.2"', '"0.1.3"'))
             result = subprocess.run([sys.executable, str(ROOT / "scripts/check-candidate.py"), "--root", str(root)], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("candidate version mismatch", result.stderr)

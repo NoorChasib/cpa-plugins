@@ -67,7 +67,7 @@ jobs:
           make store-smoke CPA_SMOKE_WORK="$CPA_SMOKE_WORK"
       - name: Prepare and verify exact smoke-tested package without publishing
         run: |
-          make package-tested checksums verify-release VERSION=0.1.1
+          make package-tested checksums verify-release VERSION=0.1.2
           cmp "$CPA_SMOKE_WORK/token-usage-production.so" dist/token-usage.so
           (cd dist && sha256sum -c checksums.txt)
           python3 scripts/verify-cpa-package.py --cpa-source "$CPA_SMOKE_WORK/source"

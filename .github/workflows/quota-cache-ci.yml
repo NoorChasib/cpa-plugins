@@ -25,7 +25,9 @@ jobs:
           go-version: '1.27.1'
           cache-dependency-path: plugins/*/go.sum
       - name: Cache unit/race checks and native build
-        run: make -C plugins/quota-cache ci
+        run: |
+          python3 scripts/check-catalog.py
+          make -C plugins/quota-cache ci
       - name: Actual native callback and restart checks
         run: python3 plugins/quota-cache/scripts/native-probe.py plugins/quota-cache/dist/quota-cache.so
       - name: Consumer regression checks and native builds

@@ -8,7 +8,7 @@ Keep CPA-reported token usage in SQLite and view statistics from the CPA sidebar
 2. Add the store source below to the existing `plugins.store-sources` list, then install the plugin from CPA's Plugin Store.
 3. Merge the configuration below into your existing configuration, enable the plugin, and follow CPA's restart prompt. Do not create a second `plugins:` mapping.
 
-This single source lists the existing stable releases for all four plugins. If this plugin is already installed from an old source, follow the [migration guide](../../docs/migration.md) before switching; CPA v7.2.155 will otherwise reject the source change.
+This source lists all five plugins from this repository, including the optional quota-cache preview. If this plugin is already installed from an old source, follow the [migration guide](../../docs/migration.md) before switching; CPA v7.2.155 will otherwise reject the source change.
 
 ```yaml
 plugins:
@@ -34,3 +34,5 @@ Token Usage collects CPA usage events and does not poll provider quota endpoints
 
 - [Complete behavior and compatibility reference](REFERENCE.md)
 - [Migration without losing settings or data](../../docs/migration.md)
+
+Quota Cache is not required or used by this plugin.

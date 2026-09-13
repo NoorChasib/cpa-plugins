@@ -22,9 +22,9 @@ import (
 const (
 	PluginID      = "auto-baseline"
 	PluginName    = "Auto Baseline"
-	PluginVersion = "0.1.2"
+	PluginVersion = "0.1.3"
 	PluginAuthor  = "NoorChasib"
-	PluginRepo    = "https://github.com/NoorChasib/cpa-plugin-auto-baseline"
+	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
 
 // Management/resource route paths (relative; the host prefixes
