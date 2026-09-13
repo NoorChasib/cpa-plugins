@@ -1,6 +1,6 @@
 # Token Usage platform parity and independent releases
 
-Audited source: `b4105cf`. **Historical findings below describe that commit.** Independent Linux amd64 release automation has since been implemented; see [the current release guide](releases.md). Additional build targets are deferred at the owner's request. Old repository deletion is left to the owner.
+Audited source: `b4105cf`. **Historical findings below describe that commit.** Independent Linux amd64 release automation has since been implemented; see [the current release guide](releases.md). Additional build targets are deferred at the owner's request.
 
 ## Findings
 

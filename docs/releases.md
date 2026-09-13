@@ -13,6 +13,8 @@ Every plugin keeps its own version. Releases currently target **Linux amd64 only
    git push origin quota-cache/v0.1.1
    ```
 
+Push each release tag separately; GitHub does not generate push events when more than three tags are pushed together.
+
 Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
 
 The root **Release one plugin** workflow automatically:
