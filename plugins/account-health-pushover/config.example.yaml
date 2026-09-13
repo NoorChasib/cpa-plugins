@@ -2,7 +2,7 @@ plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-account-health-pushover/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
   configs:
     account-health-pushover:
       enabled: true
@@ -53,3 +53,6 @@ plugins:
       quota-exhausted-percent: 100
       quota-notification-priority: 0
       quota-http-timeout: 15s
+
+# Development candidate only: set plugins.configs.account-health-pushover.quota-cache-path
+# to /CLIProxyAPI/plugins/data/quota-cache/snapshot.json with the updated binary.

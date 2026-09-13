@@ -37,21 +37,33 @@ Do not use `docker compose down -v`, delete/recreate volumes, change their names
 
 Changing the source repository does not require changing any of these paths. Keep file ownership, permissions, and CPA's working directory the same.
 
-## 3. Switch store source when the new catalog is published
+## 3. Switch store source on CPA v7.2.155
 
-The intended combined URL is:
+The public combined source is:
 
 ```text
 https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 ```
 
-This URL is a target until the new repository is actually published. Verify that it loads and lists the four expected IDs before using it.
+**Do not just replace the old source URLs and click Update.** In v7.2.155, CPA rejects a different source with `plugin_store_source_conflict`. Its source identity is derived from the registry URL, even when both catalogs point at the same release. The supported error guidance is to uninstall before switching, and **uninstall also deletes that plugin's saved configuration**. It does not recursively delete the plugin data directory in the inspected implementation.
 
-Keep the old source list in your backup. Replace only these four custom source entries with the combined source; preserve unrelated custom sources and CPA's built-in source. Keep the existing `plugins.configs` mappings exactly as they are, including all custom options and paths.
+The lowest-disruption option is to keep current installations and old store sources while using the new repository for development. There is no runtime penalty for doing this.
 
-Restart/reload using the supported CPA flow, then inspect the store. Verify that the installed plugins remain enabled at the expected versions, with their settings intact. If CPA still associates an installed plugin with its previous source, use the version's supported source/update flow. Do not guess at generated `store` fields or uninstall to force reassociation. The exact reassociation step needs rehearsal against your deployed CPA version.
+For an actual store-source switch, migrate one currently enabled plugin at a time:
 
-The combined catalog still serves the existing artifacts. You can complete the source-code consolidation while retaining the old store sources if source reassociation is not yet verified.
+1. Complete the stopped, consistent backup above. Save a separate private copy of that plugin's complete `plugins.configs.<id>` subtree.
+2. Disable that plugin and follow CPA's restart requirement so its native library can be removed. Do not delete any volumes or state directories.
+3. Use CPA's plugin uninstall action. Expect its config subtree to disappear. Leave its data directory and auth files intact.
+4. Stop CPA in Coolify. Restore the saved plugin options into `config.yaml`, **excluding the old generated `store` subtree**, and set that plugin's `enabled: false` temporarily. Preserve every custom data path and policy setting. Keep unrelated configuration untouched.
+5. Add the combined source and remove only this plugin's old source (preserve the others until their turns). Start CPA with the restored options present.
+6. Install the same plugin ID from the combined source, selecting the intended version. v7.2.155's install path preserves the other raw configuration fields while setting `enabled: true` and writing new store metadata. Installing auto-enables the plugin, so complete option restoration before this step.
+7. Follow the restart prompt, then compare the effective settings and historical data with the backup. Do not migrate the next plugin until this one checks out.
+
+For an intentionally disabled plugin, keep it disabled/uninstalled until you are ready for the install operation's automatic enablement. Never enable mutating behavior merely to match a quick-start example; restore the previous `dry-run`, routing, and provider selections.
+
+These rules are grounded in CPA tag v7.2.155 (`7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974`): `validatePluginStoreInstallSource`, `DeletePlugin`, and `enablePluginConfigLocked`. The live deployment's actual config/volume paths still require inspection. Rehearse the complete source-switch sequence on a disposable copy before a production switch if your deployment has custom storage or startup automation.
+
+The combined stable catalog continues to serve existing release artifacts. Switching to it does not by itself install the new quota cache or updated cache consumers.
 
 ## 4. When new binaries are released
 

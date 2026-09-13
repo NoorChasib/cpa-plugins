@@ -26,7 +26,7 @@ plugins:
   # Custom registry for this plugin. The built-in official registry remains
   # available. Remove this source after moving to an official-store entry.
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-auto-baseline/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
 
   configs:
     auto-baseline:

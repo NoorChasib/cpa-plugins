@@ -1,0 +1,16 @@
+# Merge these fields into existing plugin configuration; preserve all other options.
+plugins:
+  enabled: true
+  configs:
+    quota-cache:
+      enabled: true
+      cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      poll-interval: 15m
+      request-spacing: 10s
+    account-health-pushover:
+      # Requires the updated consumer binary; old published releases do not use this option.
+      quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      # Keep your existing quota-alerts preference. true enables notifications from cached data.
+    reset-priority:
+      # Requires the updated consumer binary.
+      quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json

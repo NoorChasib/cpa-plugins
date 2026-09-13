@@ -8,13 +8,13 @@ Give higher priority to healthy Claude and Codex accounts whose regular weekly q
 2. Add the store source below to the existing `plugins.store-sources` list, then install the plugin from CPA's Plugin Store.
 3. Merge the configuration below into your existing configuration, enable the plugin, and follow CPA's restart prompt. Do not create a second `plugins:` mapping.
 
-The source still serves the existing published release during repository consolidation.
+This single source lists the existing stable releases for all four plugins. If this plugin is already installed from an old source, follow the [migration guide](../../docs/migration.md) before switching; CPA v7.2.155 will otherwise reject the source change.
 
 ```yaml
 plugins:
   enabled: true
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-reset-priority/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
   configs:
     reset-priority:
       enabled: true
@@ -37,3 +37,7 @@ Preserve the auth directory: written priority/quarantine values live in the phys
 - [Complete behavior and compatibility reference](REFERENCE.md)
 - [Migration without losing settings or data](../../docs/migration.md)
 - [All configuration options](config.example.yaml)
+
+## Shared quota cache (development candidate)
+
+The updated source supports `quota-cache-path` pointing to Quota Cache's snapshot. When set, quota reads use that file exclusively; missing/stale data never triggers direct polling. This option is not in the existing published release. See [Quota Cache setup](../quota-cache/README.md) for the required updated binaries and shared path.

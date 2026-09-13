@@ -452,6 +452,7 @@ func configFields() []protocol.ConfigField {
 		field("quota-warning-percent", "number", "Used-percentage that triggers the single per-window warning; 95 means 5% remaining (default 95)."),
 		field("quota-exhausted-percent", "number", "Used-percentage that counts as the weekly limit being reached (default 100)."),
 		field("quota-notification-priority", "integer", "Pushover priority for weekly quota messages, -2 through 1 (default 0)."),
+		field("quota-cache-path", "string", "Shared quota-cache snapshot path; when set, quota reads never contact providers directly."),
 		field("quota-http-timeout", "string", "Timeout for each provider usage request (default 15s)."),
 	}
 }

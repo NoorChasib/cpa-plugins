@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	quotaclient "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"strings"
 	"sync"
 	"time"
@@ -839,6 +840,7 @@ func (e *Engine) fetchOneInternal(
 		}
 		providerID := acct.provider
 		timeout := e.cfg.RequestTimeout
+		quotaCachePath := e.cfg.QuotaCachePath
 		e.mu.Unlock()
 
 		provider := e.providers[providerID]
@@ -849,18 +851,23 @@ func (e *Engine) fetchOneInternal(
 
 		fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 
-		// Read the latest credential JSON just before use; never cache tokens.
-		got, errGet := e.host.AuthGet(fetchCtx, authIndex)
-		if errGet != nil {
-			cancel()
-			e.applyFetchFailure(attempt, sanitize.Error(errGet))
-			return
-		}
-		creds, errCreds := providers.ExtractCredentials(providerID, got.JSON)
-		if errCreds != nil {
-			cancel()
-			e.applyFetchFailure(attempt, sanitize.Error(errCreds))
-			return
+		var creds providers.Credentials
+		if quotaCachePath == "" {
+			// Read the latest credential JSON just before use; never cache tokens.
+			got, errGet := e.host.AuthGet(fetchCtx, authIndex)
+			if errGet != nil {
+				cancel()
+				e.applyFetchFailure(attempt, sanitize.Error(errGet))
+				return
+			}
+			var errCreds error
+			creds, errCreds = providers.ExtractCredentials(providerID, got.JSON)
+			if errCreds != nil {
+				cancel()
+				e.applyFetchFailure(attempt, sanitize.Error(errCreds))
+				return
+			}
+
 		}
 
 		// Pair final provider admission with configuration publication. The shared
@@ -901,7 +908,17 @@ func (e *Engine) fetchOneInternal(
 		}
 		e.mu.Unlock()
 
-		obs, errFetch := provider.FetchWeeklyReset(fetchCtx, creds)
+		var obs providers.Observation
+		var errFetch error
+		if quotaCachePath != "" {
+			var cached quotaclient.Entry
+			cached, errFetch = quotaclient.ReadFresh(quotaCachePath, providerID, authIndex, e.clk.Now(), 30*time.Minute)
+			if errFetch == nil {
+				obs = providers.Observation{HasWeekly: !cached.ResetAt.IsZero(), ResetAt: cached.ResetAt, ObservedAt: cached.ObservedAt}
+			}
+		} else {
+			obs, errFetch = provider.FetchWeeklyReset(fetchCtx, creds)
+		}
 		e.providerCallMu.RUnlock()
 		cancel()
 		if errFetch != nil {
@@ -1041,7 +1058,7 @@ func (e *Engine) applyObservation(attempt fetchAttempt, obs providers.Observatio
 		// a request begun in the current recovery epoch and a confirmed physical
 		// sentinel, except that dry-run may simulate promotion without saving.
 		if acct.health == HealthRecovering {
-			if attempt.startedAt.Before(acct.recoveredAt) || e.recoverySentinelPendingLocked(acct) {
+			if attempt.startedAt.Before(acct.recoveredAt) || (e.cfg.QuotaCachePath != "" && !obs.ObservedAt.After(acct.recoveredAt)) || e.recoverySentinelPendingLocked(acct) {
 				return
 			}
 			acct.health = HealthHealthy

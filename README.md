@@ -7,6 +7,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Account Health Pushover](plugins/account-health-pushover/README.md) | Notifications when credentials need attention; optional weekly quota alerts |
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
+| [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (development candidate) |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
 ## Get started
@@ -15,7 +16,7 @@ Open the README for the plugin you want. Each has a short installation/configura
 
 Already using these plugins? Start with [the migration guide](docs/migration.md). Keep your existing settings and data paths; a repository move does not require a fresh installation.
 
-The root `registry.json` combines the four existing store entries and continues to resolve their existing published releases. It can become one store source once this repository is published. There are no newly published binaries from this repository yet.
+The root `registry.json` combines the four existing store entries and continues to resolve their existing published releases. It is available as one store source at `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`. There are no newly published binaries from this repository yet.
 
 ## Development
 
@@ -33,3 +34,9 @@ Source histories were imported from the existing repositories. Historical tags a
 ## Compatibility
 
 Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. A successful source import is not a new compatibility certification.
+
+## Shared quota polling
+
+[Quota Cache](plugins/quota-cache/README.md) and cache-only consumer support are implemented as a development candidate. The stable store catalog still points to the original published versions. See the quota-cache README for build/configuration instructions and the verification record for tested scope.
+
+CPA v7.2.155 has no native quota-provider capability. Its stock dashboard can still issue independent quota requests; installing this cache does not redirect those requests. Auto Baseline and Token Usage do not poll provider quota endpoints.

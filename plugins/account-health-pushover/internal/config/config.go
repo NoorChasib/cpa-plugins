@@ -52,6 +52,9 @@ var (
 )
 
 type Config struct {
+	// QuotaCachePath selects cache-only quota reads; empty preserves standalone polling.
+	QuotaCachePath string
+
 	Enabled                    bool
 	Priority                   int
 	Providers                  []string
@@ -101,6 +104,8 @@ type Config struct {
 }
 
 type rawConfig struct {
+	QuotaCachePath string `yaml:"quota-cache-path"`
+
 	Enabled                    *bool    `yaml:"enabled"`
 	Priority                   int      `yaml:"priority"`
 	Providers                  []string `yaml:"providers"`
@@ -186,6 +191,7 @@ func Parse(data []byte) (Config, error) {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return Config{}, fmt.Errorf("parse plugin config: %w", err)
 	}
+	cfg.QuotaCachePath = strings.TrimSpace(raw.QuotaCachePath)
 	if raw.Enabled != nil {
 		cfg.Enabled = *raw.Enabled
 	}

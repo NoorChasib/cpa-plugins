@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	quotaclient "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"sort"
 	"strings"
 	"sync"
@@ -234,6 +235,14 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 // synchronous host callbacks with the configured timeout. A callback that
 // outlives the timeout keeps its native admission and drains at shutdown.
 func (m *Monitor) fetchQuota(ctx context.Context, entry protocol.HostAuthFileEntry, now time.Time) (quota.Observation, error) {
+	if m.cfg.QuotaCachePath != "" {
+		cached, err := quotaclient.ReadFresh(m.cfg.QuotaCachePath, entry.Provider, entry.AuthIndex, now, 30*time.Minute)
+		if err != nil {
+			return quota.Observation{}, err
+		}
+		return quota.Observation{Provider: cached.Provider, Percent: cached.Percent, ResetAt: cached.ResetAt, ObservedAt: cached.ObservedAt}, nil
+	}
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, m.cfg.QuotaHTTPTimeout)
 	defer cancel()
 	type outcome struct {
@@ -268,6 +277,9 @@ func (m *Monitor) applyQuotaLocked(account *state.Account, observation quota.Obs
 	q.Percent = observation.Percent
 	q.ResetAt = observation.ResetAt
 	q.ObservedAt = now
+	if m.cfg.QuotaCachePath != "" {
+		q.ObservedAt = observation.ObservedAt
+	}
 
 	// A new window (different reset instant, or a large drop in usage when the
 	// provider reports no reset instant) clears the latches so the next window

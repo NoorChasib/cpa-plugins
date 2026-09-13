@@ -8,13 +8,13 @@ Keep CPA-reported token usage in SQLite and view statistics from the CPA sidebar
 2. Add the store source below to the existing `plugins.store-sources` list, then install the plugin from CPA's Plugin Store.
 3. Merge the configuration below into your existing configuration, enable the plugin, and follow CPA's restart prompt. Do not create a second `plugins:` mapping.
 
-The source still serves the existing published release during repository consolidation.
+This single source lists the existing stable releases for all four plugins. If this plugin is already installed from an old source, follow the [migration guide](../../docs/migration.md) before switching; CPA v7.2.155 will otherwise reject the source change.
 
 ```yaml
 plugins:
   enabled: true
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
   configs:
     token-usage:
       enabled: true

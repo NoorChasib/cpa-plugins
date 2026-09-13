@@ -1,0 +1,149 @@
+package cache
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+)
+
+type fakeFetcher struct {
+	accounts []Account
+	calls    int
+	now      time.Time
+	failure  error
+}
+
+func (f *fakeFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
+func (f *fakeFetcher) Fetch(context.Context, Account) (Observation, error) {
+	f.calls++
+	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now}, f.failure
+}
+func fixture(t *testing.T) (*Cache, *fakeFetcher, Options) {
+	t.Helper()
+	opts := Options{Path: filepath.Join(t.TempDir(), "cache", "snapshot.json"), Interval: 15 * time.Minute, Spacing: 10 * time.Second}
+	f := &fakeFetcher{accounts: []Account{{"claude", "one"}}, now: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)}
+	c, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c, f, opts
+}
+func TestConcurrentRequestsAndRepeatedConsumerReadsMakeOneProviderCall(t *testing.T) {
+	c, f, opts := fixture(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.Step(context.Background(), f.now); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i := 0; i < 100; i++ {
+		entry, err := client.ReadFresh(opts.Path, "claude", "one", f.now, 30*time.Minute)
+		if err != nil || entry.Percent != 95 {
+			t.Fatalf("entry=%+v err=%v", entry, err)
+		}
+	}
+	if f.calls != 1 {
+		t.Fatalf("provider requests=%d; want 1", f.calls)
+	}
+	if err := c.Step(context.Background(), f.now.Add(14*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 {
+		t.Fatal("TTL was bypassed")
+	}
+}
+func TestRateLimitPausesSiblingAccountsAndSurvivesRestart(t *testing.T) {
+	c, f, opts := fixture(t)
+	f.accounts = append(f.accounts, Account{"claude", "two"}, Account{"codex", "three"})
+	f.failure = RateLimited{RetryAfter: f.now.Add(time.Hour)}
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	f.failure = nil
+	c2, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+	if err := c2.Step(context.Background(), f.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatalf("other provider should still refresh, calls=%d", f.calls)
+	}
+	if !snapshot.Entries[client.Key("claude", "two")].ObservedAt.IsZero() {
+		t.Fatal("sibling bypassed provider cooldown")
+	}
+	if err := c2.Step(context.Background(), f.now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatal("restart or sibling bypassed Retry-After")
+	}
+}
+func TestFailedRefreshRetainsButDoesNotServeOldObservationAsFresh(t *testing.T) {
+	c, f, opts := fixture(t)
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	f.failure = errors.New("private upstream failure body")
+	if err := c.Step(context.Background(), f.now.Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := snapshot.Entries[client.Key("claude", "one")]
+	if entry.Percent != 95 || !entry.ObservedAt.Equal(f.now) || entry.LastError != "quota fetch failed" {
+		t.Fatalf("%+v", entry)
+	}
+	if _, err := client.ReadFresh(opts.Path, "claude", "one", f.now.Add(15*time.Minute), time.Hour); err == nil {
+		t.Fatal("failed refresh became fresh")
+	}
+}
+func TestSingleWriterAndCorruptStateFailClosed(t *testing.T) {
+	c, f, opts := fixture(t)
+	if other, err := Open(opts, f); err == nil {
+		other.Close()
+		t.Fatal("second writer admitted")
+	}
+	c.Close()
+	if err := os.WriteFile(opts.Path, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if other, err := Open(opts, f); err == nil {
+		other.Close()
+		t.Fatal("corrupt persisted cooldown discarded")
+	}
+}
+func TestRemovedAccountIsNotServed(t *testing.T) {
+	c, f, opts := fixture(t)
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	f.accounts = nil
+	if err := c.Step(context.Background(), f.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ReadFresh(opts.Path, "claude", "one", f.now.Add(time.Minute), time.Hour); err == nil {
+		t.Fatal("removed account retained")
+	}
+}

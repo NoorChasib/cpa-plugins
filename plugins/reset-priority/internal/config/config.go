@@ -36,6 +36,9 @@ const (
 
 // Config is the validated plugin configuration.
 type Config struct {
+	// QuotaCachePath selects cache-only quota reads; empty preserves standalone polling.
+	QuotaCachePath string
+
 	// Enabled mirrors the per-plugin enabled flag the host preserves in the
 	// subtree. The host normally does not activate disabled plugins at all;
 	// this is a defensive second gate.
@@ -83,6 +86,8 @@ func (c Config) Manages(provider string) bool {
 // intentionally ignored here: it is unrelated to the credential priorities
 // this plugin manages.
 type rawConfig struct {
+	QuotaCachePath string `yaml:"quota-cache-path"`
+
 	Enabled           *bool      `yaml:"enabled"`
 	LoadPriority      any        `yaml:"priority"` // host-owned; ignored
 	ReconcileInterval *duration  `yaml:"reconcile-interval"`
@@ -185,6 +190,7 @@ func Parse(configYAML []byte) (Config, error) {
 		return Config{}, fmt.Errorf("parse reset-priority config: %w", err)
 	}
 
+	cfg.QuotaCachePath = strings.TrimSpace(raw.QuotaCachePath)
 	if raw.Enabled != nil {
 		cfg.Enabled = *raw.Enabled
 	}

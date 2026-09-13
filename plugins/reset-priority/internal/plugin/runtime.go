@@ -470,6 +470,7 @@ func configFields() []hostapi.ConfigField {
 		{Name: "manage-claude", Type: "boolean", Description: "Manage Claude OAuth credentials (default true)."},
 		{Name: "manage-codex", Type: "boolean", Description: "Manage Codex OAuth credentials (default true)."},
 		{Name: "dry-run", Type: "boolean", Description: "Compute and report priorities without writing auth files (default false; recommended true for first install)."},
+		{Name: "quota-cache-path", Type: "string", Description: "Shared quota-cache snapshot path; disables direct quota polling when set."},
 		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" for the host zone (default UTC). Presentation only."},
 	}
 }
