@@ -45,7 +45,7 @@ No real provider or Pushover requests were made by these test fixtures. The actu
 
 The screenshot's 429 cause has not been attributed to a particular caller. The new cache controls only participating plugins. CPA v7.2.155's stock dashboard is not redirected through the cache. The snapshot initially exposes regular weekly quota observations, not all dashboard windows or billing fields.
 
-The live CPA URL was reachable in a dedicated browser but required sign-in. Actual installed plugins, effective polling settings, volume names, custom data paths, and live dashboard requests have not been audited. No production configuration, installation, or data was changed.
+The live CPA URL was reachable in a dedicated browser but required sign-in. Its publicly served management JavaScript was inspected without authentication: the Claude quota fetcher calls both `/api/oauth/usage` and `/api/oauth/profile` through CPA `/api-call`, in parallel; the Codex fetcher also uses `/api-call` for `/backend-api/wham/usage`. This is static evidence of request paths, not a measurement of live request frequency. The fetched management HTML SHA-256 was `f11e7f970ed474d262049b236c54f35ef59f4b9a2da5b9fe1946af14a8641553`. Actual installed plugins, effective polling settings, volume names, custom data paths, and live dashboard requests have not been audited. No production configuration, installation, or data was changed.
 
 Migration source conflict/config deletion behavior was inspected in exact v7.2.155 source; the complete uninstall/restore/reinstall migration has not been executed against a production copy. The native suite test verifies loading/persistence/restart, not source reassociation.
 

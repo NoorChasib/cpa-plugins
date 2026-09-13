@@ -29,7 +29,7 @@ const (
 	actionRequestHeaderValue = "1"
 )
 
-var Version = "0.4.0"
+var Version = "0.4.1"
 
 type Host = monitor.Host
 
