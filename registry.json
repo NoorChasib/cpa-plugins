@@ -116,7 +116,7 @@
       "name": "Token Usage",
       "description": "Persistent CPA-reported raw token usage by provider/model. Linux amd64 only; not billing or lossless accounting.",
       "author": "NoorChasib",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "license": "MIT",
       "install": {
@@ -125,9 +125,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/token-usage_0.1.2_linux_amd64.zip",
-            "sha256": "3f1ec1aae36f914613b7bf612206f425a6ee0e723ef949934a68677f85cb5ca4",
-            "size": 3228501
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/token-usage/v0.1.3/token-usage_0.1.3_linux_amd64.zip",
+            "sha256": "e7b7368812e9953bdd408072eb099a2d34d484c1c256f12b526907ce5fc631d9",
+            "size": 3210078
           }
         ]
       },
