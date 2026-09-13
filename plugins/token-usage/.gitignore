@@ -1,0 +1,14 @@
+/dist/
+/scripts/browser/node_modules/
+*.so
+*.dylib
+*.dll
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.lock
+__pycache__/
+*.py[cod]
+.env
+.env.*
