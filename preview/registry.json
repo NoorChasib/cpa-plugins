@@ -46,16 +46,16 @@
         "Claude",
         "Codex"
       ],
-      "version": "0.1.3",
+      "version": "0.1.4",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/auto-baseline_0.1.3_linux_amd64.zip",
-            "sha256": "9c4b51f2ace0ee53073071491762a76e9ba4af4f572a950e9cd1688403a64c4f",
-            "size": 4269863
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v0.1.4/auto-baseline_0.1.4_linux_amd64.zip",
+            "sha256": "38e17b3d244b2ab33dba79200954571e4c6a23f8d46ee53e1718e90094d9a311",
+            "size": 4269754
           }
         ]
       }
