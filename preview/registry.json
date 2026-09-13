@@ -97,16 +97,16 @@
         "Claude",
         "Codex"
       ],
-      "version": "0.1.6",
+      "version": "0.1.7",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-2/reset-priority_0.1.6_linux_amd64.zip",
-            "sha256": "3368e1e84ffe0d68076576d1f9217908e131f3bf22d4e79effaf9fafb0fdec05",
-            "size": 4192236
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/reset-priority/v0.1.7/reset-priority_0.1.7_linux_amd64.zip",
+            "sha256": "12377308da0362dfe23a211c1db268508e9a5dfe56db89b873028110d8eebb09",
+            "size": 4193547
           }
         ]
       }
