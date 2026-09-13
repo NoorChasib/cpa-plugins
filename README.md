@@ -7,7 +7,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Account Health Pushover](plugins/account-health-pushover/README.md) | Notifications when credentials need attention; optional weekly quota alerts |
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
-| [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (development candidate) |
+| [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
 ## Get started
@@ -16,7 +16,7 @@ Open the README for the plugin you want. Each has a short installation/configura
 
 Already using these plugins? Start with [the migration guide](docs/migration.md). Keep your existing settings and data paths; a repository move does not require a fresh installation.
 
-The root `registry.json` combines the four existing store entries and continues to resolve their existing published releases. It is available as one store source at `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`. There are no newly published binaries from this repository yet.
+The root `registry.json` combines the four existing store entries and continues to resolve their existing published releases. It is available as one store source at `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`. The [quota cache preview](docs/quota-cache-preview.md) provides new binaries through a separate opt-in source.
 
 ## Development
 
@@ -37,6 +37,6 @@ Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC 
 
 ## Shared quota polling
 
-[Quota Cache](plugins/quota-cache/README.md) and cache-only consumer support are implemented as a development candidate. The stable store catalog still points to the original published versions. See the quota-cache README for build/configuration instructions and the verification record for tested scope.
+[Quota Cache](plugins/quota-cache/README.md) and cache-only consumer support are available in an [installable preview](docs/quota-cache-preview.md). The stable store catalog still points to the original published versions. See the quota-cache README for configuration and the verification record for tested scope.
 
 CPA v7.2.155 has no native quota-provider capability. Its stock dashboard can still issue independent quota requests; installing this cache does not redirect those requests. Auto Baseline and Token Usage do not poll provider quota endpoints.

@@ -2,9 +2,13 @@
 
 One scheduled poller for Claude, Codex, and Grok regular weekly quota observations. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Development candidate:** source and local native builds are available. It is not yet in the stable store catalog. Existing published consumer binaries do not support `quota-cache-path`; all three updated binaries are needed for shared polling.
+**Opt-in preview:** [download and install the first preview](../../docs/quota-cache-preview.md). It includes Quota Cache 0.1.0, Account Health 0.4.1, and Reset Priority 0.1.5 for Linux amd64. All three updated binaries are needed for shared polling. The stable catalog continues to serve the prior consumer versions.
 
-## Build and start
+## Install and start
+
+Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/preview/registry.json` as your preview store source, then follow the [preview installation guide](../../docs/quota-cache-preview.md). Read the migration guide before switching already-installed plugins between sources.
+
+### Build from source
 
 Target: Linux amd64, native ABI 1 / schema 4+, including CPA v7.2.155. The writer uses Linux file locking. You need Go 1.26+ and a C toolchain; verification uses Go 1.27.1.
 
@@ -16,7 +20,7 @@ make -C plugins/account-health-pushover c-shared
 make -C plugins/reset-priority build
 ```
 
-Outputs are `plugins/quota-cache/dist/quota-cache.so`, `plugins/account-health-pushover/dist/account-health-pushover.so`, and `plugins/reset-priority/reset-priority.so`. These are development builds; use verified release artifacts for a production upgrade. Follow the [migration guide](../../docs/migration.md) before replacing installed libraries, especially versioned store-managed files.
+Outputs are `plugins/quota-cache/dist/quota-cache.so`, `plugins/account-health-pushover/dist/account-health-pushover.so`, and `plugins/reset-priority/reset-priority.so`. These are local builds; the preview release provides checksum-verified artifacts of the tested binaries. Follow the [migration guide](../../docs/migration.md) before replacing installed libraries, especially versioned store-managed files.
 
 Merge the following options into your existing plugin configuration; keep all other options and data paths:
 

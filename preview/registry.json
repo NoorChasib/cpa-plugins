@@ -1,0 +1,114 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "account-health-pushover",
+      "name": "Account Health Pushover",
+      "description": "Sends Pushover alerts when Claude, Codex, or Grok (xAI) OAuth credentials require reauthentication or become credential-unhealthy, and optionally when an account's weekly quota is almost used or exhausted.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover",
+      "license": "MIT",
+      "tags": [
+        "monitoring",
+        "pushover",
+        "oauth",
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "version": "0.4.1",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-1/account-health-pushover_0.4.1_linux_amd64.zip",
+            "sha256": "1fc8fc0efa718ae9af5e344e628a81f494fccc1f98043c323cb791e1cfce9ec8",
+            "size": 7482825
+          }
+        ]
+      }
+    },
+    {
+      "id": "auto-baseline",
+      "name": "Auto Baseline",
+      "description": "Learns the newest authentic Claude Code and Codex CLI client fingerprint from inbound requests and promotes it into claude-header-defaults / codex-header-defaults so the proxy's measured baseline follows the client you actually run.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "homepage": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "license": "MIT",
+      "tags": [
+        "Fingerprint",
+        "Baseline",
+        "Headers",
+        "Claude",
+        "Codex"
+      ]
+    },
+    {
+      "id": "quota-cache",
+      "name": "Quota Cache",
+      "description": "Serialized weekly quota polling with a persistent cache and provider-wide 429 cooldowns. Preview: Linux amd64 only.",
+      "author": "NoorChasib",
+      "license": "MIT",
+      "version": "0.1.0",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/quota-cache",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-1/quota-cache_0.1.0_linux_amd64.zip",
+            "sha256": "f34acd73a5872e957eb057bee570ff066cc5b73406bf1a8372acd5ee5de8cecd",
+            "size": 4345722
+          }
+        ]
+      }
+    },
+    {
+      "id": "reset-priority",
+      "name": "Reset Priority",
+      "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/reset-priority",
+      "license": "MIT",
+      "tags": [
+        "Scheduler",
+        "Priority",
+        "Quota",
+        "Claude",
+        "Codex"
+      ],
+      "version": "0.1.5",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache-preview-1/reset-priority_0.1.5_linux_amd64.zip",
+            "sha256": "fbb637ddd953c5b4969613f8bc5a8d3783883b4175d9c77f646659edaeceb118",
+            "size": 4192144
+          }
+        ]
+      }
+    },
+    {
+      "id": "token-usage",
+      "name": "Token Usage",
+      "description": "Persistent CPA-reported raw token usage by provider/model. Linux amd64 only; not billing or lossless accounting.",
+      "author": "NoorChasib",
+      "version": "0.1.1",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-token-usage",
+      "license": "MIT",
+      "install": {
+        "type": "github-release"
+      }
+    }
+  ]
+}

@@ -50,3 +50,17 @@ The live CPA URL was reachable in a dedicated browser but required sign-in. Its 
 Migration source conflict/config deletion behavior was inspected in exact v7.2.155 source; the complete uninstall/restore/reinstall migration has not been executed against a production copy. The native suite test verifies loading/persistence/restart, not source reassociation.
 
 As with the existing ABI bridge, a host callback that never returns can block shutdown while it drains. The cache keeps provider calls serialized rather than starting replacements behind a stalled callback.
+
+## Installable preview verification
+
+The final preview uses Quota Cache 0.1.0, Account Health 0.4.1, and Reset Priority 0.1.5. Account Health and Reset Priority unit/race/vet/native gates passed after version/source-link changes. The pinned CPA suite smoke test passed again with these exact versions at source commit `a73a5cd57a0197027fb8c6b2debcd77ba5f264e1`. Quota Cache native callback/429 tests passed; its runtime code is unchanged from the earlier cache verification.
+
+| Preview library | Version reported by CPA | Tested native SHA-256 |
+| --- | --- | --- |
+| quota-cache | 0.1.0 | `02619e0e7f6886713e31da019e9b53f0e9e29a76eb56fe1580c527e5645c0946` |
+| account-health-pushover | 0.4.1 | `c6df62ecaa74f1ac7729916aecbbf75883f17c1033778ad3a6a2413dbe03b5aa` |
+| reset-priority | 0.1.5 | `e6ef63700aa80ff11e96b96262ab411ad8bf61bcd38a7c020b68450e4dd2a667` |
+
+`scripts/package-quota-preview.py` checks native hashes and CPA-reported versions against the smoke evidence, packages the exact bytes, verifies ZIP contents, and generates direct-install URLs with archive hashes/sizes. The preview release includes `verification.json`, the catalog, and checksums. Stable catalog artifacts are unchanged.
+
+All five GitHub workflows passed at `ee02efe`, including full Token Usage native/browser/store acceptance and the new quota-cache integration workflow. Later preview version/source-link changes were rechecked locally as described above.

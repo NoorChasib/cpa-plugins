@@ -38,6 +38,6 @@ Preserve the auth directory: written priority/quarantine values live in the phys
 - [Migration without losing settings or data](../../docs/migration.md)
 - [All configuration options](config.example.yaml)
 
-## Shared quota cache (development candidate)
+## Shared quota cache (preview)
 
-The updated source supports `quota-cache-path` pointing to Quota Cache's snapshot. When set, quota reads use that file exclusively; missing/stale data never triggers direct polling. This option is not in the existing published release. See [Quota Cache setup](../quota-cache/README.md) for the required updated binaries and shared path.
+Preview version 0.1.5 supports `quota-cache-path` pointing to Quota Cache's snapshot. When set, quota reads use that file exclusively; missing/stale data never triggers direct polling. Use the [preview store source](../../docs/quota-cache-preview.md); the stable source still serves the previous version. See [Quota Cache setup](../quota-cache/README.md) for the required updated binaries and shared path.
