@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "account-health-pushover",
+      "name": "Account Health Pushover",
+      "description": "Sends Pushover alerts when Claude, Codex, or Grok (xAI) OAuth credentials require reauthentication or become credential-unhealthy, and optionally when an account's weekly quota is almost used or exhausted.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+      "homepage": "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+      "license": "MIT",
+      "tags": [
+        "monitoring",
+        "pushover",
+        "oauth",
+        "claude",
+        "codex",
+        "grok"
+      ]
+    },
+    {
+      "id": "auto-baseline",
+      "name": "Auto Baseline",
+      "description": "Learns the newest authentic Claude Code and Codex CLI client fingerprint from inbound requests and promotes it into claude-header-defaults / codex-header-defaults so the proxy's measured baseline follows the client you actually run.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "homepage": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+      "license": "MIT",
+      "tags": [
+        "Fingerprint",
+        "Baseline",
+        "Headers",
+        "Claude",
+        "Codex"
+      ]
+    },
+    {
+      "id": "reset-priority",
+      "name": "Reset Priority",
+      "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
+      "author": "NoorChasib",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
+      "homepage": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
+      "license": "MIT",
+      "tags": [
+        "Scheduler",
+        "Priority",
+        "Quota",
+        "Claude",
+        "Codex"
+      ]
+    },
+    {
+      "id": "token-usage",
+      "name": "Token Usage",
+      "description": "Persistent CPA-reported raw token usage by provider/model. Linux amd64 only; not billing or lossless accounting.",
+      "author": "NoorChasib",
+      "version": "0.1.1",
+      "repository": "https://github.com/NoorChasib/cpa-plugin-token-usage",
+      "license": "MIT",
+      "install": {
+        "type": "github-release"
+      }
+    }
+  ]
+}

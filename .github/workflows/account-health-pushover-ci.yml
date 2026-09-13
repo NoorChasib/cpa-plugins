@@ -1,0 +1,52 @@
+name: account-health-pushover CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: account-health-pushover-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: plugins/account-health-pushover
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+          cache-dependency-path: plugins/account-health-pushover/go.sum
+      - name: Check formatting
+        run: make fmt-check
+      - name: Vet
+        run: make vet
+      - name: Test with race detector
+        run: make test-race
+      - name: Build packages
+        run: make build
+      - name: Build native plugin
+        run: make c-shared
+      - name: Package current platform
+        run: make package-current VERSION=0.4.0
+      - name: Generate checksums
+        run: make checksums
+      - name: Verify packaged archive and checksums (partial bundle)
+        run: make verify-release
+      # Note: make smoke pulls the unpinned eceasy/cli-proxy-api:latest image.
+      # CPA_SMOKE_REQUIRE_DOCKER=1 forbids the local no-Docker skip path so the
+      # integration test can never be skipped silently in CI.
+      - name: Run Docker integration smoke test
+        env:
+          CPA_SMOKE_REQUIRE_DOCKER: "1"
+        run: make smoke

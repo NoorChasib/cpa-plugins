@@ -1,0 +1,75 @@
+name: Token Usage native acceptance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: token-usage-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GOTOOLCHAIN: local
+      AGENT_BROWSER_ARGS: --no-sandbox
+    defaults:
+      run:
+        working-directory: plugins/token-usage
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      # Official tag refs verified with git ls-remote on 2026-09-09.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Require the selected Go toolchain
+        run: test "$(go env GOVERSION)" = go1.27.1
+      - name: Install exact test-only Node with verified integrity
+        run: |
+          bash scripts/browser/install-node.sh "$RUNNER_TEMP/token-usage-node"
+          printf '%s\n' "$RUNNER_TEMP/token-usage-node/bin" >> "$GITHUB_PATH"
+      - name: Install locked browser CLI and pinned Chrome
+        run: make browser-tools
+      - name: Unit, race, static, and native builds
+        run: make ci
+      - name: Required real browser session, rendering, CSP, and accessibility acceptance
+        run: make browser
+      - name: Required real pinned CPA native acceptance
+        run: |
+          make smoke | tee "$RUNNER_TEMP/native-smoke.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          log = (Path(os.environ["RUNNER_TEMP"]) / "native-smoke.log").read_text()
+          matches = re.findall(r"^Pinned CPA source/build/runtime artifacts: (/tmp/token-usage-smoke\.[A-Za-z0-9]+)$", log, re.M)
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one native smoke work directory")
+          work = Path(matches[0])
+          shutil.copyfile(work / "token-usage-production.so", "dist/token-usage.so")
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              out.write(f"CPA_SMOKE_WORK={work}\n")
+          PY
+      - name: Required actual official-image store handler and native browser acceptance
+        run: |
+          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b
+          docker pull --platform linux/amd64 python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+          make store-smoke CPA_SMOKE_WORK="$CPA_SMOKE_WORK"
+      - name: Prepare and verify exact smoke-tested package without publishing
+        run: |
+          make package-tested checksums verify-release VERSION=0.1.1
+          cmp "$CPA_SMOKE_WORK/token-usage-production.so" dist/token-usage.so
+          (cd dist && sha256sum -c checksums.txt)
+          python3 scripts/verify-cpa-package.py --cpa-source "$CPA_SMOKE_WORK/source"
+      # No release, artifact upload, store update, workflow_dispatch, or publish job.
