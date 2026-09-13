@@ -38,6 +38,8 @@ type Options struct {
 
 type Cache struct {
 	mu         sync.Mutex
+	scheduleMu sync.Mutex
+	schedule   Options
 	opts       Options
 	fetcher    Fetcher
 	data       client.Snapshot
@@ -82,7 +84,7 @@ func Open(opts Options, fetcher Fetcher) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Cache{opts: opts, fetcher: fetcher, lock: lock, data: client.Snapshot{
+	c := &Cache{opts: opts, schedule: opts, fetcher: fetcher, lock: lock, data: client.Snapshot{
 		Schema: 1, Entries: map[string]client.Entry{}, ProviderCooldown: map[string]time.Time{},
 	}}
 	if _, err = os.Lstat(path); err == nil {
@@ -106,6 +108,49 @@ func (c *Cache) Close() {
 	}
 }
 
+// SetSchedule queues a validated schedule without waiting for provider I/O.
+// Step applies it between requests while retaining ownership of the writer.
+func (c *Cache) SetSchedule(interval, spacing time.Duration) {
+	c.scheduleMu.Lock()
+	c.schedule.Interval, c.schedule.Spacing = interval, spacing
+	c.scheduleMu.Unlock()
+}
+
+// applySchedule runs under the writer lock. Successful credentials adopt the
+// new interval; failed/pending attempts retain their existing backoff floor.
+// Provider cooldowns and already-admitted global spacing are never shortened.
+func (c *Cache) applySchedule(now time.Time) error {
+	c.scheduleMu.Lock()
+	opts := c.schedule
+	c.scheduleMu.Unlock()
+	if opts == c.opts {
+		return nil
+	}
+	var lastAttempt time.Time
+	for key, entry := range c.data.Entries {
+		if entry.LastAttempt.After(lastAttempt) {
+			lastAttempt = entry.LastAttempt
+		}
+		if entry.LastAttempt.IsZero() {
+			continue
+		}
+		next := entry.LastAttempt.Add(opts.Interval)
+		if entry.LastError == "" || next.After(entry.NextAttempt) {
+			entry.NextAttempt = next
+			c.data.Entries[key] = entry
+		}
+	}
+	if next := lastAttempt.Add(opts.Spacing); !lastAttempt.IsZero() && next.After(c.data.NextRequest) {
+		c.data.NextRequest = next
+	}
+	// Do not consider the change applied until its schedule is durable.
+	if err := c.save(now); err != nil {
+		return err
+	}
+	c.opts = opts
+	return nil
+}
+
 // Step performs at most one provider request. Concurrent callers serialize at
 // this interface. Schedule and cooldowns are persisted before provider calls so
 // restarts cannot repeatedly bypass admission. Dashboard/consumer reads never
@@ -125,6 +170,9 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		return errors.New("cache stopped")
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.applySchedule(now); err != nil {
 		return err
 	}
 	if now.Before(c.data.NextRequest) {

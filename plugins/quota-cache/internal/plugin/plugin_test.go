@@ -84,3 +84,26 @@ func TestPrivateDataRouteAndStaticSidebarAreRegistered(t *testing.T) {
 		t.Fatal("expected static sidebar and private read-only data route")
 	}
 }
+
+func TestReconfigureScheduleKeepsWriter(t *testing.T) {
+	p := New(&testHost{})
+	defer p.Shutdown()
+	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
+	configure := func(method, interval, spacing string) error {
+		raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("cache-path: " + path + "\npoll-interval: " + interval + "\nrequest-spacing: " + spacing + "\n")})
+		_, err := p.Handle(method, raw)
+		return err
+	}
+	if err := configure(protocol.MethodPluginRegister, "15m", "10s"); err != nil {
+		t.Fatal(err)
+	}
+	writer := p.cache
+	for _, schedule := range [][2]string{{"5m", "10s"}, {"5m", "1s"}, {"30m", "20s"}} {
+		if err := configure(protocol.MethodPluginReconfigure, schedule[0], schedule[1]); err != nil {
+			t.Fatalf("valid schedule edit must remain registered: %v", err)
+		}
+		if p.cache != writer {
+			t.Fatal("schedule edit replaced the single writer")
+		}
+	}
+}

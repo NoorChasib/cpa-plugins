@@ -21,7 +21,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.1"
+var Version = "0.1.2"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -37,6 +37,7 @@ type Plugin struct {
 	opts           cache.Options
 	cancel         context.CancelFunc
 	done           chan struct{}
+	wake           chan time.Duration
 	terminal       bool
 	statusMu       sync.Mutex
 	statusReads    uint64
@@ -142,9 +143,20 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if p.terminal {
 		return protocol.Registration{}, errors.New("cache shut down")
 	}
-	if p.opts.Path != "" && p.opts != opts {
-		return protocol.Registration{}, errors.New("configuration changes require native restart")
+	if p.cache != nil && p.opts.Path != opts.Path {
+		return protocol.Registration{}, errors.New("cache path changes require native restart")
 	}
+	if p.cache != nil && p.opts != opts {
+		p.cache.SetSchedule(interval, spacing)
+		// Keep only the latest requested spacing. This never starts a second poller
+		// or cancels an in-flight provider request.
+		select {
+		case <-p.wake:
+		default:
+		}
+		p.wake <- spacing
+	}
+	p.opts = opts
 	if cfg.Enabled != nil && !*cfg.Enabled && p.cache != nil {
 		p.cancel()
 		<-p.done
@@ -158,7 +170,8 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		p.opts, p.cache, p.cancel, p.done = opts, current, cancel, make(chan struct{})
-		go p.run(ctx, current, p.done, spacing)
+		p.wake = make(chan time.Duration, 1)
+		go p.run(ctx, current, p.done, p.wake, spacing)
 	}
 	return protocol.Registration{SchemaVersion: 4, Metadata: protocol.Metadata{Name: ID, Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: []protocol.ConfigField{
 		{Name: "cache-path", Type: "string", Description: "Shared private snapshot path; preserve across restarts"},
@@ -167,7 +180,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}}, Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true}}, nil
 }
 
-func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct{}, spacing time.Duration) {
+func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct{}, wake <-chan time.Duration, spacing time.Duration) {
 	defer close(done)
 	ticker := time.NewTicker(spacing)
 	defer ticker.Stop()
@@ -178,6 +191,8 @@ func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct
 		select {
 		case <-ctx.Done():
 			return
+		case spacing = <-wake:
+			ticker.Reset(spacing)
 		case <-ticker.C:
 		}
 	}

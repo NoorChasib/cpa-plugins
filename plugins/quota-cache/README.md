@@ -86,3 +86,5 @@ python3 scripts/quota-cache-smoke.py
 ```
 
 Browser acceptance requires `agent-browser` and Chrome. CI and releases reuse the pinned test-only toolchain through `scripts/verify-quota-sidebar.sh`; no browser dependencies are included in the plugin. See [preview verification evidence](../../docs/quota-cache-verification.md). No live provider credentials or production changes are required by these tests.
+
+Schedule edits (`poll-interval` and `request-spacing`) apply live after any in-flight request finishes. Successful accounts adopt the new interval; existing failure backoff, provider cooldowns, history, and the single writer are preserved. Moving `cache-path` still requires a native restart.

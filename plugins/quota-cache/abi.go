@@ -372,7 +372,7 @@ func sanitizeError(err error) string {
 	// These fixed diagnostics contain no paths, credentials, or upstream text.
 	switch err.Error() {
 	case "invalid quota-cache configuration", "invalid cache schedule or path",
-		"cache path cannot be resolved", "configuration changes require native restart",
+		"cache path cannot be resolved", "cache path changes require native restart",
 		"cache directory must be private (0700)", "cache lock unavailable",
 		"another quota-cache writer owns this path",
 		"existing cache cannot be read; refusing to reset cooldowns", "cache shut down":

@@ -122,6 +122,24 @@ plugins:
                 shell=response.read()
                 assert response.headers.get('Content-Security-Policy')
                 assert b'Recent polling activity' in shell and b'synthetic-local-smoke-key' not in shell
+        if tuple(map(int, records['quota-cache']['metadata']['version'].split('.'))) >= (0, 1, 2):
+            for interval, spacing in [('5m', '2s'), ('15m', '10s'), ('5m', '10s')]:
+                req = urllib.request.Request(origin+'/v0/management/plugins/quota-cache/config',
+                    data=json.dumps({'poll-interval':interval,'request-spacing':spacing}).encode(),
+                    method='PATCH',headers={'Authorization':'Bearer synthetic-local-smoke-key','Content-Type':'application/json'})
+                with urllib.request.urlopen(req,timeout=5) as response: assert response.status == 200
+                deadline=time.monotonic()+10
+                while True:
+                    try:
+                        rows={p['id']:p for p in get('plugins')['plugins']}
+                        assert rows['quota-cache']['registered'] and rows['quota-cache']['effective_enabled']
+                        data=get('plugins/quota-cache/status')
+                        assert data['poll_interval']==interval+'0s' and data['request_spacing']==spacing
+                        assert rows['quota-cache']['menus'], 'schedule edit removed sidebar'
+                        break
+                    except Exception:
+                        if time.monotonic()>deadline: raise
+                        time.sleep(.1)
         try:
             get('plugins/quota-cache/status',False)
             raise AssertionError('private cache route accepted unauthenticated request')

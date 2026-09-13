@@ -227,3 +227,76 @@ func TestStatusRemainsReadableDuringAProviderCall(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestScheduleChangesPreserveHistoryAndCooldowns(t *testing.T) {
+	c, f, opts := fixture(t)
+	start := f.now
+	if err := c.Step(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	c.SetSchedule(5*time.Minute, time.Second)
+	if err := c.Step(context.Background(), start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Entries[client.Key("claude", "one")].NextAttempt.Equal(start.Add(5*time.Minute)) || f.calls != 1 || len(s.History) != 1 {
+		t.Fatal("shorter interval was not persisted without losing history or making an early request")
+	}
+	f.now = start.Add(5 * time.Minute)
+	f.failure = RateLimited{RetryAfter: start.Add(time.Hour)}
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	c.SetSchedule(time.Minute, 20*time.Second)
+	if err := c.Step(context.Background(), start.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s, err = client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.ProviderCooldown["claude"].Equal(start.Add(time.Hour)) || f.calls != 2 || len(s.History) != 2 || s.Totals.RateLimits != 1 {
+		t.Fatal("schedule edit lost history or shortened rate limit cooldown")
+	}
+	c.Close()
+	opts.Interval, opts.Spacing = time.Minute, 20*time.Second
+	restarted, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if err := restarted.Step(context.Background(), start.Add(7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatal("restart bypassed cooldown after schedule edit")
+	}
+}
+
+func TestIncreasingScheduleDefersAdmission(t *testing.T) {
+	c, f, opts := fixture(t)
+	f.accounts = append(f.accounts, Account{"codex", "two"})
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	c.SetSchedule(30*time.Minute, time.Minute)
+	if err := c.Step(context.Background(), f.now.Add(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 || !s.NextRequest.Equal(f.now.Add(time.Minute)) || !s.Entries[client.Key("claude", "one")].NextAttempt.Equal(f.now.Add(30*time.Minute)) {
+		t.Fatal("longer interval or spacing did not defer admission")
+	}
+	if err := c.Step(context.Background(), f.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatal("new spacing did not admit queued account")
+	}
+}

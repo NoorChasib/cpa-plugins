@@ -6,7 +6,7 @@ import (
 )
 
 func TestLifecycleErrorsKeepSafeDiagnosticsAndRedactUnknownDetails(t *testing.T) {
-	for _, safe := range []string{"configuration changes require native restart", "cache directory must be private (0700)", "another quota-cache writer owns this path"} {
+	for _, safe := range []string{"cache path changes require native restart", "cache directory must be private (0700)", "another quota-cache writer owns this path"} {
 		if sanitizeError(errors.New(safe)) != safe {
 			t.Fatal("safe diagnostic was hidden")
 		}

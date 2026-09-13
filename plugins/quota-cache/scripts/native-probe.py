@@ -84,6 +84,8 @@ def start(path):
     assert routes['routes'][0]['Menu'] == ''
     # A CPA config save can spell the same location as an absolute path.
     cfg['cache-path'] = str(path)
+    cfg['poll-interval'] = '5m'
+    cfg['request-spacing'] = '2s'
     call(api, 'plugin.reconfigure', {'schema_version': 6, 'config_yaml': base64.b64encode(json.dumps(cfg).encode()).decode()})
     shell = call(api, 'management.handle', {'Method': 'GET', 'Path': '/v0/resource/plugins/quota-cache/status'})
     assert shell['StatusCode'] == 200
@@ -112,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
     try:
         data = await_result(api, '')
         assert data['entries']['claude:synthetic-one']['used_percent'] == 42
+        assert data['poll_interval'] == '5m0s' and data['request_spacing'] == '2s'
         for _ in range(100): assert snapshot(api)[0] == 200
         assert counts['http'] == 1
         assert data['totals']['requests'] == 1 and data['totals']['successes'] == 1
