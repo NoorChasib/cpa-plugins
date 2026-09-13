@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+import argparse
+from plugin_release import load_catalog, released_library
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
@@ -23,12 +25,20 @@ PLUGINS = {
 def run(*args):
     return subprocess.check_output(args, text=True).strip()
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--candidate', choices=PLUGINS, help='Test one local build with the other four published plugins')
+args = parser.parse_args()
+published = {p['id']: p for p in load_catalog()['plugins']} if args.candidate else {}
+
 with tempfile.TemporaryDirectory(prefix='cpa-suite-smoke-') as tmp:
     work = Path(tmp)
     plugins, auth = work/'plugins', work/'auth'
     plugins.mkdir(); auth.mkdir()
     for plugin, library in PLUGINS.items():
-        shutil.copy2(ROOT/'plugins'/plugin/library, plugins/(plugin+'.so'))
+        if args.candidate and plugin != args.candidate:
+            (plugins/(plugin+'.so')).write_bytes(released_library(published[plugin]))
+        else:
+            shutil.copy2(ROOT/'plugins'/plugin/library, plugins/(plugin+'.so'))
     config = work/'config.yaml'
     config.write_text('''host: 0.0.0.0
 port: 8317
@@ -87,6 +97,8 @@ plugins:
         for plugin in PLUGINS:
             assert records[plugin]['registered'] and records[plugin]['effective_enabled'], 'plugin inactive: '+plugin
             assert records[plugin]['metadata']['github_repository'] == 'https://github.com/NoorChasib/cpa-plugins', 'legacy repository metadata: '+plugin
+            if args.candidate and plugin != args.candidate:
+                assert records[plugin]['metadata']['version'] == published[plugin]['version'], 'published peer version mismatch: '+plugin
         for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
             get('plugins/'+plugin+'/status')
         try:
@@ -128,6 +140,8 @@ plugins:
                     time.sleep(.1)
             run('docker','stop',container)
         evidence['optional_cache_modes'] = ['missing-cache-wait', 'standalone']
+        if args.candidate:
+            evidence['candidate'] = args.candidate
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('PASS: pinned CPA v7.2.155 loads all five native plugins; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')

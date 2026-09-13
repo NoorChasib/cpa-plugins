@@ -1,0 +1,109 @@
+name: Release one plugin
+
+on:
+  push:
+    tags:
+      - 'account-health-pushover/v*'
+      - 'auto-baseline/v*'
+      - 'reset-priority/v*'
+      - 'quota-cache/v*'
+      - 'token-usage/v*'
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Verify and package only (does not publish or change the catalog)'
+        type: choice
+        required: true
+        options:
+          - quota-cache
+          - account-health-pushover
+          - auto-baseline
+          - reset-priority
+          - token-usage
+
+permissions:
+  contents: read
+
+# Different plugin tags do not cancel each other. Catalog writes use optimistic
+# fast-forward retries so simultaneous releases preserve each other's entries.
+concurrency:
+  group: release-plugin-${{ github.ref }}-${{ inputs.plugin }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GOTOOLCHAIN: local
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: plugins/*/go.sum
+      - name: Select exactly one plugin and validate its native version
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          PLUGIN: ${{ inputs.plugin }}
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          if [[ "$EVENT" == push ]]; then
+            python3 scripts/plugin_release.py select --tag "$TAG" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/plugin_release.py select --plugin "$PLUGIN" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Release tooling regression checks
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+          python3 scripts/check-catalog.py
+      - name: Required plugin-specific checks and native build
+        env:
+          PLUGIN: ${{ steps.select.outputs.plugin }}
+        run: |
+          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b
+          bash scripts/verify-plugin-release.sh "$PLUGIN"
+      - name: Verify candidate with published peers in pinned CPA
+        env:
+          PLUGIN: ${{ steps.select.outputs.plugin }}
+        run: python3 scripts/quota-cache-smoke.py --candidate "$PLUGIN"
+      - name: Package exact tested bytes
+        env:
+          TAG: ${{ steps.select.outputs.tag }}
+        run: python3 scripts/plugin_release.py package --tag "$TAG" --output dist/plugin-release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-plugin-release
+          path: dist/plugin-release/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verified-plugin-release
+          path: dist/plugin-release
+      - name: Publish immutable assets and advance only this catalog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: python3 scripts/publish_plugin.py --tag "$TAG" --bundle dist/plugin-release

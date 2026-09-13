@@ -26,6 +26,7 @@ jobs:
           cache-dependency-path: plugins/*/go.sum
       - name: Cache unit/race checks and native build
         run: |
+          python3 -m unittest discover -s scripts/tests -v
           python3 scripts/check-catalog.py
           make -C plugins/quota-cache ci
       - name: Actual native callback and restart checks

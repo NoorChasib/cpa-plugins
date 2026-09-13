@@ -28,6 +28,8 @@ Each plugin works independently. Account Health and Reset Priority use Quota Cac
 
 Historical releases and their original bytes are preserved under `legacy/<plugin>/<tag>` in this repository.
 
+Publish updates independently with a tag such as `quota-cache/v0.1.1`. The root workflow verifies that plugin, publishes its Linux amd64 package, and updates only its catalog entry in both source aliases. CPA then offers that plugin's update; installation/restarts remain under your control. See [release commands and recovery](docs/releases.md).
+
 ## Development
 
 Each directory retains its own Go module, tests, and Makefile:
