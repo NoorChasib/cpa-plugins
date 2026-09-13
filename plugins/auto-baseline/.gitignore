@@ -1,0 +1,21 @@
+# Native build outputs (buildmode=c-shared also emits a C header)
+auto-baseline.so
+auto-baseline.dylib
+auto-baseline.dll
+auto-baseline.h
+
+# Release packaging outputs
+dist/
+
+# Go test artifacts
+*.test
+coverage.out
+coverage.html
+
+# Plugin runtime state and in-place configuration backups
+state.json
+*.bak
+plugins/auto-baseline/
+
+# Local agent/editor state
+.claude/worktrees/
