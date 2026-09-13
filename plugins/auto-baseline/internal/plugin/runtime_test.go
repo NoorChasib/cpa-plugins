@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/engine"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
 )
 
 var t0 = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)

@@ -2,7 +2,7 @@
 
 Prepared: 2026-09-09
 
-**Working project name:** `cpa-plugin-token-usage`  
+**Working project name:** `token-usage`
 **Plug-in ID / configuration key:** `token-usage`  
 **Management Center name:** **Token Usage**
 
@@ -26,7 +26,7 @@ Do **not** promise provider-global consumption, accurate invoices, a live per-to
 |---|---|
 | User's core goal | Track individual models' input and output token usage. |
 | User's project direction | A new plug-in/new project, potentially based on the existing account-health repository. |
-| Working naming recommendation | Repository `cpa-plugin-token-usage`, plug-in ID `token-usage`, display name `Token Usage`. Treat these as the working names unless the user changes them. |
+| Working naming recommendation | Repository `NoorChasib/cpa-plugins`, module `plugins/token-usage`, plug-in ID `token-usage`, display name `Token Usage`. Treat these as the working names unless the user changes them. |
 | Recommended MVP | Native usage callback, persistent SQLite history, provider/model totals, date filters, authenticated read-only API, collection-health reporting. |
 | Proposed optional additions | Alias drill-down, account drill-down, a small authenticated browser table, CSV export. These are not already approved requirements. |
 | Deliberately deferred | Pricing, budgets, quota polling, Pushover alerts, charts, dashboards, client/session analytics, cross-instance aggregation, provider billing reconciliation. |
@@ -39,7 +39,7 @@ Use sensible repository conventions for routine choices. Ask focused questions o
 
 **Baseline plug-in repository:**
 
-https://github.com/NoorChasib/cpa-plugin-account-health-pushover
+https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover
 
 **CLIProxyAPI / CPA repository:**
 
@@ -59,7 +59,7 @@ https://github.com/router-for-me/CLIProxyAPI/releases
 
 **Proposed new repository URL, NOT created or verified to exist:**
 
-`https://github.com/NoorChasib/cpa-plugin-token-usage`
+`https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/token-usage`
 
 Do not assume the proposed remote exists, is owned by the current operator, or is already authorized for publication. Establish the destination when implementation is assigned.
 
@@ -74,7 +74,7 @@ Do not assume the proposed remote exists, is owned by the current operator, or i
 
 Pinned trees:
 
-- Baseline: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
+- Baseline: https://github.com/NoorChasib/cpa-plugins/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
 - CPA: https://github.com/router-for-me/CLIProxyAPI/tree/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974
 - CPA release: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.155
 
@@ -86,7 +86,7 @@ A longer research note was created at `docs/model-token-tracking-analysis.md` in
 
 Original local directory, for orientation only:
 
-`/home/noor/Code/cpa-plugin-account-health-pushover`
+`/home/noor/Code/account-health-pushover`
 
 Do not require that path to exist in another environment.
 
@@ -575,7 +575,7 @@ Do not claim success solely because Go unit tests pass. Verify a real native loa
 
 ## 15. Copy/paste kickoff message for the next agent
 
-> Build the separate `cpa-plugin-token-usage` project described in this handoff. The core goal is persistent per-model input/output token tracking for traffic through CLIProxyAPI. Use `https://github.com/NoorChasib/cpa-plugin-account-health-pushover` as a selective native plug-in baseline and `https://github.com/router-for-me/CLIProxyAPI` as the authoritative host source. Keep the existing health plug-in unchanged. Read the requirements-versus-recommendations section, inspect the destination and target CPA version, and start by validating the actual native usage payload and streaming limitations with fixtures. Then implement and verify the scoped collector, persistence, authenticated API, lifecycle, and packaging. Use `token-usage` as the working plug-in ID. Preserve raw CPA counters; do not promise exact billing/global usage, double-count cache/reasoning, store keys/bodies, or expose private statistics through public resources. Treat the suggested SQLite/config/API/package designs as defaults you may refine with a documented reason. Ask only about material unresolved choices and continue independent work. Do not publish, push, release, deploy, alter production CPA, or make billable provider calls without authorization. Hand back working source, docs, exact test results, and known limitations.
+> Build the separate `token-usage` project described in this handoff. The core goal is persistent per-model input/output token tracking for traffic through CLIProxyAPI. Use `https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover` as a selective native plug-in baseline and `https://github.com/router-for-me/CLIProxyAPI` as the authoritative host source. Keep the existing health plug-in unchanged. Read the requirements-versus-recommendations section, inspect the destination and target CPA version, and start by validating the actual native usage payload and streaming limitations with fixtures. Then implement and verify the scoped collector, persistence, authenticated API, lifecycle, and packaging. Use `token-usage` as the working plug-in ID. Preserve raw CPA counters; do not promise exact billing/global usage, double-count cache/reasoning, store keys/bodies, or expose private statistics through public resources. Treat the suggested SQLite/config/API/package designs as defaults you may refine with a documented reason. Ask only about material unresolved choices and continue independent work. Do not publish, push, release, deploy, alter production CPA, or make billable provider calls without authorization. Hand back working source, docs, exact test results, and known limitations.
 
 ---
 

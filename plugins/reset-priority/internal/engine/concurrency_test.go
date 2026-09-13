@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
 )
 
 // gateProvider blocks every fetch until release is closed, signalling each

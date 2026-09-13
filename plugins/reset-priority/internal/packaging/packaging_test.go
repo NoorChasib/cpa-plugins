@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/plugin"
 )
 
 func TestPluginIDMatchesStoreRules(t *testing.T) {
@@ -135,7 +135,7 @@ func TestValidateRegistryShape(t *testing.T) {
 			"name": "Reset Priority",
 			"description": "Prioritizes Claude and Codex OAuth accounts by weekly reset time.",
 			"author": "NoorChasib",
-			"repository": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
+			"repository": "https://github.com/NoorChasib/cpa-plugins",
 			"license": "MIT",
 			"tags": ["routing", "quota"]
 		}]

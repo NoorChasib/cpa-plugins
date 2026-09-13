@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"net/http"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 // These embedded assets contain no runtime data, credentials, configuration or

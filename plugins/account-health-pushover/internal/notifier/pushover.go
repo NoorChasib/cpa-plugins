@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
 )
 
 const ProductionEndpoint = "https://api.pushover.net/1/messages.json"

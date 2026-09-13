@@ -49,7 +49,7 @@ plugins:
   dir: "plugins"
 
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-reset-priority/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
 
   configs:
     reset-priority:
@@ -119,10 +119,10 @@ export VERSION='<VERSION>'
 export PLATFORM='<linux_amd64-or-linux_arm64>'
 
 curl --fail --location --output "reset-priority_${VERSION}_${PLATFORM}.zip" \
-  "https://github.com/NoorChasib/cpa-plugin-reset-priority/releases/download/v${VERSION}/reset-priority_${VERSION}_${PLATFORM}.zip"
+  "https://github.com/NoorChasib/cpa-plugins/releases/download/reset-priority/v${VERSION}/reset-priority_${VERSION}_${PLATFORM}.zip"
 
 curl --fail --location --output checksums.txt \
-  "https://github.com/NoorChasib/cpa-plugin-reset-priority/releases/download/v${VERSION}/checksums.txt"
+  "https://github.com/NoorChasib/cpa-plugins/releases/download/reset-priority/v${VERSION}/checksums.txt"
 
 grep "  reset-priority_${VERSION}_${PLATFORM}.zip$" checksums.txt \
   | sha256sum --check --strict

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
 )
 
 func configuredTestConfig(t *testing.T) config.Config {

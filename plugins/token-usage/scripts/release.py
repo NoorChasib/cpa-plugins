@@ -15,14 +15,14 @@ MEMBERS = {"token-usage.so", "LICENSE", "THIRD-PARTY-NOTICES.txt"}
 
 
 def archive_name(version):
-    if version != "0.1.2":
-        raise ValueError("only the scoped 0.1.2 release is currently supported")
+    if version != "0.1.3":
+        raise ValueError("only the scoped 0.1.3 release is currently supported")
     return f"token-usage_{version}_linux_amd64.zip"
 
 
 def release_base(version):
     archive_name(version)
-    return f"{PROJECT}/releases/download/v{version}"
+    return f"{PROJECT}/releases/download/token-usage/v{version}"
 
 
 def digest(path):
@@ -128,7 +128,7 @@ def verify(dist, version, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("package", "checksums", "verify"))
-    parser.add_argument("--version", default="0.1.2")
+    parser.add_argument("--version", default="0.1.3")
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
     try:

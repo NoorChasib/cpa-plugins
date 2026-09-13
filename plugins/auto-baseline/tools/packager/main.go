@@ -37,8 +37,8 @@ import (
 	"runtime"
 	"sort"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/packaging"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/packaging"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/plugin"
 )
 
 func main() {

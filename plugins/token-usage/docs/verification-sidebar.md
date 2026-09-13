@@ -100,7 +100,7 @@ Reproduction uses `make browser-tools`, `AGENT_BROWSER_ARGS=--no-sandbox make br
 
 ## Final accepted local artifacts
 
-Saved directory: **`/home/noor/Code/cpa-plugin-token-usage/dist/0.1.1/`**. This separate version directory preserves the historical v0.1.0 ZIP/registry/checksum files at the dist root. The following are accepted local candidate bytes, **not published assets**:
+Saved directory: **`/home/noor/Code/cpa-plugins/plugins/token-usage/dist/0.1.1/`**. This separate version directory preserves the historical v0.1.0 ZIP/registry/checksum files at the dist root. The following are accepted local candidate bytes, **not published assets**:
 
 | File in the saved directory | Size (bytes) | SHA-256 |
 |---|---:|---|

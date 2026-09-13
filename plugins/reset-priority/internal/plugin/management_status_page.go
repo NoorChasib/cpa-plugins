@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/config"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
 )
 
 // This file renders the AUTHENTICATED management HTML status view. It is

@@ -6,8 +6,8 @@
       "name": "Reset Priority",
       "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
       "author": "NoorChasib",
-      "repository": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
-      "homepage": "https://github.com/NoorChasib/cpa-plugin-reset-priority",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins",
       "license": "MIT",
       "tags": [
         "Scheduler",

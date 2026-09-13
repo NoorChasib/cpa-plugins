@@ -1,4 +1,4 @@
-module github.com/NoorChasib/cpa-plugin-reset-priority
+module github.com/NoorChasib/cpa-plugins/plugins/reset-priority
 
 go 1.26.0
 

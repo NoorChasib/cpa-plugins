@@ -75,7 +75,7 @@ plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-account-health-pushover/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
   configs:
     account-health-pushover:
       enabled: true
@@ -116,8 +116,7 @@ plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-reset-priority/main/registry.json"
-    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugin-account-health-pushover/main/registry.json"
+    - "https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json"
   configs:
     reset-priority:
       enabled: true

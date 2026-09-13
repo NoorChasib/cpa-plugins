@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/store"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/store"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 )
 
 // Deliberately no worker: operation/fault interleavings and wall-clock throttles

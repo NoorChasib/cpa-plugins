@@ -1,4 +1,4 @@
-// cpa-plugin-auto-baseline is a CLIProxyAPI native plugin that learns the
+// auto-baseline is a CLIProxyAPI native plugin that learns the
 // newest authentic Claude Code / Codex CLI client fingerprint from inbound
 // requests and promotes it into config.yaml's claude-header-defaults /
 // codex-header-defaults so CPA's hot reload raises its measured baseline.

@@ -3,7 +3,7 @@
 import json
 import sys
 
-PACKAGE = "github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin"
+PACKAGE = "github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/plugin"
 TEST = "TestSidebarBrowser"
 
 

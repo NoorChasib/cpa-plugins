@@ -1,10 +1,10 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
-VERSION ?= 0.1.2
+VERSION ?= 0.1.3
 DIST ?= dist
 GO ?= go
 PYTHON ?= python3
-LDFLAGS := -s -w -X github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/plugin.Version=$(VERSION)
 
 .PHONY: fmt-check vet test test-race build c-shared ci smoke native-spike browser-tools browser store-smoke package-current package-tested checksums verify-release
 fmt-check:

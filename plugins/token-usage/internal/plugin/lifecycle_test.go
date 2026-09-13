@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/store"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/store"
 )
 
 func TestQuiesceKeepsLateDiagnosticsReachableAndReopensSameConfig(t *testing.T) {

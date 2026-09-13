@@ -14,8 +14,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
 )
 
 // Limits on stored history and file size.

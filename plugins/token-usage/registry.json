@@ -6,7 +6,7 @@
       "name": "Token Usage",
       "description": "Persistent CPA-reported raw token usage by provider/model. Linux amd64 only; not billing or lossless accounting.",
       "author": "NoorChasib",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "license": "MIT",
       "install": {

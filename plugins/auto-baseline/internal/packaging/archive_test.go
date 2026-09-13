@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/plugin"
 )
 
 func mustReadFile(t *testing.T, path string) []byte {

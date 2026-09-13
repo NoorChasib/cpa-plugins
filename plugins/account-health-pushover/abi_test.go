@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 func TestHostCallGateDrainsBeforeNativeUnload(t *testing.T) {

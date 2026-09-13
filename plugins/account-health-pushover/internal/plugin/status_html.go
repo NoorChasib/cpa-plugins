@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/health"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/monitor"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/health"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/monitor"
 )
 
 // This file renders both browser views from one template:

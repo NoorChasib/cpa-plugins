@@ -12,16 +12,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/collector"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/config"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/store"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/collector"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/store"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 )
 
 const ID = "token-usage"
 
-var Version = "0.1.2"
+var Version = "0.1.3"
 
 type Plugin struct {
 	lifecycle                   sync.Mutex

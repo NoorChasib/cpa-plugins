@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 // quarantine drives account a into definitive quarantine.

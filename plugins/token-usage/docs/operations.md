@@ -8,10 +8,8 @@ The candidate targets **Linux amd64**, native ABI 1 / RPC schema 6 and **CPA v7.
 
 Choose the stable/latest source or the version-specific v0.1.1 source:
 
-- Stable/latest: `https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json`.
-- Version-specific v0.1.1: `https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.1/registry.json`.
+Use `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json` as the store source. Keep the identical preview alias if already installed from it. Install or update Token Usage through CPA, preserving its database path and other configured options. See the [quick start](../README.md) and [release guide](../../../docs/releases.md).
 
-Append only one under the existing CPA `plugins.store-sources` list. Keep existing sources and `plugins.configs` entries; CPA retains its built-in official registry. A source alone does not enable a plug-in. The stable GitHub-release source follows latest; its displayed version is not a tag lock. Use the pinned v0.1.0 source and [tagged instructions](https://github.com/NoorChasib/cpa-plugin-token-usage/blob/v0.1.0/README.md) to deliberately remain on the prior release. Installation follows the [README](../REFERENCE.md#install-and-configure) and CPA's supported native restart procedure.
 
 For manual installation, download the ZIP, `checksums.txt`, and `registry.json` together from the trusted release, verify `sha256sum -c checksums.txt`, stage/extract, and stop CPA before changing a native library. The ZIP includes the library and project/dependency license notices; retain them. CPA store installation creates a versioned library under the platform directory, unlike the manual unversioned example below. Do not let stale versioned libraries shadow a manually copied binary. Publishing assets does not deploy them or change any operator configuration.
 

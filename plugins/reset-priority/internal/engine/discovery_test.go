@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 func day(n int) time.Time { return baseTime.Add(time.Duration(n) * 24 * time.Hour) }

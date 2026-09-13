@@ -15,12 +15,12 @@ SPEC.loader.exec_module(smoke)
 
 class StoreSmokeContracts(unittest.TestCase):
     def generated(self):
-        return {"enabled": True, "store": {"id": "token-usage", "version": "0.1.2",
+        return {"enabled": True, "store": {"id": "token-usage", "version": "0.1.3",
             "source-url": smoke.STORE_URL, "install": {"type": "direct"}}}
 
     def test_assertion_requires_actual_preserved_handler_config(self):
         with patch.object(smoke, "request_json", return_value=self.generated()) as request:
-            self.assertEqual(smoke.assert_generated_config("http://127.0.0.1:1", "0.1.2"), self.generated())
+            self.assertEqual(smoke.assert_generated_config("http://127.0.0.1:1", "0.1.3"), self.generated())
         request.assert_called_once_with("http://127.0.0.1:1", "/v0/management/plugins/token-usage/config")
 
     def test_config_regression_cannot_pass_with_missing_store_or_manual_database_override(self):
@@ -29,7 +29,7 @@ class StoreSmokeContracts(unittest.TestCase):
         for item in cases:
             with self.subTest(item=item), patch.object(smoke, "request_json", return_value=item):
                 with self.assertRaises((AssertionError, KeyError)):
-                    smoke.assert_generated_config("http://127.0.0.1:1", "0.1.2")
+                    smoke.assert_generated_config("http://127.0.0.1:1", "0.1.3")
 
     def test_inventory_does_not_confuse_configured_with_registered(self):
         item = {"configured": True, "enabled": True, "registered": False, "effective_enabled": False}

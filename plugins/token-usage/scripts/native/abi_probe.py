@@ -56,7 +56,7 @@ def main():
 
     def register(path=database, schema=6, method=b"plugin.register"):
         cfg = {"database-path": str(path), "batch-size": 1, "flush-interval": "10ms",
-               "store": {"id": "token-usage", "version": "0.1.2", "install": {"type": "direct"}}}
+               "store": {"id": "token-usage", "version": "0.1.3", "install": {"type": "direct"}}}
         raw = json.dumps({"schema_version": schema, "config_yaml": base64.b64encode(json.dumps(cfg).encode()).decode()}).encode()
         return call(method, raw)
 

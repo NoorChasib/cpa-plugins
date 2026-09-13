@@ -77,8 +77,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/plugin"
 )
 
 var (

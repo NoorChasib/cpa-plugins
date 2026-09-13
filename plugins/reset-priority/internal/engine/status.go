@@ -4,8 +4,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/config"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/sanitize"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/sanitize"
 )
 
 // Snapshot is the published, sanitized status. It never contains tokens,

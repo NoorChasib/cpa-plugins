@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
 )
 
 // Bounds that keep memory constant under adversarial input.

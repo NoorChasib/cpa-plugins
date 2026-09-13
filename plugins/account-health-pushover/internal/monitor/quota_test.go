@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/notifier"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/notifier"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 // quotaFakeHost extends fakeHost with the callbacks quota polling needs and

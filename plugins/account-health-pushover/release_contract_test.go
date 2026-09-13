@@ -176,7 +176,7 @@ func TestRegistryPassesUpstreamValidationRules(t *testing.T) {
 	if plugin.ID != "account-health-pushover" || plugin.Author != "NoorChasib" {
 		t.Fatalf("plugin identity=%+v", plugin)
 	}
-	wantRepo := "https://github.com/NoorChasib/cpa-plugin-account-health-pushover"
+	wantRepo := "https://github.com/NoorChasib/cpa-plugins"
 	if plugin.Repository != wantRepo || plugin.Homepage != wantRepo || plugin.License != "MIT" {
 		t.Fatalf("plugin URLs/license=%+v", plugin)
 	}
@@ -194,7 +194,7 @@ func TestRegistryValidationRejectsWhatUpstreamRejects(t *testing.T) {
 				Name:        "Account Health Pushover",
 				Description: "d",
 				Author:      "NoorChasib",
-				Repository:  "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+				Repository:  "https://github.com/NoorChasib/cpa-plugins",
 			}},
 		}
 		mutate(&registry)
@@ -217,19 +217,19 @@ func TestRegistryValidationRejectsWhatUpstreamRejects(t *testing.T) {
 		{"missing repository", func(r *storeRegistry) { r.Plugins[0].Repository = "" }, "missing required field repository"},
 		{"v-prefixed version", func(r *storeRegistry) { r.Plugins[0].Version = "v0.1.0" }, "invalid plugin version"},
 		{"repository .git suffix", func(r *storeRegistry) {
-			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugin-account-health-pushover.git"
+			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugins.git"
 		}, "repository must be"},
 		{"repository non-github host", func(r *storeRegistry) {
-			r.Plugins[0].Repository = "https://gitlab.com/NoorChasib/cpa-plugin-account-health-pushover"
+			r.Plugins[0].Repository = "https://gitlab.com/NoorChasib/cpa-plugins"
 		}, "repository must be"},
 		{"repository http scheme", func(r *storeRegistry) {
-			r.Plugins[0].Repository = "http://github.com/NoorChasib/cpa-plugin-account-health-pushover"
+			r.Plugins[0].Repository = "http://github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover"
 		}, "repository must be"},
 		{"repository extra path segment", func(r *storeRegistry) {
-			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugin-account-health-pushover/tree/main"
+			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover"
 		}, "repository must be"},
 		{"repository with query", func(r *storeRegistry) {
-			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugin-account-health-pushover?tab=readme"
+			r.Plugins[0].Repository = "https://github.com/NoorChasib/cpa-plugins?tab=readme"
 		}, "repository must be"},
 		{"direct install under schema 1", func(r *storeRegistry) { r.Plugins[0].Install.Type = "direct" }, "unsupported install type"},
 		{"duplicate plugin ids", func(r *storeRegistry) { r.Plugins = append(r.Plugins, r.Plugins[0]) }, "duplicate plugin id"},
@@ -276,7 +276,7 @@ func TestRequiredReleaseAssetNames(t *testing.T) {
 	}
 	for _, required := range []string{
 		"account-health-pushover_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip",
-		"-X github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/plugin.Version=${VERSION}",
+		"-X github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/plugin.Version=${VERSION}",
 		"dist/checksums.txt",
 		"github.event_name == 'push'",
 	} {

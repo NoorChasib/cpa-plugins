@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 const (

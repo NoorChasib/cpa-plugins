@@ -11,7 +11,7 @@ Maintained contract for **Token Usage 0.1.1**, updated 2026-09-09. Published v0.
 | Deployed CPA | **Unknown; not inspected.** Older/newer releases are not implied to behave identically |
 | Native contract | ABI **1**, RPC schema **6**, `cliproxy_plugin_init`, Go `c-shared` |
 | Tested platform | **Linux amd64 only**, CGO enabled, GCC 15.2.0, Go 1.27.1; module language floor Go 1.26.0 |
-| Native baseline | `cpa-plugin-account-health-pushover` release 0.4.0, commit `870456ecdbf3a86c76c6274f1d02e14dadddabf4` |
+| Native baseline | `account-health-pushover` release 0.4.0, commit `870456ecdbf3a86c76c6274f1d02e14dadddabf4` |
 | Historical source-built runtime isolation | Official Python container `python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285`, `--platform linux/amd64 --network none`; **not** a prebuilt CPA image |
 | Audited console | Official Management Center **v1.22.15**, commit `ed5f1c48e11ba7335f1e8f676f228c280196af85`; source/codec and synthetic browser compatibility, not deployed-console access |
 | Deployed console and proxy | **Unknown; not inspected.** Origin, reverse-proxy prefix and framing policy must not be assumed |
@@ -19,7 +19,7 @@ Maintained contract for **Token Usage 0.1.1**, updated 2026-09-09. Published v0.
 
 Sources: [official release][release], [official release metadata](https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest), [pinned CPA tree][cpa], [baseline tree][baseline], and [pinned sidebar/console audit](sidebar-audit.md). The historical upstream checks used `git ls-remote` and the official GitHub API. CPA for the historical execution suite was compiled, unmodified, from the pinned archive outside this repository; the new official-image gate is distinct. No provider credentials, existing CPA configuration, auth files, or production state were read.
 
-The baseline native ABI structure was adapted selectively. Health classification, auth access, quota polling, notifications, and Pushover code were not copied. `LICENSE` retains `Copyright (c) 2026 NoorChasib` and CPA's published MIT notice for the mirrored protocol declarations, including its original date text. See [baseline license](https://github.com/NoorChasib/cpa-plugin-account-health-pushover/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/LICENSE) and [CPA license](https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/LICENSE).
+The baseline native ABI structure was adapted selectively. Health classification, auth access, quota polling, notifications, and Pushover code were not copied. `LICENSE` retains `Copyright (c) 2026 NoorChasib` and CPA's published MIT notice for the mirrored protocol declarations, including its original date text. See [baseline license](https://github.com/NoorChasib/cpa-plugins/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/LICENSE) and [CPA license](https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/LICENSE).
 
 CPA requires nonempty name, version, author **and GitHubRepository** in metadata. The intended project URL is therefore an identity field only: its presence is not a claim that a remote, store entry, or release exists. See [`validPlugin`](https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/internal/pluginhost/host.go#L1025-L1037).
 
@@ -171,7 +171,7 @@ Still not tested or claimed by the synthetic native acceptance:
 7. Preserve explicit history paths; the omitted-path default is captured-cwd `plugins/data/token-usage/usage.sqlite`, not auth/store-metadata discovery. Keep valid initial-storage-failure metadata/sidebar recoverable with sanitized 503 and no fabricated coverage/counters, while malformed config/protocol remains rejected. After first successful initialization, semantic storage/collector changes require native restart.
 
 [cpa]: https://github.com/router-for-me/CLIProxyAPI/tree/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974
-[baseline]: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
+[baseline]: https://github.com/NoorChasib/cpa-plugins/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
 [release]: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.2.155
 [abi]: https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/sdk/pluginabi/types.go#L5-L105
 [negotiation]: https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/internal/pluginhost/rpc_client.go#L58-L80

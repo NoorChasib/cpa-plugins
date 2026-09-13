@@ -20,12 +20,12 @@ Initial native plugin release for persistent **CPA-reported** raw token usage by
 
 Add **one** of these URL strings to CPA's existing `plugins.store-sources` list, refresh the plugin store, and choose Token Usage:
 
-- Stable source (tracks latest): `https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json`
-- Pinned 0.1.0 source (direct ZIP URL/SHA-256): `https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.0/registry.json`
+- Stable source (tracks latest): `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`
+For current installation and configuration, use the [Token Usage quick start](../README.md).
 
 The stable source uses CPA's GitHub-release installer; its version is a display fallback rather than a tag lock. The pinned source explicitly selects only Linux amd64. Public source/download URLs become usable when the release is published. No central official-store listing is claimed.
 
-**Import alone is not configuration.** Set an explicit absolute `plugins.configs.token-usage.database-path` in a private local persistent directory owned by the CPA UID (directory 0700, database/companions 0600). Enable/configure the plugin, preserve unrelated CPA configuration, and restart the native host. All queries require CPA management authentication. See the [installation guide](https://github.com/NoorChasib/cpa-plugin-token-usage/blob/v0.1.0/README.md#install-and-configure) and [operations guide](https://github.com/NoorChasib/cpa-plugin-token-usage/blob/v0.1.0/docs/operations.md) before installing.
+For current installation and configuration, use the [Token Usage quick start](../README.md).
 
 ## Important limitations
 

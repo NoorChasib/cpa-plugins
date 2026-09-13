@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/store"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/store"
 )
 
 // TestSidebarBrowser executes the shipped, CSP-protected page in a real browser.

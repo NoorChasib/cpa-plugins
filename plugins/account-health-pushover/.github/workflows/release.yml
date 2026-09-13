@@ -113,7 +113,7 @@ jobs:
           export CGO_ENABLED=1 GOOS='${{ matrix.goos }}' GOARCH='${{ matrix.goarch }}'
           export CC='${{ matrix.cc }}'
           go build -trimpath -buildmode=c-shared \
-            -ldflags "-X github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/plugin.Version=${VERSION}" \
+            -ldflags "-X github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/plugin.Version=${VERSION}" \
             -o 'dist/account-health-pushover.${{ matrix.extension }}' .
           rm -f dist/account-health-pushover.h
       - name: Package release archive

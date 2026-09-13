@@ -1,4 +1,4 @@
-module github.com/NoorChasib/cpa-plugin-auto-baseline
+module github.com/NoorChasib/cpa-plugins/plugins/auto-baseline
 
 go 1.26.0
 

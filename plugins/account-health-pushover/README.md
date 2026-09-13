@@ -41,7 +41,7 @@ Preserve any existing `state-file` override. By default, incident and notificati
 
 ## Optional shared quota cache
 
-Version 0.4.2 works independently by default. Quota Cache is **not required**.
+Version 0.4.3 works independently by default. Quota Cache is **not required**.
 
 To share quota observations, install Quota Cache and enable **use-quota-cache** in this plugin's CPA config panel:
 

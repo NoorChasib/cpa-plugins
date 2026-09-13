@@ -1,4 +1,4 @@
-// cpa-plugin-reset-priority is a CLIProxyAPI native plugin that maintains
+// reset-priority is a CLIProxyAPI native plugin that maintains
 // credential priorities for Claude and Codex OAuth accounts so that the
 // account whose regular weekly quota resets soonest is consumed first.
 //

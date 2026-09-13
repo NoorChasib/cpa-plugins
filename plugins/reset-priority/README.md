@@ -40,7 +40,7 @@ Preserve the auth directory: written priority/quarantine values live in the phys
 
 ## Optional shared quota cache
 
-Version 0.1.6 works independently by default. Quota Cache is **not required**.
+Version 0.1.7 works independently by default. Quota Cache is **not required**.
 
 To share quota observations, install Quota Cache and enable **use-quota-cache** in this plugin's CPA config panel:
 

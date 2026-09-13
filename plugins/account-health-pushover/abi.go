@@ -71,8 +71,8 @@ import (
 	"sync"
 	"unsafe"
 
-	pluginimpl "github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/plugin"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	pluginimpl "github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 var (

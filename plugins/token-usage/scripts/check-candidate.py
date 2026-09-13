@@ -21,7 +21,7 @@ PATTERNS = {
     "scripts/native/store_smoke.py": [r'^VERSION = "' + SEMVER + '"'],
     "scripts/release.py": [r'if version != "' + SEMVER + '"', r'--version", default="' + SEMVER + '"',
                            r'only the scoped ' + SEMVER + ' release'],
-    "scripts/verify-cpa-package.py": [r'/releases/download/v' + SEMVER, r'const archiveName = "token-usage_' + SEMVER,
+    "scripts/verify-cpa-package.py": [r'/releases/download/token-usage/v' + SEMVER, r'const archiveName = "token-usage_' + SEMVER,
         r'TagName: "v' + SEMVER, r'plugin.Version != "' + SEMVER, r'installed.Version != "' + SEMVER,
         r'case apiBase \+ "latest", apiBase \+ "tags/v' + SEMVER,
         r'client.InstallVersion\(ctx, plugin, "v' + SEMVER, r'release.verify\(args.dist, "' + SEMVER],

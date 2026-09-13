@@ -18,8 +18,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
 )
 
 // Defaults for every tunable.

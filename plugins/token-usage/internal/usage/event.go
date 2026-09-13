@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 const (

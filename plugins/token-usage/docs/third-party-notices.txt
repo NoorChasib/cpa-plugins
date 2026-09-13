@@ -6,20 +6,20 @@ Sidebar references and console session compatibility
 Adapted visual tokens/base components and audited source patterns:
 
 - Account Health Pushover v0.4.0
-  https://github.com/NoorChasib/cpa-plugin-account-health-pushover
+  https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/account-health-pushover
   Revision: 870456ecdbf3a86c76c6274f1d02e14dadddabf4
   Sources: internal/plugin/status_html.go, internal/plugin/browser_auth_script.go
   Copyright (c) 2026 NoorChasib
 
 - Auto Baseline v0.1.2
-  https://github.com/NoorChasib/cpa-plugin-auto-baseline
+  https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/auto-baseline
   Revision: a7f5946b90e41d2a89d800cb143561fae0b4d9ea
   Sources: internal/plugin/status_html.go, internal/plugin/browser_auth_script.go,
   internal/config/config.go
   Copyright (c) 2026 Noor Chasib
 
 - Reset Priority v0.1.4
-  https://github.com/NoorChasib/cpa-plugin-reset-priority
+  https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/reset-priority
   Revision: d5dfcb2a8517d87c7741ec07100f6400c7db60c3
   Sources: internal/plugin/status_page.go, internal/plugin/runtime.go,
   internal/plugin/browser_auth_script.go

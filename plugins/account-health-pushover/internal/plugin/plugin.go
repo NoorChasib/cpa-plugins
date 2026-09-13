@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/monitor"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/notifier"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/monitor"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/notifier"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 const (
@@ -29,7 +29,7 @@ const (
 	actionRequestHeaderValue = "1"
 )
 
-var Version = "0.4.2"
+var Version = "0.4.3"
 
 type Host = monitor.Host
 

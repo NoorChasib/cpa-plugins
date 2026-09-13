@@ -1,4 +1,4 @@
-# Makefile for cpa-plugin-auto-baseline.
+# Makefile for auto-baseline.
 #
 # The plugin is a CGO c-shared library, so `build` targets the native platform
 # of the machine running make. Release Linux libraries are built on matching-

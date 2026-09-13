@@ -45,7 +45,7 @@ The checksum-locked immutable published-v0.1.0 negative control, **executed opti
 
 All required local prepublication acceptance gates passed. Exact local artifact hashes and packaging provenance are retained in the [historical local verification record](verification-sidebar.md), not presented here as hosted release checksums. Validate downloaded assets using the `checksums.txt` supplied with their release.
 
-The stable source `https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json` follows the latest published release. The version-specific v0.1.1 source is `https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.1/registry.json`; its assets become available upon publication. Publishing assets does not install the plug-in or change an operator deployment.
+For current installation and configuration, use the [Token Usage quick start](../README.md).
 
 ## Unchanged limitations
 

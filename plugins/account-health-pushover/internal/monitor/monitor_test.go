@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/health"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/notifier"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/state"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/health"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/notifier"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/state"
 )
 
 type hostLog struct {

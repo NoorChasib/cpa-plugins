@@ -20,7 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
 )
 
 // YAML keys edited or read by the plugin (internal/config/config.go:131,138

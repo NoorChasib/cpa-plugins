@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/health"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/health"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 func TestStoreAtomicRoundTripAndPermissions(t *testing.T) {

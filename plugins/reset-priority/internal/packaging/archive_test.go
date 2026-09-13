@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/plugin"
 )
 
 // writeFixtures creates a fake shared library and license in dir.

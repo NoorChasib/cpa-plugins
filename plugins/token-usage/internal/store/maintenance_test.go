@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 )
 
 func TestMaintenanceContinuationPreservesFreshHistoryAndDurableFloor(t *testing.T) {

@@ -111,8 +111,9 @@ Isolation differs from the source-built `--network none` runner: this gate uses 
 
 Registry schema **2** is distinct from native RPC schema **6**:
 
-- **Committed root registry:** GitHub-release mode, repository fixed to `https://github.com/NoorChasib/cpa-plugin-token-usage`. The version is a display fallback; CPA resolves the latest published tag and corresponding `token-usage_<version>_linux_amd64.zip` plus an asset literally named `checksums.txt`. This is not a fixed-tag source.
-- **Generated release registry:** direct mode, version `0.1.1`, Linux amd64 only, exact HTTPS archive URL/SHA-256/size under `/releases/download/v0.1.1/`. Release URLs become available upon publication. Local packaging computes a prospective binding; it does not upload it. The committed registry must not be rewritten with local toolchain-specific hashes.
+- **Root combined catalog:** schema 2, direct verified downloads for each independently versioned plugin in `NoorChasib/cpa-plugins`. The root publication workflow advances only the selected entry.
+- **Plugin-local registry and generated metadata:** packaging contract fixtures exercised against CPA's GitHub-release and direct installers. Installations use the root combined catalog, not repository-wide latest-release discovery.
+
 
 The ZIP contains one root library and license files, never nested/multiple libraries, symlinks or escaping paths. Both install modes verify the whole ZIP checksum, including licenses. A checksum detects corruption, not an untrusted publisher. Stable ZIP timestamps/order/modes make packaging reproducible for identical inputs; unpinned compiler/runner differences can change native bytes, so bit-for-bit cross-run build reproducibility is not promised.
 
@@ -121,12 +122,12 @@ After packaging, use the actual verified CPA source tree printed by a successful
 ```sh
 python3 scripts/verify-cpa-package.py \
   --cpa-source /tmp/token-usage-smoke.REPLACE/source \
-  --dist /absolute/path/to/cpa-plugin-token-usage/dist/0.1.1
+  --dist /absolute/path/to/cpa-plugins/plugins/token-usage/dist/0.1.1
 ```
 
 The verifier builds a temporary Go harness against CPA's real SDK and maps intended registry/archive/checksum URLs to local files with synthetic release metadata. It exercises registry/platform/checksum/ZIP installers without network transport, installed-byte equality, idempotent reinstall, corrupt checksums and unsupported platforms. It is **not** the management-handler-to-startup test above and does not prove public hosting. Dependency compilation may populate Go caches. Do not substitute an unverified source tree and call it pinned validation.
 
-**Final candidate packaging and both actual CPA SDK installers passed**, with the exact accepted production library from `/tmp/token-usage-smoke.ubZRD0hP/token-usage-production.so`, pinned CPA source `/tmp/token-usage-smoke.ubZRD0hP/source` and saved output `/home/noor/Code/cpa-plugin-token-usage/dist/0.1.1/`. `package-tested` did **not rebuild** the library; the archive library matches both native-smoke and actual store-installed bytes. The ZIP contains the exact frozen notices, SHA-256 `d389b376b66a71072ff75fb36a7b4a4ce9e2a6bdbc32bca12577ea945132a9b0`. Checksum validation, both SDK modes, installed-byte equality, idempotence and negative checksum/platform cases passed.
+**Final candidate packaging and both actual CPA SDK installers passed**, with the exact accepted production library from `/tmp/token-usage-smoke.ubZRD0hP/token-usage-production.so`, pinned CPA source `/tmp/token-usage-smoke.ubZRD0hP/source` and saved output `/home/noor/Code/cpa-plugins/plugins/token-usage/dist/0.1.1/`. `package-tested` did **not rebuild** the library; the archive library matches both native-smoke and actual store-installed bytes. The ZIP contains the exact frozen notices, SHA-256 `d389b376b66a71072ff75fb36a7b4a4ce9e2a6bdbc32bca12577ea945132a9b0`. Checksum validation, both SDK modes, installed-byte equality, idempotence and negative checksum/platform cases passed.
 
 Use `DIST=/absolute/staging/path` with Make and the same `--dist /absolute/staging/path` with `scripts/verify-cpa-package.py`. The final candidate was deliberately saved in **`dist/0.1.1/`**, not over the historical v0.1.0 ZIP/registry/checksum assets at the dist root. Its ZIP is **3,215,797 bytes**, SHA-256 `bc27bf8934b01c01452284294eed5c730da8359ebb0cbd14bc10453dafdb0a7f`; `.so` is **7,541,528 bytes**, SHA-256 `081a28f45e20efe320aa80e06e5a8757f4162e96a1990f3505a8783c32e7e6dc`. Matching `registry.json` and `checksums.txt` are in the same folder. [Candidate verification](verification-sidebar.md) records all four file digests and final logs. These are accepted **local** bytes, not published release assets.
 
@@ -134,7 +135,7 @@ Pinned authoritative files: [registry schema](https://github.com/router-for-me/C
 
 ## CI and publication boundary
 
-The current read-only `.github/workflows/ci.yml` and explicitly guarded `v0.1.1` release workflow both require **locked browser-tool installation → make ci → make browser → make smoke → official-image make store-smoke → package-tested/checksum/actual CPA SDK validation**. Packaging uses the same production library accepted by both native gates; comparisons prevent a rebuild from replacing accepted bytes. No required browser/native/image gate is treated as optional. Ordinary CI has read-only permissions, no uploads, no release writes and no workflow-dispatch trigger.
+The active root `token-usage-ci.yml` and `release-plugin.yml` require locked browser-tool installation, Go/race checks, browser checks, native CPA smoke, official-image store smoke, and exact-byte packaging/SDK validation. Plugin-local workflows are nonexecuting contract fixtures. See the [shared release guide](../../../docs/releases.md).
 
 The release workflow additionally checks repository/event/version/tag/main ancestry, refuses any existing release or draft, rechecks the remote tag, downloads/revalidates exact draft assets, and verifies draft state before publication. Only its publish job has write permissions; checkout does not persist credentials and only explicit GitHub steps receive their token. **Local validation does not establish that a hosted release workflow succeeded.**
 

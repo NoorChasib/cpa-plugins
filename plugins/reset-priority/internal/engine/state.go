@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 // ResetState describes the trustworthiness of an account's weekly reset

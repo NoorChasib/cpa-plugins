@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/plugin"
 )
 
 func TestPluginIDMatchesStoreRules(t *testing.T) {
@@ -134,7 +134,7 @@ func TestValidateRegistryShape(t *testing.T) {
 			"name": "Auto Baseline",
 			"description": "Learns the newest authentic Claude Code and Codex CLI fingerprint and promotes it into the header-defaults baseline.",
 			"author": "NoorChasib",
-			"repository": "https://github.com/NoorChasib/cpa-plugin-auto-baseline",
+			"repository": "https://github.com/NoorChasib/cpa-plugins",
 			"license": "MIT",
 			"tags": ["fingerprint", "baseline"]
 		}]

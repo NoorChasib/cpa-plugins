@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/config"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/store"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/store"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 )
 
 type backend interface {

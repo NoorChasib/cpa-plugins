@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/config"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/sanitize"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/sanitize"
 )
 
 // maxConcurrentFetches bounds concurrent provider quota requests.

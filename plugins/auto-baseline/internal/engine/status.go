@@ -5,9 +5,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/statefile"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/statefile"
 )
 
 // Snapshot is the published status document (JSON status route and the

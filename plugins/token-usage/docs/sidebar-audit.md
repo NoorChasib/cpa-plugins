@@ -71,21 +71,21 @@ Empty custom fields reuse an appropriate selected range or suggest a disclosed r
 
 The reproducible browser test uses byte-identical pinned `encryption.ts` and `secureStorage.ts`, plus their LICENSE, under `internal/plugin/frontendtests/upstream/`; Node strips TypeScript for test execution. Required acceptance pins Node 26.8.1/npm 11.19.0, agent-browser 0.37.1 via npm lock and binary SHA, and Chrome for Testing 153.0.8010.36 via ZIP SHA. The fixtures and `scripts/browser/` tools are test-only, not a front-end runtime dependency or production session setter. Candidate tests execute the shipped page rather than merely checking JavaScript source strings. The **final post-review local gates all passed**: 39 Python contracts, 71 actual browser scenarios, native/official-image integration and exact tested-library/package/frozen-notice validation. The [candidate verification record](verification-sidebar.md) records the completed evidence, local artifact hashes and limitations separately. These passes do not establish the deployed console/proxy policy or full console sign-in/sidebar-navigation behavior, and do not authorize publication.
 
-[health]: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
-[health-style]: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/internal/plugin/status_html.go
-[health-auth]: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/internal/plugin/browser_auth_script.go
-[health-license]: https://github.com/NoorChasib/cpa-plugin-account-health-pushover/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/LICENSE
-[baseline]: https://github.com/NoorChasib/cpa-plugin-auto-baseline/tree/a7f5946b90e41d2a89d800cb143561fae0b4d9ea
-[baseline-style]: https://github.com/NoorChasib/cpa-plugin-auto-baseline/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/plugin/status_html.go
-[baseline-config]: https://github.com/NoorChasib/cpa-plugin-auto-baseline/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/config/config.go
-[baseline-auth]: https://github.com/NoorChasib/cpa-plugin-auto-baseline/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/plugin/browser_auth_script.go
-[baseline-license]: https://github.com/NoorChasib/cpa-plugin-auto-baseline/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/LICENSE
-[reset]: https://github.com/NoorChasib/cpa-plugin-reset-priority/tree/d5dfcb2a8517d87c7741ec07100f6400c7db60c3
-[reset-page]: https://github.com/NoorChasib/cpa-plugin-reset-priority/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/status_page.go
-[reset-runtime]: https://github.com/NoorChasib/cpa-plugin-reset-priority/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/runtime.go
-[reset-auth]: https://github.com/NoorChasib/cpa-plugin-reset-priority/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/browser_auth_script.go
-[reset-private]: https://github.com/NoorChasib/cpa-plugin-reset-priority/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/management_status_page.go
-[reset-license]: https://github.com/NoorChasib/cpa-plugin-reset-priority/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/LICENSE
+[health]: https://github.com/NoorChasib/cpa-plugins/tree/870456ecdbf3a86c76c6274f1d02e14dadddabf4
+[health-style]: https://github.com/NoorChasib/cpa-plugins/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/internal/plugin/status_html.go
+[health-auth]: https://github.com/NoorChasib/cpa-plugins/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/internal/plugin/browser_auth_script.go
+[health-license]: https://github.com/NoorChasib/cpa-plugins/blob/870456ecdbf3a86c76c6274f1d02e14dadddabf4/LICENSE
+[baseline]: https://github.com/NoorChasib/cpa-plugins/tree/a7f5946b90e41d2a89d800cb143561fae0b4d9ea
+[baseline-style]: https://github.com/NoorChasib/cpa-plugins/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/plugin/status_html.go
+[baseline-config]: https://github.com/NoorChasib/cpa-plugins/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/config/config.go
+[baseline-auth]: https://github.com/NoorChasib/cpa-plugins/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/internal/plugin/browser_auth_script.go
+[baseline-license]: https://github.com/NoorChasib/cpa-plugins/blob/a7f5946b90e41d2a89d800cb143561fae0b4d9ea/LICENSE
+[reset]: https://github.com/NoorChasib/cpa-plugins/tree/d5dfcb2a8517d87c7741ec07100f6400c7db60c3
+[reset-page]: https://github.com/NoorChasib/cpa-plugins/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/status_page.go
+[reset-runtime]: https://github.com/NoorChasib/cpa-plugins/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/runtime.go
+[reset-auth]: https://github.com/NoorChasib/cpa-plugins/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/browser_auth_script.go
+[reset-private]: https://github.com/NoorChasib/cpa-plugins/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/internal/plugin/management_status_page.go
+[reset-license]: https://github.com/NoorChasib/cpa-plugins/blob/d5dfcb2a8517d87c7741ec07100f6400c7db60c3/LICENSE
 [cpa]: https://github.com/router-for-me/CLIProxyAPI/tree/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974
 [cpa-management]: https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/internal/pluginhost/management.go
 [cpa-auth]: https://github.com/router-for-me/CLIProxyAPI/blob/7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974/internal/api/server_management.go

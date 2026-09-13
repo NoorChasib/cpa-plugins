@@ -38,7 +38,7 @@ fi
 
 mkdir -p "$TMP_DIR/plugins" "$TMP_DIR/auth"
 CGO_ENABLED=1 "$GO_BIN" build -trimpath -buildmode=c-shared \
-  -ldflags "-X main.allowTestEndpointOverride=true -X github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/plugin.Version=0.1.0" \
+  -ldflags "-X main.allowTestEndpointOverride=true -X github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/plugin.Version=0.1.0" \
   -o "$TMP_DIR/plugins/account-health-pushover.so" "$ROOT_DIR"
 rm -f "$TMP_DIR/plugins/account-health-pushover.h"
 

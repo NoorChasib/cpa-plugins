@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/learner"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
 )
 
 func TestParseEmptyYieldsDefaultsDisabled(t *testing.T) {

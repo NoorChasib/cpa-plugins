@@ -12,17 +12,17 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/config"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/engine"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/hostapi"
 )
 
 // Plugin identity constants.
 const (
 	PluginID      = "auto-baseline"
 	PluginName    = "Auto Baseline"
-	PluginVersion = "0.1.3"
+	PluginVersion = "0.1.4"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )

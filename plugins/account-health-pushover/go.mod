@@ -1,4 +1,4 @@
-module github.com/NoorChasib/cpa-plugin-account-health-pushover
+module github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover
 
 go 1.26.0
 

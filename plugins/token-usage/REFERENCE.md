@@ -1,6 +1,6 @@
 # CPA Token Usage
 
-**Token Usage 0.1.1.** A native CLIProxyAPI plug-in that persists **CPA-reported** token usage in SQLite and displays it in a dedicated **Token Usage** sidebar page. The unchanged [v0.1.0](https://github.com/NoorChasib/cpa-plugin-token-usage/releases/tag/v0.1.0) does not include this sidebar or automatic storage default.
+**Token Usage.** A native CLIProxyAPI plug-in that persists **CPA-reported** token usage in SQLite and displays it in a dedicated **Token Usage** sidebar page.
 
 ## Open Token Usage
 
@@ -36,10 +36,14 @@ No charts, pricing, CSV, rollups/all-time guarantee, account/alias drilldown, cr
 
 Use one of these sources:
 
-- **Stable source, follows latest published release:** `https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json`
-- **Version-specific v0.1.1 source:** `https://github.com/NoorChasib/cpa-plugin-token-usage/releases/download/v0.1.1/registry.json`
+Add the combined source once:
 
-Append only one source to the existing CPA `plugins.store-sources` list. Preserve other sources and plug-in configuration; CPA retains its built-in official source. The stable source's version is a display fallback, **not a tag lock**. Confirm the selected version before installing/enabling Token Usage through CPA. Version-specific assets become available when that release is published. Published v0.1.0 instructions remain in the [tagged README](https://github.com/NoorChasib/cpa-plugin-token-usage/blob/v0.1.0/README.md).
+```text
+https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
+```
+
+Select Token Usage in CPA's Plugin Store. The catalog pins each plugin's own published version and verified ZIP; updates advance that entry independently. Keep your existing source alias if already installed. See [release behavior](../../docs/releases.md).
+
 
 See [development](docs/development.md) and the [historical local prepublication verification](docs/verification-sidebar.md) for build and validation details. Do not replace a loaded native library. Follow CPA's supported install/restart procedure, retain license notices and a verified backup, and keep only one selected Token Usage version in scanned plug-in directories. An old versioned library can shadow an unversioned manual copy.
 

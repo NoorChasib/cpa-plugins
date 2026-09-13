@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 func TestPublicSidebarIsFixedAcrossUnregisteredUnavailableActiveAndStoppedStates(t *testing.T) {

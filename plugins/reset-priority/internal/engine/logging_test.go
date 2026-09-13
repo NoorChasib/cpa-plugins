@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
 )
 
 // TestWriteAndRosterErrorLogsEmitOutsideEngineMu guards the cross-ABI logging

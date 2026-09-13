@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
 )
 
 // richDoc builds an auth JSON doc with many unrelated fields, including

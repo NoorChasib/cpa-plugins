@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 // The plug-in section produced by CPA v7.2.155's store installation. Store URLs
@@ -23,11 +23,11 @@ store:
   author: NoorChasib
   version: 0.1.0
   release-tag: v0.1.0
-  repository: https://github.com/NoorChasib/cpa-plugin-token-usage
+  repository: https://github.com/NoorChasib/cpa-plugins
   license: MIT
   source-id: source-97e4ec28aa27
   source-name: raw.githubusercontent.com
-  source-url: https://raw.githubusercontent.com/NoorChasib/cpa-plugin-token-usage/main/registry.json
+  source-url: https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
   install:
     type: github-release
 `

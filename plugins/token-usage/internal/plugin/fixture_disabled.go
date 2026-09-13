@@ -2,7 +2,7 @@
 
 package plugin
 
-import "github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+import "github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 
 // Production builds neither retain observations nor decorate status with them.
 type fixtureRecorder struct{}

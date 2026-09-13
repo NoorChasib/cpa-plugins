@@ -1,4 +1,4 @@
-module github.com/NoorChasib/cpa-plugin-token-usage
+module github.com/NoorChasib/cpa-plugins/plugins/token-usage
 
 go 1.26.0
 

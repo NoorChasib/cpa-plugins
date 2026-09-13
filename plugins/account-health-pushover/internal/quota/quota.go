@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 )
 
 const (
@@ -41,7 +41,7 @@ const (
 	// codexUserAgent is CLI-shaped because the ChatGPT backend edge rejects
 	// non-CLI clients on this endpoint. The comment segment identifies the
 	// real caller.
-	codexUserAgent = "codex_cli_rs/0.0.0 (cpa-plugin-account-health-pushover)"
+	codexUserAgent = "codex_cli_rs/0.0.0 (account-health-pushover)"
 
 	xaiBillingURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 	// xaiTokenAuthHeader mirrors the open-source Grok Build CLI, which sends

@@ -1,4 +1,4 @@
-// Native ABI adapted from cpa-plugin-account-health-pushover at 870456ec.
+// Native ABI adapted from account-health-pushover at 870456ec.
 // Copyright (c) 2026 NoorChasib. Distributed under the MIT license.
 package main
 
@@ -35,8 +35,8 @@ import (
 	"sync"
 	"unsafe"
 
-	pluginimpl "github.com/NoorChasib/cpa-plugin-token-usage/internal/plugin"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	pluginimpl "github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 // No host API pointer is retained: collection needs no host callbacks, auth

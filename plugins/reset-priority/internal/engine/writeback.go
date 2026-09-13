@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/sanitize"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/sanitize"
 )
 
 // writeItem is one planned priority write.

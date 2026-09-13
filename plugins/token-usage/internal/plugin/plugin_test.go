@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
 )
 
 const validUsage = `{"Provider":"test","Model":"model","ExecutorType":"CustomExecutor","RequestedAt":"2026-09-09T00:00:00Z","Generate":true,"Detail":{"InputTokens":9007199254740993,"OutputTokens":20,"TotalTokens":9007199254741013},"AuthIndex":"","APIKey":"secret-canary","Source":"secret-canary","Failure":{"Body":"secret-canary"},"ResponseHeaders":{"X-Test":["secret-canary"]},"Unknown":{"ignored":true}}`

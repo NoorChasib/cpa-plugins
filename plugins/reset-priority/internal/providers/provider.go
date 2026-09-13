@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 // HTTPDoer abstracts host.http.do for tests.

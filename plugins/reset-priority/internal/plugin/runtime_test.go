@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/engine"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 var testBase = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

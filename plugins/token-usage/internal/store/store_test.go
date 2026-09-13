@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/config"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/protocol"
-	"github.com/NoorChasib/cpa-plugin-token-usage/internal/usage"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/token-usage/internal/usage"
 	sqlite "github.com/mattn/go-sqlite3"
 )
 

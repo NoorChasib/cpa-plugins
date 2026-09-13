@@ -64,12 +64,12 @@ docker exec <container> uname -m     # x86_64 -> linux_amd64, aarch64 -> linux_a
 ### Install a release archive
 
 ```bash
-VERSION=0.1.2          # release version without the leading v
+VERSION=0.1.4          # release version without the leading v
 PLATFORM=linux_amd64   # or linux_arm64
 curl --fail --silent --show-error --location --remote-name \
-  "https://github.com/NoorChasib/cpa-plugin-auto-baseline/releases/download/v${VERSION}/auto-baseline_${VERSION}_${PLATFORM}.zip"
+  "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v${VERSION}/auto-baseline_${VERSION}_${PLATFORM}.zip"
 curl --fail --silent --show-error --location --remote-name \
-  "https://github.com/NoorChasib/cpa-plugin-auto-baseline/releases/download/v${VERSION}/checksums.txt"
+  "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v${VERSION}/checksums.txt"
 grep "auto-baseline_${VERSION}_${PLATFORM}.zip" checksums.txt | sha256sum --check
 unzip -o "auto-baseline_${VERSION}_${PLATFORM}.zip" auto-baseline.so
 docker cp auto-baseline.so <container>:/CLIProxyAPI/plugins/auto-baseline.so

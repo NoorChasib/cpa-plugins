@@ -12,18 +12,18 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/clock"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/config"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/engine"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/clock"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
 )
 
 // Plugin identity constants.
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.1.6"
+	PluginVersion = "0.1.7"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )

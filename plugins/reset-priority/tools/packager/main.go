@@ -37,8 +37,8 @@ import (
 	"runtime"
 	"sort"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/packaging"
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/packaging"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/plugin"
 )
 
 func main() {

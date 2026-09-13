@@ -14,7 +14,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 
 Open the README for the plugin you want. Each has a short installation/configuration guide. Install only the plugins you need.
 
-Already using these plugins? Start with [the migration guide](docs/migration.md). Keep your existing settings and data paths; a repository move does not require a fresh installation.
+For updates and reinstalls, see [settings and data preservation](docs/migration.md).
 
 Add this one source in CPA's Plugin Store:
 
@@ -26,7 +26,6 @@ All five catalog entries, download assets, and current native repository links u
 
 Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas.
 
-Historical releases and their original bytes are preserved under `legacy/<plugin>/<tag>` in this repository.
 
 Publish updates independently with a tag such as `quota-cache/v0.1.1`. The root workflow verifies that plugin, publishes its Linux amd64 package, and updates only its catalog entry in both source aliases. CPA then offers that plugin's update; installation/restarts remain under your control. See [release commands and recovery](docs/releases.md).
 
@@ -41,11 +40,10 @@ make ci
 
 See each plugin's reference documentation for its exact build and verification commands. Detailed existing documentation is retained in `REFERENCE.md` and `docs/`. Root GitHub workflows run each plugin's existing CI checks from its new directory.
 
-Source histories were imported from the existing repositories. Historical tags are namespaced as `legacy/<plugin>/<tag>`. See [source provenance](docs/migration.md#source-provenance).
 
 ## Compatibility
 
-Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. A successful source import is not a new compatibility certification.
+Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 

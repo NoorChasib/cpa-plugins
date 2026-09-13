@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 )
 
 // codexUsageURL is the ChatGPT/Codex usage probe endpoint.
@@ -21,7 +21,7 @@ const codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 // The ChatGPT backend expects Codex CLI-style clients on this endpoint;
 // requests without a CLI-shaped User-Agent may be rejected by edge filtering.
 // The comment segment honestly identifies this plugin as the actual caller.
-const codexUserAgent = "codex_cli_rs/0.0.0 (cpa-plugin-reset-priority)"
+const codexUserAgent = "codex_cli_rs/0.0.0 (reset-priority)"
 
 // weeklyWindowSeconds identifies the regular weekly quota window. The window
 // is identified strictly by its duration semantics, never by array/object

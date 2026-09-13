@@ -1,19 +1,19 @@
-name: Publish verified Token Usage 0.1.2
+name: Publish verified Token Usage 0.1.3
 
 on:
   push:
-    tags: [v0.1.2]
+    tags: [v0.1.3]
 
 permissions:
   contents: read
 
 concurrency:
-  group: token-usage-release-v0.1.2
+  group: token-usage-release-v0.1.3
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.repository == 'NoorChasib/cpa-plugins' && github.event_name == 'push' && github.ref == 'refs/tags/v0.1.2' && github.event.deleted == false
+    if: github.repository == 'NoorChasib/cpa-plugins' && github.event_name == 'push' && github.ref == 'refs/tags/v0.1.3' && github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # The only writable job. GH_TOKEN is exported only for explicit gh steps.
@@ -21,8 +21,8 @@ jobs:
       contents: write
     env:
       RELEASE_REPO: NoorChasib/cpa-plugins
-      RELEASE_TAG: v0.1.2
-      RELEASE_VERSION: 0.1.2
+      RELEASE_TAG: v0.1.3
+      RELEASE_VERSION: 0.1.3
       GH_PROMPT_DISABLED: '1'
       GOTOOLCHAIN: local
       # Test-only Chromium sandbox exception on the disposable hosted runner.
@@ -45,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
-          python3 -c 'import json; assert json.load(open("registry.json"))["plugins"][0]["version"] == "0.1.2"'
+          python3 -c 'import json; assert json.load(open("registry.json"))["plugins"][0]["version"] == "0.1.3"'
       - name: Refuse any existing release or draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,7 +110,7 @@ jobs:
           git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
           gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" --verify-tag --draft \
-            --title "Token Usage $RELEASE_VERSION" --notes-file docs/release-notes-0.1.2.md \
+            --title "Token Usage $RELEASE_VERSION" --notes-file docs/release-notes-0.1.3.md \
             "dist/token-usage_${RELEASE_VERSION}_linux_amd64.zip" dist/checksums.txt dist/registry.json
       - name: Download and revalidate the draft before publication
         env:
@@ -122,9 +122,9 @@ jobs:
           import os
           from pathlib import Path
           draft = json.loads((Path(os.environ["RUNNER_TEMP"]) / "draft.json").read_text())
-          assert draft["isDraft"] and draft["tagName"] == "v0.1.2"
+          assert draft["isDraft"] and draft["tagName"] == "v0.1.3"
           names = [asset["name"] for asset in draft["assets"]]
-          assert sorted(names) == ["checksums.txt", "registry.json", "token-usage_0.1.2_linux_amd64.zip"]
+          assert sorted(names) == ["checksums.txt", "registry.json", "token-usage_0.1.3_linux_amd64.zip"]
           PY
           downloaded=$(mktemp -d "$RUNNER_TEMP/release-download.XXXXXXXX")
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --dir "$downloaded"

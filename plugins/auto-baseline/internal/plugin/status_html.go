@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/config"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/engine"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/fingerprint"
-	"github.com/NoorChasib/cpa-plugin-auto-baseline/internal/statefile"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/statefile"
 )
 
 // This file renders both browser views from one template:

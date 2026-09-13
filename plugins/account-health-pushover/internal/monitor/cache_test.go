@@ -3,8 +3,8 @@ package monitor
 import (
 	"context"
 	"encoding/json"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/config"
-	"github.com/NoorChasib/cpa-plugin-account-health-pushover/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/account-health-pushover/internal/protocol"
 	quotaclient "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"os"
 	"path/filepath"

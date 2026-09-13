@@ -27,7 +27,7 @@ func TestRegistrationWireContractUsesMixedUpstreamCasing(t *testing.T) {
 			Name:             "Account Health Pushover",
 			Version:          "0.1.0",
 			Author:           "Noor Chasib",
-			GitHubRepository: "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+			GitHubRepository: "https://github.com/NoorChasib/cpa-plugins",
 			Logo:             "bell",
 			ConfigFields: []ConfigField{{
 				Name: "providers", Type: "array", EnumValues: []string{"claude", "codex"}, Description: "providers",
