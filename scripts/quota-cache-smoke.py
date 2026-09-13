@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Load the suite in a disposable pinned CPA v7.2.155 container with no real accounts."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -82,9 +83,9 @@ plugins:
             raise AssertionError('quota-cache did not become available')
         ready()
         registered = get('plugins')
-        serialized=json.dumps(registered)
+        records = {entry['id']:entry for entry in registered['plugins']}
         for plugin in PLUGINS:
-            assert plugin in serialized, 'plugin not listed: '+plugin
+            assert records[plugin]['registered'] and records[plugin]['effective_enabled'], 'plugin inactive: '+plugin
         for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
             get('plugins/'+plugin+'/status')
         try:
@@ -102,6 +103,9 @@ plugins:
             get('plugins/'+plugin+'/status')
         logs=run('docker','logs',container)
         assert '7.2.155' in logs, 'unexpected CPA runtime version'
+        evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in PLUGINS}}
+        (ROOT/'dist').mkdir(exist_ok=True)
+        (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('PASS: pinned CPA v7.2.155 loads all five native plugins; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.

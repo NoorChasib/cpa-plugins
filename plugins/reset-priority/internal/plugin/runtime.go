@@ -25,7 +25,7 @@ const (
 	PluginName    = "Reset Priority"
 	PluginVersion = "0.1.5"
 	PluginAuthor  = "NoorChasib"
-	PluginRepo    = "https://github.com/NoorChasib/cpa-plugin-reset-priority"
+	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
 
 // Management/resource route paths (relative; the host prefixes

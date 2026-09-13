@@ -393,7 +393,7 @@ func registration() protocol.Registration {
 			Name:             "Account Health Pushover",
 			Version:          Version,
 			Author:           "NoorChasib",
-			GitHubRepository: "https://github.com/NoorChasib/cpa-plugin-account-health-pushover",
+			GitHubRepository: "https://github.com/NoorChasib/cpa-plugins",
 			ConfigFields:     configFields(),
 		},
 		Capabilities: protocol.RegistrationCapabilities{
