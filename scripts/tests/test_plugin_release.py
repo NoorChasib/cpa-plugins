@@ -17,6 +17,10 @@ publisher = importlib.import_module('publish_plugin')
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.catalog = release.load_catalog()
+        # Fixed fixture versions keep these regression scenarios independent
+        # of catalog advancement after each real publication.
+        next(p for p in self.catalog['plugins'] if p['id'] == 'quota-cache')['version'] = '0.1.0'
+        next(p for p in self.catalog['plugins'] if p['id'] == 'auto-baseline')['version'] = '0.1.3'
         self.entry = copy.deepcopy(next(p for p in self.catalog['plugins'] if p['id'] == 'quota-cache'))
         self.entry['version'] = '0.1.1'
 
@@ -24,7 +28,7 @@ class ReleaseTests(unittest.TestCase):
         for plugin in release.LIBRARIES:
             self.assertEqual(release.parse_tag(plugin + '/v1.2.3'), (plugin, '1.2.3'))
             release.source_version(plugin)
-        for tag in ('v1.2.3', 'legacy/quota-cache/v1.2.3', '../v1.2.3', 'quota-cache/v01.2.3',
+        for tag in ('v1.2.3', 'extra/quota-cache/v1.2.3', '../v1.2.3', 'quota-cache/v01.2.3',
                     'quota-cache/v1.2', 'quota-cache/v1.2.3-rc1', 'quota-cache/v1.2.3\n', 'unknown/v1.2.3'):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 release.parse_tag(tag)
