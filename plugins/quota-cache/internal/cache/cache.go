@@ -17,6 +17,7 @@ import (
 
 type Account struct{ Provider, AuthIndex string }
 type Observation struct {
+	Quota               *client.Quota
 	Percent             float64
 	ResetAt, ObservedAt time.Time
 	RequestSent         bool
@@ -266,6 +267,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		} else {
 			c.data.Totals.Successes++
 			entry.Percent, entry.ResetAt, entry.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
+			entry.Quota = observation.Quota
 			entry.Failures, entry.LastError = 0, ""
 		}
 		poll.Error = entry.LastError

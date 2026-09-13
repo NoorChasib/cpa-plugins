@@ -47,6 +47,49 @@
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
   }
+  function extendedQuota(entry, now) {
+    const q = entry.quota;
+    if (!q || q.schema !== 1) return node('span', 'Additional fields arrive after the next successful poll', 'secondary');
+    const details = node('details');
+    details.className = 'quota-details';
+    details.append(node('summary', 'All cached quota fields'));
+    const observed = date(q.observed_at);
+    details.append(node('p', entry.last_error || !observed || observed > now || now - observed > 30 * 60000 ? 'Last known response — not fresh' : 'Latest successful response', 'secondary'));
+    details.append(time(q.observed_at, now));
+    if (q.active_limit) details.append(node('p', 'Active limit: ' + q.active_limit));
+    if (q.limit_reached_reason) details.append(node('p', 'Limit reason: ' + q.limit_reached_reason));
+    if (q.plan) details.append(node('p', 'Plan: ' + q.plan));
+    if (typeof q.unified_billing === 'boolean') details.append(node('p', 'Unified billing: ' + (q.unified_billing ? 'yes' : 'no')));
+    const list = node('ul');
+    for (const [id, w] of Object.entries(q.windows || {})) {
+      const item = node('li', id + ': ' + (Number.isFinite(w.used_percent) ? w.used_percent + '% used' : 'usage not supplied'));
+      if (w.duration_seconds) item.append(node('span', ' · ' + w.duration_seconds + ' second window'));
+      if (w.period) item.append(node('span', ' · ' + w.period));
+      if (date(w.starts_at)) { item.append(node('span', ' · starts '), time(w.starts_at, now)); }
+      if (date(w.resets_at)) { item.append(node('span', ' · resets '), time(w.resets_at, now)); if (date(w.resets_at) <= now) item.append(node('strong', ' · Window expired')); }
+      list.append(item);
+    }
+    for (const [id, l] of Object.entries(q.limits || {})) {
+      const flags = [];
+      if (l.metered_feature) flags.push('feature: ' + l.metered_feature);
+      if (typeof l.allowed === 'boolean') flags.push('allowed: ' + l.allowed);
+      if (typeof l.reached === 'boolean') flags.push('limit reached: ' + l.reached);
+      list.append(node('li', id + ' — ' + flags.join(' · ')));
+    }
+    for (const [id, b] of Object.entries(q.balances || {})) {
+      const fields = [];
+      for (const key of ['used', 'limit', 'remaining']) if (typeof b[key] === 'string') fields.push(key + ': ' + b[key] + ' ' + b.unit);
+      if (b.source) fields.push('source: ' + b.source);
+      if (Number.isFinite(b.remaining_percent)) fields.push(b.remaining_percent + '% remaining');
+      if (date(b.resets_at)) fields.push('resets: ' + new Date(date(b.resets_at)).toLocaleString());
+      if (Number.isFinite(b.used_percent)) fields.push(b.used_percent + '% used');
+      for (const key of ['enabled', 'has_credits', 'unlimited']) if (typeof b[key] === 'boolean') fields.push(key.replaceAll('_', ' ') + ': ' + b[key]);
+      list.append(node('li', id + ' — ' + fields.join(' · ')));
+    }
+    details.append(list);
+    if (q.truncated) details.append(node('p', 'Provider returned more entries than the cache limit; this list is incomplete.', 'secondary'));
+    return details;
+  }
   function render(s) {
     const now = Date.now();
     const all = Object.values(s.entries || {});
@@ -88,11 +131,12 @@
         quotaCell.append(node('span', fresh(e, now) ? 'Current observation' : 'Last known value', 'secondary'));
         if (date(e.reset_at)) { const reset = node('span', 'Resets ', 'secondary'); reset.append(time(e.reset_at, now)); quotaCell.append(reset); }
       }
+      quotaCell.append(extendedQuota(e, now));
       addCell(row, time(e.observed_at, now));
       addCell(row, time(e.last_attempt, now));
       addCell(row, time(new Date(next(e,s,now)).toISOString(), now));
       const cooling = date((s.provider_cooldown || {})[e.provider]) > now;
-      const label = cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) ? 'Fresh' : known ? 'Stale' : 'Queued';
+      const label = cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) ? 'Fresh' : known ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
       const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' ? 'ok' : label === 'Failed' ? 'error' : 'warn')));
       if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
       $('accounts').append(row);

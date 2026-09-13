@@ -21,7 +21,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.3"
+var Version = "0.1.4"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -247,6 +247,7 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account) (cache.Ob
 		return result, errors.New("quota fetch failed")
 	}
 	result.Percent, result.ResetAt, result.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
+	result.Quota = observation.Quota
 	return result, nil
 }
 

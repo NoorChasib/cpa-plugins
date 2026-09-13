@@ -1,9 +1,10 @@
-// Package quota reads each OAuth account's regular weekly usage window
+// Package quota reads each OAuth account's quota windows and balances
 // directly from the provider usage endpoint that the provider's own CLI uses.
 //
 // Only the credential fields required to authenticate one usage request are
-// decoded from the physical auth JSON, and only the weekly percentage plus
-// its reset instant are decoded from the response. Tokens, response bodies,
+// decoded from the physical auth JSON. Responses are projected into a regular
+// weekly/pool compatibility observation and bounded extended quota fields.
+// Tokens, raw response bodies,
 // and provider error text are never logged, persisted, rendered, or copied
 // into notifications: every error returned here is a static string.
 //
@@ -25,11 +26,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
 )
 
@@ -83,6 +86,7 @@ type Doer interface {
 // provider. Percent is used capacity from 0 to 100 (values above 100 are
 // clamped). ResetAt is zero when the provider omitted a usable reset instant.
 type Observation struct {
+	Quota      *client.Quota
 	Provider   string
 	Percent    float64
 	ResetAt    time.Time
@@ -99,7 +103,7 @@ func Supported(provider string) bool {
 	return false
 }
 
-// Fetch reads the weekly window for one credential. rawAuth is the physical
+// Fetch reads quota fields for one credential. rawAuth is the physical
 // auth JSON from host.auth.get; only the token fields are extracted.
 func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now time.Time) (Observation, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
@@ -157,12 +161,24 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 	if len(response.Body) > maxResponseBytes {
 		return Observation{}, ErrInvalidResponse
 	}
-	observation, err := parse(provider, response.Body, now)
+	root, err := decodeObject(response.Body)
 	if err != nil {
 		return Observation{}, err
 	}
+	observation, primaryErr := parsePrimary(provider, root, now)
+	details := parseDetails(provider, root, now)
+	if primaryErr != nil && !errors.Is(primaryErr, ErrNoWeeklyWindow) {
+		return Observation{}, primaryErr
+	}
+	if primaryErr != nil && len(details.Windows) == 0 && len(details.Limits) == 0 && len(details.Balances) == 0 {
+		return Observation{}, primaryErr
+	}
 	observation.Provider = provider
-	observation.ObservedAt = now
+	// Old readers must not mistake a short-window-only account for 0% weekly use.
+	if primaryErr == nil {
+		observation.ObservedAt = now
+	}
+	observation.Quota = details
 	return observation, nil
 }
 
@@ -236,11 +252,7 @@ func accountIDFromIDToken(idToken string) string {
 	return stringField(claims, "chatgpt_account_id")
 }
 
-func parse(provider string, body []byte, now time.Time) (Observation, error) {
-	root, err := decodeObject(body)
-	if err != nil {
-		return Observation{}, err
-	}
+func parsePrimary(provider string, root map[string]any, now time.Time) (Observation, error) {
 	switch provider {
 	case "claude":
 		return parseClaude(root)
@@ -260,14 +272,14 @@ func decodeObject(body []byte) (map[string]any, error) {
 		return nil, ErrInvalidResponse
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, ErrInvalidResponse
 	}
 	return root, nil
 }
 
 // parseClaude reads the account-wide seven_day window. Model-scoped windows
-// (seven_day_opus, ...) and five_hour are deliberately ignored.
+// and short windows are separate in the extended observation.
 func parseClaude(root map[string]any) (Observation, error) {
 	window, ok := root["seven_day"].(map[string]any)
 	if !ok {
@@ -286,7 +298,7 @@ func parseClaude(root map[string]any) (Observation, error) {
 
 // parseCodex locates the window whose declared duration is exactly one week
 // under rate_limit / rate_limits and reads its used_percent. Additional
-// (code-review, credits) limits and the five-hour window are ignored.
+// and short limits remain separate in the extended observation.
 func parseCodex(root map[string]any, now time.Time) (Observation, error) {
 	for _, window := range codexWindows(root) {
 		if !codexWeekly(window) {

@@ -1,8 +1,8 @@
 # Quota Cache
 
-One scheduled poller for Claude, Codex, and Grok regular weekly quota observations. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
+One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, and availability flags. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Linux amd64:** Quota Cache 0.1.1 adds a sidebar with polling history and fixes registration after an equivalent relative/absolute cache-path edit. Cache consumers remain opt-in: Account Health 0.4.2+ and Reset Priority 0.1.6+ support shared reads and work independently with that option off.
+**Linux amd64:** Quota Cache 0.1.4 retains additional quota fields from the same provider requests. Expand **All cached quota fields** in the sidebar to inspect them. Existing consumers remain opt-in and keep their regular weekly/pool behavior. See the [cache format and reader API](docs/cache-format.md) for building another consumer.
 
 ## Install and start
 

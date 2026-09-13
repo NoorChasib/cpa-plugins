@@ -18,6 +18,7 @@ const MaxBytes = 4 << 20
 var ErrUnavailable = errors.New("quota cache unavailable, stale, or waiting for refresh")
 
 type Entry struct {
+	Quota       *Quota    `json:"quota,omitempty"`
 	Provider    string    `json:"provider"`
 	AuthIndex   string    `json:"auth_index"`
 	Percent     float64   `json:"used_percent"`

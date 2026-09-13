@@ -300,3 +300,58 @@ func TestIncreasingScheduleDefersAdmission(t *testing.T) {
 		t.Fatal("new spacing did not admit queued account")
 	}
 }
+
+func TestExtendedSnapshotPersistsRetainsOnFailureAndReplacesOnSuccess(t *testing.T) {
+	c, f, opts := fixture(t)
+	value := float64(20)
+	// Exercise actual snapshot persistence and admission with extended data.
+	detailed := &detailsFetcher{fakeFetcher: f, quota: &client.Quota{Schema: 1, ObservedAt: f.now, Windows: map[string]client.Window{"five_hour": {UsedPercent: &value}}}}
+	c.fetcher = detailed
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	restarted, err := Open(opts, detailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if q, err := client.ReadQuota(opts.Path, "claude", "one", f.now, time.Hour); err != nil || len(q.Windows) != 1 {
+		t.Fatalf("restart lost extended data: %v", err)
+	}
+	f.failure = RateLimited{RetryAfter: f.now.Add(time.Hour)}
+	if err := restarted.Step(context.Background(), f.now.Add(opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Entries["claude:one"].Quota == nil {
+		t.Fatal("failure discarded last known extended values")
+	}
+	if _, err := client.ReadQuota(opts.Path, "claude", "one", f.now.Add(opts.Interval), time.Hour); err == nil {
+		t.Fatal("failed refresh treated as usable")
+	}
+	f.failure = nil
+	f.now = f.now.Add(2 * time.Hour)
+	detailed.quota = &client.Quota{Schema: 1, ObservedAt: f.now}
+	if err := restarted.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	q, err := client.ReadQuota(opts.Path, "claude", "one", f.now, time.Hour)
+	if err != nil || len(q.Windows) != 0 {
+		t.Fatal("successful response retained fields omitted by provider")
+	}
+}
+
+type detailsFetcher struct {
+	*fakeFetcher
+	quota *client.Quota
+}
+
+func (f *detailsFetcher) Fetch(ctx context.Context, a Account) (Observation, error) {
+	o, err := f.fakeFetcher.Fetch(ctx, a)
+	o.Quota = f.quota
+	return o, err
+}

@@ -37,3 +37,42 @@ func TestFreshnessIdentityAndExpiredWindow(t *testing.T) {
 		})
 	}
 }
+
+func TestExtendedAndLegacyFreshnessRemainIndependent(t *testing.T) {
+	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Minute)
+	pct := float64(10)
+	entry := Entry{Provider: "claude", AuthIndex: "one", Quota: &Quota{Schema: 1, ObservedAt: now, Windows: map[string]Window{"five_hour": {UsedPercent: &pct, ResetsAt: &reset}}}}
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	write := func() {
+		raw, _ := json.Marshal(Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]Entry{"claude:one": entry}})
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if _, err := ReadFresh(path, "claude", "one", now, time.Hour); err == nil {
+		t.Fatal("legacy reader accepted missing weekly observation")
+	}
+	if _, err := ReadWindow(path, "claude", "one", "five_hour", now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadWindow(path, "claude", "one", "five_hour", reset, time.Hour); err == nil {
+		t.Fatal("expired individual window accepted")
+	}
+	for _, when := range []time.Time{now.Add(-time.Second), now.Add(2 * time.Hour)} {
+		if _, err := ReadQuota(path, "claude", "one", when, time.Hour); err == nil {
+			t.Fatal("future or stale observation accepted")
+		}
+	}
+	entry.Quota = nil
+	entry.ObservedAt = now
+	entry.Percent = 10
+	write()
+	if _, err := ReadFresh(path, "claude", "one", now, time.Hour); err != nil {
+		t.Fatal("legacy snapshot rejected")
+	}
+	if _, err := ReadQuota(path, "claude", "one", now, time.Hour); err == nil {
+		t.Fatal("legacy snapshot invented extended fields")
+	}
+}

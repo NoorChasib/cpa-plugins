@@ -24,7 +24,7 @@ func (f *fakeDoer) HTTPDo(_ context.Context, request protocol.HostHTTPRequest) (
 
 var now = time.Date(2026, time.September, 4, 22, 0, 0, 0, time.UTC)
 
-func TestClaudeReadsSevenDayWindowOnly(t *testing.T) {
+func TestClaudeKeepsRegularSevenDayProjection(t *testing.T) {
 	body := `{"five_hour":{"utilization":99.0,"resets_at":"2026-09-04T23:30:00+00:00"},"seven_day":{"utilization":14.0,"resets_at":"2026-09-09T10:00:00.438310+00:00","limit_dollars":null},"seven_day_opus":{"utilization":100.0},"limits":[]}`
 	doer := &fakeDoer{response: protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(body)}}
 	observation, err := Fetch(context.Background(), doer, "claude", []byte(`{"access_token":"tok-secret","refresh_token":"r"}`), now)
@@ -130,8 +130,8 @@ func TestErrorsAreStaticAndNeverEchoBodiesOrTokens(t *testing.T) {
 		{"http 401", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 401, Body: []byte(`{"error":"bad ` + secret + `"}`)}, nil, HTTPStatusError{StatusCode: 401}},
 		{"invalid json", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`not json ` + secret)}, nil, ErrInvalidResponse},
 		{"trailing json", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"seven_day":{"utilization":1}} {}`)}, nil, ErrInvalidResponse},
-		{"missing window", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"five_hour":{"utilization":1}}`)}, nil, ErrNoWeeklyWindow},
-		{"non weekly codex", "codex", `{"access_token":"` + secret + `","account_id":"a"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"rate_limit":{"primary_window":{"used_percent":5,"limit_window_seconds":18000}}}`)}, nil, ErrNoWeeklyWindow},
+		{"missing window", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"five_hour":{"utilization":null}}`)}, nil, ErrNoWeeklyWindow},
+		{"non weekly codex", "codex", `{"access_token":"` + secret + `","account_id":"a"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"rate_limit":{"primary_window":{"used_percent":null,"limit_window_seconds":18000}}}`)}, nil, ErrNoWeeklyWindow},
 		{"xai no config", "xai", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"error":"` + secret + `"}`)}, nil, ErrNoWeeklyWindow},
 		{"transport", "claude", `{"access_token":"` + secret + `"}`, protocol.HostHTTPResponse{}, errors.New("dial failed"), nil},
 	}

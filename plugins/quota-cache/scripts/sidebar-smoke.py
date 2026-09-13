@@ -44,6 +44,7 @@ for index,(provider,status) in enumerate((('claude',429),('codex',200),('xai',50
              'observed_at':iso(now-timedelta(minutes=4)), 'reset_at':iso(now+timedelta(days=3)),
              'last_attempt':iso(now-timedelta(minutes=1)), 'next_attempt':iso(now+timedelta(minutes=12)),
              'failures':int(status!=200),'last_error':'' if status==200 else 'provider rate limited' if status==429 else 'quota fetch failed'}
+    entry['quota'] = {'schema':1, 'observed_at':entry['observed_at'], 'windows':{'five_hour':{'used_percent':0,'resets_at':entry['reset_at']}}, 'limits':{'regular':{'allowed':False}}, 'balances':{'credits':{'unit':'credits','remaining':'0.00000000000000000001','unlimited':False}}}
     fixture['entries'][provider+':'+identifier] = entry
     fixture['history'].append({'provider':provider,'auth_index':identifier,'started_at':entry['last_attempt'],
                                'finished_at':entry['last_attempt'],'duration_ms':125,'request_sent':True,'http_status':status,
@@ -114,6 +115,8 @@ try:
     check("document.body.innerText.includes('HTTP 429') && document.body.innerText.includes('backend-api/wham/usage')")
     browser('select','#provider','codex')
     check("document.querySelectorAll('#accounts tr').length === 1 && document.querySelectorAll('#history tr').length === 1")
+    browser('click','#accounts summary')
+    check("document.querySelector('#accounts').innerText.includes('0.00000000000000000001 credits') && document.querySelector('#accounts').innerText.includes('allowed: false') && document.querySelector('#accounts').innerText.includes('0% used')")
     browser('select','#provider','all')
     count = native['counts']['http']
     for _ in range(3):

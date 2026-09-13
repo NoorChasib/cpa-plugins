@@ -34,6 +34,8 @@ def host_call(ctx, method, request, length, response):
         elif method == 'host.http.do':
             counts['http'] += 1
             body = {'seven_day': {'utilization': 42, 'resets_at': (datetime.now(timezone.utc)+timedelta(days=3)).isoformat()}}
+            body['five_hour'] = {'utilization': 18, 'resets_at': (datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()}
+            body['extra_usage'] = {'is_enabled': False, 'monthly_limit': 0}
             result = {'StatusCode': mode['status'], 'Headers': {'Retry-After': ['3600']}, 'Body': base64.b64encode(json.dumps(body).encode()).decode()}
         elif method == 'host.log':
             result = {}
@@ -114,6 +116,10 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
     try:
         data = await_result(api, '')
         assert data['entries']['claude:synthetic-one']['used_percent'] == 42
+        details = data['entries']['claude:synthetic-one']['quota']
+        assert details['windows']['five_hour']['used_percent'] == 18
+        assert details['balances']['extra_usage']['enabled'] is False
+        assert details['balances']['extra_usage']['limit'] == '0'
         assert data['poll_interval'] == '5m0s' and data['request_spacing'] == '2s'
         for _ in range(100): assert snapshot(api)[0] == 200
         assert counts['http'] == 1
