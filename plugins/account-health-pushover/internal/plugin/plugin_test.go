@@ -795,7 +795,7 @@ func TestRegistrationUsesCurrentABIContract(t *testing.T) {
 	if registration.SchemaVersion != 4 || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
 		t.Fatalf("registration=%+v", registration)
 	}
-	if registration.Metadata.Version != Version || registration.Metadata.GitHubRepository != "https://github.com/NoorChasib/cpa-plugin-account-health-pushover" {
+	if registration.Metadata.Version != Version || registration.Metadata.GitHubRepository != "https://github.com/NoorChasib/cpa-plugins" {
 		t.Fatalf("metadata=%+v", registration.Metadata)
 	}
 	fieldNames := make(map[string]bool)

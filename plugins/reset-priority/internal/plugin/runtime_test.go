@@ -254,7 +254,7 @@ func TestRegisterParsesBase64ConfigAndReconciles(t *testing.T) {
 		`"schema_version":4`,
 		`"Name":"Reset Priority"`,
 		`"Version":"` + PluginVersion + `"`,
-		`"GitHubRepository":"https://github.com/NoorChasib/cpa-plugin-reset-priority"`,
+		`"GitHubRepository":"https://github.com/NoorChasib/cpa-plugins"`,
 		`"management_api":true`,
 	} {
 		if !strings.Contains(raw, want) {
