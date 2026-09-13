@@ -22,7 +22,7 @@ type fakeFetcher struct {
 func (f *fakeFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
 func (f *fakeFetcher) Fetch(context.Context, Account) (Observation, error) {
 	f.calls++
-	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now}, f.failure
+	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now, RequestSent: true, HTTPStatus: 200}, f.failure
 }
 func fixture(t *testing.T) (*Cache, *fakeFetcher, Options) {
 	t.Helper()
@@ -145,5 +145,85 @@ func TestRemovedAccountIsNotServed(t *testing.T) {
 	}
 	if _, err := client.ReadFresh(opts.Path, "claude", "one", f.now.Add(time.Minute), time.Hour); err == nil {
 		t.Fatal("removed account retained")
+	}
+}
+
+func TestPollingHistoryIsBoundedRedactedAndPreservedOnRestart(t *testing.T) {
+	c, f, opts := fixture(t)
+	for i := 0; i < 105; i++ {
+		f.now = f.now.Add(opts.Interval)
+		if err := c.Step(context.Background(), f.now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.failure = errors.New("private upstream canary")
+	if err := c.Step(context.Background(), f.now.Add(opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	restarted, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	s, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.History) != 100 || s.Totals.Attempts != 106 || s.Totals.Requests != 106 || s.Totals.Successes != 105 || s.Totals.Failures != 1 {
+		t.Fatalf("incorrect bounded history or totals: %d %+v", len(s.History), s.Totals)
+	}
+	last := s.History[len(s.History)-1]
+	if last.Outcome != "failed" || last.Error != "quota fetch failed" || last.HTTPStatus != 200 {
+		t.Fatalf("%+v", last)
+	}
+	if err := restarted.Step(context.Background(), f.now.Add(opts.Interval+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 106 {
+		t.Fatal("history caused an extra provider request")
+	}
+}
+
+type blockingFetcher struct{ entered, finish chan struct{} }
+
+func (f *blockingFetcher) List(context.Context) ([]Account, error) {
+	return []Account{{"claude", "one"}}, nil
+}
+func (f *blockingFetcher) Fetch(context.Context, Account) (Observation, error) {
+	close(f.entered)
+	<-f.finish
+	return Observation{}, nil
+}
+
+func TestStatusRemainsReadableDuringAProviderCall(t *testing.T) {
+	f := &blockingFetcher{make(chan struct{}), make(chan struct{})}
+	opts := Options{Path: filepath.Join(t.TempDir(), "cache", "snapshot.json"), Interval: time.Minute, Spacing: time.Second}
+	c, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	done := make(chan error, 1)
+	go func() { done <- c.Step(context.Background(), time.Now()) }()
+	<-f.entered
+	// Disk status and the activity mutex must not wait behind the HTTP callback.
+	read := make(chan bool, 1)
+	go func() {
+		s, err := client.Load(opts.Path)
+		a := c.Activity()
+		read <- err == nil && a.Accounts == 1 && s.Entries["claude:one"].LastError == "refresh pending"
+	}()
+	select {
+	case ok := <-read:
+		if !ok {
+			t.Error("pending poll not visible")
+		}
+	case <-time.After(time.Second):
+		t.Error("status blocked on provider callback")
+	}
+	close(f.finish)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

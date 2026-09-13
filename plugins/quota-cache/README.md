@@ -2,11 +2,11 @@
 
 One scheduled poller for Claude, Codex, and Grok regular weekly quota observations. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Opt-in preview:** [download and install preview 2](../../docs/quota-cache-preview.md). It includes Quota Cache 0.1.0, Account Health 0.4.2, and Reset Priority 0.1.6 for Linux amd64. All three updated binaries are needed for shared polling. The catalog also includes Auto Baseline 0.1.3 and Token Usage 0.1.2.
+**Linux amd64:** Quota Cache 0.1.1 adds a sidebar with polling history and fixes registration after an equivalent relative/absolute cache-path edit. Cache consumers remain opt-in: Account Health 0.4.2+ and Reset Priority 0.1.6+ support shared reads and work independently with that option off.
 
 ## Install and start
 
-Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json` as your store source, then follow the [preview installation guide](../../docs/quota-cache-preview.md). Read the migration guide before switching already-installed plugins between sources.
+Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json` as your store source, then install **Quota Cache**. If you already use `preview/registry.json`, keep that source and select **Update** for this plugin. Both catalogs advance together. Follow any disable/restart instruction CPA gives for a loaded native library.
 
 ### Build from source
 
@@ -47,7 +47,13 @@ Install/start the cache first and wait for observations, then enable cache mode 
 
 In the standard Coolify/Docker layout the cache is inside the existing `/CLIProxyAPI/plugins` volume. No new network port or management key is needed between plugins. The cache directory must be private (`0700`) and owned by the CPA process user; snapshots are written with `0600`. Custom paths must be identical across the three plugins and remain on a local filesystem supporting atomic rename and file locking.
 
-The private management route `GET /v0/management/plugins/quota-cache/status` reports the snapshot and retry schedule through CPA's existing authentication. There is no public quota-data route or sidebar page in this first version.
+Open **Quota Cache** in the CPA sidebar. It shows fresh versus stale observations, last/next polling times, account quotas, provider-wide cooldowns, request endpoints, HTTP results, durations, and the last 100 completed polls. History and cumulative totals survive restarts. Existing snapshots load unchanged; newly added history begins with subsequent polls.
+
+**Refresh view** and the optional 30-second view refresh only read cached status. They never request a provider poll. Status-read counts cover this authenticated endpoint; consumer file reads cannot be counted. The page follows the other plugins' light/dark styling and uses your browser's time zone.
+
+The sidebar resource is a static public shell; operational information comes only from authenticated `GET /v0/management/plugins/quota-cache/status` using your same-origin CPA session. No new login, key, or port is needed.
+
+If version 0.1.0 becomes unregistered after changing the relative default to its equivalent absolute path, restore `cache-path: plugins/data/quota-cache/snapshot.json` until you update. Version 0.1.1 normalizes these paths before comparing configuration, so an unchanged location does not require a restart. Actual schedule or location changes still require a native restart; safe failure reasons now appear in CPA logs.
 
 ## Polling behavior
 
@@ -74,8 +80,9 @@ A future push-notification plugin can read the same version-1 snapshot or authen
 ```sh
 make -C plugins/quota-cache ci
 python3 plugins/quota-cache/scripts/native-probe.py plugins/quota-cache/dist/quota-cache.so
+python3 plugins/quota-cache/scripts/sidebar-smoke.py
 # After building all five plugins:
 python3 scripts/quota-cache-smoke.py
 ```
 
-See [verification evidence](../../docs/quota-cache-verification.md). No live provider credentials or production changes are required by these tests.
+Browser acceptance requires `agent-browser` and Chrome. CI and releases reuse the pinned test-only toolchain through `scripts/verify-quota-sidebar.sh`; no browser dependencies are included in the plugin. See [preview verification evidence](../../docs/quota-cache-verification.md). No live provider credentials or production changes are required by these tests.

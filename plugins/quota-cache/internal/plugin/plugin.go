@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +21,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -30,13 +31,16 @@ type Host interface {
 }
 
 type Plugin struct {
-	mu       sync.Mutex
-	host     Host
-	cache    *cache.Cache
-	opts     cache.Options
-	cancel   context.CancelFunc
-	done     chan struct{}
-	terminal bool
+	mu             sync.Mutex
+	host           Host
+	cache          *cache.Cache
+	opts           cache.Options
+	cancel         context.CancelFunc
+	done           chan struct{}
+	terminal       bool
+	statusMu       sync.Mutex
+	statusReads    uint64
+	lastStatusRead time.Time
 }
 
 func New(host Host) *Plugin { return &Plugin{host: host} }
@@ -49,27 +53,48 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		p.stop(false)
 		return struct{}{}, nil
 	case protocol.MethodManagementRegister:
-		return protocol.ManagementRegistration{Routes: []protocol.ManagementRoute{{Method: "GET", Path: "/plugins/" + ID + "/status", Description: "Private cached quota observations and retry schedule"}}}, nil
+		return protocol.ManagementRegistration{
+			Routes:    []protocol.ManagementRoute{{Method: "GET", Path: "/plugins/" + ID + "/status", Description: "Private cached quota observations and polling activity"}},
+			Resources: []protocol.ResourceRoute{{Path: "/status", Menu: "Quota Cache", Description: "Quota cache status and polling history"}},
+		}, nil
 	case protocol.MethodManagementHandle:
 		var req protocol.ManagementRequest
 		if json.Unmarshal(raw, &req) != nil {
 			return nil, errors.New("invalid management request")
 		}
+		if req.Method == "GET" && strings.TrimRight(req.Path, "/") == "/v0/resource/plugins/"+ID+"/status" {
+			return sidebarResponse(), nil
+		}
 		if req.Method != "GET" || req.Path != "/v0/management/plugins/"+ID+"/status" {
 			return response(404, map[string]string{"error": "not_found"}), nil
 		}
 		p.mu.Lock()
-		path := p.opts.Path
-		running := p.cache != nil
+		opts, current := p.opts, p.cache
 		p.mu.Unlock()
-		if !running {
+		if current == nil {
 			return response(503, map[string]string{"error": "cache_stopped"}), nil
 		}
-		snapshot, err := client.Load(path)
+		snapshot, err := client.Load(opts.Path)
 		if err != nil {
 			return response(503, map[string]string{"error": "cache_unavailable"}), nil
 		}
-		return response(200, snapshot), nil
+		now := time.Now().UTC()
+		p.statusMu.Lock()
+		previous := p.lastStatusRead
+		p.lastStatusRead, p.statusReads = now, p.statusReads+1
+		reads := p.statusReads
+		p.statusMu.Unlock()
+		return response(200, struct {
+			client.Snapshot
+			GeneratedAt        time.Time      `json:"generated_at"`
+			Running            bool           `json:"running"`
+			CachePath          string         `json:"cache_path"`
+			PollInterval       string         `json:"poll_interval"`
+			RequestSpacing     string         `json:"request_spacing"`
+			Activity           cache.Activity `json:"activity"`
+			StatusReads        uint64         `json:"status_reads"`
+			PreviousStatusRead time.Time      `json:"previous_status_read"`
+		}{snapshot, now, true, opts.Path, opts.Interval.String(), opts.Spacing.String(), current.Activity(), reads, previous}), nil
 	default:
 		return nil, errors.New("unknown method")
 	}
@@ -106,6 +131,12 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("invalid cache schedule or path")
 	}
 	opts := cache.Options{Path: cfg.Path, Interval: interval, Spacing: spacing}
+	// Compare locations, not the spelling of the path. CPA can rewrite a
+	// relative default as an absolute path when saving user configuration.
+	opts.Path, e1 = filepath.Abs(opts.Path)
+	if e1 != nil {
+		return protocol.Registration{}, errors.New("cache path cannot be resolved")
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.terminal {
@@ -193,22 +224,26 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account) (cache.Ob
 	}
 	doer := &captureDoer{host: f.host}
 	observation, err := quota.Fetch(ctx, doer, account.Provider, raw, time.Now().UTC())
+	result := cache.Observation{RequestSent: doer.sent, HTTPStatus: doer.status}
 	if doer.status == 429 {
-		return cache.Observation{}, cache.RateLimited{RetryAfter: doer.retryAfter}
+		return result, cache.RateLimited{RetryAfter: doer.retryAfter}
 	}
 	if err != nil {
-		return cache.Observation{}, errors.New("quota fetch failed")
+		return result, errors.New("quota fetch failed")
 	}
-	return cache.Observation{Percent: observation.Percent, ResetAt: observation.ResetAt, ObservedAt: observation.ObservedAt}, nil
+	result.Percent, result.ResetAt, result.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
+	return result, nil
 }
 
 type captureDoer struct {
 	host       Host
 	status     int
 	retryAfter time.Time
+	sent       bool
 }
 
 func (d *captureDoer) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	d.sent = true
 	response, err := d.host.HTTPDo(ctx, req)
 	d.status = response.StatusCode
 	value := http.Header(response.Headers).Get("Retry-After")

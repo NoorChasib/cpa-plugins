@@ -19,6 +19,8 @@ type Account struct{ Provider, AuthIndex string }
 type Observation struct {
 	Percent             float64
 	ResetAt, ObservedAt time.Time
+	RequestSent         bool
+	HTTPStatus          int
 }
 type Fetcher interface {
 	List(context.Context) ([]Account, error)
@@ -35,12 +37,28 @@ type Options struct {
 }
 
 type Cache struct {
-	mu      sync.Mutex
-	opts    Options
-	fetcher Fetcher
-	data    client.Snapshot
-	lock    *os.File
-	closed  bool
+	mu         sync.Mutex
+	opts       Options
+	fetcher    Fetcher
+	data       client.Snapshot
+	lock       *os.File
+	closed     bool
+	activityMu sync.RWMutex
+	activity   Activity
+}
+
+type Activity struct {
+	LastScan time.Time `json:"last_scan"`
+	Accounts int       `json:"accounts"`
+	Error    string    `json:"error,omitempty"`
+}
+
+// Activity stays responsive while Step is inside a provider callback. The
+// persisted snapshot separately exposes the in-flight attempt and schedule.
+func (c *Cache) Activity() Activity {
+	c.activityMu.RLock()
+	defer c.activityMu.RUnlock()
+	return c.activity
 }
 
 func Open(opts Options, fetcher Fetcher) (*Cache, error) {
@@ -92,9 +110,17 @@ func (c *Cache) Close() {
 // this interface. Schedule and cooldowns are persisted before provider calls so
 // restarts cannot repeatedly bypass admission. Dashboard/consumer reads never
 // call Step.
-func (c *Cache) Step(ctx context.Context, now time.Time) error {
+func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() {
+		c.activityMu.Lock()
+		defer c.activityMu.Unlock()
+		c.activity.Error = ""
+		if result != nil && ctx.Err() == nil {
+			c.activity.Error = result.Error()
+		}
+	}()
 	if c.closed {
 		return errors.New("cache stopped")
 	}
@@ -115,6 +141,15 @@ func (c *Cache) Step(ctx context.Context, now time.Time) error {
 		}
 	}
 	dirty := c.data.WrittenAt.IsZero()
+	c.activityMu.Lock()
+	c.activity.LastScan, c.activity.Accounts = now, len(active)
+	c.activityMu.Unlock()
+	for key, a := range active {
+		if _, exists := c.data.Entries[key]; !exists {
+			c.data.Entries[key] = client.Entry{Provider: a.Provider, AuthIndex: a.AuthIndex}
+			dirty = true
+		}
+	}
 	for key := range c.data.Entries {
 		if _, ok := active[key]; !ok {
 			delete(c.data.Entries, key)
@@ -146,8 +181,19 @@ func (c *Cache) Step(ctx context.Context, now time.Time) error {
 		if err := c.save(now); err != nil {
 			return err
 		}
+		started := time.Now()
 		observation, fetchErr := c.fetcher.Fetch(ctx, a)
+		elapsed := time.Since(started)
+		poll := client.Poll{Provider: a.Provider, AuthIndex: a.AuthIndex, StartedAt: now,
+			FinishedAt: now.Add(elapsed), DurationMS: elapsed.Milliseconds(), RequestSent: observation.RequestSent,
+			HTTPStatus: observation.HTTPStatus, Outcome: "success"}
+		c.data.Totals.Attempts++
+		if observation.RequestSent {
+			c.data.Totals.Requests++
+		}
 		if fetchErr != nil {
+			c.data.Totals.Failures++
+			poll.Outcome = "failed"
 			entry.Failures++
 			entry.LastError = "quota fetch failed"
 			// Start at the normal interval and exponentially back off to six hours.
@@ -161,6 +207,8 @@ func (c *Cache) Step(ctx context.Context, now time.Time) error {
 			entry.NextAttempt = now.Add(delay)
 			var limited RateLimited
 			if errors.As(fetchErr, &limited) {
+				c.data.Totals.RateLimits++
+				poll.Outcome = "rate_limited"
 				entry.LastError = "provider rate limited"
 				if limited.RetryAfter.After(entry.NextAttempt) {
 					entry.NextAttempt = limited.RetryAfter
@@ -168,8 +216,14 @@ func (c *Cache) Step(ctx context.Context, now time.Time) error {
 				c.data.ProviderCooldown[a.Provider] = entry.NextAttempt
 			}
 		} else {
+			c.data.Totals.Successes++
 			entry.Percent, entry.ResetAt, entry.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
 			entry.Failures, entry.LastError = 0, ""
+		}
+		poll.Error = entry.LastError
+		c.data.History = append(c.data.History, poll)
+		if len(c.data.History) > 100 {
+			c.data.History = c.data.History[len(c.data.History)-100:]
 		}
 		c.data.Entries[key] = entry
 		return c.save(now)

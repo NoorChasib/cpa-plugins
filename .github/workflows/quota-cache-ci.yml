@@ -29,8 +29,8 @@ jobs:
           python3 -m unittest discover -s scripts/tests -v
           python3 scripts/check-catalog.py
           make -C plugins/quota-cache ci
-      - name: Actual native callback and restart checks
-        run: python3 plugins/quota-cache/scripts/native-probe.py plugins/quota-cache/dist/quota-cache.so
+      - name: Native callback, reconfiguration, restart, and real-browser sidebar checks
+        run: bash scripts/verify-quota-sidebar.sh
       - name: Consumer regression checks and native builds
         run: |
           make -C plugins/account-health-pushover ci c-shared

@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../plugins/$plugin"
 case "$plugin" in
   quota-cache)
     make ci
-    python3 scripts/native-probe.py dist/quota-cache.so
+    bash ../../scripts/verify-quota-sidebar.sh
     ;;
   account-health-pushover)
     make ci c-shared package-current checksums verify-release

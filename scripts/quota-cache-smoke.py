@@ -101,6 +101,27 @@ plugins:
                 assert records[plugin]['metadata']['version'] == published[plugin]['version'], 'published peer version mismatch: '+plugin
         for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
             get('plugins/'+plugin+'/status')
+        # The deployed config editor rewrites the relative cache default as an
+        # absolute path. That spelling change must preserve registration/data.
+        if records['quota-cache']['metadata']['version'] != '0.1.0':
+            req = urllib.request.Request(origin+'/v0/management/plugins/quota-cache/config',
+                data=json.dumps({'cache-path':'/CLIProxyAPI/plugins/data/quota-cache/snapshot.json'}).encode(),
+                method='PATCH',headers={'Authorization':'Bearer synthetic-local-smoke-key','Content-Type':'application/json'})
+            with urllib.request.urlopen(req,timeout=5) as response: assert response.status == 200
+            deadline=time.monotonic()+10
+            while True:
+                try:
+                    rows={p['id']:p for p in get('plugins')['plugins']}
+                    assert rows['quota-cache']['registered'] and rows['quota-cache']['effective_enabled']
+                    assert get('plugins/quota-cache/status')['cache_path']=='/CLIProxyAPI/plugins/data/quota-cache/snapshot.json'
+                    break
+                except Exception:
+                    if time.monotonic()>deadline: raise
+                    time.sleep(.1)
+            with urllib.request.urlopen(origin+'/v0/resource/plugins/quota-cache/status',timeout=5) as response:
+                shell=response.read()
+                assert response.headers.get('Content-Security-Policy')
+                assert b'Recent polling activity' in shell and b'synthetic-local-smoke-key' not in shell
         try:
             get('plugins/quota-cache/status',False)
             raise AssertionError('private cache route accepted unauthenticated request')

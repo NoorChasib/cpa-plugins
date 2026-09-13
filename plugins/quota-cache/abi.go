@@ -368,4 +368,16 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.len = C.size_t(len(raw))
 }
 
-func sanitizeError(err error) string { return "quota cache request failed" }
+func sanitizeError(err error) string {
+	// These fixed diagnostics contain no paths, credentials, or upstream text.
+	switch err.Error() {
+	case "invalid quota-cache configuration", "invalid cache schedule or path",
+		"cache path cannot be resolved", "configuration changes require native restart",
+		"cache directory must be private (0700)", "cache lock unavailable",
+		"another quota-cache writer owns this path",
+		"existing cache cannot be read; refusing to reset cooldowns", "cache shut down":
+		return err.Error()
+	default:
+		return "quota cache request failed"
+	}
+}

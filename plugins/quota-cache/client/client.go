@@ -35,6 +35,30 @@ type Snapshot struct {
 	NextRequest      time.Time            `json:"next_request"`
 	ProviderCooldown map[string]time.Time `json:"provider_cooldown"`
 	Entries          map[string]Entry     `json:"entries"`
+	Totals           Totals               `json:"totals"`
+	History          []Poll               `json:"history,omitempty"`
+}
+
+// Additive v1 fields: old readers ignore these, and old snapshots start with
+// zero counters. Never store credentials, request headers, or response bodies.
+type Totals struct {
+	Attempts   uint64 `json:"attempts"`
+	Requests   uint64 `json:"requests"`
+	Successes  uint64 `json:"successes"`
+	Failures   uint64 `json:"failures"`
+	RateLimits uint64 `json:"rate_limits"`
+}
+
+type Poll struct {
+	Provider    string    `json:"provider"`
+	AuthIndex   string    `json:"auth_index"`
+	StartedAt   time.Time `json:"started_at"`
+	FinishedAt  time.Time `json:"finished_at"`
+	DurationMS  int64     `json:"duration_ms"`
+	RequestSent bool      `json:"request_sent"`
+	HTTPStatus  int       `json:"http_status,omitempty"`
+	Outcome     string    `json:"outcome"`
+	Error       string    `json:"error,omitempty"`
 }
 
 func Key(provider, authIndex string) string { return provider + ":" + authIndex }

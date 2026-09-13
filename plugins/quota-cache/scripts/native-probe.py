@@ -74,13 +74,22 @@ def start(path):
     assert library.cliproxy_plugin_init(c.byref(Host(99, None, host_call, host_free)), c.byref(api)) != 0
     assert library.cliproxy_plugin_init(c.byref(host), c.byref(api)) == 0
     assert library.cliproxy_plugin_init(c.byref(host), c.byref(API())) != 0
-    cfg = {'cache-path': str(path), 'poll-interval': '15m', 'request-spacing': '1s'}
+    import os
+    cfg = {'cache-path': os.path.relpath(path), 'poll-interval': '15m', 'request-spacing': '1s'}
     registered = call(api, 'plugin.register', {'schema_version': 6, 'config_yaml': base64.b64encode(json.dumps(cfg).encode()).decode()})
     assert registered['metadata']['Name'] == 'quota-cache'
     assert registered['capabilities']['management_api'] is True
     routes = call(api, 'management.register')
-    assert not routes.get('resources')
+    assert routes['resources'][0]['Menu'] == 'Quota Cache'
     assert routes['routes'][0]['Menu'] == ''
+    # A CPA config save can spell the same location as an absolute path.
+    cfg['cache-path'] = str(path)
+    call(api, 'plugin.reconfigure', {'schema_version': 6, 'config_yaml': base64.b64encode(json.dumps(cfg).encode()).decode()})
+    shell = call(api, 'management.handle', {'Method': 'GET', 'Path': '/v0/resource/plugins/quota-cache/status'})
+    assert shell['StatusCode'] == 200
+    shell_bytes = base64.b64decode(shell['Body'])
+    assert b'synthetic-one' not in shell_bytes and b'synthetic-not-a-real-token' not in shell_bytes
+    assert 'Content-Security-Policy' in shell['Headers']
     return api
 
 def snapshot(api):
@@ -105,6 +114,8 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
         assert data['entries']['claude:synthetic-one']['used_percent'] == 42
         for _ in range(100): assert snapshot(api)[0] == 200
         assert counts['http'] == 1
+        assert data['totals']['requests'] == 1 and data['totals']['successes'] == 1
+        assert data['history'][0]['http_status'] == 200
         serialized = path.read_text()
         assert 'synthetic-not-a-real-token' not in serialized
         assert 'access_token' not in serialized

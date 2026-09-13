@@ -1,0 +1,44 @@
+<main class="page">
+  <header class="header">
+    <div>
+      <h1>Quota Cache</h1>
+      <p class="subtitle">Shared quota observations for your plugins.</p>
+      <div class="pills"><span id="health" class="pill">Connecting</span><span class="pill">Scheduled polling</span></div>
+    </div>
+    <div class="actions">
+      <div class="buttons"><label class="auto"><input id="auto" type="checkbox" checked> Update view every 30 seconds</label><button id="refresh" type="button">Refresh view</button></div>
+      <p id="view-status" class="hint" role="status" aria-live="polite">Checking your management session…</p>
+    </div>
+  </header>
+  <div id="error" class="alert error" role="alert" hidden></div>
+  <div id="content" hidden>
+    <div id="cooldowns" class="alert warn" hidden></div>
+    <div id="activity-error" class="alert error" hidden></div>
+    <section class="stats" aria-label="Cache overview">
+      <div class="card stat"><div class="label">Fresh observations</div><div id="fresh" class="value">—</div><div class="hint">Usable by cache-enabled consumers</div></div>
+      <div class="card stat"><div class="label">Last provider request</div><div id="last-call" class="value time-value">—</div><div id="last-call-detail" class="hint">Waiting for polling activity</div></div>
+      <div class="card stat"><div class="label">Next eligible poll</div><div id="next-call" class="value time-value">—</div><div class="hint">Accounts run one at a time</div></div>
+    </section>
+    <section class="section" aria-labelledby="accounts-heading">
+      <div class="section-head"><h2 id="accounts-heading">Accounts</h2><span id="account-count" class="hint"></span><label class="filter">Provider <select id="provider"><option value="all">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="xai">Grok</option></select></label></div>
+      <div class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Account observations">
+        <table><thead><tr><th scope="col">Account</th><th scope="col">Quota used</th><th scope="col">Observation</th><th scope="col">Last attempt</th><th scope="col">Next eligible</th><th scope="col">Status</th></tr></thead><tbody id="accounts"></tbody></table>
+      </div><p id="accounts-empty" class="empty" hidden>No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA; the next scheduled scan will discover it.</p></div>
+    </section>
+    <section class="section" aria-labelledby="history-heading">
+      <div class="section-head"><h2 id="history-heading">Recent polling activity</h2><span id="history-count" class="hint"></span></div>
+      <div class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Polling history">
+        <table><thead><tr><th scope="col">When</th><th scope="col">Account</th><th scope="col">Request</th><th scope="col">Result</th><th scope="col">Duration</th></tr></thead><tbody id="history"></tbody></table>
+      </div><p id="history-empty" class="empty" hidden>No completed polls recorded yet. Existing observations and cooldowns are preserved; history appears as scheduled polls complete.</p></div>
+    </section>
+    <section class="section" aria-labelledby="schedule-heading">
+      <div class="section-head"><h2 id="schedule-heading">Schedule and activity</h2></div>
+      <div class="card settings"><dl id="details" class="detail-grid"></dl></div>
+    </section>
+    <footer class="footnote">
+      <p>Refreshing this view reads cached information only. It never requests a provider refresh. Times use your browser’s time zone.</p>
+      <p>Account Health and Reset Priority opt in through their configuration and wait when fresh data is unavailable. Their direct file reads cannot be counted here. CPA’s stock quota dashboard polls independently.</p>
+      <p>The latest 100 completed polls and cumulative totals persist across restarts. No credentials, request headers, or provider response bodies are stored in this history.</p>
+    </footer>
+  </div>
+</main>
