@@ -13,7 +13,7 @@ export const SUPPORTED_SCHEMA = 1
 
 export type Level = Open<"ok" | "low" | "critical">
 export type Trend = Open<"up" | "down" | "flat" | "unknown">
-export type EntryState = Open<"ok" | "error" | "stale">
+export type EntryState = Open<"ok" | "error" | "stale" | "noData" | "pending" | "unsupported">
 export type ResetDisplayHint = Open<"countdown" | "none">
 export type StaleReason = Open<
   "neverObserved" | "cacheMissing" | "cacheStale" | "snapshotSchemaUnsupported" | "rosterUnavailable"
@@ -38,6 +38,7 @@ export interface Credential {
 export interface Aggregate {
   remainingFraction: number
   remainingPercent: number
+  /** Credentials the mean covers, and the rest. They sum to `entries.length`. */
   memberCount: number
   excludedCount: number
   level: Level
@@ -50,6 +51,13 @@ export interface Aggregate {
 
 export interface RowEntry {
   credentialId: string
+  /**
+   * False when this credential reported nothing for this window. Every numeric
+   * field below is then zero and means nothing — print a dash, not 0% — and
+   * `level` is "", which falls through to the neutral rendering every unknown
+   * enum value gets.
+   */
+  hasReading: boolean
   remainingFraction: number
   remainingPercent: number
   level: Level

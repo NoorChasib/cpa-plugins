@@ -89,11 +89,19 @@ func trendOf(samples []Sample, current []observation, rowID string, now time.Tim
 // SamplesFrom projects a built document back into trend samples. Taking them
 // from the document rather than the snapshot means a sample always matches the
 // row it will later be compared against, including per-model rows.
+//
+// Entries with no reading are skipped. Their remaining fraction is zero because
+// there is no number, not because the credential is empty, and recording that
+// zero would write a fabricated drop to 0% into the history every other trend
+// is then measured against.
 func SamplesFrom(doc Document, at time.Time) []Sample {
 	samples := []Sample{}
 	for _, provider := range doc.Providers {
 		for _, row := range provider.Rows {
 			for _, entry := range row.Entries {
+				if !entry.HasReading {
+					continue
+				}
 				samples = append(samples, Sample{
 					AuthIndex: entry.CredentialID,
 					WindowKey: row.RowID,

@@ -12,7 +12,7 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 | File | What it shows |
 | --- | --- |
 | `summary.json` | Seven healthy credentials. The layout the design was drawn against. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, per-model rows, an unmapped window, a reset in the past, a window with no reset at all. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -30,8 +30,14 @@ is a deliberate contract change.
 - **`credentials[]` is pre-sorted** by each credential's `weekly` window reset,
   soonest first; those without one sort last. **Every row's `entries[]` repeats
   that order.** Do not re-sort.
-- **`entries[]` contains only members** of that row, so it is usually shorter
-  than `credentials[]`. Match on `credentialId`.
+- **`entries[]` lists every one of the provider's credentials**, always, in that
+  same order. `entries.length == provider.credentialCount`. A credential that
+  reported nothing for the window is present with `hasReading: false` rather
+  than omitted, because a credential silently missing from a card cannot be told
+  apart from one the operator never added.
+- **`hasReading: false` is not zero.** Every numeric field on such an entry is
+  zero and none of them means anything: render a dash. An absent reading and an
+  exhausted credential are the same bytes and opposite facts.
 - **Times are integer Unix epoch seconds.** Nullable ones are `null`, never
   omitted and never zero. `generatedAtEpoch + resetInSeconds == resetAtEpoch`.
 - **The header line is precomputed too.** `observedAtEpoch` is the newest
@@ -52,7 +58,7 @@ is a deliberate contract change.
 
 ## Vocabulary
 
-### `credentials[].status` — does this credential produce data?
+### `credentials[].status` — what is the state of this credential?
 
 | Value | Meaning |
 | --- | --- |
@@ -60,16 +66,38 @@ is a deliberate contract change.
 | `error` | Its last poll failed. Last-known figures are still shown, marked. |
 | `pending` | quota-cache knows about it but has not polled it yet. No data, not an error. |
 | `unsupported` | quota-cache does not poll this provider. |
-| `disabled` | Disabled in CPA. Catalogued, excluded from every row. |
-| `unavailable` | Marked unavailable by CPA. Catalogued, excluded from every row. |
+| `disabled` | Disabled in CPA. |
+| `unavailable` | CPA will not route to it right now — typically a quota cooldown after a 429. |
 
-`counters.observedOK` counts `ok` only; `counters.observeError` counts `error`
-only. The rest are in `counters.credentials` and in neither.
+The last two answer a different question from the rest: whether CPA will route
+to the credential, not whether quota-cache can read it. They are reported here
+because there is one `status` field and routing state wins it when set — but
+they say nothing about the figures. A parked credential is still polled, still
+appears on every card, and still counts in every mean. Render it normally and
+mark it; `credentials[].status` is the only place that fact lives.
+
+`counters.observedOK` and `counters.observeError` follow the **poll**, not the
+status: a credential polled cleanly is counted as observed whether or not CPA
+will route to it. Credentials never polled at all (`pending`, `unsupported`) are
+in `counters.credentials` and in neither.
 
 ### `entries[].state` — is this particular reading trustworthy?
 
-A different question from `status`, and a different set: `ok`, `error`, `stale`.
-`stale` means the observation is older than the configured `stale-after`.
+A different question from `status`, and a different set.
+
+| Value | Meaning |
+| --- | --- |
+| `ok` | A reading, and a good one. |
+| `error` | The last poll failed. The previous figures are still shown. |
+| `stale` | The observation is older than the configured `stale-after`. |
+| `noData` | No reading: this credential did not report this window. Nothing is wrong with it — a plan with no Fable allowance lands here. |
+| `pending` | No reading: quota-cache has not polled this credential yet. |
+| `unsupported` | No reading: quota-cache does not poll this provider. |
+
+The last three always accompany `hasReading: false`. `disabled` and
+`unavailable` deliberately never appear here: they describe the credential, not
+the reading, and a row that called itself `ok` on one card and `disabled` on the
+next would be describing one credential two ways in the same column.
 
 ### `entries[].dataIssues` — always an array, often empty
 
@@ -162,11 +190,18 @@ holds no opinion about what the values mean.
 
 ### Membership
 
-A credential is a member of a row only if it reported that window and is neither
-disabled nor unavailable. **A credential that did not report a window is
-excluded from the mean, not counted as full** — otherwise one silent credential
-quietly inflates the single number the whole card is read from. `memberCount`
-and `excludedCount` say what happened; `excludedCount` is never negative.
+A credential is a member of a row if it reported that window. That is the whole
+test: not whether CPA will route to it, not whether it is disabled. The figures
+a parked credential last reported are still true, and a credential vanishing
+from every card at the exact moment it runs out is the opposite of what the card
+is read for.
+
+**A credential that did not report a window is excluded from the mean, not
+counted as full** — otherwise one silent credential quietly inflates the single
+number the whole card is read from. It is still listed, with `hasReading: false`.
+
+`memberCount` is how many the mean covers and `excludedCount` the rest; they sum
+to `credentialCount`, which is also `entries.length`. Neither is ever negative.
 
 `aggregate.remainingFraction` is the arithmetic mean over members.
 `soonestResetAtEpoch` is the earliest *future* reset among them, and

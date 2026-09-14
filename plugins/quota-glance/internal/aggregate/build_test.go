@@ -414,7 +414,11 @@ func TestNonReportingCredentialIsExcludedNotCountedAsFull(t *testing.T) {
 	}
 }
 
-func TestDisabledCredentialIsCatalogedButNotCounted(t *testing.T) {
+// Disabled and unavailable are facts about routing, not about quota. The
+// figures a parked credential last reported are still true, so it keeps its
+// place on every card and in the mean; credentials[].status is where a client
+// learns it cannot be routed to right now.
+func TestDisabledCredentialStillCountsAndIsFlagged(t *testing.T) {
 	now := at(t, 0)
 	observed := now.Add(-5 * time.Minute)
 	entry := qc.Entry{
@@ -434,8 +438,12 @@ func TestDisabledCredentialIsCatalogedButNotCounted(t *testing.T) {
 	}, StaleAfter: time.Hour}, now)
 
 	row := rowOf(t, doc, "claude", qc.WindowWeekly)
-	if row.Aggregate.MemberCount != 1 || row.Aggregate.RemainingPercent != 50 {
-		t.Fatalf("a disabled credential contributed to the mean: %+v", row.Aggregate)
+	// 50% and 100% left: the mean covers both, and the card shows both.
+	if row.Aggregate.MemberCount != 2 || row.Aggregate.RemainingPercent != 75 {
+		t.Fatalf("a disabled credential was dropped from the mean: %+v", row.Aggregate)
+	}
+	if len(row.Entries) != 2 {
+		t.Fatalf("row has %d entries; a disabled credential is still a row", len(row.Entries))
 	}
 	if len(doc.Credentials) != 2 {
 		t.Fatal("a disabled credential must still be listed")
@@ -822,7 +830,7 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 	for name, set := range map[string][]string{
 		"level": {LevelOK, LevelLow, LevelCritical},
 		"trend": {TrendDown, TrendUnknown},
-		"state": {StatusOK, StatusError, StateStale},
+		"state": {StatusOK, StatusError, StateStale, StateNoData, StatusPending},
 		"hint":  {HintCountdown, HintNone},
 	} {
 		var have map[string]bool
@@ -946,6 +954,148 @@ func TestNeverObservedCredentialIsNeverARowMember(t *testing.T) {
 				t.Fatalf("a never-observed credential was counted at %d%% in row %s",
 					row.Aggregate.RemainingPercent, row.RowID)
 			}
+		}
+	}
+}
+
+// The reported bug. CPA flags a credential unavailable while it sits in a quota
+// cooldown, which is exactly the moment its figures matter most — and the row
+// it vanished from was the one that would have explained why. It stays, with
+// its real reading, on every card its provider has.
+func TestCooldownCredentialStaysOnEveryCard(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-2 * time.Minute)
+	windows := func(session, weekly float64) []qc.EntryWindow {
+		return []qc.EntryWindow{
+			{Key: qc.WindowSession, UsedPercent: session, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			{Key: qc.WindowWeekly, UsedPercent: weekly, ResetAt: now.Add(48 * time.Hour), ObservedAt: observed},
+		}
+	}
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-fine@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-fine@example.com.json",
+			ObservedAt: observed, Windows: windows(0, 40),
+		},
+		// Rate limited a minute ago: CPA will not route to it, quota-cache
+		// polled it anyway, and it is empty. All three are true at once.
+		"claude:claude-cooling@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-cooling@example.com.json",
+			ObservedAt: observed, Windows: windows(100, 100),
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot, Identities: []Identity{
+		{AuthIndex: "claude-fine@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-cooling@example.com.json", Provider: "claude", Unavailable: true},
+	}, StaleAfter: time.Hour}, now)
+
+	for _, rowID := range []string{qc.WindowSession, qc.WindowWeekly} {
+		row := rowOf(t, doc, "claude", rowID)
+		if len(row.Entries) != 2 || row.Aggregate.MemberCount != 2 {
+			t.Fatalf("row %s dropped the credential in cooldown: %d entries, %+v",
+				rowID, len(row.Entries), row.Aggregate)
+		}
+	}
+	// Means of (100%, 0%) and (60%, 0%). Dropping the exhausted credential
+	// would report 100% and 60% — a dashboard claiming full capacity at the
+	// moment half the fleet is rate limited.
+	if got := rowOf(t, doc, "claude", qc.WindowSession).Aggregate.RemainingPercent; got != 50 {
+		t.Fatalf("session = %d%%; want 50", got)
+	}
+	if got := rowOf(t, doc, "claude", qc.WindowWeekly).Aggregate.RemainingPercent; got != 30 {
+		t.Fatalf("weekly = %d%%; want 30", got)
+	}
+	// The reason it is parked is still reported, on the credential where a
+	// client looks for it rather than on the reading, which is perfectly good.
+	for _, c := range doc.Credentials {
+		if c.ID == "claude-cooling@example.com.json" && c.Status != StatusUnavailable {
+			t.Fatalf("status = %q; want unavailable", c.Status)
+		}
+	}
+	for _, entry := range rowOf(t, doc, "claude", qc.WindowSession).Entries {
+		if entry.CredentialID != "claude-cooling@example.com.json" {
+			continue
+		}
+		if !entry.HasReading || entry.State != StatusOK || entry.RemainingPercent != 0 {
+			t.Fatalf("a fresh reading from a parked credential is still a good reading: %+v", entry)
+		}
+	}
+}
+
+// Every card lists every credential the provider has, in catalog order,
+// whatever state each one is in.
+func TestEveryCredentialAppearsInEveryRow(t *testing.T) {
+	doc := buildDegraded(t)
+	for _, provider := range doc.Providers {
+		catalog := []string{}
+		for _, c := range doc.Credentials {
+			if c.Provider == provider.ID {
+				catalog = append(catalog, c.ID)
+			}
+		}
+		for _, row := range provider.Rows {
+			if len(row.Entries) != provider.CredentialCount {
+				t.Fatalf("%s/%s has %d entries for %d credentials",
+					provider.ID, row.RowID, len(row.Entries), provider.CredentialCount)
+			}
+			if sum := row.Aggregate.MemberCount + row.Aggregate.ExcludedCount; sum != provider.CredentialCount {
+				t.Fatalf("%s/%s: members+excluded = %d, credentials = %d",
+					provider.ID, row.RowID, sum, provider.CredentialCount)
+			}
+			for i, entry := range row.Entries {
+				if entry.CredentialID != catalog[i] {
+					t.Fatalf("%s/%s entry %d = %s; want %s",
+						provider.ID, row.RowID, i, entry.CredentialID, catalog[i])
+				}
+			}
+		}
+	}
+}
+
+// An entry with nothing behind it must not read as a credential at zero. The
+// two look identical in every numeric field, so hasReading is what separates
+// them, and level is left empty rather than resolving to critical.
+func TestEntryWithNoReadingIsNotAZeroReading(t *testing.T) {
+	doc := buildDegraded(t)
+	fable := rowOf(t, doc, "claude", qc.WindowWeeklyFable)
+	seen := map[string]RowEntry{}
+	for _, entry := range fable.Entries {
+		seen[entry.CredentialID] = entry
+	}
+	absent, ok := seen["claude-pending@example.com.json"]
+	if !ok {
+		t.Fatal("a never-polled credential is missing from the card")
+	}
+	if absent.HasReading || absent.Level != "" || absent.State != StatusPending {
+		t.Fatalf("placeholder = %+v; want no reading, no level, pending", absent)
+	}
+	if absent.ResetAtEpoch != nil || absent.ResetDisplayHint != HintNone {
+		t.Fatalf("placeholder invented a reset: %+v", absent)
+	}
+	// Polling fine, simply has no Fable allowance. Nothing is wrong with it and
+	// its state must not say otherwise.
+	if healthy := seen["claude-stale@example.com.json"]; healthy.HasReading || healthy.State != StateNoData {
+		t.Fatalf("no-such-window = %+v; want no reading, noData", healthy)
+	}
+	if reporting := seen["claude-fresh@example.com.json"]; !reporting.HasReading {
+		t.Fatal("the one credential that did report the window lost its reading")
+	}
+}
+
+// Trend history is keyed off the document, so a placeholder would write a
+// fabricated 0% into it and every later comparison would measure against that.
+func TestSamplesFromSkipsEntriesWithNoReading(t *testing.T) {
+	doc := buildDegraded(t)
+	now := at(t, 0)
+	recorded := map[string]bool{}
+	for _, s := range SamplesFrom(doc, now) {
+		recorded[s.WindowKey+"|"+s.AuthIndex] = true
+	}
+	if !recorded[qc.WindowWeeklyFable+"|claude-fresh@example.com.json"] {
+		t.Fatal("a real reading was not sampled")
+	}
+	for _, id := range []string{"claude-pending@example.com.json", "claude-stale@example.com.json"} {
+		if recorded[qc.WindowWeeklyFable+"|"+id] {
+			t.Fatalf("%s has no fable window, but a 0%% sample was recorded for it", id)
 		}
 	}
 }

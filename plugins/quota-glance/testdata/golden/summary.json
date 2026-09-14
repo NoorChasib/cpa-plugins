@@ -95,6 +95,7 @@
           "entries": [
             {
               "credentialId": "claude-siphorchannel@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.69,
               "remainingPercent": 69,
               "level": "ok",
@@ -110,6 +111,7 @@
             },
             {
               "credentialId": "claude-agency@example.com.json",
+              "hasReading": true,
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
@@ -125,6 +127,7 @@
             },
             {
               "credentialId": "claude-chasibnoor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
@@ -140,6 +143,7 @@
             },
             {
               "credentialId": "claude-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
@@ -155,6 +159,7 @@
             },
             {
               "credentialId": "claude-noorchasib@example.com.json",
+              "hasReading": true,
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
@@ -190,6 +195,7 @@
           "entries": [
             {
               "credentialId": "claude-siphorchannel@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.76,
               "remainingPercent": 76,
               "level": "ok",
@@ -205,6 +211,7 @@
             },
             {
               "credentialId": "claude-agency@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.9,
               "remainingPercent": 90,
               "level": "ok",
@@ -220,6 +227,7 @@
             },
             {
               "credentialId": "claude-chasibnoor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.24,
               "remainingPercent": 24,
               "level": "low",
@@ -235,6 +243,7 @@
             },
             {
               "credentialId": "claude-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.6,
               "remainingPercent": 60,
               "level": "ok",
@@ -250,6 +259,7 @@
             },
             {
               "credentialId": "claude-noorchasib@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
@@ -285,6 +295,7 @@
           "entries": [
             {
               "credentialId": "claude-siphorchannel@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "critical",
@@ -300,6 +311,7 @@
             },
             {
               "credentialId": "claude-agency@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.88,
               "remainingPercent": 88,
               "level": "ok",
@@ -315,6 +327,7 @@
             },
             {
               "credentialId": "claude-chasibnoor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
@@ -330,6 +343,7 @@
             },
             {
               "credentialId": "claude-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.7,
               "remainingPercent": 70,
               "level": "ok",
@@ -345,6 +359,7 @@
             },
             {
               "credentialId": "claude-noorchasib@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.1,
               "remainingPercent": 10,
               "level": "critical",
@@ -388,6 +403,7 @@
           "entries": [
             {
               "credentialId": "codex-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.88,
               "remainingPercent": 88,
               "level": "ok",
@@ -423,6 +439,7 @@
           "entries": [
             {
               "credentialId": "codex-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.66,
               "remainingPercent": 66,
               "level": "ok",
@@ -466,6 +483,7 @@
           "entries": [
             {
               "credentialId": "xai-noor@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.32,
               "remainingPercent": 32,
               "level": "low",

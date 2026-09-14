@@ -54,6 +54,11 @@ const (
 	// polled successfully. It is not an error and has no data.
 	StatusPending = "pending"
 	StateStale    = "stale"
+	// StateNoData is a row entry with nothing behind it: the credential is in
+	// the roster and reported other windows, but not this one. It exists so
+	// every card lists every credential — a credential silently missing from a
+	// card is indistinguishable from one the operator forgot to add.
+	StateNoData = "noData"
 )
 
 // Reset display hints. A reset instant slightly in the past is normal between a
@@ -140,7 +145,10 @@ type Row struct {
 }
 
 // Aggregate carries both a fraction and a rounded percent so the bar width and
-// the printed label cannot disagree.
+// the printed label cannot disagree. MemberCount counts the credentials the
+// mean was taken over — those with a reading for this window — and
+// ExcludedCount the rest. The two always sum to the provider's credential
+// count, which is also the length of Entries.
 type Aggregate struct {
 	RemainingFraction     float64 `json:"remainingFraction"`
 	RemainingPercent      int     `json:"remainingPercent"`
@@ -155,7 +163,13 @@ type Aggregate struct {
 }
 
 type RowEntry struct {
-	CredentialID      string   `json:"credentialId"`
+	CredentialID string `json:"credentialId"`
+	// HasReading is false when this credential reported no observation for this
+	// window. Everything numeric below is then zero and means nothing: render a
+	// dash, not 0%. Level is "" in that case rather than the level zero would
+	// compute to, so a client that ignores this flag shows a neutral row rather
+	// than a confident red one.
+	HasReading        bool     `json:"hasReading"`
 	RemainingFraction float64  `json:"remainingFraction"`
 	RemainingPercent  int      `json:"remainingPercent"`
 	Level             string   `json:"level"`
