@@ -12,10 +12,13 @@ limits it exists to protect.
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
-- Quota Cache **0.1.5 or newer** for the full session / weekly / weekly-Fable
-  layout. Against an older snapshot, Quota Glance shows a single weekly row per
-  credential and fills in the rest on its own once Quota Cache supplies
-  canonical windows — no reconfiguration needed.
+- Quota Cache **0.1.6 or newer** for the full session / weekly / weekly-Fable
+  layout. Anthropic moved model-scoped allowances into a structured `limits[]`
+  array and nulled the flat keys that carried them; 0.1.6 reads both, so
+  anything older shows no Fable card and an empty plan badge however healthy the
+  credential is. Against an older snapshot Quota Glance renders what it is
+  given and fills in the rest on its own once Quota Cache supplies canonical
+  windows — no reconfiguration needed.
 
 **Enable Quota Cache first, and let it poll once.** Quota Glance refuses to
 start when `cache-path` does not yet exist, so enabling both in the same edit
