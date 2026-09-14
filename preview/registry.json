@@ -83,6 +83,28 @@
       }
     },
     {
+      "name": "Quota Glance",
+      "description": "One dashboard for remaining quota across every credential and rate-limit window, read from Quota Cache. Signs in with your CPA console session. Preview: Linux amd64 only.",
+      "author": "NoorChasib",
+      "license": "MIT",
+      "id": "quota-glance",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/quota-glance",
+      "version": "0.1.0",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance/v0.1.0/quota-glance_0.1.0_linux_amd64.zip",
+            "sha256": "8fd33f1fdcd2d832d276542247bffa75fdeca37694fcd0beee802b2180644428",
+            "size": 4494547
+          }
+        ]
+      }
+    },
+    {
       "id": "reset-priority",
       "name": "Reset Priority",
       "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
