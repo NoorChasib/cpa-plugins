@@ -69,6 +69,18 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests -v
           python3 scripts/check-catalog.py
+      # quota-glance's `make ci` rebuilds its dashboard bundle to prove the
+      # committed copy is not stale, which needs Node. Scoped to that plugin so
+      # token-usage's own pinned Node toolchain is left exactly as it was. pnpm
+      # comes from corepack, which ships with Node, and its version is pinned by
+      # `packageManager` in plugins/quota-glance/web/package.json.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        if: steps.select.outputs.plugin == 'quota-glance'
+        with:
+          node-version: '22'
+      - name: Enable pnpm
+        if: steps.select.outputs.plugin == 'quota-glance'
+        run: corepack enable
       - name: Required plugin-specific checks and native build
         env:
           PLUGIN: ${{ steps.select.outputs.plugin }}
