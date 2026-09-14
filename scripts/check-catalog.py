@@ -16,7 +16,7 @@ ids = [p['id'] for p in catalog['plugins']]
 # release. What must never happen is an unknown entry, a duplicate, or a
 # published plugin quietly disappearing.
 KNOWN = {'account-health-pushover', 'auto-baseline', 'quota-cache', 'quota-glance', 'reset-priority', 'token-usage'}
-PUBLISHED = {'account-health-pushover', 'auto-baseline', 'quota-cache', 'reset-priority', 'token-usage'}
+PUBLISHED = {'account-health-pushover', 'auto-baseline', 'quota-cache', 'quota-glance', 'reset-priority', 'token-usage'}
 assert len(ids) == len(set(ids)), 'duplicate plugin entries'
 assert set(ids) <= KNOWN, 'catalog lists an unknown plugin: ' + str(set(ids) - KNOWN)
 assert PUBLISHED <= set(ids), 'a published plugin was dropped: ' + str(PUBLISHED - set(ids))
