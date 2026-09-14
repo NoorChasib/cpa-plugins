@@ -26,8 +26,10 @@ plugins:
       # plan-labels:
       #   pro: "Pro 20x"
     quota-cache:
-      # quota-glance requires quota-cache 0.1.5 or newer for the full
-      # session / weekly / weekly-fable layout. Against an older snapshot it
+      # quota-glance requires quota-cache 0.1.6 or newer for the full
+      # session / weekly / weekly-fable layout: Anthropic moved model-scoped
+      # allowances into a structured limits[] array and nulled the flat keys,
+      # and 0.1.6 is the release that reads both. Against an older snapshot it
       # shows a single weekly row and fills in the rest once quota-cache
       # supplies canonical windows.
       enabled: true
