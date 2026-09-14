@@ -18,8 +18,11 @@ import (
 type Account struct{ Provider, AuthIndex string }
 type Observation struct {
 	Quota               *client.Quota
+	Windows             []client.EntryWindow
 	Percent             float64
 	ResetAt, ObservedAt time.Time
+	Plan, TierName      string
+	RenewalAt           time.Time
 	RequestSent         bool
 	HTTPStatus          int
 }
@@ -268,6 +271,16 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 			c.data.Totals.Successes++
 			entry.Percent, entry.ResetAt, entry.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
 			entry.Quota = observation.Quota
+			// One observation replaces the previous one wholesale, so a window
+			// the latest response stopped reporting disappears rather than
+			// lingering as stale data under a fresh timestamp.
+			entry.Windows = observation.Windows
+			entry.Plan, entry.TierName = observation.Plan, observation.TierName
+			entry.RenewalAt = nil
+			if !observation.RenewalAt.IsZero() {
+				renewal := observation.RenewalAt
+				entry.RenewalAt = &renewal
+			}
 			entry.Failures, entry.LastError = 0, ""
 		}
 		poll.Error = entry.LastError

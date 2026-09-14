@@ -355,3 +355,64 @@ func (f *detailsFetcher) Fetch(ctx context.Context, a Account) (Observation, err
 	o.Quota = f.quota
 	return o, err
 }
+
+type windowFetcher struct {
+	accounts []Account
+	now      time.Time
+	windows  []client.EntryWindow
+}
+
+func (f *windowFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
+func (f *windowFetcher) Fetch(context.Context, Account) (Observation, error) {
+	return Observation{
+		Percent: 76, ResetAt: f.now.Add(62 * time.Hour), ObservedAt: f.now,
+		Windows: f.windows, Plan: "Max", TierName: "max_20x",
+		RequestSent: true, HTTPStatus: 200,
+	}, nil
+}
+
+// The dashboard reads the file, not the writer's memory. Windows and plan have
+// to survive the atomic-rename commit and come back in the same order, since an
+// unstable order would rewrite the file on every poll.
+func TestCanonicalWindowsAndPlanSurviveTheWriteAndReload(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	f := &windowFetcher{accounts: []Account{{"claude", "one"}}, now: now, windows: []client.EntryWindow{
+		{Key: client.WindowSession, Title: "Session", UsedPercent: 31, ResetAt: now.Add(75 * time.Minute), ObservedAt: now},
+		{Key: client.WindowWeekly, Title: "Weekly", UsedPercent: 76, ResetAt: now.Add(62 * time.Hour), ObservedAt: now},
+		{Key: client.WindowWeeklyFable, UsedPercent: 100, ResetAt: now.Add(61 * time.Hour), ObservedAt: now},
+	}}
+	opts := Options{Path: filepath.Join(t.TempDir(), "cache", "snapshot.json"), Interval: 15 * time.Minute, Spacing: 10 * time.Second}
+	c, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Step(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := snapshot.Entries[client.Key("claude", "one")]
+	if len(entry.Windows) != 3 {
+		t.Fatalf("windows=%+v", entry.Windows)
+	}
+	for i, want := range []string{client.WindowSession, client.WindowWeekly, client.WindowWeeklyFable} {
+		if entry.Windows[i].Key != want {
+			t.Fatalf("window %d=%q want %q", i, entry.Windows[i].Key, want)
+		}
+		if !entry.Windows[i].ObservedAt.Equal(now) {
+			t.Fatalf("window %d lost its observation time", i)
+		}
+	}
+	if entry.Plan != "Max" || entry.TierName != "max_20x" {
+		t.Fatalf("identity=%q/%q", entry.Plan, entry.TierName)
+	}
+	// The compatibility surface is unchanged, so existing consumers still read
+	// the regular weekly window exactly as before.
+	fresh, err := client.ReadFresh(opts.Path, "claude", "one", now, 30*time.Minute)
+	if err != nil || fresh.Percent != 76 {
+		t.Fatalf("fresh=%+v err=%v", fresh, err)
+	}
+}

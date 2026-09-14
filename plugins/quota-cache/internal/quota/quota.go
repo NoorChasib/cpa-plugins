@@ -91,6 +91,13 @@ type Observation struct {
 	Percent    float64
 	ResetAt    time.Time
 	ObservedAt time.Time
+
+	// Windows is the same response projected into the canonical vocabulary.
+	// Percent/ResetAt above remain the regular weekly window regardless.
+	Windows   []client.EntryWindow
+	Plan      string
+	TierName  string
+	RenewalAt time.Time
 }
 
 // Supported reports whether the provider has a usage endpoint this package
@@ -179,6 +186,10 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 		observation.ObservedAt = now
 	}
 	observation.Quota = details
+	// Derived after ObservedAt is set: a weekly window is only synthesized when
+	// the primary observation actually succeeded.
+	observation.Windows = canonicalWindows(provider, details, observation)
+	observation.Plan, observation.TierName, observation.RenewalAt = identity(provider, details)
 	return observation, nil
 }
 

@@ -14,7 +14,10 @@ const maxDetails = 32
 
 var decimalValue = regexp.MustCompile(`^-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
-var detailName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _./-]{0,63}$`)
+// Bounded allowlist for any label copied out of a provider response. Kept
+// deliberately narrow; parentheses and "+" are included because real plan names
+// use them ("Pro (20x)", "Team+") and were otherwise dropped in silence.
+var detailName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _.()+/-]{0,63}$`)
 
 func object(m map[string]any, keys ...string) map[string]any {
 	for _, k := range keys {
@@ -100,6 +103,12 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 	q := &client.Quota{Schema: 1, ObservedAt: now, Windows: map[string]client.Window{}, Limits: map[string]client.Limit{}, Balances: map[string]client.Balance{}}
 	switch provider {
 	case "claude":
+		// The subscription object is reported alongside usage and costs no
+		// extra request. Names go through the same bounded validation as every
+		// other label, so a malformed value is omitted rather than stored.
+		subscription := object(root, "subscription")
+		q.Plan = name(subscription, "plan")
+		q.TierName = name(subscription, "tierName", "tier_name")
 		for _, id := range []string{"five_hour", "seven_day", "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet", "seven_day_cowork"} {
 			w := object(root, id)
 			duration := int64(604800)

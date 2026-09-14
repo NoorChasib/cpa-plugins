@@ -11,6 +11,7 @@ type Quota struct {
 	ActiveLimit        string             `json:"active_limit,omitempty"`
 	LimitReachedReason string             `json:"limit_reached_reason,omitempty"`
 	Plan               string             `json:"plan,omitempty"`
+	TierName           string             `json:"tier_name,omitempty"`
 	Windows            map[string]Window  `json:"windows,omitempty"`
 	Limits             map[string]Limit   `json:"limits,omitempty"`
 	Balances           map[string]Balance `json:"balances,omitempty"`
