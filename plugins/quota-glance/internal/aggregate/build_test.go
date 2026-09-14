@@ -1,0 +1,811 @@
+package aggregate
+
+import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+)
+
+var update = flag.Bool("update", false, "rewrite testdata/golden/summary.json")
+
+// fixtureNow is the instant the committed golden document is built at. The web
+// app develops against that file, so this constant is part of the contract.
+const fixtureNow = 1789012800 // 2026-09-10T04:00:00Z
+
+func at(t *testing.T, offset int64) time.Time {
+	t.Helper()
+	return time.Unix(fixtureNow+offset, 0).UTC()
+}
+
+func loadSnapshot(t *testing.T, name string) qc.Snapshot {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "snapshots", name)
+	snapshot, err := qc.Load(path)
+	if err != nil {
+		t.Fatalf("fixture %s: %v", name, err)
+	}
+	return snapshot
+}
+
+// fixtureRoster is what host.auth.list reports. Order is deliberately not the
+// display order: the server sorts by weekly reset, and a roster that arrived
+// pre-sorted would hide a failure to do so.
+func fixtureRoster() []Identity {
+	return []Identity{
+		{AuthIndex: "xai-noor@example.com.json", Provider: "xai"},
+		{AuthIndex: "claude-chasibnoor@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-noorchasib@example.com.json", Provider: "claude"},
+		{AuthIndex: "codex-noor@example.com.json", Provider: "codex"},
+		{AuthIndex: "claude-siphorchannel@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-noor@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-agency@example.com.json", Provider: "claude"},
+	}
+}
+
+func buildFixture(t *testing.T) Document {
+	t.Helper()
+	return Build(Input{
+		Snapshot:   loadSnapshot(t, "seven-credentials.json"),
+		Identities: fixtureRoster(),
+		StaleAfter: 45 * time.Minute,
+	}, at(t, 0))
+}
+
+func rowOf(t *testing.T, doc Document, provider, rowID string) Row {
+	t.Helper()
+	for _, p := range doc.Providers {
+		if p.ID != provider {
+			continue
+		}
+		for _, r := range p.Rows {
+			if r.RowID == rowID {
+				return r
+			}
+		}
+	}
+	t.Fatalf("provider %s has no row %s", provider, rowID)
+	return Row{}
+}
+
+// The named inversion test. quota-cache reports USED capacity; this document
+// reports REMAINING. Shipping it backwards produces numbers that look entirely
+// plausible on a dashboard, so it is asserted directly against the worked
+// example in the handoff: 76 used renders as 24% left.
+func TestUsedPercent76RendersAs24PercentLeft(t *testing.T) {
+	remaining, issue := remainingOf(76)
+	if issue != "" {
+		t.Fatalf("unexpected issue %q", issue)
+	}
+	if remaining != 0.24 {
+		t.Fatalf("remainingOf(76) = %v; want 0.24 (24%% left, not 76%%)", remaining)
+	}
+	if got := percentOf(remaining); got != 24 {
+		t.Fatalf("percentOf = %d; want 24", got)
+	}
+
+	// And end to end: the credential whose weekly window is 76 used must show
+	// 24% left in the document the dashboard actually receives.
+	doc := buildFixture(t)
+	weekly := rowOf(t, doc, "claude", qc.WindowWeekly)
+	for _, entry := range weekly.Entries {
+		if entry.CredentialID != "claude-chasibnoor@example.com.json" {
+			continue
+		}
+		if entry.RemainingPercent != 24 || entry.RemainingFraction != 0.24 {
+			t.Fatalf("76 used rendered as %d%% (%v); want 24%%", entry.RemainingPercent, entry.RemainingFraction)
+		}
+		return
+	}
+	t.Fatal("weekly row is missing the credential at 76 used")
+}
+
+// The acceptance case from the handoff, asserted on the document rather than
+// only through curl.
+func TestSessionRowMatchesTheDesign(t *testing.T) {
+	doc := buildFixture(t)
+	session := rowOf(t, doc, "claude", qc.WindowSession)
+
+	if session.Aggregate.RemainingPercent != 94 {
+		t.Fatalf("session = %d%%; want 94", session.Aggregate.RemainingPercent)
+	}
+	if want := "+6% when siphorchannel resets in 1h 15m"; session.Aggregate.Subtext != want {
+		t.Fatalf("subtext = %q; want %q", session.Aggregate.Subtext, want)
+	}
+	if len(session.Entries) != 5 {
+		t.Fatalf("session has %d entries; want 5", len(session.Entries))
+	}
+	if session.Aggregate.MemberCount != 5 || session.Aggregate.ExcludedCount != 0 {
+		t.Fatalf("membership = %+v", session.Aggregate)
+	}
+	// Every row repeats the catalog order, so the top row of each card is
+	// always the credential that recovers next.
+	order := []string{}
+	for _, c := range doc.Credentials {
+		if c.Provider == "claude" {
+			order = append(order, c.ID)
+		}
+	}
+	want := []string{
+		"claude-siphorchannel@example.com.json",
+		"claude-agency@example.com.json",
+		"claude-chasibnoor@example.com.json",
+		"claude-noor@example.com.json",
+		"claude-noorchasib@example.com.json",
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("credential order = %v; want %v", order, want)
+		}
+		if session.Entries[i].CredentialID != want[i] {
+			t.Fatalf("session entry %d = %s; want %s", i, session.Entries[i].CredentialID, want[i])
+		}
+	}
+	if doc.Counters != (Counters{Credentials: 7, ObservedOK: 6, ObserveError: 1}) {
+		t.Fatalf("counters = %+v", doc.Counters)
+	}
+	if doc.Credentials[0].Email != "siphorchannel@example.com" || doc.Credentials[0].Plan != "Max" {
+		t.Fatalf("identity = %+v", doc.Credentials[0])
+	}
+}
+
+// The golden document is the contract between this half and the web app. It is
+// committed, and it is byte-identical to what the summary route serves.
+func TestGoldenSummaryDocument(t *testing.T) {
+	doc := buildFixture(t)
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	path := filepath.Join("..", "..", "testdata", "golden", "summary.json")
+	if *update {
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("golden document rewritten")
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("golden document missing; regenerate with: make golden (%v)", err)
+	}
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("built document differs from testdata/golden/summary.json.\n"+
+			"The web app develops against that file, so this is a contract change.\n"+
+			"Review it, then regenerate with: make golden\n\ngot %d bytes, want %d bytes", len(raw), len(want))
+	}
+}
+
+func TestBuildIsDeterministic(t *testing.T) {
+	first, second := buildFixture(t), buildFixture(t)
+	a, _ := json.Marshal(first)
+	b, _ := json.Marshal(second)
+	if !bytes.Equal(a, b) {
+		t.Fatal("two builds of the same input differ; map iteration is leaking into the output")
+	}
+}
+
+func TestLevelThresholdIsServerSide(t *testing.T) {
+	for _, tc := range []struct {
+		used  float64
+		level string
+	}{{0, LevelOK}, {60, LevelOK}, {61, LevelLow}, {80, LevelLow}, {81, LevelCritical}, {100, LevelCritical}} {
+		remaining, _ := remainingOf(tc.used)
+		if got := levelOf(remaining); got != tc.level {
+			t.Fatalf("used %v -> %s; want %s", tc.used, got, tc.level)
+		}
+	}
+}
+
+func TestHumanDurationMatchesTheDesign(t *testing.T) {
+	for _, tc := range []struct {
+		seconds int64
+		want    string
+	}{{4500, "1h 15m"}, {93600, "1d 2h"}, {158400, "1d 20h"}, {399600, "4d 15h"},
+		{442800, "5d 3h"}, {3600, "1h"}, {2700, "45m"}, {172800, "2d"}, {30, "<1m"}, {-5, "<1m"}} {
+		if got := humanDuration(time.Duration(tc.seconds) * time.Second); got != tc.want {
+			t.Fatalf("%ds -> %q; want %q", tc.seconds, got, tc.want)
+		}
+	}
+}
+
+func TestAdversarialWindowValues(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	entry := func(windows ...qc.EntryWindow) qc.Entry {
+		return qc.Entry{
+			Provider: "claude", AuthIndex: "claude-a@example.com.json",
+			ObservedAt: observed, NextAttempt: now.Add(10 * time.Minute), Windows: windows,
+		}
+	}
+	base := func(used float64, reset time.Time) qc.Snapshot {
+		return qc.Snapshot{
+			Schema: 1, ProviderCooldown: map[string]time.Time{},
+			Entries: map[string]qc.Entry{
+				"claude:claude-a@example.com.json": entry(qc.EntryWindow{
+					Key: qc.WindowWeekly, UsedPercent: used, ResetAt: reset, ObservedAt: observed,
+				}),
+			},
+		}
+	}
+	roster := []Identity{{AuthIndex: "claude-a@example.com.json", Provider: "claude"}}
+	build := func(s qc.Snapshot) Row {
+		doc := Build(Input{Snapshot: s, Identities: roster, StaleAfter: time.Hour}, now)
+		return rowOf(t, doc, "claude", qc.WindowWeekly)
+	}
+
+	// An out-of-range percentage is clamped and flagged, never silently used.
+	for _, tc := range []struct {
+		name      string
+		used      float64
+		remaining float64
+		issue     string
+	}{
+		{"negative", -1, 1, issuePercentOutOfRange},
+		{"above 100", 101, 0, issuePercentOutOfRange},
+		// No information at all reports no remaining capacity: overstating
+		// headroom is the damaging direction.
+		{"NaN", math.NaN(), 0, issuePercentInvalid},
+		{"infinite", math.Inf(1), 0, issuePercentInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := build(base(tc.used, now.Add(time.Hour)))
+			got := row.Entries[0]
+			if got.RemainingFraction != tc.remaining {
+				t.Fatalf("remaining = %v; want %v", got.RemainingFraction, tc.remaining)
+			}
+			if len(got.DataIssues) == 0 || got.DataIssues[0] != tc.issue {
+				t.Fatalf("issues = %v; want %s", got.DataIssues, tc.issue)
+			}
+		})
+	}
+
+	t.Run("reset in the past", func(t *testing.T) {
+		row := build(base(50, now.Add(-time.Minute)))
+		got := row.Entries[0]
+		if got.ResetDisplayHint != HintNone {
+			t.Fatalf("hint = %q; a past reset must not start a countdown", got.ResetDisplayHint)
+		}
+		if got.ResetAtEpoch == nil || *got.ResetInSeconds != 0 {
+			t.Fatalf("entry = %+v; the instant stays visible so the client can say resetting", got)
+		}
+		if row.Aggregate.SoonestResetAtEpoch != nil {
+			t.Fatal("a past reset was offered as the next reset")
+		}
+	})
+
+	t.Run("failed poll keeps last known figures", func(t *testing.T) {
+		snapshot := base(50, now.Add(time.Hour))
+		e := snapshot.Entries["claude:claude-a@example.com.json"]
+		e.Failures, e.LastError = 2, "quota fetch failed"
+		snapshot.Entries["claude:claude-a@example.com.json"] = e
+		doc := Build(Input{Snapshot: snapshot, Identities: roster, StaleAfter: time.Hour}, now)
+		if doc.Counters.ObserveError != 1 || doc.Credentials[0].Status != StatusError {
+			t.Fatalf("counters=%+v status=%s", doc.Counters, doc.Credentials[0].Status)
+		}
+		row := rowOf(t, doc, "claude", qc.WindowWeekly)
+		if row.Entries[0].RemainingPercent != 50 || row.Entries[0].State != StatusError {
+			t.Fatalf("entry = %+v; last known data must stay visible, marked", row.Entries[0])
+		}
+	})
+
+	t.Run("refresh pending is not an error", func(t *testing.T) {
+		snapshot := base(50, now.Add(time.Hour))
+		e := snapshot.Entries["claude:claude-a@example.com.json"]
+		e.LastError = "refresh pending"
+		snapshot.Entries["claude:claude-a@example.com.json"] = e
+		doc := Build(Input{Snapshot: snapshot, Identities: roster, StaleAfter: time.Hour}, now)
+		if doc.Credentials[0].Status != StatusOK || doc.Counters.ObserveError != 0 {
+			t.Fatalf("a credential mid-refresh was reported as failed: %+v", doc.Credentials[0])
+		}
+	})
+}
+
+// Against a snapshot written before canonical windows existed, the weekly row
+// is synthesized from the top-level fields, so the plugin is useful immediately
+// and the remaining rows appear on their own once quota-cache supplies them.
+func TestSnapshotWithoutWindowsStillProducesWeekly(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	snapshot := qc.Snapshot{
+		Schema: 1, ProviderCooldown: map[string]time.Time{},
+		Entries: map[string]qc.Entry{
+			"claude:claude-a@example.com.json": {
+				Provider: "claude", AuthIndex: "claude-a@example.com.json",
+				Percent: 76, ResetAt: now.Add(48 * time.Hour), ObservedAt: observed,
+			},
+		},
+	}
+	doc := Build(Input{
+		Snapshot:   snapshot,
+		Identities: []Identity{{AuthIndex: "claude-a@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour,
+	}, now)
+	row := rowOf(t, doc, "claude", qc.WindowWeekly)
+	if row.Aggregate.RemainingPercent != 24 || len(row.Entries) != 1 {
+		t.Fatalf("row = %+v", row.Aggregate)
+	}
+	if len(doc.Providers[0].Rows) != 1 {
+		t.Fatalf("only weekly can be synthesized, got %d rows", len(doc.Providers[0].Rows))
+	}
+}
+
+// A credential that did not report a window is excluded from the mean rather
+// than counted as full: otherwise a silent credential quietly inflates the one
+// number the whole card is read from.
+func TestNonReportingCredentialIsExcludedNotCountedAsFull(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	snapshot := qc.Snapshot{
+		Schema: 1, ProviderCooldown: map[string]time.Time{},
+		Entries: map[string]qc.Entry{
+			"claude:claude-a@example.com.json": {
+				Provider: "claude", AuthIndex: "claude-a@example.com.json", ObservedAt: observed,
+				Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 80, ResetAt: now.Add(time.Hour), ObservedAt: observed}},
+			},
+		},
+	}
+	roster := []Identity{
+		{AuthIndex: "claude-a@example.com.json", Provider: "claude"},
+		// In the roster, absent from the snapshot.
+		{AuthIndex: "claude-b@example.com.json", Provider: "claude"},
+	}
+	doc := Build(Input{Snapshot: snapshot, Identities: roster, StaleAfter: time.Hour}, now)
+	row := rowOf(t, doc, "claude", qc.WindowWeekly)
+	if row.Aggregate.MemberCount != 1 || row.Aggregate.ExcludedCount != 1 {
+		t.Fatalf("membership = %+v", row.Aggregate)
+	}
+	// One member at 20% left. Counting the silent credential as full would
+	// report 60%.
+	if row.Aggregate.RemainingPercent != 20 {
+		t.Fatalf("aggregate = %d%%; want 20", row.Aggregate.RemainingPercent)
+	}
+	if doc.Credentials[1].Status != StatusUnsupported {
+		t.Fatalf("status = %s", doc.Credentials[1].Status)
+	}
+}
+
+func TestDisabledCredentialIsCatalogedButNotCounted(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	entry := qc.Entry{
+		Provider: "claude", AuthIndex: "claude-b@example.com.json", ObservedAt: observed,
+		Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 0, ResetAt: now.Add(time.Hour), ObservedAt: observed}},
+	}
+	first := entry
+	first.AuthIndex = "claude-a@example.com.json"
+	first.Windows = []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 50, ResetAt: now.Add(time.Hour), ObservedAt: observed}}
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-a@example.com.json": first,
+		"claude:claude-b@example.com.json": entry,
+	}}
+	doc := Build(Input{Snapshot: snapshot, Identities: []Identity{
+		{AuthIndex: "claude-a@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-b@example.com.json", Provider: "claude", Disabled: true},
+	}, StaleAfter: time.Hour}, now)
+
+	row := rowOf(t, doc, "claude", qc.WindowWeekly)
+	if row.Aggregate.MemberCount != 1 || row.Aggregate.RemainingPercent != 50 {
+		t.Fatalf("a disabled credential contributed to the mean: %+v", row.Aggregate)
+	}
+	if len(doc.Credentials) != 2 {
+		t.Fatal("a disabled credential must still be listed")
+	}
+	for _, c := range doc.Credentials {
+		if c.ID == "claude-b@example.com.json" && c.Status != StatusDisabled {
+			t.Fatalf("status = %s", c.Status)
+		}
+	}
+}
+
+// A window with no canonical meaning is still rendered, generically, and sorts
+// after everything that has one.
+func TestRawWindowIsKeptAndSortsLast(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-a@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-a@example.com.json", ObservedAt: observed,
+			Windows: []qc.EntryWindow{
+				{Key: "raw:claude:seven_day_cowork", Title: "seven_day_cowork", UsedPercent: 10, ObservedAt: observed},
+				{Key: qc.WindowWeekly, UsedPercent: 40, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "claude-a@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour}, now)
+	rows := doc.Providers[0].Rows
+	if len(rows) != 2 || rows[0].RowID != qc.WindowWeekly || rows[1].RowID != "raw:claude:seven_day_cowork" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[1].Matched || rows[1].Title != "seven_day_cowork" {
+		t.Fatalf("raw row = %+v; it must be marked unmatched and keep a label", rows[1])
+	}
+	if !rows[0].Matched {
+		t.Fatal("a canonical row must be marked matched")
+	}
+}
+
+func TestStaleReasons(t *testing.T) {
+	now := at(t, 0)
+	roster := []Identity{{AuthIndex: "claude-a@example.com.json", Provider: "claude"}}
+	observed := now.Add(-2 * time.Hour)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-a@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-a@example.com.json", ObservedAt: observed,
+			Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 10, ObservedAt: observed}},
+		},
+	}}
+
+	// WrittenAt is not freshness: a snapshot rewritten during a cooldown is
+	// fresh on disk and stale in substance, so staleness follows ObservedAt.
+	snapshot.WrittenAt = now
+	doc := Build(Input{Snapshot: snapshot, Identities: roster, StaleAfter: 45 * time.Minute}, now)
+	if !doc.Stale || *doc.StaleReason != ReasonCacheStale {
+		t.Fatalf("stale=%v reason=%v", doc.Stale, doc.StaleReason)
+	}
+	row := rowOf(t, doc, "claude", qc.WindowWeekly)
+	if row.Entries[0].State != StateStale {
+		t.Fatalf("entry state = %s", row.Entries[0].State)
+	}
+
+	// A schema bump in quota-cache blinds this plugin too, and must surface as
+	// itself rather than as a generic read failure.
+	doc = Build(Input{SourceReason: ReasonSchemaUnsupported, Identities: roster}, now)
+	if !doc.Stale || *doc.StaleReason != ReasonSchemaUnsupported {
+		t.Fatalf("reason = %v", doc.StaleReason)
+	}
+
+	doc = Build(Input{Snapshot: qc.Snapshot{Schema: 1, Entries: map[string]qc.Entry{}}, Identities: roster}, now)
+	if !doc.Stale || *doc.StaleReason != ReasonNeverObserved {
+		t.Fatalf("reason = %v", doc.StaleReason)
+	}
+
+	doc = buildFixture(t)
+	if doc.Stale || doc.StaleReason != nil {
+		t.Fatalf("fresh fixture reported stale: %v", doc.StaleReason)
+	}
+}
+
+// The runtime passes time.Now(), which carries nanoseconds. Every value the
+// document reports is in whole seconds, so a sub-second now used to make
+// generatedAtEpoch + resetInSeconds disagree with resetAtEpoch, and round every
+// countdown down — printing "1h 14m" for data that reads "1h 15m" on the second.
+func TestSubSecondClockDoesNotSkewCountdowns(t *testing.T) {
+	for _, offset := range []time.Duration{0, 1, 500 * time.Millisecond, 999999999} {
+		now := at(t, 0).Add(offset)
+		doc := Build(Input{
+			Snapshot:   loadSnapshot(t, "seven-credentials.json"),
+			Identities: fixtureRoster(),
+			StaleAfter: 45 * time.Minute,
+		}, now)
+		session := rowOf(t, doc, "claude", qc.WindowSession)
+		agg := session.Aggregate
+		if got := doc.GeneratedAtEpoch + *agg.SoonestResetInSeconds; got != *agg.SoonestResetAtEpoch {
+			t.Fatalf("offset %v: generatedAt+seconds = %d, resetAtEpoch = %d", offset, got, *agg.SoonestResetAtEpoch)
+		}
+		if want := "+6% when siphorchannel resets in 1h 15m"; agg.Subtext != want {
+			t.Fatalf("offset %v: subtext = %q; want %q", offset, agg.Subtext, want)
+		}
+		for _, entry := range session.Entries {
+			if entry.ResetAtEpoch == nil {
+				continue
+			}
+			if got := doc.GeneratedAtEpoch + *entry.ResetInSeconds; got != *entry.ResetAtEpoch {
+				t.Fatalf("offset %v: entry %s epoch mismatch", offset, entry.CredentialID)
+			}
+		}
+	}
+}
+
+// The acceptance snapshot in the handoff carries no window titles at all, so a
+// heading fell back to the raw row id. Card headings come from a server-side
+// table when the writer supplies nothing.
+func TestRowTitlesFallBackToCanonicalNames(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-2 * time.Minute)
+	untitled := func(key, model string, used float64) qc.EntryWindow {
+		return qc.EntryWindow{Key: key, Model: model, UsedPercent: used, ResetAt: now.Add(time.Hour), ObservedAt: observed}
+	}
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-a@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-a@example.com.json", ObservedAt: observed,
+			Windows: []qc.EntryWindow{
+				untitled(qc.WindowSession, "", 31),
+				untitled(qc.WindowWeekly, "", 76),
+				untitled(qc.WindowWeeklyFable, "", 100),
+				untitled(qc.WindowModelWeekly, "sonnet", 10),
+				untitled("raw:claude:seven_day_cowork", "", 5),
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "claude-a@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour}, now)
+	want := []string{"Session", "Weekly", "Weekly (Fable)", "Weekly (sonnet)", "seven_day_cowork"}
+	for i, row := range doc.Providers[0].Rows {
+		if row.Title != want[i] {
+			t.Fatalf("row %d title = %q; want %q", i, row.Title, want[i])
+		}
+	}
+}
+
+// A credential quota-cache knows about but has not polled yet is not "ok": it
+// has no data, contributes to no row, and must not inflate observedOK.
+func TestNeverObservedCredentialIsPendingNotOK(t *testing.T) {
+	now := at(t, 0)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-new@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-new@example.com.json",
+			NextAttempt: now.Add(10 * time.Minute),
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "claude-new@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour}, now)
+	if doc.Credentials[0].Status != StatusPending {
+		t.Fatalf("status = %q; want %q", doc.Credentials[0].Status, StatusPending)
+	}
+	if doc.Counters.ObservedOK != 0 || doc.Counters.ObserveError != 0 {
+		t.Fatalf("counters = %+v; a credential awaiting its first poll is neither", doc.Counters)
+	}
+}
+
+// One credential contributes at most once to a row. Two windows collapsing to
+// the same row id used to weight it twice and drive excludedCount negative.
+func TestOneCredentialContributesOncePerRow(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-2 * time.Minute)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"codex:codex-a@example.com.json": {
+			Provider: "codex", AuthIndex: "codex-a@example.com.json", ObservedAt: observed,
+			Windows: []qc.EntryWindow{
+				{Key: qc.WindowWeekly, UsedPercent: 10, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+				{Key: qc.WindowWeekly, UsedPercent: 90, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "codex-a@example.com.json", Provider: "codex"}},
+		StaleAfter: time.Hour}, now)
+	row := rowOf(t, doc, "codex", qc.WindowWeekly)
+	if row.Aggregate.MemberCount != 1 || len(row.Entries) != 1 {
+		t.Fatalf("credential counted %d times: %+v", row.Aggregate.MemberCount, row.Aggregate)
+	}
+	if row.Aggregate.ExcludedCount < 0 {
+		t.Fatalf("excludedCount = %d; it must never be negative", row.Aggregate.ExcludedCount)
+	}
+	if row.Aggregate.RemainingPercent != 90 {
+		t.Fatalf("aggregate = %d%%; the first window wins", row.Aggregate.RemainingPercent)
+	}
+}
+
+// Trend compares the row now against the row an hour ago. Both means must cover
+// the SAME members: taking the current mean over everyone and the historical
+// mean over whoever happens to have samples compares two populations and
+// reports movement where nothing moved.
+func TestTrendComparesLikeForLike(t *testing.T) {
+	now := at(t, 0)
+	roster := fixtureRoster()
+	snapshot := loadSnapshot(t, "seven-credentials.json")
+	const siphor = "claude-siphorchannel@example.com.json"
+
+	// History for exactly one of the five session members, unchanged at 0.69.
+	partial := []Sample{
+		{AuthIndex: siphor, WindowKey: qc.WindowSession, At: now.Add(-90 * time.Minute), Remaining: 0.69},
+		{AuthIndex: siphor, WindowKey: qc.WindowSession, At: now.Add(-40 * time.Minute), Remaining: 0.69},
+	}
+	doc := Build(Input{Snapshot: snapshot, Identities: roster, Samples: partial, StaleAfter: time.Hour}, now)
+	if got := rowOf(t, doc, "claude", qc.WindowSession).Aggregate.Trend; got != TrendFlat {
+		t.Fatalf("trend = %q; nothing moved, and the one member with history is unchanged", got)
+	}
+
+	// Real movement in the member that has history is still detected.
+	moved := []Sample{
+		{AuthIndex: siphor, WindowKey: qc.WindowSession, At: now.Add(-90 * time.Minute), Remaining: 1.0},
+		{AuthIndex: siphor, WindowKey: qc.WindowSession, At: now.Add(-40 * time.Minute), Remaining: 1.0},
+	}
+	doc = Build(Input{Snapshot: snapshot, Identities: roster, Samples: moved, StaleAfter: time.Hour}, now)
+	if got := rowOf(t, doc, "claude", qc.WindowSession).Aggregate.Trend; got != TrendDown {
+		t.Fatalf("trend = %q; the member with history fell from 1.0 to 0.69", got)
+	}
+
+	// Too little history stays unknown rather than guessing.
+	short := []Sample{{AuthIndex: siphor, WindowKey: qc.WindowSession, At: now.Add(-5 * time.Minute), Remaining: 0.2}}
+	doc = Build(Input{Snapshot: snapshot, Identities: roster, Samples: short, StaleAfter: time.Hour}, now)
+	if got := rowOf(t, doc, "claude", qc.WindowSession).Aggregate.Trend; got != TrendUnknown {
+		t.Fatalf("trend = %q; one sample is not a trend", got)
+	}
+}
+
+// A snapshot entry with no matching credential in the host roster is ignored:
+// the roster is authoritative for what exists. Asserted so the behaviour is
+// deliberate rather than incidental.
+func TestSnapshotEntryAbsentFromRosterIsIgnored(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-2 * time.Minute)
+	window := []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 50, ResetAt: now.Add(time.Hour), ObservedAt: observed}}
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-known@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-known@example.com.json", ObservedAt: observed, Windows: window,
+		},
+		"claude:claude-ghost@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-ghost@example.com.json", ObservedAt: observed, Windows: window,
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "claude-known@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour}, now)
+	if len(doc.Credentials) != 1 || doc.Credentials[0].ID != "claude-known@example.com.json" {
+		t.Fatalf("credentials = %+v; the roster decides what exists", doc.Credentials)
+	}
+	if doc.Counters.Credentials != 1 {
+		t.Fatalf("counters = %+v", doc.Counters)
+	}
+	row := rowOf(t, doc, "claude", qc.WindowWeekly)
+	if row.Aggregate.MemberCount != 1 {
+		t.Fatalf("an unrostered entry reached a row: %+v", row.Aggregate)
+	}
+}
+
+// degradedRoster adds two credentials the snapshot does not know about, and
+// flags the disabled and unavailable ones.
+func degradedRoster() []Identity {
+	return []Identity{
+		{AuthIndex: "claude-fresh@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-stale@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-failing@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-pending@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-disabled@example.com.json", Provider: "claude", Disabled: true},
+		{AuthIndex: "claude-unavailable@example.com.json", Provider: "claude", Unavailable: true},
+		// In the roster, absent from the snapshot: quota-cache does not poll it.
+		{AuthIndex: "gemini-unsupported@example.com.json", Provider: "gemini"},
+		{AuthIndex: "codex-model@example.com.json", Provider: "codex"},
+		{AuthIndex: "xai-raw@example.com.json", Provider: "xai"},
+	}
+}
+
+// degradedSamples is an hour of history for the Claude session row, enough for
+// a real trend arrow rather than unknown.
+func degradedSamples(t *testing.T) []Sample {
+	t.Helper()
+	samples := []Sample{}
+	for _, id := range []string{
+		"claude-fresh@example.com.json",
+		"claude-stale@example.com.json",
+		"claude-failing@example.com.json",
+	} {
+		samples = append(samples,
+			Sample{AuthIndex: id, WindowKey: qc.WindowSession, At: at(t, -5400), Remaining: 0.95},
+			Sample{AuthIndex: id, WindowKey: qc.WindowSession, At: at(t, -3600), Remaining: 0.90},
+			Sample{AuthIndex: id, WindowKey: qc.WindowSession, At: at(t, -900), Remaining: 0.70},
+		)
+	}
+	return samples
+}
+
+func buildDegraded(t *testing.T) Document {
+	t.Helper()
+	return Build(Input{
+		Snapshot:   loadSnapshot(t, "degraded-states.json"),
+		Identities: degradedRoster(),
+		Samples:    degradedSamples(t),
+		StaleAfter: 45 * time.Minute,
+	}, at(t, 0))
+}
+
+// The second committed contract. The happy-path golden shows none of the
+// degraded states a real deployment produces, so the web app would have to
+// invent them; this one exercises every branch it has to render.
+func TestGoldenDegradedDocument(t *testing.T) {
+	doc := buildDegraded(t)
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	path := filepath.Join("..", "..", "testdata", "golden", "summary-degraded.json")
+	if *update {
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("degraded golden document rewritten")
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("degraded golden missing; regenerate with: make golden (%v)", err)
+	}
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("built document differs from testdata/golden/summary-degraded.json.\n" +
+			"The web app develops against that file too, so this is a contract change.\n" +
+			"Review it, then regenerate with: make golden")
+	}
+}
+
+// Every state the web app has to render must actually appear in the degraded
+// contract, or it is not doing its job.
+func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
+	doc := buildDegraded(t)
+
+	statuses := map[string]bool{}
+	for _, c := range doc.Credentials {
+		statuses[c.Status] = true
+	}
+	for _, want := range []string{StatusOK, StatusError, StatusPending, StatusDisabled, StatusUnavailable, StatusUnsupported} {
+		if !statuses[want] {
+			t.Errorf("no credential with status %q", want)
+		}
+	}
+
+	levels, trends, states, hints := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	issues := map[string]bool{}
+	var sawNullReset, sawEmptySubtext, sawUnmatched, sawModel, sawExcluded bool
+	for _, provider := range doc.Providers {
+		for _, row := range provider.Rows {
+			levels[row.Aggregate.Level] = true
+			trends[row.Aggregate.Trend] = true
+			if !row.Matched {
+				sawUnmatched = true
+			}
+			if row.Aggregate.SoonestResetAtEpoch == nil {
+				sawNullReset = true
+			}
+			if row.Aggregate.Subtext == "" {
+				sawEmptySubtext = true
+			}
+			if row.Aggregate.ExcludedCount > 0 {
+				sawExcluded = true
+			}
+			for _, entry := range row.Entries {
+				levels[entry.Level] = true
+				states[entry.State] = true
+				hints[entry.ResetDisplayHint] = true
+				if entry.SourceModel != nil {
+					sawModel = true
+				}
+				for _, issue := range entry.DataIssues {
+					issues[issue] = true
+				}
+			}
+		}
+	}
+	for name, set := range map[string][]string{
+		"level": {LevelOK, LevelLow, LevelCritical},
+		"trend": {TrendDown, TrendUnknown},
+		"state": {StatusOK, StatusError, StateStale},
+		"hint":  {HintCountdown, HintNone},
+	} {
+		var have map[string]bool
+		switch name {
+		case "level":
+			have = levels
+		case "trend":
+			have = trends
+		case "state":
+			have = states
+		case "hint":
+			have = hints
+		}
+		for _, want := range set {
+			if !have[want] {
+				t.Errorf("no %s = %q anywhere in the degraded contract", name, want)
+			}
+		}
+	}
+	for _, want := range []string{issueResetInPast, issueObserveError, issueStale} {
+		if !issues[want] {
+			t.Errorf("no dataIssue %q", want)
+		}
+	}
+	if !sawNullReset || !sawEmptySubtext || !sawUnmatched || !sawModel || !sawExcluded {
+		t.Errorf("missing: nullReset=%v emptySubtext=%v unmatchedRow=%v sourceModel=%v excluded=%v",
+			sawNullReset, sawEmptySubtext, sawUnmatched, sawModel, sawExcluded)
+	}
+}

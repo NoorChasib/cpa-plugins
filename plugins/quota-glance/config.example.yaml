@@ -1,0 +1,23 @@
+# Merge these fields into existing plugin configuration; preserve all other options.
+plugins:
+  enabled: true
+  configs:
+    quota-glance:
+      enabled: true
+      # Must match quota-cache's own cache-path. quota-glance never polls a
+      # provider; it reads what quota-cache already collected.
+      cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      data-dir: /CLIProxyAPI/plugins/data/quota-glance
+      # Bearer token for GET /v0/resource/plugins/quota-glance/summary.
+      # Left empty, one is generated and logged exactly once at startup; copy it
+      # here so it survives a restart.
+      web-token: ""
+      # Age at which an observation is shown with a staleness badge.
+      stale-after: 45m
+    quota-cache:
+      # quota-glance requires quota-cache 0.1.5 or newer for the full
+      # session / weekly / weekly-fable layout. Against an older snapshot it
+      # shows a single weekly row and fills in the rest once quota-cache
+      # supplies canonical windows.
+      enabled: true
+      cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json

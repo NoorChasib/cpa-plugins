@@ -1,0 +1,502 @@
+{
+  "schemaVersion": 1,
+  "generatedAtEpoch": 1789012800,
+  "stale": false,
+  "staleReason": null,
+  "counters": {
+    "credentials": 9,
+    "observedOK": 4,
+    "observeError": 1
+  },
+  "credentials": [
+    {
+      "id": "claude-fresh@example.com.json",
+      "email": "fresh@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-stale@example.com.json",
+      "email": "stale@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "ok",
+      "lastObservedEpoch": 1789002000
+    },
+    {
+      "id": "claude-failing@example.com.json",
+      "email": "failing@example.com",
+      "provider": "claude",
+      "plan": "Team",
+      "status": "error",
+      "lastObservedEpoch": 1789012200
+    },
+    {
+      "id": "claude-disabled@example.com.json",
+      "email": "disabled@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "disabled",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-unavailable@example.com.json",
+      "email": "unavailable@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "unavailable",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "codex-model@example.com.json",
+      "email": "model@example.com",
+      "provider": "codex",
+      "plan": "pro",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-pending@example.com.json",
+      "email": "pending@example.com",
+      "provider": "claude",
+      "plan": "",
+      "status": "pending",
+      "lastObservedEpoch": 0
+    },
+    {
+      "id": "gemini-unsupported@example.com.json",
+      "email": "unsupported@example.com",
+      "provider": "gemini",
+      "plan": "",
+      "status": "unsupported",
+      "lastObservedEpoch": 0
+    },
+    {
+      "id": "xai-raw@example.com.json",
+      "email": "raw@example.com",
+      "provider": "xai",
+      "plan": "SuperGrok Heavy",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    }
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "title": "Claude",
+      "order": 10,
+      "credentialCount": 6,
+      "rows": [
+        {
+          "rowId": "session",
+          "title": "Session",
+          "order": 10,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.5166666666666667,
+            "remainingPercent": 52,
+            "memberCount": 3,
+            "excludedCount": 3,
+            "level": "ok",
+            "trend": "down",
+            "soonestResetAtEpoch": 1789014600,
+            "soonestResetInSeconds": 1800,
+            "projectedGainPercent": 13,
+            "subtext": "+13% when stale resets in 30m"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-fresh@example.com.json",
+              "remainingFraction": 0.85,
+              "remainingPercent": 85,
+              "level": "ok",
+              "resetAtEpoch": 1789016400,
+              "resetInSeconds": 3600,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-stale@example.com.json",
+              "remainingFraction": 0.6,
+              "remainingPercent": 60,
+              "level": "ok",
+              "resetAtEpoch": 1789014600,
+              "resetInSeconds": 1800,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789002000,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [
+                "stale"
+              ],
+              "state": "stale"
+            },
+            {
+              "credentialId": "claude-failing@example.com.json",
+              "remainingFraction": 0.1,
+              "remainingPercent": 10,
+              "level": "critical",
+              "resetAtEpoch": 1789012680,
+              "resetInSeconds": 0,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 1789012200,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [
+                "resetInPast",
+                "observeError"
+              ],
+              "state": "error"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly",
+          "title": "Weekly",
+          "order": 20,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.26666666666666666,
+            "remainingPercent": 27,
+            "memberCount": 3,
+            "excludedCount": 3,
+            "level": "low",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789099200,
+            "soonestResetInSeconds": 86400,
+            "projectedGainPercent": 18,
+            "subtext": "+18% when fresh resets in 1d"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-fresh@example.com.json",
+              "remainingFraction": 0.45,
+              "remainingPercent": 45,
+              "level": "ok",
+              "resetAtEpoch": 1789099200,
+              "resetInSeconds": 86400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-stale@example.com.json",
+              "remainingFraction": 0.3,
+              "remainingPercent": 30,
+              "level": "low",
+              "resetAtEpoch": 1789185600,
+              "resetInSeconds": 172800,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789002000,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [
+                "stale"
+              ],
+              "state": "stale"
+            },
+            {
+              "credentialId": "claude-failing@example.com.json",
+              "remainingFraction": 0.05,
+              "remainingPercent": 5,
+              "level": "critical",
+              "resetAtEpoch": 1789272000,
+              "resetInSeconds": 259200,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012200,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [
+                "observeError"
+              ],
+              "state": "error"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly_fable",
+          "title": "Weekly (Fable)",
+          "order": 30,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.15,
+            "remainingPercent": 15,
+            "memberCount": 1,
+            "excludedCount": 5,
+            "level": "critical",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789099140,
+            "soonestResetInSeconds": 86340,
+            "projectedGainPercent": 85,
+            "subtext": "+85% when fresh resets in 23h 59m"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-fresh@example.com.json",
+              "remainingFraction": 0.15,
+              "remainingPercent": 15,
+              "level": "critical",
+              "resetAtEpoch": 1789099140,
+              "resetInSeconds": 86340,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "title": "Codex",
+      "order": 20,
+      "credentialCount": 1,
+      "rows": [
+        {
+          "rowId": "session",
+          "title": "Session",
+          "order": 10,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.8,
+            "remainingPercent": 80,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789018200,
+            "soonestResetInSeconds": 5400,
+            "projectedGainPercent": 20,
+            "subtext": "+20% when model resets in 1h 30m"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-model@example.com.json",
+              "remainingFraction": 0.8,
+              "remainingPercent": 80,
+              "level": "ok",
+              "resetAtEpoch": 1789018200,
+              "resetInSeconds": 5400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly",
+          "title": "Weekly",
+          "order": 20,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.7,
+            "remainingPercent": 70,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789444800,
+            "soonestResetInSeconds": 432000,
+            "projectedGainPercent": 30,
+            "subtext": "+30% when model resets in 5d"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-model@example.com.json",
+              "remainingFraction": 0.7,
+              "remainingPercent": 70,
+              "level": "ok",
+              "resetAtEpoch": 1789444800,
+              "resetInSeconds": 432000,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "model_session:spark",
+          "title": "Session (spark)",
+          "order": 40,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.75,
+            "remainingPercent": 75,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789018200,
+            "soonestResetInSeconds": 5400,
+            "projectedGainPercent": 25,
+            "subtext": "+25% when model resets in 1h 30m"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-model@example.com.json",
+              "remainingFraction": 0.75,
+              "remainingPercent": 75,
+              "level": "ok",
+              "resetAtEpoch": 1789018200,
+              "resetInSeconds": 5400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "model_session",
+              "sourceModel": "spark",
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "model_weekly:spark",
+          "title": "Weekly (spark)",
+          "order": 50,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.4,
+            "remainingPercent": 40,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789444800,
+            "soonestResetInSeconds": 432000,
+            "projectedGainPercent": 60,
+            "subtext": "+60% when model resets in 5d"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-model@example.com.json",
+              "remainingFraction": 0.4,
+              "remainingPercent": 40,
+              "level": "ok",
+              "resetAtEpoch": 1789444800,
+              "resetInSeconds": 432000,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "model_weekly",
+              "sourceModel": "spark",
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai",
+      "title": "xAI",
+      "order": 30,
+      "credentialCount": 1,
+      "rows": [
+        {
+          "rowId": "credits",
+          "title": "Credits",
+          "order": 60,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.32,
+            "remainingPercent": 32,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "low",
+            "trend": "unknown",
+            "soonestResetAtEpoch": null,
+            "soonestResetInSeconds": null,
+            "projectedGainPercent": 0,
+            "subtext": ""
+          },
+          "entries": [
+            {
+              "credentialId": "xai-raw@example.com.json",
+              "remainingFraction": 0.32,
+              "remainingPercent": 32,
+              "level": "low",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "credits",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "raw:xai:product/BUILD",
+          "title": "product/BUILD",
+          "order": 100,
+          "matched": false,
+          "aggregate": {
+            "remainingFraction": 0.78,
+            "remainingPercent": 78,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": null,
+            "soonestResetInSeconds": null,
+            "projectedGainPercent": 0,
+            "subtext": ""
+          },
+          "entries": [
+            {
+              "credentialId": "xai-raw@example.com.json",
+              "remainingFraction": 0.78,
+              "remainingPercent": 78,
+              "level": "ok",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "raw:xai:product/BUILD",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "title": "gemini",
+      "order": 100,
+      "credentialCount": 1,
+      "rows": []
+    }
+  ]
+}

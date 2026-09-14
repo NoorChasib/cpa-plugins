@@ -1,0 +1,487 @@
+{
+  "schemaVersion": 1,
+  "generatedAtEpoch": 1789012800,
+  "stale": false,
+  "staleReason": null,
+  "counters": {
+    "credentials": 7,
+    "observedOK": 6,
+    "observeError": 1
+  },
+  "credentials": [
+    {
+      "id": "claude-siphorchannel@example.com.json",
+      "email": "siphorchannel@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-agency@example.com.json",
+      "email": "agency@example.com",
+      "provider": "claude",
+      "plan": "Team",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-chasibnoor@example.com.json",
+      "email": "chasibnoor@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-noor@example.com.json",
+      "email": "noor@example.com",
+      "provider": "claude",
+      "plan": "Team",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "claude-noorchasib@example.com.json",
+      "email": "noorchasib@example.com",
+      "provider": "claude",
+      "plan": "Max",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "codex-noor@example.com.json",
+      "email": "noor@example.com",
+      "provider": "codex",
+      "plan": "pro",
+      "status": "ok",
+      "lastObservedEpoch": 1789012500
+    },
+    {
+      "id": "xai-noor@example.com.json",
+      "email": "noor@example.com",
+      "provider": "xai",
+      "plan": "SuperGrok Heavy",
+      "status": "error",
+      "lastObservedEpoch": 1789012500
+    }
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "title": "Claude",
+      "order": 10,
+      "credentialCount": 5,
+      "rows": [
+        {
+          "rowId": "session",
+          "title": "Session",
+          "order": 10,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.938,
+            "remainingPercent": 94,
+            "memberCount": 5,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789017300,
+            "soonestResetInSeconds": 4500,
+            "projectedGainPercent": 6,
+            "subtext": "+6% when siphorchannel resets in 1h 15m"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-siphorchannel@example.com.json",
+              "remainingFraction": 0.69,
+              "remainingPercent": 69,
+              "level": "ok",
+              "resetAtEpoch": 1789017300,
+              "resetInSeconds": 4500,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-agency@example.com.json",
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789023600,
+              "resetInSeconds": 10800,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-chasibnoor@example.com.json",
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789027200,
+              "resetInSeconds": 14400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noor@example.com.json",
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789030800,
+              "resetInSeconds": 18000,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noorchasib@example.com.json",
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789034400,
+              "resetInSeconds": 21600,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly",
+          "title": "Weekly",
+          "order": 20,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.5900000000000001,
+            "remainingPercent": 59,
+            "memberCount": 5,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789106400,
+            "soonestResetInSeconds": 93600,
+            "projectedGainPercent": 5,
+            "subtext": "+5% when siphorchannel resets in 1d 2h"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-siphorchannel@example.com.json",
+              "remainingFraction": 0.76,
+              "remainingPercent": 76,
+              "level": "ok",
+              "resetAtEpoch": 1789106400,
+              "resetInSeconds": 93600,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-agency@example.com.json",
+              "remainingFraction": 0.9,
+              "remainingPercent": 90,
+              "level": "ok",
+              "resetAtEpoch": 1789171200,
+              "resetInSeconds": 158400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-chasibnoor@example.com.json",
+              "remainingFraction": 0.24,
+              "remainingPercent": 24,
+              "level": "low",
+              "resetAtEpoch": 1789272000,
+              "resetInSeconds": 259200,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noor@example.com.json",
+              "remainingFraction": 0.6,
+              "remainingPercent": 60,
+              "level": "ok",
+              "resetAtEpoch": 1789412400,
+              "resetInSeconds": 399600,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noorchasib@example.com.json",
+              "remainingFraction": 0.45,
+              "remainingPercent": 45,
+              "level": "ok",
+              "resetAtEpoch": 1789455600,
+              "resetInSeconds": 442800,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly_fable",
+          "title": "Weekly (Fable)",
+          "order": 30,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.42600000000000005,
+            "remainingPercent": 43,
+            "memberCount": 5,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789106340,
+            "soonestResetInSeconds": 93540,
+            "projectedGainPercent": 20,
+            "subtext": "+20% when siphorchannel resets in 1d 1h"
+          },
+          "entries": [
+            {
+              "credentialId": "claude-siphorchannel@example.com.json",
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "critical",
+              "resetAtEpoch": 1789106340,
+              "resetInSeconds": 93540,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-agency@example.com.json",
+              "remainingFraction": 0.88,
+              "remainingPercent": 88,
+              "level": "ok",
+              "resetAtEpoch": 1789171140,
+              "resetInSeconds": 158340,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-chasibnoor@example.com.json",
+              "remainingFraction": 0.45,
+              "remainingPercent": 45,
+              "level": "ok",
+              "resetAtEpoch": 1789271940,
+              "resetInSeconds": 259140,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noor@example.com.json",
+              "remainingFraction": 0.7,
+              "remainingPercent": 70,
+              "level": "ok",
+              "resetAtEpoch": 1789412340,
+              "resetInSeconds": 399540,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-noorchasib@example.com.json",
+              "remainingFraction": 0.1,
+              "remainingPercent": 10,
+              "level": "critical",
+              "resetAtEpoch": 1789455540,
+              "resetInSeconds": 442740,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly_fable",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "title": "Codex",
+      "order": 20,
+      "credentialCount": 1,
+      "rows": [
+        {
+          "rowId": "session",
+          "title": "Session",
+          "order": 10,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.88,
+            "remainingPercent": 88,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789020000,
+            "soonestResetInSeconds": 7200,
+            "projectedGainPercent": 12,
+            "subtext": "+12% when noor resets in 2h"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-noor@example.com.json",
+              "remainingFraction": 0.88,
+              "remainingPercent": 88,
+              "level": "ok",
+              "resetAtEpoch": 1789020000,
+              "resetInSeconds": 7200,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        },
+        {
+          "rowId": "weekly",
+          "title": "Weekly",
+          "order": 20,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.66,
+            "remainingPercent": 66,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "ok",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789531200,
+            "soonestResetInSeconds": 518400,
+            "projectedGainPercent": 34,
+            "subtext": "+34% when noor resets in 6d"
+          },
+          "entries": [
+            {
+              "credentialId": "codex-noor@example.com.json",
+              "remainingFraction": 0.66,
+              "remainingPercent": 66,
+              "level": "ok",
+              "resetAtEpoch": 1789531200,
+              "resetInSeconds": 518400,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai",
+      "title": "xAI",
+      "order": 30,
+      "credentialCount": 1,
+      "rows": [
+        {
+          "rowId": "credits",
+          "title": "Credits",
+          "order": 60,
+          "matched": true,
+          "aggregate": {
+            "remainingFraction": 0.32,
+            "remainingPercent": 32,
+            "memberCount": 1,
+            "excludedCount": 0,
+            "level": "low",
+            "trend": "unknown",
+            "soonestResetAtEpoch": 1789617600,
+            "soonestResetInSeconds": 604800,
+            "projectedGainPercent": 68,
+            "subtext": "+68% when noor resets in 7d"
+          },
+          "entries": [
+            {
+              "credentialId": "xai-noor@example.com.json",
+              "remainingFraction": 0.32,
+              "remainingPercent": 32,
+              "level": "low",
+              "resetAtEpoch": 1789617600,
+              "resetInSeconds": 604800,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "credits",
+              "sourceModel": null,
+              "dataIssues": [
+                "observeError"
+              ],
+              "state": "error"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
