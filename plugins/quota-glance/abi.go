@@ -144,6 +144,25 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, api *C.cliproxy_plugin_api)
 	return 0
 }
 
+// handleGuarded runs the plugin call behind a panic barrier.
+//
+// This library is dlopen'd into CPA and carries its own Go runtime, so a panic
+// that escapes this cgo export aborts the entire proxy process — the host's own
+// recover() cannot see it. Every request therefore returns an error envelope
+// rather than unwinding past this point.
+func handleGuarded(current *pluginimpl.Plugin, method string, raw []byte) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			// The panic value can carry wire input or a filesystem path; it is
+			// never echoed.
+			result, err = nil, errPluginPanic
+		}
+	}()
+	return current.Handle(method, raw)
+}
+
+var errPluginPanic = errors.New("plugin request failed")
+
 //export cliproxyPluginCall
 func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
 	if response != nil {
@@ -165,10 +184,13 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		writeResponse(response, errorEnvelope("not_initialized", "plugin is not initialized"))
 		return 1
 	}
-	result, err := current.Handle(C.GoString(method), requestBytes)
+	result, err := handleGuarded(current, C.GoString(method), requestBytes)
 	if err != nil {
 		code := "plugin_error"
-		if strings.HasPrefix(err.Error(), "unknown method:") {
+		switch {
+		case errors.Is(err, errPluginPanic):
+			code = "plugin_panic"
+		case strings.HasPrefix(err.Error(), "unknown method:"):
 			code = "unknown_method"
 		}
 		writeResponse(response, errorEnvelope(code, sanitizeError(err)))

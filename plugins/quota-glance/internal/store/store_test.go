@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,5 +99,42 @@ func TestUnreadableHistoryStartsEmptyRatherThanFailing(t *testing.T) {
 func TestOpenRequiresADirectory(t *testing.T) {
 	if _, err := Open(""); err == nil {
 		t.Fatal("an empty data directory was accepted")
+	}
+}
+
+// The writer must never persist more than Open will read back: a file that
+// always reloads as zero samples is worse than a shorter history.
+func TestPersistedHistoryNeverExceedsTheReadCap(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Unix(1789012800, 0).UTC()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A long upstream window key, which a raw: passthrough can produce.
+	key := strings.Repeat("k", 1000)
+	batch := make([]aggregate.Sample, 0, MaxSamples)
+	for i := 0; i < MaxSamples; i++ {
+		batch = append(batch, aggregate.Sample{
+			AuthIndex: "claude-a@example.com.json", WindowKey: key,
+			At: now.Add(-time.Duration(i) * time.Millisecond), Remaining: 0.5,
+		})
+	}
+	if err := s.Append(batch, now); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, fileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > maxBytes {
+		t.Fatalf("persisted %d bytes against a %d-byte read cap", info.Size(), maxBytes)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reopened.Samples()) == 0 {
+		t.Fatal("history reloaded as empty; the write exceeded what Open accepts")
 	}
 }

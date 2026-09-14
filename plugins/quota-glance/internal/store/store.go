@@ -99,6 +99,15 @@ func (s *Store) persistLocked() error {
 	if err != nil {
 		return errors.New("history cannot be encoded")
 	}
+	// Never write more than Open will read back. A long upstream window key can
+	// make the encoded form exceed the read cap, and a file that always reloads
+	// as zero samples is worse than a shorter history.
+	for len(raw) > maxBytes && len(s.samples) > 0 {
+		s.samples = s.samples[len(s.samples)/2:]
+		if raw, err = json.Marshal(document{Schema: 1, Samples: s.samples}); err != nil {
+			return errors.New("history cannot be encoded")
+		}
+	}
 	file, err := os.CreateTemp(filepath.Dir(s.path), ".history-*")
 	if err != nil {
 		return errors.New("history cannot be written")

@@ -228,6 +228,11 @@ type record struct {
 	hasWeekly bool
 	status    string
 	stale     bool
+	// observed is true when anything has ever been successfully read for this
+	// credential, whether or not it produced a weekly window.
+	observed bool
+	// freshest is the newest observation across the entry and its windows.
+	freshest time.Time
 }
 
 // Build renders the document. now is supplied by the caller; nothing in this
@@ -253,16 +258,20 @@ func Build(in Input, now time.Time) Document {
 		r.entry, r.hasEntry = in.Snapshot.Entries[qc.Key(identity.Provider, identity.AuthIndex)]
 		if r.hasEntry {
 			r.windows = windowsOf(r.entry)
+			r.freshest = r.entry.ObservedAt
 			for _, w := range r.windows {
-				if w.Key == qc.WindowWeekly {
+				if w.Key == qc.WindowWeekly && !r.hasWeekly {
 					r.weekly, r.hasWeekly = w.ResetAt, !w.ResetAt.IsZero()
-					break
+				}
+				if w.ObservedAt.After(r.freshest) {
+					r.freshest = w.ObservedAt
 				}
 			}
-			if !r.entry.ObservedAt.IsZero() {
-				r.stale = in.StaleAfter > 0 && now.Sub(r.entry.ObservedAt) > in.StaleAfter
-				if r.entry.ObservedAt.After(newestObservation) {
-					newestObservation = r.entry.ObservedAt
+			r.observed = !r.freshest.IsZero()
+			if r.observed {
+				r.stale = in.StaleAfter > 0 && now.Sub(r.freshest) > in.StaleAfter
+				if r.freshest.After(newestObservation) {
+					newestObservation = r.freshest
 				}
 			}
 		}
@@ -273,10 +282,11 @@ func Build(in Input, now time.Time) Document {
 			r.status = StatusUnavailable
 		case !r.hasEntry:
 			r.status = StatusUnsupported
-		// An entry exists but no poll has succeeded yet — a credential CPA has
-		// only just learned about. Reporting it ok would show a green row with
-		// no data and inflate observedOK.
-		case r.entry.ObservedAt.IsZero():
+		// An entry exists but nothing has ever been observed for it — a
+		// credential CPA has only just learned about. Windows are checked too:
+		// a successful poll that produced no weekly window leaves the legacy
+		// ObservedAt empty by design, and that credential is polled, not pending.
+		case !r.observed:
 			r.status = StatusPending
 		// Failures, not LastError, marks a failed poll: the writer sets
 		// LastError to "refresh pending" while an attempt is in flight, and a
@@ -315,9 +325,9 @@ func Build(in Input, now time.Time) Document {
 			ID:                r.identity.AuthIndex,
 			Email:             emailOf(r.identity),
 			Provider:          r.identity.Provider,
-			Plan:              planLabelOf(r.entry.Plan, in.PlanLabels),
+			Plan:              planLabelOf(r.identity.Provider, r.entry.Plan, in.PlanLabels),
 			Status:            r.status,
-			LastObservedEpoch: epochOf(r.entry.ObservedAt),
+			LastObservedEpoch: epochOf(r.freshest),
 		})
 	}
 
@@ -397,7 +407,7 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 	for _, r := range records {
 		// A disabled or unavailable credential is not a member of any row. It
 		// stays in the catalog so the count still reflects reality.
-		if r.identity.Disabled || r.identity.Unavailable {
+		if r.identity.Disabled || r.identity.Unavailable || !r.observed {
 			continue
 		}
 		claimed := map[string]bool{}

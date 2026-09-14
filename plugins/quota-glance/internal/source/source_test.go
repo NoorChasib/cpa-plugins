@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
@@ -130,5 +132,30 @@ func TestRosterFailureIsReportedAsASourceFailure(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent.json")
 	if got := Read(context.Background(), fakeHost{err: errors.New("x")}, missing); got.Reason != aggregate.ReasonCacheMissing {
 		t.Fatalf("reason = %q", got.Reason)
+	}
+}
+
+// A path that cannot be opened without blocking must never be opened. This runs
+// on the watcher goroutine, which the shutdown path waits for while holding the
+// plugin's lifecycle lock, so a blocking open wedges the plugin permanently and
+// stops CPA unloading it.
+func TestUnopenablePathsAreRejectedWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "snapshot.json")
+	if out, err := exec.Command("mkfifo", fifo).CombinedOutput(); err != nil {
+		t.Skipf("mkfifo unavailable: %v %s", err, out)
+	}
+	done := make(chan Result, 1)
+	go func() { done <- Read(context.Background(), fakeHost{}, fifo) }()
+	select {
+	case got := <-done:
+		if got.Reason != aggregate.ReasonCacheMissing {
+			t.Fatalf("reason = %q", got.Reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Read blocked on a FIFO; this deadlocks the plugin and CPA's unload")
+	}
+	if err := Readable(fifo); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("Readable accepted a FIFO: %v", err)
 	}
 }

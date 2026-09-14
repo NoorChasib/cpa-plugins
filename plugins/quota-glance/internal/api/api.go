@@ -25,13 +25,10 @@ import (
 )
 
 const (
-	// rateLimit is per client address. It exists to slow a brute force against
-	// the token, not to lock anyone out: exceeding it costs a 429 for the rest
-	// of the minute and nothing more. A ban on the user's own dashboard would
-	// be a worse outcome than a slow attack on a long random token.
-	rateLimit      = 20
-	rateWindow     = time.Minute
-	maxTrackedAddr = 4096
+	// failureLimit bounds FAILED authentication attempts per window, across all
+	// callers. It slows a brute force against the token; it is not a ban.
+	failureLimit = 20
+	rateWindow   = time.Minute
 )
 
 // WatcherState mirrors the watcher's reported state. It is redeclared here
@@ -70,7 +67,23 @@ type API struct {
 
 	tokenHash [sha256.Size]byte
 	hasToken  bool
+	disabled  bool
 	limiter   *limiter
+}
+
+// Disable and Enable close and reopen every route. A plugin turned off in
+// configuration that kept serving its last document would be indistinguishable
+// from one that is still running.
+func (a *API) Disable() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.disabled = true
+}
+
+func (a *API) Enable() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.disabled = false
 }
 
 func New(pluginID, token string) *API {
@@ -111,6 +124,12 @@ func (a *API) SetToken(token string) {
 func (a *API) Publish(doc aggregate.Document, health Health) {
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
+		// Keep serving the previous document, but say so: silently serving
+		// stale data while health reports the older build is worse than either.
+		a.mu.Lock()
+		a.health = health
+		a.health.LastError = "summary document could not be encoded"
+		a.mu.Unlock()
 		return
 	}
 	body = append(body, '\n')
@@ -143,6 +162,12 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	if req.Method != http.MethodGet {
 		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 	}
+	a.mu.RLock()
+	disabled := a.disabled
+	a.mu.RUnlock()
+	if disabled {
+		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "disabled"})
+	}
 	switch req.Path {
 	case a.resourcePath("/app"):
 		return a.appResponse(req)
@@ -159,15 +184,16 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 }
 
 func (a *API) summaryResponse(req protocol.ManagementRequest, now time.Time) protocol.ManagementResponse {
-	// Throttle before authenticating, so a brute force is slowed rather than
-	// merely counted.
-	if !a.limiter.allow(clientAddr(req.Headers), now) {
-		return protocol.ManagementResponse{
-			StatusCode: http.StatusTooManyRequests,
-			Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
-		}
-	}
+	// Authenticate first, and never throttle a request that presents the right
+	// token. That is what makes a lockout impossible: no volume of hostile
+	// traffic can stop the operator reaching their own dashboard.
 	if !a.authorized(req.Headers) {
+		if !a.limiter.allowFailure(now) {
+			return protocol.ManagementResponse{
+				StatusCode: http.StatusTooManyRequests,
+				Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
+			}
+		}
 		// Bare: no hint about whether the token was absent, malformed, or
 		// merely wrong.
 		return protocol.ManagementResponse{
@@ -229,23 +255,6 @@ func matchesETag(header, etag string) bool {
 	return false
 }
 
-// clientAddr identifies the caller for rate limiting only. A forged header
-// costs the forger their own bucket and nothing else, since exceeding a bucket
-// never bans anyone.
-func clientAddr(headers http.Header) string {
-	for _, name := range []string{"X-Forwarded-For", "X-Real-Ip"} {
-		if value := headers.Get(name); value != "" {
-			if comma := strings.Index(value, ","); comma > 0 {
-				value = value[:comma]
-			}
-			if value = strings.TrimSpace(value); value != "" {
-				return value
-			}
-		}
-	}
-	return "unknown"
-}
-
 func (a *API) healthResponse() protocol.ManagementResponse {
 	a.mu.RLock()
 	health, doc := a.health, a.doc
@@ -296,43 +305,35 @@ func jsonResponse(status int, value any) protocol.ManagementResponse {
 	}
 }
 
-// limiter is a fixed-window counter per client address. It never records a
-// failure count and never blocks an address beyond the current window.
+// limiter throttles failed authentication attempts, globally.
+//
+// A per-client limiter is not implementable over this ABI: the request carries
+// no peer address, only headers the caller supplies. A key taken from those is
+// rotated trivially — which defeats the limit outright — and forged just as
+// trivially as the operator's own address, which would lock them out of their
+// own dashboard with unauthenticated traffic. It is also unbounded input, so
+// keying a map on it retains whatever the caller sends.
+//
+// Counting failures globally removes the attacker-chosen key. Combined with
+// authenticating before throttling, a correct token always gets through and a
+// wrong one is slowed, which is the property the design actually asks for.
 type limiter struct {
-	mu      sync.Mutex
-	windows map[string]*bucket
-}
-
-type bucket struct {
+	mu    sync.Mutex
 	start time.Time
 	count int
 }
 
-func newLimiter() *limiter { return &limiter{windows: map[string]*bucket{}} }
+func newLimiter() *limiter { return &limiter{} }
 
-func (l *limiter) allow(addr string, now time.Time) bool {
+func (l *limiter) allowFailure(now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// Bound the map so an attacker varying the forwarded address cannot grow
-	// it without limit. Expired buckets go first; a full table of live ones is
-	// reset outright rather than allowed to grow.
-	if len(l.windows) >= maxTrackedAddr {
-		for key, b := range l.windows {
-			if now.Sub(b.start) >= rateWindow {
-				delete(l.windows, key)
-			}
-		}
-		if len(l.windows) >= maxTrackedAddr {
-			l.windows = map[string]*bucket{}
-		}
-	}
-	b, ok := l.windows[addr]
-	if !ok || now.Sub(b.start) >= rateWindow {
-		l.windows[addr] = &bucket{start: now, count: 1}
+	if l.start.IsZero() || now.Sub(l.start) >= rateWindow || now.Before(l.start) {
+		l.start, l.count = now, 1
 		return true
 	}
-	b.count++
-	return b.count <= rateLimit
+	l.count++
+	return l.count <= failureLimit
 }
 
 // appResponse serves the application shell. It is deliberately unauthenticated
