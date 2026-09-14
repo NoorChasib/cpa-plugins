@@ -2,7 +2,7 @@
 set -euo pipefail
 plugin=${1:?plugin required}
 case "$plugin" in
-  quota-cache|account-health-pushover|reset-priority|auto-baseline|token-usage) ;;
+  quota-cache|quota-glance|account-health-pushover|reset-priority|auto-baseline|token-usage) ;;
   *) echo 'Unknown plugin' >&2; exit 1 ;;
 esac
 cd "$(dirname "$0")/../plugins/$plugin"
@@ -10,6 +10,12 @@ case "$plugin" in
   quota-cache)
     make ci
     bash ../../scripts/verify-quota-sidebar.sh
+    ;;
+  quota-glance)
+    # `ci` rebuilds the dashboard bundle and fails if the committed copy is
+    # stale, so the library about to be packaged embeds the current page.
+    make ci
+    CPA_SMOKE_REQUIRE_DOCKER=1 make smoke
     ;;
   account-health-pushover)
     make ci c-shared package-current checksums verify-release

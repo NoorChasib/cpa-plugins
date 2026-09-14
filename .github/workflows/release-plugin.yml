@@ -7,6 +7,7 @@ on:
       - 'auto-baseline/v*'
       - 'reset-priority/v*'
       - 'quota-cache/v*'
+      - 'quota-glance/v*'
       - 'token-usage/v*'
   workflow_dispatch:
     inputs:
@@ -16,6 +17,7 @@ on:
         required: true
         options:
           - quota-cache
+          - quota-glance
           - account-health-pushover
           - auto-baseline
           - reset-priority
