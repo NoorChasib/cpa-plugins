@@ -38,9 +38,14 @@ is a deliberate contract change.
   successful observation across every credential and `nextAttemptEpoch` the
   soonest poll quota-cache has scheduled — the two halves of "observed 4m ago ·
   next attempt in 11m". They are served rather than derived because deriving
-  them means a max and a min across every entry. `nextAttemptEpoch` is not
-  filtered to the future: a poller that has fallen behind reads as overdue
-  rather than disappearing. Both are `null` when there is nothing to report.
+  them means a max and a min across every entry. `nextAttemptEpoch` is the
+  soonest attempt **still ahead**, because what it answers is when this document
+  can next change; one credential stuck in backoff would otherwise hold it in
+  the past forever and the header would read "due" while everything else kept
+  polling on schedule. Only when nothing at all is scheduled ahead — a poller
+  that has genuinely stalled — does it report an instant already passed, so the
+  client can say "due" rather than go blank. Both are `null` when there is
+  nothing to report.
 - **Additive evolution only.** New fields and new enum values may appear without
   a `schemaVersion` bump; handle an unknown value by falling through to a
   neutral rendering rather than failing.
