@@ -2,7 +2,10 @@
 
 `GET /v0/management/plugins/quota-glance/summary` returns one JSON document.
 CPA authenticates it with the management key before this plugin sees the
-request; the plugin holds no credential of its own. This
+request. The identical document is served on
+`GET /v0/resource/plugins/quota-glance/summary` for a reader with no console
+session; CPA authenticates nothing there, so that path carries the plugin's own
+`web-token`. Same bytes, same ETag, two gates. This
 page is its reference: the vocabulary a client has to understand, and the
 guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 

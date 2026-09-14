@@ -36,6 +36,7 @@ plugins:
       enabled: true
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       data-dir: /CLIProxyAPI/plugins/data/quota-glance
+      web-token: ""
       stale-after: 45m
 ```
 
@@ -43,9 +44,15 @@ plugins:
 cannot read that file, rather than serving an empty page that looks like a
 working install with no quota anywhere.
 
-**There is nothing else to configure and no password to set.** The dashboard
-authenticates as whoever is signed in to the CPA management console, so once the
-plugin is enabled the **Quota Glance** entry in the console sidebar opens it.
+**From the CPA console there is nothing to set.** The dashboard authenticates as
+whoever is signed in to the console, so once the plugin is enabled the **Quota
+Glance** entry in the sidebar opens it — no password, no prompt.
+
+`web-token` is the fallback, for a browser with no console session: a phone, a
+bookmark, a machine that has never signed in. Set it to a password of your
+choosing, or leave it empty and one is generated and printed **once** in the CPA
+log at startup, then persisted under `data-dir` so restarts keep it. Either way
+it is typed in once per browser and saved there.
 
 ## Routes
 
@@ -53,15 +60,24 @@ plugin is enabled the **Quota Glance** entry in the console sidebar opens it.
 | --- | --- | --- |
 | `GET /v0/resource/plugins/quota-glance/app` | none | The page. Contains no data. |
 | `GET /v0/management/plugins/quota-glance/summary` | CPA management key | The document the page renders. Supports `If-None-Match`. |
+| `GET /v0/resource/plugins/quota-glance/summary` | `Authorization: Bearer <web-token>` | The same document, for a reader with no console session. |
 | `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error. |
 | `GET /v0/management/plugins/quota-glance/windows` | CPA management key | Observed window keys and which credentials report them. |
 
-**This plugin holds no credential of its own.** Only the page is public, and it
-carries no data; every byte of quota sits behind the management key CPA already
-checks. The page recovers that key from the console's own browser storage — the
-documented arrangement for a plugin page served from the console's origin, and
-the same one Quota Cache's status view uses — so there is no second secret to
-mint, log, rotate, or leak, and nothing to brute force.
+**One document, two doors.** From the console the page spends the session that
+is already there: it recovers the management key from the console's own browser
+storage — the documented arrangement for a plugin page served from the console's
+origin, and the same one Quota Cache's status view uses — and CPA checks it. That
+door needs no sign-in and is the one the sidebar uses.
+
+The other door exists because CPA authenticates nothing on a resource route, so
+a reader arriving without a console session has no session to spend. That path
+carries `web-token`, compared in constant time against a stored SHA-256. Failed
+attempts are counted globally rather than per caller — the ABI hands the plugin
+only headers the caller chose, so any key taken from them is rotated, and forged,
+trivially. A correct token is never throttled, so no volume of hostile traffic
+can lock you out of your own dashboard; a wrong one costs a `429` for the rest
+of the minute and never a ban.
 
 Resource routes return 404 while CPA's built-in home page is enabled. The plugin
 cannot read that setting, so if `/app` 404s, that is the first thing to check.
@@ -108,18 +124,17 @@ subresource would carry that URL out in a `Referer` header. Two Go tests hold
 the line, failing the build on a subresource, a `url()`, an `@import`, or any
 address or token that finds its way into the document.
 
-How it signs in, in full: the CPA management console persists its management key
-in browser storage, behind a documented reversible obfuscation. This page is
-served from the console's own origin, so it recovers that key and presents it to
-the management route above — which CPA authenticates before this plugin sees the
-request. There is no host to configure either, because the plugin serves the
-page and the page calls its own origin.
+How it signs in, in full: the page tries the console's management key first,
+recovering it from browser storage on the console's own origin, and falls back
+to a saved `web-token` only if that key is absent or refused. So the sidebar and
+the direct URL `https://<your-host>/v0/resource/plugins/quota-glance/app` both
+open straight onto the dashboard on any browser that has signed in to the
+console.
 
-So there is no sign-in, from the sidebar or from the direct URL
-`https://<your-host>/v0/resource/plugins/quota-glance/app`. The one case that
-needs anything is a browser that has never signed in to the console — a phone,
-say — which sees "Sign in to CPA first" and a link to the console, rather than a
-password prompt this plugin could not honour anyway.
+Anywhere else, the sign-in screen offers both doors: a link to the console, and
+a password field. Whichever you use is saved in that browser, so it is asked
+once. There is no host to configure either, because the plugin serves the page
+and the page calls its own origin.
 
 Everything the page shows is precomputed here: percentages, levels, ordering,
 trend, and the wording of each card's subtitle. The only arithmetic in the
@@ -145,7 +160,8 @@ and fails if the result differs from the committed file. Edit `web/src/`, run
 
 `make web-dev` serves the committed golden documents through a stand-in for the
 summary route, so the dashboard can be worked on with nothing else running.
-There is no console in front of it, so seed a key once in the browser console:
+There is no console in front of it, so either type `dev-token` into the password
+field, or seed a console session once in the browser console:
 
 ```js
 localStorage.setItem('cli-proxy-auth', JSON.stringify({state: {managementKey: 'dev'}}))
@@ -153,7 +169,8 @@ localStorage.setItem('cli-proxy-auth', JSON.stringify({state: {managementKey: 'd
 
 `?scenario=` then selects a state to look at —
 `degraded`, `stale-cache`, `stale-schema`, `never-observed`, `empty`,
-`future-schema`, `down`, `unauthorized`. Point `QUOTA_GLANCE_PROXY` at a real
+`future-schema`, `down`, `unauthorized`, `cpa-expired` (CPA refuses, so the
+password fallback takes over). Point `QUOTA_GLANCE_PROXY` at a real
 CPA host to develop against live data instead. `web/design/mockup.html` is the
 approved design the app is built to match.
 

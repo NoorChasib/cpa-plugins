@@ -10,6 +10,7 @@ and they are the only ones no unit test can reach.
 No real accounts and no provider requests: quota-cache is absent and the
 snapshot is written directly, which is the whole point of the split.
 """
+import gzip
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
 MANAGEMENT_KEY = 'synthetic-local-smoke-key'
 PLUGIN = 'quota-glance'
+WEB_TOKEN = 'synthetic-local-smoke-web-token'
 
 # The committed fixture's shape, anchored to the current instant so the document
 # is live rather than stale. Offsets match testdata/snapshots/seven-credentials
@@ -136,6 +138,7 @@ plugins:
       enabled: true
       cache-path: /work/data/snapshot.json
       data-dir: /work/data/{PLUGIN}
+      web-token: {WEB_TOKEN}
       stale-after: 45m
 ''')
 
@@ -209,16 +212,33 @@ def checks(container, cache_path, now):
     assert 'src="http' not in shell and 'href="http' not in shell, 'the shell fetches something external'
     print(f'  app           200 html, {len(body)} bytes, data-free, self-contained')
 
-    # 3. The document is reachable only through CPA's authenticated management
-    #    tree. The public resource tree must not serve it at all, and the
-    #    management tree must refuse an absent or wrong key — that refusal is
-    #    CPA's, which is exactly the point: this plugin holds no credential.
-    status, _, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary')
-    assert status == 404, f'the public tree served the document: {status}'
+    # 3. Two ways to the same document, each gated by whoever owns that tree.
+    #    CPA refuses an absent or wrong management key on its own path. The
+    #    public fallback path is CPA-authenticated by nobody, so the plugin
+    #    checks its own token there and refuses bare.
     for label, key in (('no key', None), ('wrong key', 'nope')):
         status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', token=key)
-        assert status in (401, 403), f'{label}: {status}'
-    print('  summary       404 on the public tree, 401 without CPA\'s key')
+        assert status in (401, 403), f'management, {label}: {status}'
+    for label, tok in (('no token', None), ('wrong token', 'nope')):
+        status, body, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=tok)
+        assert status == 401, f'fallback, {label}: {status}'
+        assert not body, f'fallback {label} returned a body'
+    # Both must serve the same document. Compared as parsed documents rather
+    # than wire bytes: CPA compresses the management response and does not
+    # compress the resource one, so identical documents arrive as different
+    # byte counts. The ETag is the plugin's own and must match either way.
+    def document(response):
+        status, raw, headers = response
+        assert status == 200, status
+        if (headers.get('Content-Encoding') or '').lower() == 'gzip':
+            raw = gzip.decompress(raw)
+        return headers.get('Etag'), json.loads(raw)
+
+    cpaTag, cpaDoc = document(request(f'/v0/management/plugins/{PLUGIN}/summary', management=True))
+    tokTag, tokDoc = document(request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN))
+    assert cpaTag == tokTag, f'the two paths disagree on the ETag: {cpaTag} vs {tokTag}'
+    assert cpaDoc == tokDoc, 'the two paths served different documents'
+    print('  summary       401 bare on both paths; CPA key and web token each serve it')
 
     # 4. Learn the roster CPA actually reports, then write a snapshot keyed by
     #    it — which is precisely what quota-cache does.
