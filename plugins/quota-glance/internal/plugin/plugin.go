@@ -12,9 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +33,6 @@ var Version = "0.1.0"
 const (
 	defaultStaleAfter = 45 * time.Minute
 	defaultDataDir    = "plugins/data/quota-glance"
-	tokenFile         = "web-token"
 )
 
 type Host interface {
@@ -79,7 +76,7 @@ type Plugin struct {
 	nextReq   time.Time
 }
 
-func New(host Host) *Plugin { return &Plugin{host: host, api: api.New(ID, "")} }
+func New(host Host) *Plugin { return &Plugin{host: host, api: api.New(ID)} }
 
 func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	switch method {
@@ -93,12 +90,15 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 			// Menu stays empty on management routes: CPA turns a GET carrying
 			// Menu into a public resource, which would publish these.
 			Routes: []protocol.ManagementRoute{
+				{Method: "GET", Path: "/plugins/" + ID + "/summary", Description: "Aggregated quota document the dashboard renders"},
 				{Method: "GET", Path: "/plugins/" + ID + "/health", Description: "Snapshot time, watcher state, and last error"},
 				{Method: "GET", Path: "/plugins/" + ID + "/windows", Description: "Observed window keys and the credentials reporting them"},
 			},
+			// Only the page itself is public, and it carries no data. It reads
+			// the document from the management route above, authenticating with
+			// the console's own key, so this plugin holds no second credential.
 			Resources: []protocol.ResourceRoute{
 				{Path: "/app", Menu: "Quota Glance", Description: "Remaining quota across every credential and window"},
-				{Path: "/summary", Description: "Aggregated quota document; requires the plugin web token"},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -124,7 +124,6 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		Enabled    *bool             `yaml:"enabled"`
 		CachePath  string            `yaml:"cache-path"`
 		DataDir    string            `yaml:"data-dir"`
-		WebToken   string            `yaml:"web-token"`
 		StaleAfter string            `yaml:"stale-after"`
 		PlanLabels map[string]string `yaml:"plan-labels"`
 		Priority   *int              `yaml:"priority"`
@@ -176,10 +175,6 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("quota-cache snapshot is unreadable at cache-path; check that quota-cache is installed and that cache-path matches its own")
 	}
 
-	token, generated, err := resolveToken(cfg.WebToken, dataDir)
-	if err != nil {
-		return protocol.Registration{}, err
-	}
 	// Stop the old watcher before opening the store: otherwise two stores hold
 	// the same history file for as long as the close takes, and whichever
 	// writes last wins with a staler view.
@@ -198,15 +193,8 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.configMu.Unlock()
 
 	// Last, after everything that can fail. A rejected reconfigure must leave
-	// the running configuration — including the token the operator's dashboard
-	// is using — exactly as it was.
+	// the running configuration exactly as it was.
 	served.Enable()
-	served.SetToken(token)
-	if generated {
-		// Logged once, when it is first minted, because the operator has no
-		// other way to learn it. It is persisted, so a restart reuses it.
-		p.log("warn", "quota-glance generated a web token; copy it into web-token in plugin configuration", map[string]any{"web_token": token})
-	}
 
 	watcher, err := watch.Start(watch.Options{
 		Path:     cachePath,
@@ -242,7 +230,6 @@ func registration() protocol.Registration {
 			ConfigFields: []protocol.ConfigField{
 				{Name: "cache-path", Type: "string", Description: "quota-cache snapshot path; must match quota-cache's own"},
 				{Name: "data-dir", Type: "string", Description: "Private directory for trend history"},
-				{Name: "web-token", Type: "string", Description: "Bearer token for the summary route; generated and logged once if empty"},
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
 			},
@@ -355,42 +342,6 @@ func (p *Plugin) log(level, message string, fields map[string]any) {
 		return
 	}
 	p.host.Log(context.Background(), level, message, fields)
-}
-
-// resolveToken returns the configured token, or a generated one persisted under
-// data-dir.
-//
-// Persisting matters: the spec says generate and log once, and a token minted
-// fresh on every start would silently invalidate a bookmarked dashboard URL
-// each time CPA restarts. An unreadable or malformed stored token is replaced
-// rather than treated as fatal.
-func resolveToken(configured, dataDir string) (token string, generated bool, err error) {
-	if configured != "" {
-		return configured, false, nil
-	}
-	// Own the directory rather than depending on the store having been opened
-	// first: a token that fails to persist is silently regenerated on the next
-	// start, which is exactly the failure this function exists to prevent.
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return "", false, errors.New("quota-glance data directory cannot be created")
-	}
-	path := filepath.Join(dataDir, tokenFile)
-	if raw, readErr := os.ReadFile(path); readErr == nil {
-		if stored := strings.TrimSpace(string(raw)); stored != "" && len(stored) <= 512 {
-			return stored, false, nil
-		}
-	}
-	token, err = api.NewToken()
-	if err != nil {
-		return "", false, errors.New("web token cannot be generated")
-	}
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		// A token that cannot be persisted would be reminted on every
-		// reconfigure, invalidating the operator's dashboard each time and
-		// writing a new secret to the log. Refuse instead, naming the cause.
-		return "", false, errors.New("web token cannot be persisted; set web-token in configuration or make data-dir writable")
-	}
-	return token, true, nil
 }
 
 // hostSource adapts the plugin host to the narrower callback the source needs.

@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "generatedAtEpoch": 1789012800,
+  "observedAtEpoch": 1789012500,
+  "nextAttemptEpoch": 1789013400,
   "stale": false,
   "staleReason": null,
   "counters": {
