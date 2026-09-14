@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "written_at": "2026-09-10T03:55:00Z",
+  "next_request": "2026-09-10T04:10:00Z",
+  "provider_cooldown": {},
+  "entries": {
+    "claude:claude-fresh@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-fresh@example.com.json",
+      "used_percent": 55,
+      "reset_at": "2026-09-11T04:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "Max",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 15,
+          "reset_at": "2026-09-10T05:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 55,
+          "reset_at": "2026-09-11T04:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly_fable",
+          "title": "Weekly (Fable)",
+          "used_percent": 85,
+          "reset_at": "2026-09-11T03:59:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    },
+    "claude:claude-stale@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-stale@example.com.json",
+      "used_percent": 70,
+      "reset_at": "2026-09-12T04:00:00Z",
+      "observed_at": "2026-09-10T01:00:00Z",
+      "last_attempt": "2026-09-10T01:00:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "Max",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 40,
+          "reset_at": "2026-09-10T04:30:00Z",
+          "observed_at": "2026-09-10T01:00:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 70,
+          "reset_at": "2026-09-12T04:00:00Z",
+          "observed_at": "2026-09-10T01:00:00Z"
+        }
+      ]
+    },
+    "claude:claude-failing@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-failing@example.com.json",
+      "used_percent": 95,
+      "reset_at": "2026-09-13T04:00:00Z",
+      "observed_at": "2026-09-10T03:50:00Z",
+      "last_attempt": "2026-09-10T03:50:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 2,
+      "last_error": "quota fetch failed",
+      "plan": "Team",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 90,
+          "reset_at": "2026-09-10T03:58:00Z",
+          "observed_at": "2026-09-10T03:50:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 95,
+          "reset_at": "2026-09-13T04:00:00Z",
+          "observed_at": "2026-09-10T03:50:00Z"
+        }
+      ]
+    },
+    "claude:claude-pending@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-pending@example.com.json",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0
+    },
+    "claude:claude-disabled@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-disabled@example.com.json",
+      "used_percent": 0,
+      "reset_at": "2026-09-14T04:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "Max",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 0,
+          "reset_at": "2026-09-10T06:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 0,
+          "reset_at": "2026-09-14T04:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    },
+    "claude:claude-unavailable@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-unavailable@example.com.json",
+      "used_percent": 5,
+      "reset_at": "2026-09-14T05:13:20Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "Max",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 5,
+          "reset_at": "2026-09-10T06:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 5,
+          "reset_at": "2026-09-14T05:13:20Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    },
+    "codex:codex-model@example.com.json": {
+      "provider": "codex",
+      "auth_index": "codex-model@example.com.json",
+      "used_percent": 30,
+      "reset_at": "2026-09-15T04:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "pro",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 20,
+          "reset_at": "2026-09-10T05:30:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 30,
+          "reset_at": "2026-09-15T04:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_session",
+          "title": "Session (spark)",
+          "model": "spark",
+          "used_percent": 25,
+          "reset_at": "2026-09-10T05:30:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_weekly",
+          "title": "Weekly (spark)",
+          "model": "spark",
+          "used_percent": 60,
+          "reset_at": "2026-09-15T04:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    },
+    "xai:xai-raw@example.com.json": {
+      "provider": "xai",
+      "auth_index": "xai-raw@example.com.json",
+      "used_percent": 0,
+      "reset_at": "1970-01-01T00:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "SuperGrok Heavy",
+      "windows": [
+        {
+          "key": "credits",
+          "title": "Credits",
+          "used_percent": 68,
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "raw:xai:product/BUILD",
+          "title": "product/BUILD",
+          "used_percent": 22,
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    }
+  }
+}

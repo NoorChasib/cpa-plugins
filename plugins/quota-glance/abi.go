@@ -1,0 +1,345 @@
+package main
+
+/*
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef struct {
+	void* ptr;
+	size_t len;
+} cliproxy_buffer;
+
+typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_host_free_fn)(void*, size_t);
+
+typedef struct {
+	uint32_t abi_version;
+	void* host_ctx;
+	cliproxy_host_call_fn call;
+	cliproxy_host_free_fn free_buffer;
+} cliproxy_host_api;
+
+typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_plugin_free_fn)(void*, size_t);
+typedef void (*cliproxy_plugin_shutdown_fn)(void);
+
+typedef struct {
+	uint32_t abi_version;
+	cliproxy_plugin_call_fn call;
+	cliproxy_plugin_free_fn free_buffer;
+	cliproxy_plugin_shutdown_fn shutdown;
+} cliproxy_plugin_api;
+
+extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+extern void cliproxyPluginFree(void*, size_t);
+extern void cliproxyPluginShutdown(void);
+
+static const cliproxy_host_api* stored_host;
+
+static void store_host_api(const cliproxy_host_api* host) {
+	stored_host = host;
+}
+
+static void clear_host_api(void) {
+	stored_host = NULL;
+}
+
+static int call_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+	if (stored_host == NULL || stored_host->call == NULL) {
+		return 1;
+	}
+	return stored_host->call(stored_host->host_ctx, method, request, request_len, response);
+}
+
+static void free_host_buffer(void* ptr, size_t len) {
+	if (stored_host != NULL && stored_host->free_buffer != NULL && ptr != NULL) {
+		stored_host->free_buffer(ptr, len);
+	}
+}
+*/
+import "C"
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"unsafe"
+
+	pluginimpl "github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/plugin"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
+)
+
+var (
+	nativeLifecycleMu  sync.Mutex
+	globalMu           sync.RWMutex
+	globalPlugin       *pluginimpl.Plugin
+	hostCalls          hostCallGate
+	clearStoredHostAPI = func() { C.clear_host_api() }
+)
+
+type hostCallGate struct {
+	mu          sync.Mutex
+	stopping    bool
+	calls       sync.WaitGroup
+	waitStarted func()
+}
+
+func (g *hostCallGate) reset() {
+	g.mu.Lock()
+	g.stopping = false
+	g.mu.Unlock()
+}
+
+func (g *hostCallGate) begin() (func(), bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stopping {
+		return nil, false
+	}
+	g.calls.Add(1)
+	var once sync.Once
+	return func() { once.Do(g.calls.Done) }, true
+}
+
+func (g *hostCallGate) stopAccepting() {
+	g.mu.Lock()
+	g.stopping = true
+	g.mu.Unlock()
+}
+
+func (g *hostCallGate) wait() {
+	if g.waitStarted != nil {
+		g.waitStarted()
+	}
+	g.calls.Wait()
+}
+
+type hostBridge struct{}
+
+//export cliproxy_plugin_init
+func cliproxy_plugin_init(host *C.cliproxy_host_api, api *C.cliproxy_plugin_api) C.int {
+	nativeLifecycleMu.Lock()
+	defer nativeLifecycleMu.Unlock()
+	if host == nil || api == nil || uint32(host.abi_version) != protocol.ABIVersion {
+		return 1
+	}
+	globalMu.RLock()
+	initialized := globalPlugin != nil
+	globalMu.RUnlock()
+	if initialized {
+		return 1
+	}
+	C.store_host_api(host)
+	hostCalls.reset()
+	api.abi_version = C.uint32_t(protocol.ABIVersion)
+	api.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
+	api.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
+	api.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
+	globalMu.Lock()
+	globalPlugin = pluginimpl.New(hostBridge{})
+	globalMu.Unlock()
+	return 0
+}
+
+//export cliproxyPluginCall
+func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+	if response != nil {
+		response.ptr = nil
+		response.len = 0
+	}
+	if method == nil || response == nil || uint64(requestLen) > 4<<20 || (request == nil && requestLen != 0) {
+		writeResponse(response, errorEnvelope("invalid_method", "method is required"))
+		return 1
+	}
+	var requestBytes []byte
+	if request != nil && requestLen > 0 {
+		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
+	}
+	globalMu.RLock()
+	current := globalPlugin
+	globalMu.RUnlock()
+	if current == nil {
+		writeResponse(response, errorEnvelope("not_initialized", "plugin is not initialized"))
+		return 1
+	}
+	result, err := current.Handle(C.GoString(method), requestBytes)
+	if err != nil {
+		code := "plugin_error"
+		if strings.HasPrefix(err.Error(), "unknown method:") {
+			code = "unknown_method"
+		}
+		writeResponse(response, errorEnvelope(code, sanitizeError(err)))
+		return 1
+	}
+	raw, err := okEnvelope(result)
+	if err != nil {
+		writeResponse(response, errorEnvelope("encoding_error", "plugin response encoding failed"))
+		return 1
+	}
+	writeResponse(response, raw)
+	return 0
+}
+
+//export cliproxyPluginFree
+func cliproxyPluginFree(ptr unsafe.Pointer, length C.size_t) {
+	if ptr != nil {
+		C.free(ptr)
+	}
+	_ = length
+}
+
+//export cliproxyPluginShutdown
+func cliproxyPluginShutdown() {
+	nativeLifecycleMu.Lock()
+	defer nativeLifecycleMu.Unlock()
+	globalMu.Lock()
+	current := globalPlugin
+	globalPlugin = nil
+	globalMu.Unlock()
+
+	// Close native host-call admission before stopping the Go plugin. Monitor
+	// shutdown drains every reconciliation that was already admitted, and the
+	// gate below additionally covers any host call outside monitor lifecycle
+	// accounting. The host API pointer is cleared only after all callbacks have
+	// returned, so CPA may safely free its table and unload the shared object.
+	hostCalls.stopAccepting()
+	if current != nil {
+		current.Shutdown()
+	}
+	hostCalls.wait()
+	clearStoredHostAPI()
+}
+
+// quota-glance uses exactly two host callbacks: the credential roster and the
+// log. There is deliberately no host.http.do and no host.auth.get here — this
+// plugin reads a file and serves memory, and holds no credential material.
+
+func (hostBridge) ListAuth(ctx context.Context) ([]protocol.HostAuthFileEntry, error) {
+	result, err := callHost(ctx, protocol.MethodHostAuthList, map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var response protocol.HostAuthListResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, errors.New("decode host.auth.list response")
+	}
+	return response.Files, nil
+}
+
+func (hostBridge) Log(ctx context.Context, level, message string, fields map[string]any) {
+	_, _ = callHost(ctx, protocol.MethodHostLog, protocol.HostLogRequest{
+		Level:   level,
+		Message: message,
+		Fields:  fields,
+	})
+}
+
+func callHost(ctx context.Context, method string, payload any) (json.RawMessage, error) {
+	finish, accepted := hostCalls.begin()
+	if !accepted {
+		return nil, errors.New("host callbacks are shutting down")
+	}
+	defer finish()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, errors.New("encode host callback request")
+	}
+	cMethod := C.CString(method)
+	defer C.free(unsafe.Pointer(cMethod))
+	var response C.cliproxy_buffer
+	var requestPtr *C.uint8_t
+	if len(rawPayload) > 0 {
+		allocated := C.CBytes(rawPayload)
+		if allocated == nil {
+			return nil, errors.New("allocate host callback request")
+		}
+		defer C.free(allocated)
+		requestPtr = (*C.uint8_t)(allocated)
+	}
+	code := C.call_host_api(cMethod, requestPtr, C.size_t(len(rawPayload)), &response)
+	var rawResponse []byte
+	if response.len > 4<<20 {
+		if response.ptr != nil {
+			C.free_host_buffer(response.ptr, response.len)
+		}
+		return nil, errors.New("host response too large")
+	}
+	if response.ptr != nil && response.len > 0 {
+		rawResponse = C.GoBytes(response.ptr, C.int(response.len))
+	}
+	if response.ptr != nil {
+		C.free_host_buffer(response.ptr, response.len)
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("host callback %s returned code %d", method, int(code))
+	}
+	if len(rawResponse) == 0 {
+		return nil, fmt.Errorf("host callback %s returned no response", method)
+	}
+	var envelope protocol.Envelope
+	if err := json.Unmarshal(rawResponse, &envelope); err != nil {
+		return nil, fmt.Errorf("host callback %s returned an invalid envelope", method)
+	}
+	if !envelope.OK {
+		if envelope.Error != nil {
+			return nil, fmt.Errorf("host callback %s failed: %s", method, envelope.Error.Code)
+		}
+		return nil, fmt.Errorf("host callback %s failed", method)
+	}
+	return envelope.Result, nil
+}
+
+func okEnvelope(result any) ([]byte, error) {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(protocol.Envelope{OK: true, Result: raw})
+}
+
+func errorEnvelope(code, message string) []byte {
+	raw, _ := json.Marshal(protocol.Envelope{
+		OK: false,
+		Error: &protocol.EnvelopeError{
+			Code:    code,
+			Message: message,
+		},
+	})
+	return raw
+}
+
+func writeResponse(response *C.cliproxy_buffer, raw []byte) {
+	if response == nil || len(raw) == 0 {
+		return
+	}
+	ptr := C.CBytes(raw)
+	if ptr == nil {
+		return
+	}
+	response.ptr = ptr
+	response.len = C.size_t(len(raw))
+}
+
+func sanitizeError(err error) string {
+	// Fixed diagnostics only: no paths, credentials, tokens, or upstream text.
+	switch err.Error() {
+	case "invalid quota-glance configuration", "schema 4 or newer required",
+		"stale-after must be between 1m and 24h", "cache-path and data-dir are required",
+		"cache-path cannot be resolved", "data-dir cannot be resolved",
+		"quota-cache snapshot is unreadable at cache-path; check that quota-cache is installed and that cache-path matches its own",
+		"quota-glance data directory is not configured", "quota-glance data directory cannot be created",
+		"web token cannot be generated", "filesystem watcher cannot be created",
+		"watch requires a path and a change handler", "quota-glance shut down",
+		"invalid management request", "unknown method":
+		return err.Error()
+	default:
+		return "quota glance request failed"
+	}
+}

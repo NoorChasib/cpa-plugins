@@ -1,4 +1,9 @@
 **/dist/
+# quota-glance embeds its application shell with go:embed, so web/dist is
+# source, not build output. Without this the plugin fails to compile from a
+# fresh clone, and the web app has nowhere to publish its build.
+!plugins/quota-glance/web/dist/
+!plugins/quota-glance/web/dist/**
 **/__pycache__/
 *.pyc
 .env
