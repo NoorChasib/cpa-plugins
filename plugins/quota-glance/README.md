@@ -80,6 +80,10 @@ rather than counted as full. Rows keep serving their last good figures with
 `stale: true` and a reason when the snapshot goes missing or its schema stops
 matching, because an empty response is indistinguishable from a broken install.
 
+Plan names arrive display-ready: Claude's `Max` and `Team` pass through, and
+Codex's plan enum is resolved to the tier name (`pro` is Pro 20x, `prolite` is
+Pro 5x). Set `plan-labels` only if a provider renames a tier.
+
 The full field reference — every status, state, data issue, level, trend, and
 stale reason — is in [docs/summary-contract.md](docs/summary-contract.md).
 

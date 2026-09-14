@@ -14,6 +14,12 @@ plugins:
       web-token: ""
       # Age at which an observation is shown with a staleness badge.
       stale-after: 45m
+      # Optional. Plan names are already display-ready: Claude reports "Max"
+      # and "Team", and Codex's plan enum is mapped to the name the tier is
+      # sold under ("pro" -> "Pro 20x", "prolite" -> "Pro 5x"). Override only
+      # if a provider renames a tier before this plugin catches up.
+      # plan-labels:
+      #   pro: "Pro 20x"
     quota-cache:
       # quota-glance requires quota-cache 0.1.5 or newer for the full
       # session / weekly / weekly-fable layout. Against an older snapshot it

@@ -53,7 +53,7 @@
       "id": "codex-noor@example.com.json",
       "email": "noor@example.com",
       "provider": "codex",
-      "plan": "pro",
+      "plan": "Pro 20x",
       "status": "ok",
       "lastObservedEpoch": 1789012500
     },

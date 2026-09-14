@@ -47,6 +47,7 @@ type settings struct {
 	cachePath  string
 	dataDir    string
 	staleAfter time.Duration
+	planLabels map[string]string
 }
 
 type Plugin struct {
@@ -120,13 +121,14 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
 	cfg := struct {
-		Enabled    *bool          `yaml:"enabled"`
-		CachePath  string         `yaml:"cache-path"`
-		DataDir    string         `yaml:"data-dir"`
-		WebToken   string         `yaml:"web-token"`
-		StaleAfter string         `yaml:"stale-after"`
-		Priority   *int           `yaml:"priority"`
-		Store      map[string]any `yaml:"store"`
+		Enabled    *bool             `yaml:"enabled"`
+		CachePath  string            `yaml:"cache-path"`
+		DataDir    string            `yaml:"data-dir"`
+		WebToken   string            `yaml:"web-token"`
+		StaleAfter string            `yaml:"stale-after"`
+		PlanLabels map[string]string `yaml:"plan-labels"`
+		Priority   *int              `yaml:"priority"`
+		Store      map[string]any    `yaml:"store"`
 	}{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yamlDecoder(req.ConfigYAML)
@@ -190,7 +192,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.stopWatcher()
 	p.configMu.Lock()
 	p.store = current
-	p.settings = settings{cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter}
+	p.settings = settings{
+		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
+		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels),
+	}
 	p.configMu.Unlock()
 
 	watcher, err := watch.Start(watch.Options{
@@ -229,6 +234,7 @@ func registration() protocol.Registration {
 				{Name: "data-dir", Type: "string", Description: "Private directory for trend history"},
 				{Name: "web-token", Type: "string", Description: "Bearer token for the summary route; generated and logged once if empty"},
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
+				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
 			},
 		},
 		Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true},
@@ -267,6 +273,7 @@ func (p *Plugin) Rebuild() {
 			Identities:   result.Identities,
 			Samples:      current.Samples(),
 			StaleAfter:   settings.staleAfter,
+			PlanLabels:   settings.planLabels,
 		}, now)
 		if result.Reason == "" {
 			good := doc
