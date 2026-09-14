@@ -20,13 +20,14 @@ PLUGINS = {
     'reset-priority': 'reset-priority.so',
     'auto-baseline': 'auto-baseline.so',
     'token-usage': 'dist/token-usage.so',
+    'quota-glance': 'dist/quota-glance.so',
 }
 
 def run(*args):
     return subprocess.check_output(args, text=True).strip()
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--candidate', choices=PLUGINS, help='Test one local build with the other four published plugins')
+parser.add_argument('--candidate', choices=PLUGINS, help='Test one local build with the other published plugins')
 args = parser.parse_args()
 published = {p['id']: p for p in load_catalog()['plugins']} if args.candidate else {}
 
@@ -39,6 +40,19 @@ with tempfile.TemporaryDirectory(prefix='cpa-suite-smoke-') as tmp:
             (plugins/(plugin+'.so')).write_bytes(released_library(published[plugin]))
         else:
             shutil.copy2(ROOT/'plugins'/plugin/library, plugins/(plugin+'.so'))
+    # quota-glance refuses to start if it cannot read a snapshot, so seed a
+    # valid empty one — the state a real install reaches as soon as quota-cache
+    # has polled once. It is a standalone file under /work rather than the one
+    # quota-cache writes: this test is about six plugins coexisting in one
+    # process, and quota-cache's own cache-path is reconfigured further down.
+    # The data path between the two is covered by quota-glance-smoke.py.
+    # /work, not the plugins mount: CPA scans that directory for shared
+    # libraries and a stray subdirectory stops every plugin loading.
+    snapshot = work/'quota-cache-snapshot.json'
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    snapshot.write_text(json.dumps({'schema': 1, 'written_at': stamp, 'next_request': stamp,
+                                    'provider_cooldown': {}, 'entries': {}}))
+
     config = work/'config.yaml'
     config.write_text('''host: 0.0.0.0
 port: 8317
@@ -68,6 +82,10 @@ plugins:
       config-path: /CLIProxyAPI/config.yaml
     token-usage:
       enabled: true
+    quota-glance:
+      enabled: true
+      cache-path: /work/quota-cache-snapshot.json
+      data-dir: /work/quota-glance
 ''')
     container = run('docker','create','--pull=never','-p','127.0.0.1::8317',
                     '--user',str(os.getuid())+':'+str(os.getgid()),
@@ -183,7 +201,7 @@ plugins:
             evidence['candidate'] = args.candidate
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-        print('PASS: pinned CPA v7.2.155 loads all five native plugins; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
+        print('PASS: pinned CPA v7.2.155 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.
         print(run('docker','logs',container)[-6000:])

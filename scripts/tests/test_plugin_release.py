@@ -60,6 +60,24 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'aliases diverged'):
                 release.load_catalog(root)
 
+    # A plugin releasing for the first time has no catalog entry to update. The
+    # tooling used to require one, which made a first release impossible.
+    def test_first_release_inserts_a_new_plugin_in_id_order(self):
+        entry = copy.deepcopy(self.entry)
+        entry['id'] = 'quota-glance'
+        entry['version'] = '0.1.0'
+        catalog = {'schema_version': 2, 'plugins': [p for p in self.catalog['plugins'] if p['id'] != 'quota-glance']}
+        before = [p['id'] for p in catalog['plugins']]
+
+        merged = release.merge_entry(catalog, entry)
+        ids = [p['id'] for p in merged['plugins']]
+
+        self.assertIn('quota-glance', ids)
+        self.assertEqual(ids, sorted(ids), 'catalog order is not deterministic')
+        self.assertEqual([i for i in ids if i != 'quota-glance'], sorted(before), 'an existing entry was lost')
+        # Re-running the same publish is a no-op, not a duplicate.
+        self.assertEqual(release.merge_entry(merged, entry), merged)
+
     def package_fixture(self, root, plugin='quota-cache'):
         directory = root / 'plugins' / plugin
         library = directory / release.LIBRARIES[plugin]

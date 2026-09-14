@@ -11,7 +11,15 @@ catalog = json.loads((ROOT / 'registry.json').read_text())
 assert catalog == json.loads((ROOT / 'preview/registry.json').read_text()), 'catalog aliases diverged'
 assert catalog['schema_version'] == 2
 ids = [p['id'] for p in catalog['plugins']]
-assert sorted(ids) == ['account-health-pushover', 'auto-baseline', 'quota-cache', 'reset-priority', 'token-usage']
+# Subset plus floor, rather than an exact list: a plugin awaiting its first
+# release has no entry yet, and a hardcoded list would fail either side of that
+# release. What must never happen is an unknown entry, a duplicate, or a
+# published plugin quietly disappearing.
+KNOWN = {'account-health-pushover', 'auto-baseline', 'quota-cache', 'quota-glance', 'reset-priority', 'token-usage'}
+PUBLISHED = {'account-health-pushover', 'auto-baseline', 'quota-cache', 'reset-priority', 'token-usage'}
+assert len(ids) == len(set(ids)), 'duplicate plugin entries'
+assert set(ids) <= KNOWN, 'catalog lists an unknown plugin: ' + str(set(ids) - KNOWN)
+assert PUBLISHED <= set(ids), 'a published plugin was dropped: ' + str(PUBLISHED - set(ids))
 for plugin in catalog['plugins']:
     assert plugin['repository'] == REPOSITORY, plugin['id'] + ': legacy repository'
     assert plugin['homepage'] == REPOSITORY + '/tree/main/plugins/' + plugin['id']
@@ -22,7 +30,7 @@ for plugin in catalog['plugins']:
         assert re.fullmatch(r'[a-f0-9]{64}', artifact['sha256'])
         assert artifact['size'] > 0
         assert artifact['url'].endswith('/' + plugin['id'] + '_' + plugin['version'] + '_' + artifact['goos'] + '_' + artifact['goarch'] + '.zip')
-print('PASS: both catalogs list all five plugins with pinned downloads exclusively from NoorChasib/cpa-plugins')
+print('PASS: both catalogs list ' + str(len(ids)) + ' plugins with pinned downloads exclusively from NoorChasib/cpa-plugins')
 
 # Guard source identity in modules, imports, documentation, and packaging too.
 # Construct the retired naming pattern so the check does not introduce a

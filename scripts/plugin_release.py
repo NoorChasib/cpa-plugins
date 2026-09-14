@@ -22,6 +22,20 @@ LIBRARIES = {
     'reset-priority': 'reset-priority.so',
     'auto-baseline': 'auto-baseline.so',
     'token-usage': 'dist/token-usage.so',
+    'quota-glance': 'dist/quota-glance.so',
+}
+
+# Descriptive catalog metadata for a plugin that has never been released, and so
+# has no catalog entry to copy it from. Kept here, in review, rather than
+# invented at release time; once the first release lands the catalog entry is
+# the source of truth and this is only a fallback.
+FIRST_RELEASE = {
+    'quota-glance': {
+        'name': 'Quota Glance',
+        'description': 'One dashboard for remaining quota across every credential and rate-limit window, read from Quota Cache. Signs in with your CPA console session. Preview: Linux amd64 only.',
+        'author': 'NoorChasib',
+        'license': 'MIT',
+    },
 }
 
 
@@ -64,7 +78,12 @@ def load_catalog(root=ROOT):
     catalog = json.loads((root / 'registry.json').read_text())
     require(catalog == json.loads((root / 'preview/registry.json').read_text()), 'catalog aliases diverged')
     require(catalog['schema_version'] == 2, 'unsupported catalog schema')
-    require(sorted(p['id'] for p in catalog['plugins']) == sorted(LIBRARIES), 'unexpected plugin set')
+    ids = [p['id'] for p in catalog['plugins']]
+    require(len(ids) == len(set(ids)), 'duplicate plugin entries')
+    # A subset, not an exact match: a plugin that has never been released has no
+    # catalog entry yet, and requiring one would make a first release impossible.
+    # The reverse — an entry with no known library — is still a hard error.
+    require(set(ids) <= set(LIBRARIES), 'catalog lists a plugin with no known library')
     return catalog
 
 
@@ -72,13 +91,28 @@ def merge_entry(catalog, entry):
     """Reapply one entry to the latest catalog without rolling back another release."""
     require(entry['id'] in LIBRARIES, 'unknown plugin')
     result = copy.deepcopy(catalog)
-    old = next(p for p in result['plugins'] if p['id'] == entry['id'])
+    old = next((p for p in result['plugins'] if p['id'] == entry['id']), None)
+    if old is None:
+        # First release of this plugin. Inserted in id order so the catalog stays
+        # deterministic whichever release happens to land first.
+        result['plugins'].append(copy.deepcopy(entry))
+        result['plugins'].sort(key=lambda p: p['id'])
+        return result
     before, after = version_tuple(old['version']), version_tuple(entry['version'])
     require(after >= before, 'refusing catalog downgrade')
     require(after != before or old == entry, 'same version already has different metadata/assets; bump version')
     old.clear()
     old.update(copy.deepcopy(entry))
     return result
+
+
+def first_release_entry(plugin):
+    """A catalog entry for a plugin releasing for the first time."""
+    require(plugin in FIRST_RELEASE, 'no catalog entry and no first-release metadata for ' + plugin)
+    # repository and homepage are derived, not declared: check-catalog.py asserts
+    # both, so there is exactly one spelling of each and no way to typo one.
+    return dict(FIRST_RELEASE[plugin], id=plugin, repository=URL,
+                homepage=URL + '/tree/main/plugins/' + plugin)
 
 
 def download_artifact(artifact):
@@ -121,7 +155,7 @@ def package(tag, output):
             info.external_attr = (stat.S_IFREG | mode) << 16
             archive.writestr(info, raw, compress_type=zipfile.ZIP_DEFLATED)
     raw = (output / name).read_bytes()
-    entry = copy.deepcopy(next(p for p in load_catalog()['plugins'] if p['id'] == plugin))
+    entry = copy.deepcopy(next((p for p in load_catalog()['plugins'] if p['id'] == plugin), None) or first_release_entry(plugin))
     entry['version'] = version
     entry['install'] = {'type': 'direct', 'artifacts': [{
         'goos': 'linux', 'goarch': 'amd64', 'url': f'{URL}/releases/download/{tag}/{name}',
