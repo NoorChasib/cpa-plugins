@@ -14,12 +14,18 @@ import type { Plugin } from "vite"
 // What it adds, because a fixture cannot: scenarios for the states the design
 // has to survive.
 //
-// In production CPA's management middleware authenticates this path with the
-// operator's management key before the plugin sees the request. Here there is
-// no CPA, so any bearer value is accepted and only its absence is a 401 — which
-// is what exercises the "sign in to CPA first" state.
+// Both paths, because the client tries both: CPA's management route first, and
+// the plugin's own token-guarded resource route as the fallback.
+//
+// In production CPA authenticates the management path before the plugin sees
+// the request, and the plugin itself checks the token on the resource path.
+// Here there is no CPA, so the management path accepts any bearer value and
+// refuses only its absence, while the resource path checks against DEV_TOKEN —
+// which is what lets the sign-in screen and the password field be exercised.
 
-const SUMMARY_PATH = "/v0/management/plugins/quota-glance/summary"
+const MANAGEMENT_PATH = "/v0/management/plugins/quota-glance/summary"
+const RESOURCE_PATH = "/v0/resource/plugins/quota-glance/summary"
+export const DEV_TOKEN = "dev-token"
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`../../testdata/golden/${name}.json`, import.meta.url))
@@ -111,6 +117,10 @@ function scenarios(): Record<string, () => Outcome> {
     "future-schema": () => ({ ...golden(), schemaVersion: 2 }),
 
     unauthorized: () => "unauthorized",
+    // Serves the document, but only down the fallback path: the refusal below
+    // is keyed on the scenario name. Exercises the fall from a rejected console
+    // session to the saved password, which is the point of having two ways in.
+    "cpa-expired": golden,
     down: () => "down",
   }
 }
@@ -142,7 +152,8 @@ export function goldenFixtureRoute(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost")
-        if (url.pathname !== SUMMARY_PATH) return next()
+        const viaCPA = url.pathname === MANAGEMENT_PATH
+        if (!viaCPA && url.pathname !== RESOURCE_PATH) return next()
 
         const all = scenarios()
         const name = url.searchParams.get("scenario") ?? "golden"
@@ -154,9 +165,12 @@ export function goldenFixtureRoute(): Plugin {
         }
         const result = pick()
 
-        // CPA answers an absent or rejected management key with a bare 401.
+        // CPA answers an absent or rejected management key with a bare 401, and
+        // so does the plugin for a wrong token.
         const presented = (req.headers.authorization ?? "").replace(/^Bearer /i, "").trim()
-        if (result === "unauthorized" || presented === "") {
+        const refused =
+          (name === "cpa-expired" && viaCPA) || (viaCPA ? presented === "" : presented !== DEV_TOKEN)
+        if (result === "unauthorized" || refused) {
           res.statusCode = 401
           res.setHeader("Cache-Control", "no-store")
           res.end()

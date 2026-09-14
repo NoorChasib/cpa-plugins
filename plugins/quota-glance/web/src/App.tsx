@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Banners } from "./components/Banner"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
-import { NoSession } from "./components/NoSession"
+import { SignIn } from "./components/SignIn"
 import { ProviderSection } from "./components/ProviderSection"
 import { Skeleton } from "./components/Skeleton"
 import { fetchSummary, NoSessionError, resetCache } from "./lib/client"
+import * as token from "./lib/token"
 import { NowProvider, useClock } from "./lib/now"
 import type { Credential, Summary } from "./lib/types"
 
@@ -77,19 +78,21 @@ export function App() {
     // quota-cache does, so nothing is gained by asking more often.
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
-    // A missing or rejected session stays missing until the reader does
+    // A missing or rejected credential stays that way until the reader does
     // something about it; retrying only repeats the same rejection.
     retry: (failureCount, error) => !(error instanceof NoSessionError) && failureCount < 2,
   })
 
-  // Nothing has ever loaded and there is no session to load it with. Once a
-  // document is in hand a lapsed session becomes an ordinary failed poll — the
-  // banner says so and the last good figures stay up.
+  // Nothing has ever loaded and neither way in worked. Once a document is in
+  // hand a lapsed credential becomes an ordinary failed poll — the banner says
+  // so and the last good figures stay up, rather than the screen being replaced
+  // by a sign-in form over data the reader can still use.
   if (query.error instanceof NoSessionError && !query.data) {
     return (
-      <NoSession
-        rejected={query.error.rejected}
-        onRetry={() => {
+      <SignIn
+        rejected={query.error.hadCredential}
+        onPassword={(value) => {
+          token.write(value)
           resetCache()
           void queryClient.resetQueries({ queryKey: ["summary"] })
         }}

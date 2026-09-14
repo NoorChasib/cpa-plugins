@@ -8,9 +8,15 @@ plugins:
       # provider; it reads what quota-cache already collected.
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       data-dir: /CLIProxyAPI/plugins/data/quota-glance
-      # There is no password or token to set. The dashboard authenticates as
-      # whoever is signed in to the CPA management console, and the quota
-      # document sits behind the management key CPA already checks.
+      # Fallback password for the dashboard, used only by a browser with no
+      # CPA console session — a phone, a bookmark, a machine that has never
+      # signed in. From the console sidebar none of this is involved: the page
+      # authenticates as whoever is signed in there.
+      #
+      # Set it to a password of your choosing. Left empty, one is generated and
+      # printed once in the CPA log at startup, then persisted under data-dir
+      # so restarts keep it.
+      web-token: ""
       # Age at which an observation is shown with a staleness badge.
       stale-after: 45m
       # Optional. Plan names are already display-ready: Claude reports "Max"

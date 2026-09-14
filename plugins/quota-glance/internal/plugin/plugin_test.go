@@ -88,7 +88,7 @@ func newFixturePlugin(t *testing.T) (*Plugin, *fakeHost, string) {
 	}}
 	p := New(host)
 	t.Cleanup(p.Shutdown)
-	cfg := "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(dir, "data") + "\nstale-after: 45m\n"
+	cfg := "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(dir, "data") + "\nweb-token: test-token\nstale-after: 45m\n"
 	if _, err := configure(t, p, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +97,10 @@ func newFixturePlugin(t *testing.T) (*Plugin, *fakeHost, string) {
 
 // The document is on the management tree, which CPA has already authenticated
 // by the time Handle sees the request; nothing is presented here.
-func resource(t *testing.T, p *Plugin, suffix string) protocol.ManagementResponse {
+func resource(t *testing.T, p *Plugin, suffix string, headers http.Header) protocol.ManagementResponse {
 	t.Helper()
 	raw, err := json.Marshal(protocol.ManagementRequest{
-		Method: "GET", Path: "/v0/resource/plugins/quota-glance" + suffix,
+		Method: "GET", Path: "/v0/resource/plugins/quota-glance" + suffix, Headers: headers,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -160,10 +160,12 @@ func TestPluginServesTheSnapshotItWasPointedAt(t *testing.T) {
 	if doc["stale"] != true || doc["staleReason"] != "cacheStale" {
 		t.Fatalf("stale=%v reason=%v", doc["stale"], doc["staleReason"])
 	}
-	// The document is only reachable through CPA's management tree; the public
-	// resource tree serves the page and nothing else.
-	if res := resource(t, p, "/summary"); res.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d; the public tree must not serve the document", res.StatusCode)
+	// The fallback path is public, so it authenticates itself.
+	if res := resource(t, p, "/summary", nil); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d; the fallback path must authenticate", res.StatusCode)
+	}
+	if res := resource(t, p, "/summary", http.Header{"Authorization": {"Bearer test-token"}}); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; the configured token must work", res.StatusCode)
 	}
 }
 
@@ -285,15 +287,14 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	// Three authenticated routes; exactly one public resource, the page itself.
-	// The document belongs on the authenticated tree — a resource entry for it
-	// would publish every credential in the pool to anyone who can reach the
-	// origin.
-	if len(registration.Routes) != 3 || len(registration.Resources) != 1 {
+	// Three authenticated routes, and two public ones: the page, which carries
+	// no data, and the document's fallback path, which carries this plugin's
+	// own token check because CPA carries none.
+	if len(registration.Routes) != 3 || len(registration.Resources) != 2 {
 		t.Fatalf("registration = %+v", registration)
 	}
-	if registration.Resources[0].Path != "/app" {
-		t.Fatalf("public resource = %q; only the page is public", registration.Resources[0].Path)
+	if registration.Resources[0].Path != "/app" || registration.Resources[1].Path != "/summary" {
+		t.Fatalf("public resources = %+v", registration.Resources)
 	}
 	for _, route := range registration.Routes {
 		if route.Menu != "" {
@@ -365,5 +366,119 @@ func TestRosterFailureKeepsServingTheLastGoodDocument(t *testing.T) {
 	credentials, _ = doc["credentials"].([]any)
 	if len(credentials) != 7 || doc["staleReason"] != "cacheMissing" {
 		t.Fatalf("the last good document was lost: %d credentials, reason %v", len(credentials), doc["staleReason"])
+	}
+}
+
+// The operator has no other way to learn a generated token, so it is logged
+// once at generation. A configured token is never logged at all.
+func TestGeneratedTokenIsLoggedOnceAndConfiguredTokensNever(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(cachePath, fixtureSnapshot(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(dir, "data") + "\n"
+
+	host := &fakeHost{}
+	p := New(host)
+	t.Cleanup(p.Shutdown)
+	if _, err := configure(t, p, base+"web-token: \"\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	generated := 0
+	var token string
+	for _, line := range host.logged() {
+		if value, ok := line.fields["web_token"].(string); ok {
+			generated++
+			token = value
+		}
+	}
+	if generated != 1 || token == "" {
+		t.Fatalf("generated token logged %d times", generated)
+	}
+	// The generated token actually works.
+	if res := resource(t, p, "/summary", http.Header{"Authorization": {"Bearer " + token}}); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+
+	configured := &fakeHost{}
+	q := New(configured)
+	t.Cleanup(q.Shutdown)
+	if _, err := configure(t, q, base+"web-token: configured-secret-value\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range configured.logged() {
+		rendered := line.message
+		for _, value := range line.fields {
+			rendered += " " + strings.TrimSpace(strings.Join(strings.Fields(toString(value)), " "))
+		}
+		if strings.Contains(rendered, "configured-secret-value") {
+			t.Fatalf("a configured token reached the log: %s", rendered)
+		}
+	}
+}
+
+// A generated token is persisted, so a restart does not silently invalidate a
+// bookmarked dashboard URL.
+func TestGeneratedTokenSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(cachePath, fixtureSnapshot(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(dir, "data")
+	cfg := "cache-path: " + cachePath + "\ndata-dir: " + dataDir + "\nweb-token: \"\"\n"
+
+	tokenOf := func(host *fakeHost) string {
+		t.Helper()
+		for _, line := range host.logged() {
+			if value, ok := line.fields["web_token"].(string); ok {
+				return value
+			}
+		}
+		return ""
+	}
+
+	first := &fakeHost{}
+	p := New(first)
+	if _, err := configure(t, p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	token := tokenOf(first)
+	if token == "" {
+		t.Fatal("no token was generated")
+	}
+	p.Shutdown()
+
+	// A fresh process against the same data directory reuses it, and does not
+	// log it a second time.
+	second := &fakeHost{}
+	q := New(second)
+	t.Cleanup(q.Shutdown)
+	if _, err := configure(t, q, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if again := tokenOf(second); again != "" {
+		t.Fatalf("a persisted token was regenerated and logged again")
+	}
+	if res := resource(t, q, "/summary", http.Header{"Authorization": {"Bearer " + token}}); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; the token from the first start must still work", res.StatusCode)
+	}
+
+	// Reconfiguring within a process must not mint a new one either.
+	third := len(second.logged())
+	if _, err := configure(t, q, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if tokenOf(second) != "" {
+		t.Fatal("reconfigure regenerated the token")
+	}
+	_ = third
+	info, err := os.Stat(filepath.Join(dataDir, tokenFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("token file mode = %v; want 0600", perm)
 	}
 }

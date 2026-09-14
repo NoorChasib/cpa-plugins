@@ -3,7 +3,12 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { App } from "./App"
+import { captureTokenFromURL } from "./lib/token"
 import "./index.css"
+
+// Before anything renders or fetches, so a `…/app?token=…` link is honoured and
+// the value is out of the address bar in the same tick.
+captureTokenFromURL()
 
 const queryClient = new QueryClient({
   defaultOptions: {
