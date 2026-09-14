@@ -47,10 +47,12 @@ type EntryWindow struct {
 	Title       string  `json:"title,omitempty"`
 	Model       string  `json:"model,omitempty"`
 	UsedPercent float64 `json:"used_percent"`
-	// omitempty has no effect on time.Time; a window with no reset instant
-	// serializes as the zero time, which readers must treat as "unknown"
-	// rather than as a date.
-	ResetAt    time.Time `json:"reset_at,omitempty"`
+	// No omitempty: it has no effect on time.Time, and promising otherwise in
+	// the tag hides the real contract. A window with no reset instant
+	// serializes as the zero time, exactly as Entry.ResetAt above always has.
+	// Readers must treat the zero time as "unknown", never as a date — a
+	// client converting it to epoch seconds gets a date in 1 BC.
+	ResetAt    time.Time `json:"reset_at"`
 	ObservedAt time.Time `json:"observed_at"`
 	// LastError is reserved for a per-window failure. No provider currently
 	// reports one; entry-level LastError covers a failed poll.

@@ -53,6 +53,14 @@ func Readable(path string) error {
 // distinguishable from a missing or corrupt file. qc.Load reports both as
 // unavailable, which is correct for it and not specific enough here.
 func snapshotSchema(path string) (int, bool) {
+	// Regular files only, checked before opening. A FIFO opened read-only
+	// blocks until a writer appears, and this runs on the watcher goroutine,
+	// which the plugin's shutdown path waits for while holding its lifecycle
+	// lock — so one unopenable path would wedge the plugin permanently and
+	// stop CPA unloading it. qc.Load guards the same way.
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		return 0, false
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, false

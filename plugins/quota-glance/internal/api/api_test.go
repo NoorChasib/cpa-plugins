@@ -95,39 +95,67 @@ func TestETagYields304(t *testing.T) {
 	}
 }
 
-// Rate limiting slows a brute force. It must never ban: a lockout on the user's
-// own dashboard is a worse outcome than a slow attack on a long random token.
-func TestRateLimitThrottlesButNeverBans(t *testing.T) {
+// Throttling must slow a brute force without ever being able to lock the
+// operator out. The request carries no peer address — only headers the caller
+// supplies — so anything keyed on those is both trivially rotated and trivially
+// forged as the operator's own address. Failures are therefore counted
+// globally, and a correct token is never throttled at all.
+func TestValidTokenIsNeverThrottledAndFailuresAreLimited(t *testing.T) {
 	a := newTestAPI()
 	const path = "/v0/resource/plugins/quota-glance/summary"
-	headers := bearer("wrong")
-	headers.Set("X-Forwarded-For", "203.0.113.7")
 	start := time.Unix(1789012800, 0)
 
 	limited := 0
-	for i := 0; i < rateLimit+5; i++ {
+	for i := 0; i < failureLimit*20; i++ {
+		headers := bearer("wrong")
+		// Rotate every header an attacker controls.
+		headers.Set("X-Forwarded-For", "203.0.113."+string(rune('0'+i%10)))
+		headers.Set("X-Real-Ip", "198.51.100.1")
 		res := a.Handle(protocol.ManagementRequest{Method: "GET", Path: path, Headers: headers}, start)
 		if res.StatusCode == http.StatusTooManyRequests {
 			limited++
 		}
 	}
-	if limited != 5 {
-		t.Fatalf("throttled %d of %d over the limit; want 5", limited, 5)
+	if limited == 0 {
+		t.Fatal("rotating caller-supplied headers bypassed the limit entirely")
 	}
 
-	// The next window serves the real token again: no lockout carried over.
-	valid := bearer(testToken)
-	valid.Set("X-Forwarded-For", "203.0.113.7")
-	res := a.Handle(protocol.ManagementRequest{Method: "GET", Path: path, Headers: valid}, start.Add(rateWindow))
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d after the window elapsed; failed attempts must not ban", res.StatusCode)
+	// The operator, mid-flood, with the correct token. This must always work.
+	if res := a.Handle(protocol.ManagementRequest{
+		Method: "GET", Path: path, Headers: bearer(testToken),
+	}, start); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; a correct token must never be throttled", res.StatusCode)
 	}
 
-	// One caller's bucket must not throttle another.
-	other := bearer(testToken)
-	other.Set("X-Forwarded-For", "203.0.113.9")
-	if res := a.Handle(protocol.ManagementRequest{Method: "GET", Path: path, Headers: other}, start); res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d; buckets are per address", res.StatusCode)
+	// Forging the operator's address cannot throttle them either.
+	forged := bearer(testToken)
+	forged.Set("X-Forwarded-For", "203.0.113.7")
+	if res := a.Handle(protocol.ManagementRequest{Method: "GET", Path: path, Headers: forged}, start); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; a forged address must not lock anyone out", res.StatusCode)
+	}
+
+	// The window rolls over; failures are never a lasting ban.
+	next := start.Add(rateWindow)
+	if res := a.Handle(protocol.ManagementRequest{
+		Method: "GET", Path: path, Headers: bearer("wrong"),
+	}, next); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d; want 401 once the window elapsed", res.StatusCode)
+	}
+}
+
+// The limiter must retain nothing derived from caller input.
+func TestLimiterRetainsNoCallerSuppliedData(t *testing.T) {
+	a := newTestAPI()
+	const path = "/v0/resource/plugins/quota-glance/summary"
+	huge := strings.Repeat("a", 256*1024)
+	for i := 0; i < 200; i++ {
+		headers := bearer("wrong")
+		headers.Set("X-Forwarded-For", huge+string(rune(i)))
+		a.Handle(protocol.ManagementRequest{Method: "GET", Path: path, Headers: headers}, time.Unix(1789012800, 0))
+	}
+	// A counter, not a map keyed on unbounded input.
+	if a.limiter.count == 0 {
+		t.Fatal("failures were not counted")
 	}
 }
 

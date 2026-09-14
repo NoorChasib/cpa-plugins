@@ -206,3 +206,59 @@ func TestCloseIsIdempotent(t *testing.T) {
 	w.Close()
 	w.Close()
 }
+
+// fsnotify closes both of its channels from a single defer when its backend
+// hits an unrecoverable read error. The stat backstop exists precisely for
+// "fsnotify does not deliver reliably on every filesystem" — so it must outlive
+// that, or the dashboard freezes permanently while health reports it healthy.
+func TestBackstopOutlivesFsnotifyGivingUp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+	w, calls := start(t, path, 100*time.Millisecond)
+
+	// Close the watcher the way its backend does on an unrecoverable error.
+	if err := w.fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := calls.Load()
+	commit(t, path, `{"schema":1,"changed":true,"padding":"aaaaaaaaaaaaaaaaaaaa"}`)
+	waitFor(t, calls, before+1)
+
+	state := w.State()
+	if state.Backstops == 0 {
+		t.Fatal("the change was picked up by neither events nor the backstop")
+	}
+	// And health must say so rather than claiming a healthy watch.
+	if state.Watching || state.LastError == "" {
+		t.Fatalf("health reports a healthy watcher after delivery stopped: %+v", state)
+	}
+	// It must keep working, not fire once and die.
+	before = calls.Load()
+	commit(t, path, `{"schema":1,"changed":true,"padding":"bbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`)
+	waitFor(t, calls, before+1)
+}
+
+// Close releases the start gate so it cannot hang on a watcher that was never
+// begun. It must not then run the startup read it was cancelling.
+func TestCloseBeforeBeginRunsNoCallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	w, err := Start(Options{Path: path, OnChange: func() {
+		calls.Add(1)
+		time.Sleep(2 * time.Second)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	w.Close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Close took %v; it waited on the callback it was cancelling", elapsed)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("OnChange ran %d times after a Close that preceded Begin", got)
+	}
+}

@@ -841,3 +841,68 @@ func TestPlanBadgesAreDisplayReadyInTheDocument(t *testing.T) {
 		}
 	}
 }
+
+// quota-cache leaves the legacy ObservedAt empty on a successful poll that
+// produced no weekly window, so old readers cannot mistake a short-window-only
+// account for 0% weekly use. That credential is polled, not pending — badging
+// it "awaiting first poll" while its windows drive rows, and letting it stamp
+// the whole document neverObserved, is worse than the bug it replaced.
+func TestShortWindowOnlyAccountIsObservedNotPending(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-2 * time.Minute)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"codex:codex-a@example.com.json": {
+			Provider: "codex", AuthIndex: "codex-a@example.com.json",
+			// ObservedAt deliberately zero; windows carry their own time.
+			Windows: []qc.EntryWindow{
+				{Key: qc.WindowSession, UsedPercent: 40, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "codex-a@example.com.json", Provider: "codex"}},
+		StaleAfter: time.Hour}, now)
+
+	if doc.Credentials[0].Status != StatusOK {
+		t.Fatalf("status = %q; a successful poll without a weekly window is not pending", doc.Credentials[0].Status)
+	}
+	if doc.Credentials[0].LastObservedEpoch != observed.Unix() {
+		t.Fatalf("lastObservedEpoch = %d; it must follow the window observation", doc.Credentials[0].LastObservedEpoch)
+	}
+	if doc.Counters.ObservedOK != 1 {
+		t.Fatalf("counters = %+v", doc.Counters)
+	}
+	if doc.Stale {
+		t.Fatalf("the document was stamped %v with two-minute-old data", *doc.StaleReason)
+	}
+	if row := rowOf(t, doc, "codex", qc.WindowSession); row.Aggregate.MemberCount != 1 {
+		t.Fatalf("its data is aggregated, so it must count as observed: %+v", row.Aggregate)
+	}
+}
+
+// A credential with no observation anywhere must not become a row member at
+// full remaining — the exact way a silent credential inflates a card.
+func TestNeverObservedCredentialIsNeverARowMember(t *testing.T) {
+	now := at(t, 0)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"claude:claude-new@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-new@example.com.json",
+			// Windows present but never observed: no timestamps at all.
+			Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 0}},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: "claude-new@example.com.json", Provider: "claude"}},
+		StaleAfter: time.Hour}, now)
+	if doc.Credentials[0].Status != StatusPending {
+		t.Fatalf("status = %q; want pending", doc.Credentials[0].Status)
+	}
+	for _, p := range doc.Providers {
+		for _, row := range p.Rows {
+			if row.Aggregate.MemberCount != 0 {
+				t.Fatalf("a never-observed credential was counted at %d%% in row %s",
+					row.Aggregate.RemainingPercent, row.RowID)
+			}
+		}
+	}
+}

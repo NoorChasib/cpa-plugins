@@ -1,6 +1,24 @@
 package aggregate
 
-import "strings"
+import (
+	"sort"
+	"strings"
+	"unicode"
+)
+
+// printableLabel rejects a configured label carrying anything that is not
+// printable. Operator-supplied, but it lands verbatim in a served document, so
+// control characters, format characters, and the line and paragraph separators
+// that terminate a JavaScript string literal are all excluded. IsGraphic admits
+// ordinary spaces and every printable script.
+func printableLabel(label string) bool {
+	for _, r := range label {
+		if !unicode.IsGraphic(r) {
+			return false
+		}
+	}
+	return true
+}
 
 // Plan display names.
 //
@@ -70,11 +88,21 @@ func NormalizePlanLabels(configured map[string]string) map[string]string {
 	if len(configured) == 0 {
 		return nil
 	}
+	// Sorted, so which overrides survive the bound does not change between
+	// process starts.
+	keys := make([]string, 0, len(configured))
+	for key := range configured {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	out := make(map[string]string, len(configured))
-	for key, label := range configured {
-		key = strings.ToLower(strings.TrimSpace(key))
-		label = strings.TrimSpace(label)
-		if key == "" || label == "" || len([]rune(label)) > maxPlanLabelRune || len(out) >= maxPlanLabels {
+	for _, raw := range keys {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		label := strings.TrimSpace(configured[raw])
+		if key == "" || label == "" || len(out) >= maxPlanLabels {
+			continue
+		}
+		if len([]rune(key)) > maxPlanLabelRune || len([]rune(label)) > maxPlanLabelRune || !printableLabel(label) {
 			continue
 		}
 		out[key] = label
@@ -86,7 +114,7 @@ func NormalizePlanLabels(configured map[string]string) map[string]string {
 //
 // A value that already reads as a name is passed through untouched, so a
 // provider that does the right thing is never second-guessed.
-func planLabelOf(raw string, overrides map[string]string) string {
+func planLabelOf(provider, raw string, overrides map[string]string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
@@ -95,8 +123,12 @@ func planLabelOf(raw string, overrides map[string]string) string {
 	if label, ok := overrides[key]; ok {
 		return label
 	}
-	if label, ok := defaultPlanLabels[key]; ok {
-		return label
+	// The enum table is Codex's. Applying it to every provider would rename
+	// Claude's own "Pro" tier to OpenAI's "Pro 20x".
+	if provider == "codex" {
+		if label, ok := defaultPlanLabels[key]; ok {
+			return label
+		}
 	}
 	if enumToken(trimmed) {
 		return prettify(trimmed)

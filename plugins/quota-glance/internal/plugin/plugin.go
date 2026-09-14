@@ -162,6 +162,12 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	enabled := cfg.Enabled == nil || *cfg.Enabled
 	if !enabled {
 		p.stopWatcher()
+		// Close the routes too. A disabled plugin that keeps serving its last
+		// document is indistinguishable from one that is still running.
+		p.configMu.RLock()
+		served := p.api
+		p.configMu.RUnlock()
+		served.Disable()
 		return registration(), nil
 	}
 	// Refuse plainly rather than serve an empty document that is
@@ -174,29 +180,33 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if err != nil {
 		return protocol.Registration{}, err
 	}
-	if generated {
-		// Logged exactly once, when it is first minted, because the operator
-		// has no other way to learn it. It is never logged again, and it is
-		// persisted so a restart does not invalidate a bookmarked dashboard.
-		p.log("warn", "quota-glance generated a web token; copy it into web-token in plugin configuration", map[string]any{"web_token": token})
-	}
-	p.configMu.RLock()
-	served := p.api
-	p.configMu.RUnlock()
-	served.SetToken(token)
-
+	// Stop the old watcher before opening the store: otherwise two stores hold
+	// the same history file for as long as the close takes, and whichever
+	// writes last wins with a staler view.
+	p.stopWatcher()
 	current, err := store.Open(dataDir)
 	if err != nil {
 		return protocol.Registration{}, err
 	}
-	p.stopWatcher()
 	p.configMu.Lock()
 	p.store = current
 	p.settings = settings{
 		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
 		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels),
 	}
+	served := p.api
 	p.configMu.Unlock()
+
+	// Last, after everything that can fail. A rejected reconfigure must leave
+	// the running configuration — including the token the operator's dashboard
+	// is using — exactly as it was.
+	served.Enable()
+	served.SetToken(token)
+	if generated {
+		// Logged once, when it is first minted, because the operator has no
+		// other way to learn it. It is persisted, so a restart reuses it.
+		p.log("warn", "quota-glance generated a web token; copy it into web-token in plugin configuration", map[string]any{"web_token": token})
+	}
 
 	watcher, err := watch.Start(watch.Options{
 		Path:     cachePath,
@@ -257,6 +267,7 @@ func (p *Plugin) Rebuild() {
 
 	p.stateMu.Lock()
 	defer p.stateMu.Unlock()
+	var historyErr error
 	var doc aggregate.Document
 	switch {
 	case result.Reason != "" && p.lastGood != nil:
@@ -279,16 +290,19 @@ func (p *Plugin) Rebuild() {
 			good := doc
 			p.lastGood = &good
 			p.written, p.nextReq = result.Snapshot.WrittenAt, result.Snapshot.NextRequest
-			if err := current.Append(aggregate.SamplesFrom(doc, now), now); err != nil {
-				p.lastError = err.Error()
-			}
+			historyErr = current.Append(aggregate.SamplesFrom(doc, now), now)
 		}
 	}
 	p.builtAt = now
-	if result.Reason == "" {
-		p.lastError = ""
-	} else {
+	switch {
+	case result.Reason != "":
 		p.lastError = result.Reason
+	case historyErr != nil:
+		// Losing history costs the trend arrows, not the numbers — but it has
+		// to be visible somewhere, and health is the only place it can appear.
+		p.lastError = historyErr.Error()
+	default:
+		p.lastError = ""
 	}
 
 	health := api.Health{
@@ -371,9 +385,10 @@ func resolveToken(configured, dataDir string) (token string, generated bool, err
 		return "", false, errors.New("web token cannot be generated")
 	}
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		// Not fatal: the plugin still serves this session with the token it
-		// just logged. It will mint another on the next restart.
-		return token, true, nil
+		// A token that cannot be persisted would be reminted on every
+		// reconfigure, invalidating the operator's dashboard each time and
+		// writing a new secret to the log. Refuse instead, naming the cause.
+		return "", false, errors.New("web token cannot be persisted; set web-token in configuration or make data-dir writable")
 	}
 	return token, true, nil
 }

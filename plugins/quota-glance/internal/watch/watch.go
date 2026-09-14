@@ -130,8 +130,14 @@ func (w *Watcher) State() State {
 
 func (w *Watcher) setError(message string) {
 	w.stateMu.Lock()
+	repeat := w.state.LastError == message
 	w.state.LastError, w.state.Watching = message, false
 	w.stateMu.Unlock()
+	if repeat {
+		// Logf is a synchronous host callback and fsnotify can fail in a tight
+		// loop; repeating the same message would be a log storm, not a signal.
+		return
+	}
 	w.opts.Logf(message)
 }
 
@@ -168,6 +174,14 @@ func (w *Watcher) run() {
 	case <-w.stop:
 		return
 	}
+	// Close releases the gate to avoid hanging on a watcher that was never
+	// begun, so re-check: without this the startup read still runs, and Close
+	// then waits on the very callback it was cancelling.
+	select {
+	case <-w.stop:
+		return
+	default:
+	}
 	// Read once before any event so a restart serves data immediately rather
 	// than waiting for the next poll to change something.
 	seen := fingerprintOf(w.opts.Path)
@@ -178,6 +192,9 @@ func (w *Watcher) run() {
 		<-debounce.C
 	}
 	pending := false
+	// Local copies so they can be detached when fsnotify gives up; a nil
+	// channel blocks forever in select, leaving only the backstop.
+	events, errors := w.fs.Events, w.fs.Errors
 	backstop := time.NewTicker(w.opts.Backstop)
 	defer backstop.Stop()
 	defer debounce.Stop()
@@ -187,9 +204,15 @@ func (w *Watcher) run() {
 		case <-w.stop:
 			return
 
-		case event, ok := <-w.fs.Events:
+		case event, ok := <-events:
 			if !ok {
-				return
+				// fsnotify has given up. Do NOT stop: the stat backstop exists
+				// for exactly this, and abandoning it here freezes the
+				// dashboard permanently on data that looks current. Detach the
+				// channels and let the ticker carry on polling.
+				events, errors = nil, nil
+				w.setError("filesystem watcher stopped delivering events; polling instead")
+				continue
 			}
 			// A rename surfaces as Create on the destination, and can arrive
 			// alongside Chmod and Write. Anything touching our file or its
@@ -205,11 +228,16 @@ func (w *Watcher) run() {
 				debounce.Reset(w.opts.Debounce)
 			}
 
-		case err, ok := <-w.fs.Errors:
+		case err, ok := <-errors:
 			if !ok {
-				return
+				events, errors = nil, nil
+				w.setError("filesystem watcher stopped delivering events; polling instead")
+				continue
 			}
 			if err != nil {
+				// Deduplicated: Logf is a synchronous callback into the host,
+				// and fsnotify retries a failing read in a tight loop, so an
+				// undeduplicated log here becomes a storm driven by a stuck fd.
 				w.setError("filesystem watcher reported an error")
 			}
 
@@ -221,7 +249,10 @@ func (w *Watcher) run() {
 		case <-backstop.C:
 			// Re-add if the directory was replaced underneath the watch;
 			// fsnotify follows the inode, not the path.
-			if err := w.fs.Add(w.dir); err != nil {
+			if events == nil {
+				// Delivery has stopped; re-adding cannot revive it, and the
+				// poll below is now the only signal.
+			} else if err := w.fs.Add(w.dir); err != nil {
 				w.setError("snapshot directory cannot be watched; falling back to polling")
 			} else {
 				w.setWatching(true)
