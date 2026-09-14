@@ -38,6 +38,14 @@ jobs:
             plugins/quota-glance/testdata/golden/summary-degraded.json
           make -C plugins/quota-glance golden
           git diff --exit-code -- plugins/quota-glance/testdata/golden/
+      # Every other check in this suite calls Handle() in process. Only this one
+      # proves the shared library loads, that CPA accepts the ABI handshake,
+      # that the routes are registered where we think, and that the plugin
+      # unloads without wedging the proxy.
+      - name: Native load, serve, reload, restart and unload inside real CPA
+        run: |
+          docker pull eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b
+          make -C plugins/quota-glance smoke
       # quota-glance imports the quota-cache client directly from the monorepo,
       # so a change to that client has to keep both consumers building.
       - name: Quota Cache client contract

@@ -65,6 +65,17 @@ A different question from `status`, and a different set: `ok`, `error`, `stale`.
 | `refreshPending` | A poll is in flight. Not an error. |
 | `stale` | Older than `stale-after`. |
 
+### `credentials[].id` and `email`
+
+`id` is the credential's CPA auth index. Treat it as an opaque key: CPA derives
+a stable index that is **sometimes the file name** (`claude-you@example.com.json`)
+and sometimes an opaque hash (`d990722065363974`), depending on how the
+credential was loaded. Both shapes were observed against a real CPA instance.
+
+`email` is resolved for you in either case — derived from the file name where
+that is what the index is, and taken from CPA's own roster otherwise. Render
+`email`; never try to parse `id`.
+
 ### `plan` — already display-ready
 
 The string beside a credential is the name its tier is sold under, resolved

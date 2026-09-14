@@ -93,7 +93,14 @@ stale reason — is in [docs/summary-contract.md](docs/summary-contract.md).
 cd plugins/quota-glance
 make ci       # gofmt, vet, race tests, and the c-shared build
 make golden   # regenerate both contracts under testdata/golden/
+make smoke    # load the built library into a disposable CPA container (needs docker)
 ```
+
+`make smoke` is the only check that leaves the process. Everything else calls
+the plugin in-process, which cannot tell you the shared library loads, that CPA
+accepts the ABI handshake, that the routes are registered where you expect, or
+that the plugin unloads without wedging the proxy. It drives the real routes
+against a pinned CPA image with synthetic credentials and no provider requests.
 
 `testdata/golden/` holds the two contracts the web app develops against:
 `summary.json` (healthy) and `summary-degraded.json` (every degraded state).
