@@ -252,11 +252,17 @@ func Build(in Input, now time.Time) Document {
 	}
 
 	records := make([]record, 0, len(in.Identities))
-	var newestObservation time.Time
+	var newestObservation, soonestAttempt time.Time
 	for _, identity := range in.Identities {
 		r := record{identity: identity}
 		r.entry, r.hasEntry = in.Snapshot.Entries[qc.Key(identity.Provider, identity.AuthIndex)]
 		if r.hasEntry {
+			// The soonest attempt is taken across every credential without
+			// filtering to the future: a poller that has fallen behind should
+			// show as overdue in the header rather than vanish from it.
+			if at := r.entry.NextAttempt; !at.IsZero() && (soonestAttempt.IsZero() || at.Before(soonestAttempt)) {
+				soonestAttempt = at
+			}
 			r.windows = windowsOf(r.entry)
 			r.freshest = r.entry.ObservedAt
 			for _, w := range r.windows {
@@ -332,6 +338,8 @@ func Build(in Input, now time.Time) Document {
 	}
 
 	doc.Providers = buildProviders(records, in, now)
+	doc.ObservedAtEpoch = epochPointerOf(newestObservation)
+	doc.NextAttemptEpoch = epochPointerOf(soonestAttempt)
 	applyStaleness(&doc, in, newestObservation, now)
 	return doc
 }
@@ -341,6 +349,16 @@ func epochOf(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
+}
+
+// epochPointerOf is the nullable form, for the document fields that report
+// "there is nothing to say yet" rather than a zero instant.
+func epochPointerOf(t time.Time) *int64 {
+	if t.IsZero() {
+		return nil
+	}
+	epoch := t.Unix()
+	return &epoch
 }
 
 func applyStaleness(doc *Document, in Input, newestObservation time.Time, now time.Time) {

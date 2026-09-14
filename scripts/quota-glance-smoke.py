@@ -24,7 +24,6 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
 MANAGEMENT_KEY = 'synthetic-local-smoke-key'
-WEB_TOKEN = 'synthetic-local-smoke-web-token'
 PLUGIN = 'quota-glance'
 
 # The committed fixture's shape, anchored to the current instant so the document
@@ -137,7 +136,6 @@ plugins:
       enabled: true
       cache-path: /work/data/snapshot.json
       data-dir: /work/data/{PLUGIN}
-      web-token: {WEB_TOKEN}
       stale-after: 45m
 ''')
 
@@ -198,20 +196,33 @@ def checks(container, cache_path, now):
     assert status == 200, f'app route: {status} (CPA home page enabled?)'
     assert 'text/html' in headers.get('Content-Type', ''), headers
     shell = body.decode()
-    for secret in (WEB_TOKEN, MANAGEMENT_KEY, 'siphorchannel', 'remainingFraction'):
+    # Values, not vocabulary. The dashboard necessarily contains the words the
+    # summary document is made of — it reads remainingFraction off the response
+    # — so what is checked for is a token, an address, or a serialized document.
+    # web/web_test.go holds the same line at build time, in more detail.
+    for secret in (MANAGEMENT_KEY, 'siphorchannel', '@example.com'):
         assert secret not in shell, f'the public shell leaked {secret!r}'
-    print(f'  app           200 html, {len(body)} bytes, data-free')
+    for serialized in ('"remainingFraction":', '"credentialId":', '"schemaVersion":'):
+        assert serialized not in shell, f'the public shell carries a document ({serialized})'
+    # And no second request: the page is one self-contained document, because a
+    # third-party fetch would run with the console's key in scope.
+    assert 'src="http' not in shell and 'href="http' not in shell, 'the shell fetches something external'
+    print(f'  app           200 html, {len(body)} bytes, data-free, self-contained')
 
-    # 3. The data route authenticates itself, because CPA does not.
-    for label, token in (('no token', None), ('wrong token', 'nope')):
-        status, body, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=token)
-        assert status == 401, f'{label}: {status}'
-        assert not body, f'{label} returned a body'
-    print('  summary       401 bare without the token')
+    # 3. The document is reachable only through CPA's authenticated management
+    #    tree. The public resource tree must not serve it at all, and the
+    #    management tree must refuse an absent or wrong key — that refusal is
+    #    CPA's, which is exactly the point: this plugin holds no credential.
+    status, _, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary')
+    assert status == 404, f'the public tree served the document: {status}'
+    for label, key in (('no key', None), ('wrong key', 'nope')):
+        status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', token=key)
+        assert status in (401, 403), f'{label}: {status}'
+    print('  summary       404 on the public tree, 401 without CPA\'s key')
 
     # 4. Learn the roster CPA actually reports, then write a snapshot keyed by
     #    it — which is precisely what quota-cache does.
-    status, body, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN)
+    status, body, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
     assert status == 200, status
     catalog = json.loads(body)['credentials']
     assert len(catalog) == len(CLAUDE), f'roster = {catalog}'
@@ -228,7 +239,7 @@ def checks(container, cache_path, now):
     deadline = time.monotonic() + 75
     document = None
     while time.monotonic() < deadline:
-        status, body, headers = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN)
+        status, body, headers = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
         if status == 200:
             candidate = json.loads(body)
             # Wait for actual rows: a provider group with no rows means the
@@ -262,7 +273,7 @@ def checks(container, cache_path, now):
     # 5. Conditional request.
     etag = headers.get('Etag') or headers.get('ETag')
     assert etag, headers
-    status, _, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN,
+    status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True,
                            headers={'If-None-Match': etag})
     assert status == 304, status
     print('  summary       304 on If-None-Match')
@@ -285,7 +296,7 @@ def checks(container, cache_path, now):
     deadline = time.monotonic() + 75
     updated = None
     while time.monotonic() < deadline:
-        status, body, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN)
+        status, body, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
         if status == 200:
             document = json.loads(body)
             row = next(r for p in document['providers'] if p['id'] == 'claude'
@@ -299,15 +310,14 @@ def checks(container, cache_path, now):
     via = 'stat backstop' if after['watcher']['backstops'] > before['watcher']['backstops'] else 'fsnotify event'
     print(f'  reload        picked up via {via}')
 
-    # 8. Restart. The generated-or-configured token must survive, and the
-    #    plugin must come back without intervention.
+    # 8. Restart. The plugin must come back without intervention.
     run('docker', 'restart', container)
     base = origin()  # the mapped port can change across a restart
     deadline = time.monotonic() + 60
     ok = False
     while time.monotonic() < deadline:
         try:
-            status, _, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=WEB_TOKEN)
+            status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
             if status == 200:
                 ok = True
                 break
@@ -315,7 +325,7 @@ def checks(container, cache_path, now):
             pass
         time.sleep(0.25)
     assert ok, 'the plugin did not serve again after a restart'
-    print('  restart       served again with the same token')
+    print('  restart       served again without intervention')
 
     # 9. Unload. A blocking file operation on the watcher goroutine used to wedge
     #    this path, and a wedged shutdown means CPA cannot unload the plugin.

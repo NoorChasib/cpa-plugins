@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+/* The approved design's tokens, taken verbatim from web/design/mockup.html.
+ *
+ * Fonts are system stacks and nothing here loads a file. The bundle makes no
+ * external request of any kind, and the reason is sharper than page weight:
+ * this page recovers the CPA console's management key to read its data, so it
+ * runs with that credential in scope. Every third party it did not contact is
+ * one that cannot reach it. Icons, where there are any, are inline SVG. */
+@theme {
+  --color-bg: #101114;
+  --color-card: #181a1e;
+  --color-card-2: #1e2126;
+  --color-line: #262a30;
+  --color-rule: #1f2227;
+
+  --color-ink: #eef0f3;
+  --color-ink-2: #9aa1ab;
+  --color-ink-3: #6b7280;
+
+  --color-accent: #3987e5;
+  --color-track: #23262c;
+
+  --color-good: #0ca30c;
+  --color-warn: #fab219;
+  --color-crit: #d03b3b;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+  --font-num: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* Numbers are monospace so columns line up down the card; names and labels
+   * are not, because this is a dashboard and not a terminal theme. */
+  .num {
+    font-family: var(--font-num);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* One credential inside a window card.
+   *
+   * Named areas rather than utilities because the mobile reflow moves cells
+   * between rows: address and plan on the first line, then bar, percent and
+   * countdown on the second. Written here, next to the columns it rearranges,
+   * it stays legible as one layout with two shapes. */
+  .cred {
+    display: grid;
+    /* The mockup's columns, with the countdown widened from 60px to fit
+     * "resetting…" — the one string the design mandates that the original
+     * measurement did not have to hold. The 8px comes out of the address
+     * column, which has hundreds to spare at every width. */
+    grid-template-columns: 1fr 62px 104px 44px 68px;
+    align-items: center;
+    gap: 11px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .cred:last-child {
+    border-bottom: 0;
+  }
+
+  @media (max-width: 640px) {
+    .cred {
+      grid-template-columns: 1fr 46px 68px;
+      grid-template-areas:
+        "mail plan plan"
+        "bar pct eta";
+      gap: 5px 9px;
+      padding: 10px 0;
+    }
+
+    .cred-mail {
+      grid-area: mail;
+    }
+
+    .cred-plan {
+      grid-area: plan;
+      justify-self: end;
+    }
+
+    .cred-bar {
+      grid-area: bar;
+    }
+
+    .cred-pct {
+      grid-area: pct;
+    }
+
+    .cred-eta {
+      grid-area: eta;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

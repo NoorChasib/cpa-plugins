@@ -27,7 +27,6 @@ func (r roster) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) 
 
 func main() {
 	snapshot := flag.String("snapshot", "testdata/snapshots/seven-credentials.json", "snapshot fixture to serve")
-	token := flag.String("token", "dev-token", "web token for the summary route")
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
 	epoch := flag.Int64("now", 1789012800, "build clock, in Unix seconds")
 	flag.Parse()
@@ -44,7 +43,7 @@ func main() {
 		StaleAfter: 45 * time.Minute,
 	}, now)
 
-	served := api.New("quota-glance", *token)
+	served := api.New("quota-glance")
 	served.Publish(doc, api.Health{Version: "fixtureserve", CachePath: *snapshot, StaleAfter: "45m"})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +59,9 @@ func main() {
 		_, _ = w.Write(res.Body)
 	})
 	fmt.Printf("serving %s on http://%s\n", *snapshot, *addr)
+	fmt.Printf("  page     http://%s/v0/resource/plugins/quota-glance/app\n", *addr)
+	fmt.Printf("  document http://%s/v0/management/plugins/quota-glance/summary\n", *addr)
+	fmt.Println("  (CPA authenticates the management tree in production; this stand-in does not)")
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 

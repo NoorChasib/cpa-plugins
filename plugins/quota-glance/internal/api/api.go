@@ -8,10 +8,7 @@
 package api
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -22,13 +19,6 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/web"
-)
-
-const (
-	// failureLimit bounds FAILED authentication attempts per window, across all
-	// callers. It slows a brute force against the token; it is not a ban.
-	failureLimit = 20
-	rateWindow   = time.Minute
 )
 
 // WatcherState mirrors the watcher's reported state. It is redeclared here
@@ -65,10 +55,7 @@ type API struct {
 	doc    aggregate.Document
 	health Health
 
-	tokenHash [sha256.Size]byte
-	hasToken  bool
-	disabled  bool
-	limiter   *limiter
+	disabled bool
 }
 
 // Disable and Enable close and reopen every route. A plugin turned off in
@@ -86,9 +73,8 @@ func (a *API) Enable() {
 	a.disabled = false
 }
 
-func New(pluginID, token string) *API {
-	a := &API{pluginID: pluginID, limiter: newLimiter()}
-	a.SetToken(token)
+func New(pluginID string) *API {
+	a := &API{pluginID: pluginID}
 	// Serve a valid, honest document before the first build completes rather
 	// than a null body.
 	a.Publish(aggregate.Document{
@@ -97,27 +83,6 @@ func New(pluginID, token string) *API {
 		Providers:     []aggregate.Provider{},
 	}, Health{})
 	return a
-}
-
-// NewToken returns a fresh web token. The caller logs it exactly once, when the
-// configuration left it empty; it is never logged again and never stored here
-// in recoverable form.
-func NewToken() (string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-// SetToken stores only a digest. An empty token leaves the summary route
-// closed rather than open: until one is configured there is nothing to
-// authenticate against, and the alternative is a route that a blank credential
-// satisfies.
-func (a *API) SetToken(token string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.tokenHash, a.hasToken = sha256.Sum256([]byte(token)), token != ""
 }
 
 // Publish replaces the served document.
@@ -171,10 +136,13 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	switch req.Path {
 	case a.resourcePath("/app"):
 		return a.appResponse(req)
-	case a.resourcePath("/summary"):
-		return a.summaryResponse(req, now)
 	// CPA's management middleware has already required the full management key
-	// before either of these runs.
+	// before any of these runs, which is the whole of this plugin's
+	// authentication. The dashboard is served from the resource tree above but
+	// reads its data from here, recovering the console's key the same way every
+	// other plugin page in this repository does.
+	case a.managementPath("/summary"):
+		return a.summaryResponse(req)
 	case a.managementPath("/health"):
 		return a.healthResponse()
 	case a.managementPath("/windows"):
@@ -183,24 +151,7 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 }
 
-func (a *API) summaryResponse(req protocol.ManagementRequest, now time.Time) protocol.ManagementResponse {
-	// Authenticate first, and never throttle a request that presents the right
-	// token. That is what makes a lockout impossible: no volume of hostile
-	// traffic can stop the operator reaching their own dashboard.
-	if !a.authorized(req.Headers) {
-		if !a.limiter.allowFailure(now) {
-			return protocol.ManagementResponse{
-				StatusCode: http.StatusTooManyRequests,
-				Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
-			}
-		}
-		// Bare: no hint about whether the token was absent, malformed, or
-		// merely wrong.
-		return protocol.ManagementResponse{
-			StatusCode: http.StatusUnauthorized,
-			Headers:    http.Header{"Cache-Control": {"no-store"}},
-		}
-	}
+func (a *API) summaryResponse(req protocol.ManagementRequest) protocol.ManagementResponse {
 	a.mu.RLock()
 	body, etag := a.body, a.etag
 	a.mu.RUnlock()
@@ -215,31 +166,6 @@ func (a *API) summaryResponse(req protocol.ManagementRequest, now time.Time) pro
 		return protocol.ManagementResponse{StatusCode: http.StatusNotModified, Headers: headers}
 	}
 	return protocol.ManagementResponse{StatusCode: http.StatusOK, Headers: headers, Body: body}
-}
-
-// authorized compares in constant time. Only the SHA-256 of the configured
-// token is held, and neither the token nor the presented value is ever logged.
-func (a *API) authorized(headers http.Header) bool {
-	presented := strings.TrimSpace(headers.Get("Authorization"))
-	const prefix = "Bearer "
-	if len(presented) <= len(prefix) || !strings.EqualFold(presented[:len(prefix)], prefix) {
-		return false
-	}
-	// An empty value never authenticates, whatever the configured token is.
-	// Without this, "Bearer " plus whitespace would trim to "" and match the
-	// digest of an unset token.
-	value := strings.TrimSpace(presented[len(prefix):])
-	if value == "" {
-		return false
-	}
-	sum := sha256.Sum256([]byte(value))
-	a.mu.RLock()
-	expected, configured := a.tokenHash, a.hasToken
-	a.mu.RUnlock()
-	if !configured {
-		return false
-	}
-	return subtle.ConstantTimeCompare(sum[:], expected[:]) == 1
 }
 
 func matchesETag(header, etag string) bool {
@@ -303,37 +229,6 @@ func jsonResponse(status int, value any) protocol.ManagementResponse {
 		Headers:    http.Header{"Content-Type": {"application/json; charset=utf-8"}, "Cache-Control": {"no-store"}},
 		Body:       raw,
 	}
-}
-
-// limiter throttles failed authentication attempts, globally.
-//
-// A per-client limiter is not implementable over this ABI: the request carries
-// no peer address, only headers the caller supplies. A key taken from those is
-// rotated trivially — which defeats the limit outright — and forged just as
-// trivially as the operator's own address, which would lock them out of their
-// own dashboard with unauthenticated traffic. It is also unbounded input, so
-// keying a map on it retains whatever the caller sends.
-//
-// Counting failures globally removes the attacker-chosen key. Combined with
-// authenticating before throttling, a correct token always gets through and a
-// wrong one is slowed, which is the property the design actually asks for.
-type limiter struct {
-	mu    sync.Mutex
-	start time.Time
-	count int
-}
-
-func newLimiter() *limiter { return &limiter{} }
-
-func (l *limiter) allowFailure(now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.start.IsZero() || now.Sub(l.start) >= rateWindow || now.Before(l.start) {
-		l.start, l.count = now, 1
-		return true
-	}
-	l.count++
-	return l.count <= failureLimit
 }
 
 // appResponse serves the application shell. It is deliberately unauthenticated

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Quota</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --bg:#101114; --card:#181a1e; --card-2:#1e2126; --line:#262a30;
+  --ink:#eef0f3; --ink-2:#9aa1ab; --ink-3:#6b7280;
+  --accent:#3987e5; --track:#23262c;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  --num:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;padding:32px 22px 56px}
+.wrap{max-width:820px;margin:0 auto}
+
+header{display:flex;align-items:baseline;justify-content:space-between;
+  gap:14px;flex-wrap:wrap;margin-bottom:26px}
+h1{font-size:19px;font-weight:650;letter-spacing:-.015em}
+.obs{font-family:var(--num);font-size:11.5px;color:var(--ink-3)}
+
+.provider{margin-bottom:30px}
+.phead{display:flex;align-items:baseline;gap:9px;margin-bottom:11px;padding-left:2px}
+.pname{font-size:14px;font-weight:600;letter-spacing:-.01em}
+.pmeta{font-size:11.5px;color:var(--ink-3)}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:15px 16px 6px;margin-bottom:10px}
+
+.whead{display:grid;grid-template-columns:1fr auto;align-items:baseline;
+  column-gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.wname{font-size:13.5px;font-weight:550;color:var(--ink)}
+.wvalue{display:flex;align-items:baseline;gap:4px;white-space:nowrap}
+.wpct{font-family:var(--num);font-size:26px;font-weight:500;line-height:1;
+  letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.wunit{font-size:11px;color:var(--ink-3)}
+.wnext{grid-column:1/-1;font-family:var(--num);font-size:11px;
+  color:var(--ink-3);margin-top:7px}
+.ok{color:var(--good)} .lo{color:var(--warn)} .no{color:var(--crit)}
+
+.cred{display:grid;grid-template-columns:1fr 62px 104px 44px 60px;
+  align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid #1f2227}
+.cred:last-child{border-bottom:0}
+.who{min-width:0}
+.mail{font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.mail i{font-style:normal;color:var(--ink-3)}
+.plan{font-size:10.5px;color:var(--ink-2);background:var(--card-2);
+  border:1px solid var(--line);border-radius:5px;padding:2px 7px;
+  justify-self:start;white-space:nowrap}
+.bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden;position:relative}
+.fill{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--accent)}
+.fill.low{background:var(--crit)}   /* applied when remaining < 20% */
+.pct{font-family:var(--num);font-size:12px;text-align:right;
+  font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.eta{font-family:var(--num);font-size:11px;text-align:right;color:var(--ink-3)}
+
+footer{font-size:11.5px;color:var(--ink-3);padding-left:2px;margin-top:18px}
+
+@media(max-width:640px){
+  body{padding:22px 14px 44px}
+  h1{font-size:17px}
+  .card{padding:13px 13px 4px;border-radius:11px}
+  .cred{grid-template-columns:1fr 46px 56px;grid-template-areas:
+    "mail plan plan" "bar pct eta";gap:5px 9px;padding:10px 0}
+  .who{grid-area:mail} .plan{grid-area:plan;justify-self:end}
+  .bar{grid-area:bar} .pct{grid-area:pct} .eta{grid-area:eta}
+}
+</style></head><body><div class="wrap">
+
+<header>
+  <h1>Capacity</h1>
+  <div class="obs">observed 4m ago · next attempt in 11m</div>
+</header>
+
+<section class="provider">
+  <div class="phead"><span class="pname">Claude</span><span class="pmeta">5 credentials</span></div>
+
+  <div class="card">
+    <div class="whead">
+      <span class="wname">Session</span>
+      <span class="wvalue"><span class="wpct ok">94</span><span class="wunit">% left</span></span>
+      <span class="wnext">+6% when siphorchannel resets in 1h 15m</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">siphorchannel<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill" style="width:100%"></span></span><span class="pct">100%</span><span class="eta">1d 2h</span></div>
+    <div class="cred"><div class="who"><div class="mail">agency<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"><span class="fill" style="width:100%"></span></span><span class="pct">100%</span><span class="eta">1d 20h</span></div>
+    <div class="cred"><div class="who"><div class="mail">chasibnoor<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill" style="width:69%"></span></span><span class="pct">69%</span><span class="eta">1h 15m</span></div>
+    <div class="cred"><div class="who"><div class="mail">noor<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"><span class="fill" style="width:100%"></span></span><span class="pct">100%</span><span class="eta">4d 15h</span></div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill" style="width:100%"></span></span><span class="pct">100%</span><span class="eta">5d 3h</span></div>
+  </div>
+
+  <div class="card">
+    <div class="whead">
+      <span class="wname">Weekly</span>
+      <span class="wvalue"><span class="wpct lo">32</span><span class="wunit">% left</span></span>
+      <span class="wnext">+19% when siphorchannel resets in 1d 2h</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">siphorchannel<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill low" style="width:3%"></span></span><span class="pct">3%</span><span class="eta">1d 2h</span></div>
+    <div class="cred"><div class="who"><div class="mail">agency<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"><span class="fill" style="width:35%"></span></span><span class="pct">35%</span><span class="eta">1d 20h</span></div>
+    <div class="cred"><div class="who"><div class="mail">chasibnoor<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill" style="width:24%"></span></span><span class="pct">24%</span><span class="eta">3d 5h</span></div>
+    <div class="cred"><div class="who"><div class="mail">noor<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"><span class="fill" style="width:49%"></span></span><span class="pct">49%</span><span class="eta">4d 15h</span></div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill" style="width:51%"></span></span><span class="pct">51%</span><span class="eta">5d 3h</span></div>
+  </div>
+
+  <div class="card">
+    <div class="whead">
+      <span class="wname">Weekly · Fable</span>
+      <span class="wvalue"><span class="wpct no">0</span><span class="wunit">% left</span></span>
+      <span class="wnext">+20% when siphorchannel resets in 1d 2h</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">siphorchannel<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"></span><span class="pct">0%</span><span class="eta">1d 2h</span></div>
+    <div class="cred"><div class="who"><div class="mail">agency<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"></span><span class="pct">0%</span><span class="eta">1d 20h</span></div>
+    <div class="cred"><div class="who"><div class="mail">chasibnoor<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"></span><span class="pct">0%</span><span class="eta">3d 5h</span></div>
+    <div class="cred"><div class="who"><div class="mail">noor<i>@nilladigital.com</i></div></div><span class="plan">Team</span><span class="bar"></span><span class="pct">0%</span><span class="eta">4d 15h</span></div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">Max</span><span class="bar"><span class="fill low" style="width:2%"></span></span><span class="pct">2%</span><span class="eta">5d 3h</span></div>
+  </div>
+</section>
+
+<section class="provider">
+  <div class="phead"><span class="pname">Codex</span><span class="pmeta">1 credential</span></div>
+  <div class="card">
+    <div class="whead">
+      <span class="wname">Weekly</span>
+      <span class="wvalue"><span class="wpct no">12</span><span class="wunit">% left</span></span>
+      <span class="wnext">full reset in 6d 4h</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">Pro 20x</span><span class="bar"><span class="fill low" style="width:12%"></span></span><span class="pct">12%</span><span class="eta">6d 4h</span></div>
+  </div>
+  <div class="card">
+    <div class="whead">
+      <span class="wname">GPT-5.3-Codex · session</span>
+      <span class="wvalue"><span class="wpct ok">100</span><span class="wunit">% left</span></span>
+      <span class="wnext">resets in 4h 12m</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">Pro 20x</span><span class="bar"><span class="fill" style="width:100%"></span></span><span class="pct">100%</span><span class="eta">4h 12m</span></div>
+  </div>
+</section>
+
+<section class="provider">
+  <div class="phead"><span class="pname">xAI</span><span class="pmeta">1 credential</span></div>
+  <div class="card">
+    <div class="whead">
+      <span class="wname">Weekly</span>
+      <span class="wvalue"><span class="wpct no">0</span><span class="wunit">% left</span></span>
+      <span class="wnext">full reset in 2d 9h</span>
+    </div>
+    <div class="cred"><div class="who"><div class="mail">noorchasib<i>@gmail.com</i></div></div><span class="plan">—</span><span class="bar"></span><span class="pct">0%</span><span class="eta">2d 9h</span></div>
+  </div>
+</section>
+
+<footer>7 credentials · 6 observed · 1 without a quota provider</footer>
+</div></body></html>

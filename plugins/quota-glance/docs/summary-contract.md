@@ -1,6 +1,8 @@
 # The summary document
 
-`GET /v0/resource/plugins/quota-glance/summary` returns one JSON document. This
+`GET /v0/management/plugins/quota-glance/summary` returns one JSON document.
+CPA authenticates it with the management key before this plugin sees the
+request; the plugin holds no credential of its own. This
 page is its reference: the vocabulary a client has to understand, and the
 guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
@@ -29,6 +31,13 @@ is a deliberate contract change.
   than `credentials[]`. Match on `credentialId`.
 - **Times are integer Unix epoch seconds.** Nullable ones are `null`, never
   omitted and never zero. `generatedAtEpoch + resetInSeconds == resetAtEpoch`.
+- **The header line is precomputed too.** `observedAtEpoch` is the newest
+  successful observation across every credential and `nextAttemptEpoch` the
+  soonest poll quota-cache has scheduled — the two halves of "observed 4m ago ·
+  next attempt in 11m". They are served rather than derived because deriving
+  them means a max and a min across every entry. `nextAttemptEpoch` is not
+  filtered to the future: a poller that has fallen behind reads as overdue
+  rather than disappearing. Both are `null` when there is nothing to report.
 - **Additive evolution only.** New fields and new enum values may appear without
   a `schemaVersion` bump; handle an unknown value by falling through to a
   neutral rendering rather than failing.

@@ -85,8 +85,17 @@ type Sample struct {
 
 // Document is the response body of GET .../summary.
 type Document struct {
-	SchemaVersion    int          `json:"schemaVersion"`
-	GeneratedAtEpoch int64        `json:"generatedAtEpoch"`
+	SchemaVersion    int   `json:"schemaVersion"`
+	GeneratedAtEpoch int64 `json:"generatedAtEpoch"`
+	// ObservedAtEpoch is the newest successful observation across every
+	// credential; NextAttemptEpoch is the soonest poll quota-cache has
+	// scheduled. The dashboard header reads "observed 4m ago · next attempt in
+	// 11m" from exactly these two. They are here rather than derived in the
+	// client because deriving them means a max and a min across every entry,
+	// and two clients doing that arithmetic separately is how they come to
+	// disagree. Both are null when there is nothing to report.
+	ObservedAtEpoch  *int64       `json:"observedAtEpoch"`
+	NextAttemptEpoch *int64       `json:"nextAttemptEpoch"`
 	Stale            bool         `json:"stale"`
 	StaleReason      *string      `json:"staleReason"`
 	Counters         Counters     `json:"counters"`
