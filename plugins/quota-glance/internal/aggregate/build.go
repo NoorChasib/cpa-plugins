@@ -252,16 +252,26 @@ func Build(in Input, now time.Time) Document {
 	}
 
 	records := make([]record, 0, len(in.Identities))
-	var newestObservation, soonestAttempt time.Time
+	var newestObservation, soonestAttempt, soonestOverdue time.Time
 	for _, identity := range in.Identities {
 		r := record{identity: identity}
 		r.entry, r.hasEntry = in.Snapshot.Entries[qc.Key(identity.Provider, identity.AuthIndex)]
 		if r.hasEntry {
-			// The soonest attempt is taken across every credential without
-			// filtering to the future: a poller that has fallen behind should
-			// show as overdue in the header rather than vanish from it.
-			if at := r.entry.NextAttempt; !at.IsZero() && (soonestAttempt.IsZero() || at.Before(soonestAttempt)) {
-				soonestAttempt = at
+			// The soonest attempt still ahead of us, which is when this
+			// document can next change. Attempts already in the past are
+			// tracked separately rather than mixed in: one credential stuck in
+			// backoff would otherwise hold the minimum in the past forever and
+			// the header would read "due" while every other credential kept
+			// polling on schedule.
+			if at := r.entry.NextAttempt; !at.IsZero() {
+				switch {
+				case at.After(now):
+					if soonestAttempt.IsZero() || at.Before(soonestAttempt) {
+						soonestAttempt = at
+					}
+				case soonestOverdue.IsZero() || at.Before(soonestOverdue):
+					soonestOverdue = at
+				}
 			}
 			r.windows = windowsOf(r.entry)
 			r.freshest = r.entry.ObservedAt
@@ -339,6 +349,12 @@ func Build(in Input, now time.Time) Document {
 
 	doc.Providers = buildProviders(records, in, now)
 	doc.ObservedAtEpoch = epochPointerOf(newestObservation)
+	// Falls back to an overdue attempt only when nothing is scheduled ahead,
+	// which is a poller that has genuinely stalled rather than one credential
+	// waiting its turn. The client reads a past instant as "due".
+	if soonestAttempt.IsZero() {
+		soonestAttempt = soonestOverdue
+	}
 	doc.NextAttemptEpoch = epochPointerOf(soonestAttempt)
 	applyStaleness(&doc, in, newestObservation, now)
 	return doc

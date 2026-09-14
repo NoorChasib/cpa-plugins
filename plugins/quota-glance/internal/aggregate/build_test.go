@@ -157,6 +157,49 @@ func TestSessionRowMatchesTheDesign(t *testing.T) {
 
 // The golden document is the contract between this half and the web app. It is
 // committed, and it is byte-identical to what the summary route serves.
+// A credential stuck in backoff must not hold the header at "next attempt due"
+// while everything else keeps polling on schedule. The reader is being told
+// when this page can next change, and that is the soonest attempt still ahead.
+func TestNextAttemptIgnoresOneStuckCredential(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	snapshot := qc.Snapshot{Entries: map[string]qc.Entry{
+		qc.Key("claude", "claude-healthy@example.com.json"): {
+			ObservedAt: observed, NextAttempt: now.Add(10 * time.Minute),
+			Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 10, ObservedAt: observed, ResetAt: now.Add(time.Hour)}},
+		},
+		// Overdue: quota-cache has not got back to it yet.
+		qc.Key("claude", "claude-stuck@example.com.json"): {
+			ObservedAt: observed, NextAttempt: now.Add(-2 * time.Hour), Failures: 3,
+			Windows: []qc.EntryWindow{{Key: qc.WindowWeekly, UsedPercent: 50, ObservedAt: observed, ResetAt: now.Add(time.Hour)}},
+		},
+	}}
+	identities := []Identity{
+		{AuthIndex: "claude-healthy@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-stuck@example.com.json", Provider: "claude"},
+	}
+
+	doc := Build(Input{Snapshot: snapshot, Identities: identities, StaleAfter: time.Hour}, now)
+
+	if doc.NextAttemptEpoch == nil {
+		t.Fatal("nextAttemptEpoch is null; the healthy credential has one scheduled")
+	}
+	if got := *doc.NextAttemptEpoch; got != now.Add(10*time.Minute).Unix() {
+		t.Fatalf("nextAttemptEpoch = %d; want the soonest FUTURE attempt %d, not the stuck one",
+			got, now.Add(10*time.Minute).Unix())
+	}
+
+	// With nothing scheduled ahead at all, the stalled poller must still be
+	// reported rather than vanishing: the header reads "due", not blank.
+	onlyStuck := qc.Snapshot{Entries: map[string]qc.Entry{
+		qc.Key("claude", "claude-stuck@example.com.json"): snapshot.Entries[qc.Key("claude", "claude-stuck@example.com.json")],
+	}}
+	stalled := Build(Input{Snapshot: onlyStuck, Identities: identities[1:], StaleAfter: time.Hour}, now)
+	if stalled.NextAttemptEpoch == nil || *stalled.NextAttemptEpoch != now.Add(-2*time.Hour).Unix() {
+		t.Fatalf("a wholly stalled poller must still report an attempt, got %v", stalled.NextAttemptEpoch)
+	}
+}
+
 func TestGoldenSummaryDocument(t *testing.T) {
 	doc := buildFixture(t)
 	raw, err := json.MarshalIndent(doc, "", "  ")
