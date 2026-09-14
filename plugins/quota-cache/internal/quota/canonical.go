@@ -64,12 +64,17 @@ const (
 // allowance this document calls Fable. Anthropic has shipped it under more than
 // one display name; both land on the same row rather than on two that each show
 // half the picture.
-func fableScope(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "fable", "opus", "claude fable", "claude opus":
-		return true
+func fableScope(model string) bool { return scopeConcept(model) == "fable" }
+
+// scopeConcept normalises a scoped model's display name to the concept the flat
+// keys spell out, so the two shapes can be recognised as the same window.
+func scopeConcept(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimPrefix(normalized, "claude ")
+	if normalized == "opus" {
+		return "fable"
 	}
-	return false
+	return normalized
 }
 
 // mapClaude. Claude names its windows after their duration; seven_day is the

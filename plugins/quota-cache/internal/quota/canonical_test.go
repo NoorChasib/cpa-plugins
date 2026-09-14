@@ -108,28 +108,62 @@ func TestClaudeReadsTheStructuredLimitsArray(t *testing.T) {
 	}
 }
 
-// Both shapes at once, which is what a rollout looks like from the outside.
-// Whichever carries data wins, and neither is published twice.
+// Both shapes at once, which is what a rollout looks like from the outside and
+// what a real account was observed serving. The two are spellings of one window
+// rather than two windows: published together they reduce to the same canonical
+// identity and the loser is demoted to a raw: row, which shows the reader the
+// same figures twice under a machine name like "limits/session".
 func TestClaudeFlatKeysAndLimitsArrayDoNotDuplicate(t *testing.T) {
 	o := fetchDetails(t, "claude", `{`+
-		`"five_hour":{"utilization":31,"resets_at":"2026-09-14T13:15:00Z"},`+
-		`"seven_day":{"utilization":76,"resets_at":"2026-09-17T03:00:00Z"},`+
-		`"seven_day_opus":null,`+
-		`"limits":[{"kind":"weekly_scoped","percent":88,"resets_at":"2026-09-17T02:59:00Z",`+
+		`"five_hour":{"utilization":4,"resets_at":"2026-09-14T13:15:00Z"},`+
+		`"seven_day":{"utilization":54,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`"seven_day_opus":{"utilization":80,"resets_at":"2026-09-17T02:59:00Z"},`+
+		`"limits":[`+
+		`{"kind":"session","percent":4,"resets_at":"2026-09-14T13:15:00Z"},`+
+		`{"kind":"weekly_all","percent":54,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`{"kind":"weekly_scoped","percent":80,"resets_at":"2026-09-17T02:59:00Z",`+
 		`"scope":{"model":{"display_name":"Fable"}}}]}`)
 
 	want := []string{client.WindowSession, client.WindowWeekly, client.WindowWeeklyFable}
 	if got := keysOf(o.Windows); !equal(got, want) {
 		t.Fatalf("keys=%v want %v", got, want)
 	}
-	seen := map[string]int{}
 	for _, w := range o.Windows {
-		seen[w.Key]++
-	}
-	for key, count := range seen {
-		if count > 1 {
-			t.Fatalf("%s emitted %d times; one credential would be counted twice in its row", key, count)
+		if strings.HasPrefix(w.Key, "raw:") {
+			t.Fatalf("a duplicate surfaced as a second card: %s (%q)", w.Key, w.Title)
 		}
+	}
+}
+
+// A flat key the structured array has no equivalent of is still read, and a
+// scoped model the flat list never knew still appears. Yielding to the array
+// must not mean dropping anything it does not mention.
+func TestClaudeKeepsWindowsTheArrayDoesNotCover(t *testing.T) {
+	o := fetchDetails(t, "claude", `{`+
+		`"seven_day":{"utilization":54,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`"seven_day_cowork":{"utilization":12},`+
+		`"limits":[`+
+		`{"kind":"weekly_all","percent":54,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`{"kind":"weekly_scoped","percent":33,"scope":{"model":{"display_name":"Haiku"}}}]}`)
+
+	want := []string{client.WindowWeekly, client.WindowModelWeekly, "raw:claude:seven_day_cowork"}
+	if got := keysOf(o.Windows); !equal(got, want) {
+		t.Fatalf("keys=%v want %v", got, want)
+	}
+}
+
+// A rejected array value must not suppress a flat key that still has one,
+// or a window Anthropic half-migrated disappears from the dashboard entirely.
+func TestClaudeFlatKeySurvivesAnUnusableArrayEntry(t *testing.T) {
+	o := fetchDetails(t, "claude", `{`+
+		`"seven_day":{"utilization":54,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`"limits":[{"kind":"weekly_all","percent":null,"resets_at":null}]}`)
+
+	if got := keysOf(o.Windows); !equal(got, []string{client.WindowWeekly}) {
+		t.Fatalf("keys=%v; the flat key must still be read", got)
+	}
+	if o.Windows[0].UsedPercent != 54 {
+		t.Fatalf("weekly=%v want 54", o.Windows[0].UsedPercent)
 	}
 }
 

@@ -113,10 +113,28 @@ func addBalance(q *client.Quota, id string, b client.Balance) {
 // scoped limit the model it applies to. Scoped entries are keyed by that model
 // rather than by a fixed list, so a model Anthropic adds later appears on its
 // own instead of needing a release here.
-func claudeLimits(q *client.Quota, root map[string]any) {
+// claudeConcept names the window a flat key describes, in the same vocabulary
+// claudeLimits reports. Empty for a key the structured array has no equivalent
+// of, which is then always read from the flat key.
+func claudeConcept(id string) string {
+	switch id {
+	case "five_hour":
+		return "session"
+	case "seven_day":
+		return "weekly_all"
+	case "seven_day_opus":
+		return "scoped/fable"
+	case "seven_day_sonnet":
+		return "scoped/sonnet"
+	}
+	return ""
+}
+
+func claudeLimits(q *client.Quota, root map[string]any) map[string]bool {
+	covered := map[string]bool{}
 	items, ok := root["limits"].([]any)
 	if !ok {
-		return
+		return covered
 	}
 	for _, item := range items {
 		entry, ok := item.(map[string]any)
@@ -130,19 +148,19 @@ func claudeLimits(q *client.Quota, root map[string]any) {
 		if used == nil && resets == nil {
 			continue
 		}
-		duration, id := int64(604800), ""
+		duration, id, concept := int64(604800), "", ""
 		switch name(entry, "kind") {
 		case "session":
 			// No duration is declared any more, so none is claimed here.
-			id = limitsSession
+			id, concept = limitsSession, "session"
 		case "weekly_all":
-			id = limitsWeeklyAll
+			id, concept = limitsWeeklyAll, "weekly_all"
 		case "weekly_scoped":
 			model := name(object(object(entry, "scope"), "model"), "display_name", "displayName", "name")
 			if model == "" {
 				continue
 			}
-			id = limitsWeeklyScoped + model
+			id, concept = limitsWeeklyScoped+model, "scoped/"+scopeConcept(model)
 		default:
 			continue
 		}
@@ -150,8 +168,15 @@ func claudeLimits(q *client.Quota, root map[string]any) {
 		if id != limitsSession {
 			window.DurationSeconds = &duration
 		}
+		before := len(q.Windows)
 		addWindow(q, id, window)
+		// Only claim the concept if the window was actually stored: a value
+		// addWindow rejected must not suppress the flat key that still has one.
+		if len(q.Windows) > before {
+			covered[concept] = true
+		}
 	}
+	return covered
 }
 
 func parseDetails(provider string, root map[string]any, now time.Time) *client.Quota {
@@ -173,7 +198,17 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 		if q.TierName == "" {
 			q.TierName = name(root, "rate_limit_tier", "rateLimitTier")
 		}
+		// The structured array first, so the flat keys can be skipped where it
+		// already covers them. An account mid-migration reports both, and the
+		// two are spellings of one window rather than two windows: published
+		// together they reduce to the same canonical identity, and the loser is
+		// demoted to a raw: row that shows the reader the same figures twice
+		// under a machine name.
+		covered := claudeLimits(q, root)
 		for _, id := range []string{"five_hour", "seven_day", "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet", "seven_day_cowork"} {
+			if concept := claudeConcept(id); concept != "" && covered[concept] {
+				continue
+			}
 			w := object(root, id)
 			duration := int64(604800)
 			if id == "five_hour" {
@@ -181,7 +216,6 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 			}
 			addWindow(q, id, client.Window{UsedPercent: percent(w, "utilization"), ResetsAt: timestamp(w, "resets_at"), DurationSeconds: &duration})
 		}
-		claudeLimits(q, root)
 		extra := object(root, "extra_usage")
 		addBalance(q, "extra_usage", client.Balance{Unit: "provider_units", Used: decimal(extra, "used_credits"), Limit: decimal(extra, "monthly_limit"), UsedPercent: percent(extra, "utilization"), Enabled: boolean(extra, "is_enabled")})
 	case "codex":
