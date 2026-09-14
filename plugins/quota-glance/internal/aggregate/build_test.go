@@ -809,3 +809,35 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 			sawNullReset, sawEmptySubtext, sawUnmatched, sawModel, sawExcluded)
 	}
 }
+
+// End to end: the plan badge the design shows beside each credential. Claude
+// reports a presentable name already; Codex reports an enum token and must
+// arrive as the name the tier is sold under, precomputed, so no client needs a
+// mapping table of its own.
+func TestPlanBadgesAreDisplayReadyInTheDocument(t *testing.T) {
+	doc := buildFixture(t)
+	want := map[string]string{
+		"claude-siphorchannel@example.com.json": "Max",
+		"claude-agency@example.com.json":        "Team",
+		"codex-noor@example.com.json":           "Pro 20x",
+		"xai-noor@example.com.json":             "SuperGrok Heavy",
+	}
+	for _, c := range doc.Credentials {
+		if expected, ok := want[c.ID]; ok && c.Plan != expected {
+			t.Errorf("%s plan = %q; want %q", c.ID, c.Plan, expected)
+		}
+	}
+
+	// And an operator override reaches the document.
+	doc = Build(Input{
+		Snapshot:   loadSnapshot(t, "seven-credentials.json"),
+		Identities: fixtureRoster(),
+		StaleAfter: 45 * time.Minute,
+		PlanLabels: NormalizePlanLabels(map[string]string{"pro": "Codex Pro"}),
+	}, at(t, 0))
+	for _, c := range doc.Credentials {
+		if c.ID == "codex-noor@example.com.json" && c.Plan != "Codex Pro" {
+			t.Fatalf("override did not reach the document: %q", c.Plan)
+		}
+	}
+}

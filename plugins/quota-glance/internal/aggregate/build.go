@@ -39,6 +39,9 @@ type Input struct {
 	// window trends independently of the shared row it derives from.
 	Samples    []Sample
 	StaleAfter time.Duration
+	// PlanLabels overrides the built-in plan display names, keyed by the
+	// provider-reported value in lower case.
+	PlanLabels map[string]string
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on
@@ -312,7 +315,7 @@ func Build(in Input, now time.Time) Document {
 			ID:                r.identity.AuthIndex,
 			Email:             emailOf(r.identity),
 			Provider:          r.identity.Provider,
-			Plan:              r.entry.Plan,
+			Plan:              planLabelOf(r.entry.Plan, in.PlanLabels),
 			Status:            r.status,
 			LastObservedEpoch: epochOf(r.entry.ObservedAt),
 		})

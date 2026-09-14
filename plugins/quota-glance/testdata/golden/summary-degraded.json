@@ -53,7 +53,7 @@
       "id": "codex-model@example.com.json",
       "email": "model@example.com",
       "provider": "codex",
-      "plan": "pro",
+      "plan": "Pro 20x",
       "status": "ok",
       "lastObservedEpoch": 1789012500
     },

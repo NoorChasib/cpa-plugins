@@ -65,6 +65,19 @@ A different question from `status`, and a different set: `ok`, `error`, `stale`.
 | `refreshPending` | A poll is in flight. Not an error. |
 | `stale` | Older than `stale-after`. |
 
+### `plan` — already display-ready
+
+The string beside a credential is the name its tier is sold under, resolved
+server-side. Claude reports `Max` / `Team` and Grok reports its tier name, which
+pass through untouched. Codex reports a plan enum, which is mapped: `pro` is
+Pro 20x and `prolite` is Pro 5x — the enum separates the two tiers, so this is a
+derivation rather than a guess. An unrecognized enum value is rendered readably
+(`self_serve_business` becomes "Self Serve Business") rather than shown raw.
+`plan` is `""` when the provider reported none.
+
+**Do not map this in the client.** An operator who needs a different name sets
+`plan-labels` in plugin configuration, and every client then agrees.
+
 ### `level` — computed server-side, on both rows and entries
 
 `critical` below 20% remaining, `low` below 40%, otherwise `ok`. The design
