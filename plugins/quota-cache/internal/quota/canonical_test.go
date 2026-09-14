@@ -2,11 +2,14 @@ package quota
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
 )
 
 func keysOf(windows []client.EntryWindow) []string {
@@ -69,6 +72,108 @@ func TestClaudeCanonicalWindowsAndSubscription(t *testing.T) {
 	}
 	if o.Plan != "Max" || o.TierName != "max_20x" {
 		t.Fatalf("subscription identity not collected: plan=%q tier=%q", o.Plan, o.TierName)
+	}
+}
+
+// The shape Anthropic actually serves now: the flat seven_day_* keys are still
+// present but null, and live quota lives in a structured limits[] array. A
+// reader that only knows the flat keys sees a session and a weekly and loses
+// every model-scoped allowance, Fable included.
+func TestClaudeReadsTheStructuredLimitsArray(t *testing.T) {
+	o := fetchDetails(t, "claude", `{"subscription":{"plan":"Max"},`+
+		`"five_hour":null,"seven_day":null,"seven_day_opus":null,"seven_day_sonnet":null,`+
+		`"limits":[`+
+		`{"kind":"session","percent":31,"resets_at":"2026-09-14T13:15:00Z"},`+
+		`{"kind":"weekly_all","percent":76,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`{"kind":"weekly_scoped","percent":88,"resets_at":"2026-09-17T02:59:00Z",`+
+		`"scope":{"model":{"display_name":"Fable"}}},`+
+		`{"kind":"weekly_scoped","percent":40,"resets_at":"2026-09-17T02:58:00Z",`+
+		`"scope":{"model":{"display_name":"Sonnet"}}}]}`)
+
+	want := []string{client.WindowSession, client.WindowWeekly, client.WindowWeeklyFable, client.WindowModelWeekly}
+	if got := keysOf(o.Windows); !equal(got, want) {
+		t.Fatalf("keys=%v want %v", got, want)
+	}
+	if o.Windows[2].UsedPercent != 88 || o.Windows[2].Title != "Weekly (Fable)" {
+		t.Fatalf("the Fable allowance was not read: %+v", o.Windows[2])
+	}
+	// A scope Anthropic adds later needs no release here: it is keyed by the
+	// model it names rather than by a list.
+	if o.Windows[3].Model != "Sonnet" || o.Windows[3].UsedPercent != 40 {
+		t.Fatalf("scoped window not carried by model: %+v", o.Windows[3])
+	}
+	// The entry-level projection still follows the account-wide weekly.
+	if o.Percent != 76 || !o.ResetAt.Equal(time.Date(2026, 9, 17, 3, 0, 0, 0, time.UTC)) {
+		t.Fatalf("primary observation not taken from the array: %+v", o)
+	}
+}
+
+// Both shapes at once, which is what a rollout looks like from the outside.
+// Whichever carries data wins, and neither is published twice.
+func TestClaudeFlatKeysAndLimitsArrayDoNotDuplicate(t *testing.T) {
+	o := fetchDetails(t, "claude", `{`+
+		`"five_hour":{"utilization":31,"resets_at":"2026-09-14T13:15:00Z"},`+
+		`"seven_day":{"utilization":76,"resets_at":"2026-09-17T03:00:00Z"},`+
+		`"seven_day_opus":null,`+
+		`"limits":[{"kind":"weekly_scoped","percent":88,"resets_at":"2026-09-17T02:59:00Z",`+
+		`"scope":{"model":{"display_name":"Fable"}}}]}`)
+
+	want := []string{client.WindowSession, client.WindowWeekly, client.WindowWeeklyFable}
+	if got := keysOf(o.Windows); !equal(got, want) {
+		t.Fatalf("keys=%v want %v", got, want)
+	}
+	seen := map[string]int{}
+	for _, w := range o.Windows {
+		seen[w.Key]++
+	}
+	for key, count := range seen {
+		if count > 1 {
+			t.Fatalf("%s emitted %d times; one credential would be counted twice in its row", key, count)
+		}
+	}
+}
+
+// The tier stopped appearing in the usage response for some accounts, which
+// left the dashboard showing an empty plan badge. The stored credential already
+// records it and has already been read, so it costs nothing to fall back to.
+func TestClaudePlanFallsBackToTheStoredCredential(t *testing.T) {
+	d := &fakeDoer{response: protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"seven_day":{"utilization":10}}`)}}
+	o, err := Fetch(context.Background(), d, "claude",
+		[]byte(`{"access_token":"synthetic-secret","subscriptionType":"max"}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Plan != "max" {
+		t.Fatalf("plan = %q; the credential records the tier when the response does not", o.Plan)
+	}
+
+	// The response still wins when it has one.
+	d = &fakeDoer{response: protocol.HostHTTPResponse{StatusCode: 200,
+		Body: []byte(`{"subscription":{"plan":"Max"},"seven_day":{"utilization":10}}`)}}
+	o, err = Fetch(context.Background(), d, "claude",
+		[]byte(`{"access_token":"synthetic-secret","subscriptionType":"team"}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Plan != "Max" {
+		t.Fatalf("plan = %q; the response is authoritative where it carries one", o.Plan)
+	}
+}
+
+// Anthropic buckets this endpoint by User-Agent. A caller that does not
+// identify as Claude Code collects 429s after a handful of polls, which shows
+// up as a credential permanently in backoff rather than as an obvious error.
+func TestClaudeUsageRequestIdentifiesItself(t *testing.T) {
+	d := &fakeDoer{response: protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"seven_day":{"utilization":10}}`)}}
+	if _, err := Fetch(context.Background(), d, "claude", []byte(`{"access_token":"synthetic-secret"}`), now); err != nil {
+		t.Fatal(err)
+	}
+	agent := ""
+	if values := d.request.Headers["User-Agent"]; len(values) > 0 {
+		agent = values[0]
+	}
+	if !strings.HasPrefix(agent, "claude-code/") {
+		t.Fatalf("User-Agent = %q; Anthropic rate-limits anything that is not Claude Code far harder", agent)
 	}
 }
 

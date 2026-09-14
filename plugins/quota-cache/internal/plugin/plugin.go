@@ -21,7 +21,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.5"
+var Version = "0.1.6"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)

@@ -12,6 +12,13 @@
 //
 //	Claude: GET https://api.anthropic.com/api/oauth/usage
 //	        -> seven_day.utilization (0..100), seven_day.resets_at (RFC3339)
+//	        Anthropic is migrating this response: the flat five_hour /
+//	        seven_day / seven_day_* keys are being nulled in favour of a
+//	        structured limits[] array whose entries carry kind (session /
+//	        weekly_all / weekly_scoped), percent, resets_at, and for a scoped
+//	        entry scope.model.display_name. Both shapes are read, and the
+//	        request must carry a claude-code User-Agent or the endpoint
+//	        rate-limits it hard.
 //	Codex:  GET https://chatgpt.com/backend-api/wham/usage
 //	        -> rate_limit.<window with limit_window_seconds=604800>.used_percent,
 //	           reset_at (unix seconds) or reset_after_seconds
@@ -45,6 +52,11 @@ const (
 	// non-CLI clients on this endpoint. The comment segment identifies the
 	// real caller.
 	codexUserAgent = "codex_cli_rs/0.0.0 (cpa-plugins/quota-cache)"
+	// Anthropic buckets this endpoint by User-Agent: a caller that does not
+	// identify as Claude Code lands in a far tighter bucket and starts
+	// collecting 429s after a handful of polls. Sending it is the difference
+	// between a credential that reports and one that sits in backoff.
+	claudeUserAgent = "claude-code/2.1.0 (cpa-plugins/quota-cache)"
 
 	xaiBillingURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 	// xaiTokenAuthHeader mirrors the open-source Grok Build CLI, which sends
@@ -131,6 +143,7 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 				"Authorization":  {"Bearer " + creds.accessToken},
 				"Accept":         {"application/json"},
 				"anthropic-beta": {claudeOAuthBeta},
+				"User-Agent":     {claudeUserAgent},
 			},
 		}
 	case "codex":
@@ -190,6 +203,11 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 	// the primary observation actually succeeded.
 	observation.Windows = canonicalWindows(provider, details, observation)
 	observation.Plan, observation.TierName, observation.RenewalAt = identity(provider, details)
+	// Last resort, so a tier the usage response stopped reporting still reaches
+	// the dashboard as a name rather than an empty badge.
+	if observation.Plan == "" {
+		observation.Plan = planName(creds.plan)
+	}
 	return observation, nil
 }
 
@@ -197,6 +215,10 @@ type credentials struct {
 	accessToken string
 	accountID   string // Codex ChatGPT account ID
 	userID      string // xAI OpenID subject
+	// plan is the subscription tier as the stored credential records it. It is
+	// the fallback for a usage response that no longer carries one, and costs
+	// nothing: the credential has already been read.
+	plan string
 }
 
 // extractCredentials decodes the minimum fields for one usage request.
@@ -204,6 +226,16 @@ type credentials struct {
 // a nested Codex CLI-style "tokens" object, and (Codex only) the ChatGPT
 // account ID claim inside the unverified id_token payload, which is used
 // solely as a routing header.
+// planName validates a credential-derived tier the same way every other label
+// is validated, so a malformed stored value is dropped rather than displayed.
+func planName(value string) string {
+	value = strings.TrimSpace(value)
+	if !detailName.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
 func extractCredentials(provider string, rawAuth []byte) (credentials, error) {
 	var root map[string]any
 	if err := json.Unmarshal(rawAuth, &root); err != nil || root == nil {
@@ -227,6 +259,12 @@ func extractCredentials(provider string, rawAuth []byte) (credentials, error) {
 		return credentials{}, ErrNoAccessToken
 	}
 	creds := credentials{accessToken: access}
+	creds.plan = firstStringField(root, "subscription_type", "subscriptionType", "plan", "plan_type", "planType")
+	if creds.plan == "" {
+		if oauth, ok := root["claudeAiOauth"].(map[string]any); ok {
+			creds.plan = firstStringField(oauth, "subscription_type", "subscriptionType")
+		}
+	}
 	switch provider {
 	case "codex":
 		if account == "" && idToken != "" {
@@ -289,22 +327,50 @@ func decodeObject(body []byte) (map[string]any, error) {
 	return root, nil
 }
 
-// parseClaude reads the account-wide seven_day window. Model-scoped windows
+// parseClaude reads the account-wide weekly allowance. Model-scoped windows
 // and short windows are separate in the extended observation.
+//
+// Two shapes, because Anthropic is moving between them: the flat seven_day key,
+// and the weekly_all entry of the structured limits[] array that replaces it.
+// The flat key is tried first and is still authoritative where it carries data;
+// the array is what keeps this projection alive once it does not. Without the
+// fallback a nulled seven_day fails the primary parse outright, which leaves
+// the credential with no observation time at all — and a credential that has
+// never been observed is excluded from every row downstream, so the dashboard
+// would not show it as stale, it would show nothing.
 func parseClaude(root map[string]any) (Observation, error) {
-	window, ok := root["seven_day"].(map[string]any)
-	if !ok {
-		return Observation{}, ErrNoWeeklyWindow
+	if window, ok := root["seven_day"].(map[string]any); ok {
+		if percent, ok := numberField(window, "utilization"); ok {
+			observation := Observation{Percent: clampPercent(percent)}
+			if reset, ok := rfc3339Field(window, "resets_at"); ok {
+				observation.ResetAt = reset
+			}
+			return observation, nil
+		}
 	}
-	percent, ok := numberField(window, "utilization")
-	if !ok {
-		return Observation{}, ErrNoWeeklyWindow
+	items, _ := root["limits"].([]any)
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if kind, _ := entry["kind"].(string); kind != "weekly_all" {
+			continue
+		}
+		percent, ok := numberField(entry, "percent")
+		if !ok {
+			percent, ok = numberField(entry, "utilization")
+		}
+		if !ok {
+			continue
+		}
+		observation := Observation{Percent: clampPercent(percent)}
+		if reset, ok := rfc3339Field(entry, "resets_at"); ok {
+			observation.ResetAt = reset
+		}
+		return observation, nil
 	}
-	observation := Observation{Percent: clampPercent(percent)}
-	if reset, ok := rfc3339Field(window, "resets_at"); ok {
-		observation.ResetAt = reset
-	}
-	return observation, nil
+	return Observation{}, ErrNoWeeklyWindow
 }
 
 // parseCodex locates the window whose declared duration is exactly one week

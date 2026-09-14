@@ -51,9 +51,43 @@ func raw(provider, id string) canonical {
 	return canonical{key: client.WindowRawPrefix + provider + ":" + id, title: id}
 }
 
+// Synthetic ids for entries read out of the structured limits[] array. They are
+// namespaced so they can never collide with a flat key Anthropic ships later,
+// and the scoped one carries its model rather than being enumerated here.
+const (
+	limitsSession      = "limits/session"
+	limitsWeeklyAll    = "limits/weekly_all"
+	limitsWeeklyScoped = "limits/weekly_scoped/"
+)
+
+// fableScope reports whether a model-scoped weekly window is the premium
+// allowance this document calls Fable. Anthropic has shipped it under more than
+// one display name; both land on the same row rather than on two that each show
+// half the picture.
+func fableScope(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "fable", "opus", "claude fable", "claude opus":
+		return true
+	}
+	return false
+}
+
 // mapClaude. Claude names its windows after their duration; seven_day is the
-// account-wide allowance that Entry.Percent already mirrors.
+// account-wide allowance that Entry.Percent already mirrors. The limits/ ids
+// come from the structured array that superseded those flat keys.
 func mapClaude(id string) canonical {
+	if scope, ok := strings.CutPrefix(id, limitsWeeklyScoped); ok {
+		if fableScope(scope) {
+			return canonical{key: client.WindowWeeklyFable, title: "Weekly (Fable)"}
+		}
+		return canonical{key: client.WindowModelWeekly, model: scope, title: "Weekly (" + scope + ")"}
+	}
+	switch id {
+	case limitsSession:
+		return canonical{key: client.WindowSession, title: "Session"}
+	case limitsWeeklyAll:
+		return canonical{key: client.WindowWeekly, title: "Weekly"}
+	}
 	switch id {
 	case "five_hour":
 		return canonical{key: client.WindowSession, title: "Session"}
