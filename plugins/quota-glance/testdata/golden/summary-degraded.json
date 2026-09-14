@@ -7,7 +7,7 @@
   "staleReason": null,
   "counters": {
     "credentials": 9,
-    "observedOK": 4,
+    "observedOK": 6,
     "observeError": 1
   },
   "credentials": [
@@ -97,20 +97,21 @@
           "order": 10,
           "matched": true,
           "aggregate": {
-            "remainingFraction": 0.5166666666666667,
-            "remainingPercent": 52,
-            "memberCount": 3,
-            "excludedCount": 3,
+            "remainingFraction": 0.7,
+            "remainingPercent": 70,
+            "memberCount": 5,
+            "excludedCount": 1,
             "level": "ok",
             "trend": "down",
             "soonestResetAtEpoch": 1789014600,
             "soonestResetInSeconds": 1800,
-            "projectedGainPercent": 13,
-            "subtext": "+13% when stale resets in 30m"
+            "projectedGainPercent": 8,
+            "subtext": "+8% when stale resets in 30m"
           },
           "entries": [
             {
               "credentialId": "claude-fresh@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.85,
               "remainingPercent": 85,
               "level": "ok",
@@ -126,6 +127,7 @@
             },
             {
               "credentialId": "claude-stale@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.6,
               "remainingPercent": 60,
               "level": "ok",
@@ -143,6 +145,7 @@
             },
             {
               "credentialId": "claude-failing@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.1,
               "remainingPercent": 10,
               "level": "critical",
@@ -158,6 +161,54 @@
                 "observeError"
               ],
               "state": "error"
+            },
+            {
+              "credentialId": "claude-disabled@example.com.json",
+              "hasReading": true,
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789020000,
+              "resetInSeconds": 7200,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-unavailable@example.com.json",
+              "hasReading": true,
+              "remainingFraction": 0.95,
+              "remainingPercent": 95,
+              "level": "ok",
+              "resetAtEpoch": 1789020000,
+              "resetInSeconds": 7200,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "session",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-pending@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "pending"
             }
           ]
         },
@@ -167,20 +218,21 @@
           "order": 20,
           "matched": true,
           "aggregate": {
-            "remainingFraction": 0.26666666666666666,
-            "remainingPercent": 27,
-            "memberCount": 3,
-            "excludedCount": 3,
-            "level": "low",
+            "remainingFraction": 0.55,
+            "remainingPercent": 55,
+            "memberCount": 5,
+            "excludedCount": 1,
+            "level": "ok",
             "trend": "unknown",
             "soonestResetAtEpoch": 1789099200,
             "soonestResetInSeconds": 86400,
-            "projectedGainPercent": 18,
-            "subtext": "+18% when fresh resets in 1d"
+            "projectedGainPercent": 11,
+            "subtext": "+11% when fresh resets in 1d"
           },
           "entries": [
             {
               "credentialId": "claude-fresh@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
@@ -196,6 +248,7 @@
             },
             {
               "credentialId": "claude-stale@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.3,
               "remainingPercent": 30,
               "level": "low",
@@ -213,6 +266,7 @@
             },
             {
               "credentialId": "claude-failing@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.05,
               "remainingPercent": 5,
               "level": "critical",
@@ -227,6 +281,54 @@
                 "observeError"
               ],
               "state": "error"
+            },
+            {
+              "credentialId": "claude-disabled@example.com.json",
+              "hasReading": true,
+              "remainingFraction": 1,
+              "remainingPercent": 100,
+              "level": "ok",
+              "resetAtEpoch": 1789358400,
+              "resetInSeconds": 345600,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-unavailable@example.com.json",
+              "hasReading": true,
+              "remainingFraction": 0.95,
+              "remainingPercent": 95,
+              "level": "ok",
+              "resetAtEpoch": 1789362800,
+              "resetInSeconds": 350000,
+              "resetDisplayHint": "countdown",
+              "observedAtEpoch": 1789012500,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "weekly",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "ok"
+            },
+            {
+              "credentialId": "claude-pending@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "pending"
             }
           ]
         },
@@ -250,6 +352,7 @@
           "entries": [
             {
               "credentialId": "claude-fresh@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.15,
               "remainingPercent": 15,
               "level": "critical",
@@ -262,6 +365,86 @@
               "sourceModel": null,
               "dataIssues": [],
               "state": "ok"
+            },
+            {
+              "credentialId": "claude-stale@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "noData"
+            },
+            {
+              "credentialId": "claude-failing@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "noData"
+            },
+            {
+              "credentialId": "claude-disabled@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "noData"
+            },
+            {
+              "credentialId": "claude-unavailable@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "noData"
+            },
+            {
+              "credentialId": "claude-pending@example.com.json",
+              "hasReading": false,
+              "remainingFraction": 0,
+              "remainingPercent": 0,
+              "level": "",
+              "resetAtEpoch": null,
+              "resetInSeconds": null,
+              "resetDisplayHint": "none",
+              "observedAtEpoch": 0,
+              "nextAttemptEpoch": 1789013400,
+              "sourceWindowKey": "",
+              "sourceModel": null,
+              "dataIssues": [],
+              "state": "pending"
             }
           ]
         }
@@ -293,6 +476,7 @@
           "entries": [
             {
               "credentialId": "codex-model@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.8,
               "remainingPercent": 80,
               "level": "ok",
@@ -328,6 +512,7 @@
           "entries": [
             {
               "credentialId": "codex-model@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.7,
               "remainingPercent": 70,
               "level": "ok",
@@ -363,6 +548,7 @@
           "entries": [
             {
               "credentialId": "codex-model@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.75,
               "remainingPercent": 75,
               "level": "ok",
@@ -398,6 +584,7 @@
           "entries": [
             {
               "credentialId": "codex-model@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.4,
               "remainingPercent": 40,
               "level": "ok",
@@ -441,6 +628,7 @@
           "entries": [
             {
               "credentialId": "xai-raw@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.32,
               "remainingPercent": 32,
               "level": "low",
@@ -476,6 +664,7 @@
           "entries": [
             {
               "credentialId": "xai-raw@example.com.json",
+              "hasReading": true,
               "remainingFraction": 0.78,
               "remainingPercent": 78,
               "level": "ok",

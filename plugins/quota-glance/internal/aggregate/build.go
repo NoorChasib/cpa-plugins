@@ -331,11 +331,20 @@ func Build(in Input, now time.Time) Document {
 
 	for _, r := range records {
 		doc.Counters.Credentials++
-		switch r.status {
-		case StatusOK:
-			doc.Counters.ObservedOK++
-		case StatusError:
+		// Counted from the poll, not from r.status. Status folds CPA's routing
+		// state over the poll outcome and reports a parked credential as
+		// "unavailable" — but a parked credential is still polled, and its
+		// readings are on every card. Reading the counter off status printed
+		// "7 credentials · 3 observed" beneath seven rows showing six live
+		// figures, which is the footer calling the cards liars.
+		switch {
+		case !r.observed:
+			// Pending or unsupported: nothing has ever been read, so neither
+			// counter claims it.
+		case r.entry.Failures > 0:
 			doc.Counters.ObserveError++
+		default:
+			doc.Counters.ObservedOK++
 		}
 		doc.Credentials = append(doc.Credentials, Credential{
 			ID:                r.identity.AuthIndex,
@@ -439,9 +448,17 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 	windowKeys := map[string]string{}
 	models := map[string]string{}
 	for _, r := range records {
-		// A disabled or unavailable credential is not a member of any row. It
-		// stays in the catalog so the count still reflects reality.
-		if r.identity.Disabled || r.identity.Unavailable || !r.observed {
+		// Membership turns on one thing only: did this credential report this
+		// window. A credential CPA has parked in a quota cooldown reports the
+		// same figures it did a minute earlier, and those figures are the whole
+		// reason to look at this dashboard — a credential vanishing from every
+		// card at the exact moment it runs out is the opposite of what the card
+		// is read for. Disabled is the same story: the quota is still there and
+		// comes back with the credential.
+		//
+		// A credential with no observation at all has nothing to average. It is
+		// not dropped either; it lands below as an entry with no reading.
+		if !r.observed {
 			continue
 		}
 		claimed := map[string]bool{}
@@ -484,7 +501,7 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 			Order:     rowOrderOf(windowKeys[id]),
 			Matched:   !strings.HasPrefix(windowKeys[id], qc.WindowRawPrefix),
 			Aggregate: buildAggregate(id, byRow[id], len(records), in, now),
-			Entries:   buildEntries(byRow[id], now),
+			Entries:   buildEntries(records, byRow[id], now),
 		})
 	}
 	return rows
@@ -562,12 +579,27 @@ func buildAggregate(rowID string, members []member, providerCredentials int, in 
 	return agg
 }
 
-func buildEntries(members []member, now time.Time) []RowEntry {
-	entries := make([]RowEntry, 0, len(members))
+// buildEntries emits one entry per provider credential, in catalog order,
+// whether or not it reported this window. A credential that did not is still
+// printed, with HasReading false: the card is the place an operator counts
+// their credentials, and a list that quietly omits the ones in trouble is worth
+// less than no list.
+func buildEntries(records []record, members []member, now time.Time) []RowEntry {
+	byCredential := make(map[string]member, len(members))
 	for _, m := range members {
+		byCredential[m.record.identity.AuthIndex] = m
+	}
+	entries := make([]RowEntry, 0, len(records))
+	for _, r := range records {
+		m, isMember := byCredential[r.identity.AuthIndex]
+		if !isMember {
+			entries = append(entries, absentEntry(r))
+			continue
+		}
 		remaining, issue := remainingOf(m.window.UsedPercent)
 		entry := RowEntry{
 			CredentialID:      m.record.identity.AuthIndex,
+			HasReading:        true,
 			RemainingFraction: remaining,
 			RemainingPercent:  percentOf(remaining),
 			Level:             levelOf(remaining),
@@ -616,4 +648,33 @@ func buildEntries(members []member, now time.Time) []RowEntry {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+// absentEntry is a credential with nothing to report for this window. Level is
+// left empty rather than computed from a zero remaining fraction, which would
+// paint an unknown bright red; the contract has clients fall through to a
+// neutral rendering on an enum value they do not recognise.
+//
+// State says why, but only ever about the missing reading. Disabled and
+// unavailable are deliberately not repeated here: they say CPA will not route
+// to the credential, which has no bearing on whether this window was reported,
+// and a credential reading "ok" on the session card and "disabled" on the one
+// below it describes itself two ways in the same column. That fact belongs to
+// credentials[].status, once.
+func absentEntry(r record) RowEntry {
+	state := StateNoData
+	switch {
+	case !r.hasEntry:
+		// quota-cache does not poll this provider at all.
+		state = StatusUnsupported
+	case !r.observed:
+		state = StatusPending
+	}
+	return RowEntry{
+		CredentialID:     r.identity.AuthIndex,
+		ResetDisplayHint: HintNone,
+		NextAttemptEpoch: epochOf(r.entry.NextAttempt),
+		DataIssues:       []string{},
+		State:            state,
+	}
 }

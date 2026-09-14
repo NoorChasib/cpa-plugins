@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -27,13 +28,18 @@ func (r roster) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) 
 
 func main() {
 	snapshot := flag.String("snapshot", "testdata/snapshots/seven-credentials.json", "snapshot fixture to serve")
+	rosterPath := flag.String("roster", "", "host.auth.list fixture: a JSON array of auth entries. Defaults to one plain entry per snapshot entry.")
 	token := flag.String("token", "dev-token", "fallback web token for the public summary route")
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
 	epoch := flag.Int64("now", 1789012800, "build clock, in Unix seconds")
 	flag.Parse()
 
 	now := time.Unix(*epoch, 0).UTC()
-	result := source.Read(context.Background(), roster{files: rosterFor(*snapshot)}, *snapshot)
+	files, err := rosterFor(*snapshot, *rosterPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result := source.Read(context.Background(), roster{files: files}, *snapshot)
 	if result.Reason != "" {
 		log.Printf("snapshot could not be read: %s", result.Reason)
 		os.Exit(1)
@@ -67,15 +73,31 @@ func main() {
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
-// rosterFor stands in for host.auth.list: every credential in the fixture, in
-// an order that is deliberately not the display order.
-func rosterFor(path string) []protocol.HostAuthFileEntry {
-	snapshot := source.Read(context.Background(), nil, path)
+// rosterFor stands in for host.auth.list.
+//
+// Derived from the snapshot by default: every credential in the fixture, in an
+// order that is deliberately not the display order. A roster file overrides
+// that, because the roster carries facts the snapshot cannot — disabled,
+// unavailable, and a credential CPA knows about that quota-cache has never
+// polled — and those are exactly the states worth looking at a page for.
+func rosterFor(snapshotPath, rosterPath string) ([]protocol.HostAuthFileEntry, error) {
+	if rosterPath != "" {
+		raw, err := os.ReadFile(rosterPath)
+		if err != nil {
+			return nil, fmt.Errorf("roster fixture: %w", err)
+		}
+		files := []protocol.HostAuthFileEntry{}
+		if err := json.Unmarshal(raw, &files); err != nil {
+			return nil, fmt.Errorf("roster fixture: %w", err)
+		}
+		return files, nil
+	}
+	snapshot := source.Read(context.Background(), nil, snapshotPath)
 	files := []protocol.HostAuthFileEntry{}
 	for _, entry := range snapshot.Snapshot.Entries {
 		files = append(files, protocol.HostAuthFileEntry{
 			AuthIndex: entry.AuthIndex, Provider: entry.Provider, Name: entry.AuthIndex,
 		})
 	}
-	return files
+	return files, nil
 }
