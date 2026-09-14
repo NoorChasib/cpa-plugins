@@ -99,6 +99,61 @@ func addBalance(q *client.Quota, id string, b client.Balance) {
 	}
 	q.Balances[id] = b
 }
+
+// claudeLimits reads the structured limits[] array.
+//
+// Anthropic moved live quota out of the flat seven_day_* keys and into this
+// array; the flat keys are still present on the response but arrive null, so a
+// reader that only knows them sees a credential with a session and a weekly and
+// nothing else — the model-scoped allowances, Fable among them, simply vanish.
+// addWindow already drops the nulled flat keys, so both shapes can be read and
+// whichever carries data wins.
+//
+// Each entry is self-describing: a kind, a percent, a reset instant, and for a
+// scoped limit the model it applies to. Scoped entries are keyed by that model
+// rather than by a fixed list, so a model Anthropic adds later appears on its
+// own instead of needing a release here.
+func claudeLimits(q *client.Quota, root map[string]any) {
+	items, ok := root["limits"].([]any)
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		// "percent" is what the array uses; "utilization" is accepted too,
+		// because that is the flat keys' spelling and the two have been seen
+		// to swap.
+		used, resets := percent(entry, "percent", "utilization"), timestamp(entry, "resets_at", "resetsAt")
+		if used == nil && resets == nil {
+			continue
+		}
+		duration, id := int64(604800), ""
+		switch name(entry, "kind") {
+		case "session":
+			// No duration is declared any more, so none is claimed here.
+			id = limitsSession
+		case "weekly_all":
+			id = limitsWeeklyAll
+		case "weekly_scoped":
+			model := name(object(object(entry, "scope"), "model"), "display_name", "displayName", "name")
+			if model == "" {
+				continue
+			}
+			id = limitsWeeklyScoped + model
+		default:
+			continue
+		}
+		window := client.Window{UsedPercent: used, ResetsAt: resets}
+		if id != limitsSession {
+			window.DurationSeconds = &duration
+		}
+		addWindow(q, id, window)
+	}
+}
+
 func parseDetails(provider string, root map[string]any, now time.Time) *client.Quota {
 	q := &client.Quota{Schema: 1, ObservedAt: now, Windows: map[string]client.Window{}, Limits: map[string]client.Limit{}, Balances: map[string]client.Balance{}}
 	switch provider {
@@ -107,8 +162,17 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 		// extra request. Names go through the same bounded validation as every
 		// other label, so a malformed value is omitted rather than stored.
 		subscription := object(root, "subscription")
-		q.Plan = name(subscription, "plan")
+		// Spelled several ways across revisions of this response, and on some
+		// of them absent entirely — the caller supplies a credential-derived
+		// fallback in that case rather than leaving the badge blank.
+		q.Plan = name(subscription, "plan", "plan_type", "planType", "tier", "name")
+		if q.Plan == "" {
+			q.Plan = name(root, "subscription_type", "subscriptionType", "plan_type", "planType")
+		}
 		q.TierName = name(subscription, "tierName", "tier_name")
+		if q.TierName == "" {
+			q.TierName = name(root, "rate_limit_tier", "rateLimitTier")
+		}
 		for _, id := range []string{"five_hour", "seven_day", "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet", "seven_day_cowork"} {
 			w := object(root, id)
 			duration := int64(604800)
@@ -117,6 +181,7 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 			}
 			addWindow(q, id, client.Window{UsedPercent: percent(w, "utilization"), ResetsAt: timestamp(w, "resets_at"), DurationSeconds: &duration})
 		}
+		claudeLimits(q, root)
 		extra := object(root, "extra_usage")
 		addBalance(q, "extra_usage", client.Balance{Unit: "provider_units", Used: decimal(extra, "used_credits"), Limit: decimal(extra, "monthly_limit"), UsedPercent: percent(extra, "utilization"), Enabled: boolean(extra, "is_enabled")})
 	case "codex":
