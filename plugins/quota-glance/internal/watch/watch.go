@@ -1,7 +1,10 @@
-// Package watch turns quota-cache's snapshot writes into reload events.
+// Package watch decides when the document is rebuilt.
 //
-// There is no event bus between CPA plugins and no host callback that reports
-// a cache refresh, so the file itself is the signal.
+// Mostly that means turning quota-cache's snapshot writes into reload events:
+// there is no event bus between CPA plugins and no host callback that reports a
+// cache refresh, so the file itself is the signal. The heartbeat covers the
+// half of the document the file does not carry — request activity, which the
+// host roster reports and which moves between writes.
 package watch
 
 import (
@@ -21,12 +24,33 @@ const (
 	// fsnotify does not deliver reliably on every filesystem, and a dashboard
 	// that silently stops updating is worse than one that polls occasionally.
 	DefaultBackstop = time.Minute
+	// DefaultHeartbeat rebuilds on a timer whether or not the file changed.
+	//
+	// The snapshot is no longer the document's only input: request activity
+	// comes from the host roster and moves while the file sits still, so a
+	// rebuild driven by writes alone would advance the strip under each address
+	// once every poll interval — fifteen minutes, by default — and call that
+	// live. The rebuild it triggers reads a file and asks the host in-process
+	// for its roster. It contacts no provider.
+	DefaultHeartbeat = time.Minute
+)
+
+// Why a rebuild ran. Only the reasons health reports are distinguished: a
+// backstop means fsnotify missed an event, a heartbeat means nothing was
+// missed and the clock came round.
+type reloadKind int
+
+const (
+	reloadDirect reloadKind = iota
+	reloadBackstop
+	reloadHeartbeat
 )
 
 type Options struct {
-	Path     string
-	Debounce time.Duration
-	Backstop time.Duration
+	Path      string
+	Debounce  time.Duration
+	Backstop  time.Duration
+	Heartbeat time.Duration
 	// OnChange runs off the watch goroutine's event loop, one call per
 	// debounced change. It must not block for long.
 	OnChange func()
@@ -50,12 +74,13 @@ type Watcher struct {
 
 // State is what .../health reports about the watcher.
 type State struct {
-	Watching  bool      `json:"watching"`
-	Directory string    `json:"directory"`
-	LastEvent time.Time `json:"last_event"`
-	LastError string    `json:"last_error,omitempty"`
-	Reloads   uint64    `json:"reloads"`
-	Backstops uint64    `json:"backstops"`
+	Watching   bool      `json:"watching"`
+	Directory  string    `json:"directory"`
+	LastEvent  time.Time `json:"last_event"`
+	LastError  string    `json:"last_error,omitempty"`
+	Reloads    uint64    `json:"reloads"`
+	Backstops  uint64    `json:"backstops"`
+	Heartbeats uint64    `json:"heartbeats"`
 }
 
 // Start begins watching the directory containing Path.
@@ -73,6 +98,9 @@ func Start(opts Options) (*Watcher, error) {
 	}
 	if opts.Backstop <= 0 {
 		opts.Backstop = DefaultBackstop
+	}
+	if opts.Heartbeat <= 0 {
+		opts.Heartbeat = DefaultHeartbeat
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(string) {}
@@ -185,7 +213,7 @@ func (w *Watcher) run() {
 	// Read once before any event so a restart serves data immediately rather
 	// than waiting for the next poll to change something.
 	seen := fingerprintOf(w.opts.Path)
-	w.fire(false)
+	w.fire(reloadDirect)
 
 	debounce := time.NewTimer(time.Hour)
 	if !debounce.Stop() {
@@ -197,6 +225,8 @@ func (w *Watcher) run() {
 	events, errors := w.fs.Events, w.fs.Errors
 	backstop := time.NewTicker(w.opts.Backstop)
 	defer backstop.Stop()
+	heartbeat := time.NewTicker(w.opts.Heartbeat)
+	defer heartbeat.Stop()
 	defer debounce.Stop()
 
 	for {
@@ -244,7 +274,16 @@ func (w *Watcher) run() {
 		case <-debounce.C:
 			pending = false
 			seen = fingerprintOf(w.opts.Path)
-			w.fire(false)
+			w.fire(reloadDirect)
+
+		case <-heartbeat.C:
+			// Unconditional: the roster half of the document moves without the
+			// file, so there is nothing here to compare. seen is deliberately
+			// left alone — this rebuild does read whatever the file now holds,
+			// but letting a heartbeat quietly adopt a new fingerprint would
+			// empty the backstop counter of its meaning, and that counter is
+			// how a deaf watcher is noticed.
+			w.fire(reloadHeartbeat)
 
 		case <-backstop.C:
 			// Re-add if the directory was replaced underneath the watch;
@@ -260,17 +299,20 @@ func (w *Watcher) run() {
 			current := fingerprintOf(w.opts.Path)
 			if current != seen {
 				seen = current
-				w.fire(true)
+				w.fire(reloadBackstop)
 			}
 		}
 	}
 }
 
-func (w *Watcher) fire(viaBackstop bool) {
+func (w *Watcher) fire(kind reloadKind) {
 	w.stateMu.Lock()
 	w.state.Reloads++
-	if viaBackstop {
+	switch kind {
+	case reloadBackstop:
 		w.state.Backstops++
+	case reloadHeartbeat:
+		w.state.Heartbeats++
 	}
 	w.stateMu.Unlock()
 	w.opts.OnChange()

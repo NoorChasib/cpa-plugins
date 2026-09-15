@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-/* The approved design's tokens, taken verbatim from web/design/mockup.html.
+/* The approved design's tokens, taken verbatim from web/design/mockup.html —
+ * and, for the activity strip and the ink below --color-ink-3 that it needed,
+ * from the option chosen in web/design/activity-options.html.
  *
  * Fonts are system stacks and nothing here loads a file. The bundle makes no
  * external request of any kind, and the reason is sharper than page weight:
@@ -17,6 +19,9 @@
   --color-ink: #eef0f3;
   --color-ink-2: #9aa1ab;
   --color-ink-3: #6b7280;
+  /* One step below the dimmest ink, for a line that has to be present without
+   * being read: "idle" under an address nothing has routed to. */
+  --color-ink-4: #4a5059;
 
   --color-accent: #3987e5;
   --color-track: #23262c;
@@ -71,6 +76,68 @@
 
   .cred:last-child {
     border-bottom: 0;
+  }
+
+  /* The traffic strip under an address: one block per bucket of the host's
+   * request ring, oldest at the left.
+   *
+   * Fixed-size blocks rather than a bar that fills its column, because the
+   * blocks are a count of buckets and not a proportion of anything — twenty of
+   * them is the shape of the data, and stretching them to the column width
+   * would make an idle credential's strip as wide as a busy one's while
+   * changing what a single block means at every breakpoint. At 5px plus gaps
+   * the whole ring is about 128px, which fits the address column down to
+   * 390px. */
+  .act {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 1.5px;
+  }
+
+  .act i {
+    display: block;
+    width: 5px;
+    height: 5px;
+    border-radius: 1.5px;
+  }
+
+  /* The ink ramp. The tier is the server's — these only say what each tier
+   * looks like — and every step is the one accent colour, so a busy pool reads
+   * as one material getting denser rather than as a second palette. */
+  .act-0 {
+    background: #242830;
+  }
+
+  .act-1 {
+    background: color-mix(in srgb, var(--color-accent) 34%, transparent);
+  }
+
+  .act-2 {
+    background: color-mix(in srgb, var(--color-accent) 66%, transparent);
+  }
+
+  .act-3 {
+    background: var(--color-accent);
+  }
+
+  /* Red at any volume. A bucket that failed is not a quieter bucket. */
+  .act-f {
+    background: var(--color-crit);
+  }
+
+  /* At 390px the address column is about 198px and the ring would leave the
+   * line beside it too narrow to finish "1h 54m ago" — the half of that line
+   * the strip cannot say for itself. A pixel off each block and its gap buys
+   * the 30px that fixes it, and twenty blocks are still twenty blocks. */
+  @media (max-width: 640px) {
+    .act {
+      gap: 1px;
+    }
+
+    .act i {
+      width: 4px;
+    }
   }
 
   @media (max-width: 640px) {

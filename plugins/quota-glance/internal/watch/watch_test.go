@@ -262,3 +262,74 @@ func TestCloseBeforeBeginRunsNoCallback(t *testing.T) {
 		t.Fatalf("OnChange ran %d times after a Close that preceded Begin", got)
 	}
 }
+
+// Request activity comes from the host roster, not from the snapshot, so it
+// moves while the file sits still. Without the heartbeat the strip under each
+// address would only advance when quota-cache next wrote — every fifteen
+// minutes by default — and would be presented as live.
+func TestHeartbeatRebuildsWithNoChangeAtAll(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+
+	var calls atomic.Int64
+	w, err := Start(Options{
+		Path: path,
+		// Long enough that neither can be what fires below.
+		Debounce: time.Hour,
+		Backstop: time.Hour,
+		// Short enough to be the only thing that can.
+		Heartbeat: 40 * time.Millisecond,
+		OnChange:  func() { calls.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1) // the startup read
+
+	waitFor(t, &calls, 4)
+	if got := w.State().Heartbeats; got < 3 {
+		t.Fatalf("heartbeats = %d; want at least 3", got)
+	}
+	// The counters separate: nothing was missed and nothing changed, so the
+	// backstop — which is how a deaf watcher is noticed — must stay at zero.
+	if got := w.State().Backstops; got != 0 {
+		t.Fatalf("backstops = %d; a heartbeat was counted as a missed event", got)
+	}
+}
+
+// And the heartbeat must not consume the fingerprint a missed event is detected
+// by, or a filesystem that stops delivering events looks exactly like one that
+// never had anything to deliver.
+func TestHeartbeatLeavesTheBackstopAbleToReport(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+
+	var calls atomic.Int64
+	w, err := Start(Options{
+		Path:      path,
+		Debounce:  time.Hour, // no event path
+		Backstop:  40 * time.Millisecond,
+		Heartbeat: 10 * time.Millisecond,
+		OnChange:  func() { calls.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	commit(t, path, `{"schema":1,"entries":{}}`)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if w.State().Backstops > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the backstop never reported a change the heartbeat had already rebuilt over")
+}

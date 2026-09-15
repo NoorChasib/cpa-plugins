@@ -40,6 +40,9 @@ type WatcherState struct {
 	LastError string    `json:"last_error,omitempty"`
 	Reloads   uint64    `json:"reloads"`
 	Backstops uint64    `json:"backstops"`
+	// Heartbeats counts rebuilds the timer ran with nothing to reload, which is
+	// how request activity stays current between snapshot writes.
+	Heartbeats uint64 `json:"heartbeats"`
 }
 
 // Health is what the management health route reports.

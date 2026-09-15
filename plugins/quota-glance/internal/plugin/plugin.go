@@ -30,7 +30,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.1.3"
+var Version = "0.2.0"
 
 const (
 	defaultStaleAfter = 45 * time.Minute
@@ -294,8 +294,16 @@ func (p *Plugin) Rebuild() {
 		if result.Reason == "" {
 			good := doc
 			p.lastGood = &good
+			// History records observations, and a rebuild is not one. Rebuilds
+			// now run on a timer as well as on a write — request activity moves
+			// while the snapshot sits still — and sampling each of those would
+			// store the same reading sixty times an hour, inflate the ring
+			// fifteenfold, and change nothing about the trend it feeds.
+			fresh := !result.Snapshot.WrittenAt.Equal(p.written)
 			p.written, p.nextReq = result.Snapshot.WrittenAt, result.Snapshot.NextRequest
-			historyErr = current.Append(aggregate.SamplesFrom(doc, now), now)
+			if fresh {
+				historyErr = current.Append(aggregate.SamplesFrom(doc, now), now)
+			}
 		}
 	}
 	p.builtAt = now
@@ -325,6 +333,7 @@ func (p *Plugin) Rebuild() {
 			Watching: state.Watching, Directory: state.Directory,
 			LastEvent: state.LastEvent, LastError: state.LastError,
 			Reloads: state.Reloads, Backstops: state.Backstops,
+			Heartbeats: state.Heartbeats,
 		}
 	}
 	served.Publish(doc, health)

@@ -34,18 +34,54 @@ func loadSnapshot(t *testing.T, name string) qc.Snapshot {
 	return snapshot
 }
 
+// ringOf builds a recent-request ring the way CPA reports one: a fixed number
+// of equal buckets, oldest first, each labelled with the local-time range it
+// covers. The maps are sparse and indexed the same way, so a fixture names only
+// the buckets that saw traffic.
+func ringOf(count int, width time.Duration, success, failed map[int]int64) []RecentRequest {
+	out := make([]RecentRequest, 0, count)
+	for i := 0; i < count; i++ {
+		start := time.Unix(fixtureNow, 0).UTC().Add(time.Duration(i-(count-1)) * width)
+		out = append(out, RecentRequest{
+			Label:   start.Format("15:04") + "-" + start.Add(width).Format("15:04"),
+			Success: success[i],
+			Failed:  failed[i],
+		})
+	}
+	return out
+}
+
+// tenMinuteRing is CPA's own shape: twenty buckets of ten minutes, the last
+// 3h20m. Every fixture below uses it except the one that deliberately does not.
+func tenMinuteRing(success, failed map[int]int64) []RecentRequest {
+	return ringOf(20, 10*time.Minute, success, failed)
+}
+
 // fixtureRoster is what host.auth.list reports. Order is deliberately not the
 // display order: the server sorts by weekly reset, and a roster that arrived
 // pre-sorted would hide a failure to do so.
+//
+// The rings are the pool as it actually behaves: one credential carrying the
+// traffic right now, one that carried it two hours ago, one that failed a
+// couple of requests, two that nothing has routed to all window, and one host
+// entry with no ring at all — an older CPA, which reports no counter.
 func fixtureRoster() []Identity {
 	return []Identity{
 		{AuthIndex: "xai-noor@example.com.json", Provider: "xai"},
-		{AuthIndex: "claude-chasibnoor@example.com.json", Provider: "claude"},
-		{AuthIndex: "claude-noorchasib@example.com.json", Provider: "claude"},
-		{AuthIndex: "codex-noor@example.com.json", Provider: "codex"},
-		{AuthIndex: "claude-siphorchannel@example.com.json", Provider: "claude"},
-		{AuthIndex: "claude-noor@example.com.json", Provider: "claude"},
-		{AuthIndex: "claude-agency@example.com.json", Provider: "claude"},
+		{AuthIndex: "claude-chasibnoor@example.com.json", Provider: "claude",
+			Recent: tenMinuteRing(map[int]int64{3: 6, 4: 11, 5: 8, 6: 4, 7: 2}, nil)},
+		{AuthIndex: "claude-noorchasib@example.com.json", Provider: "claude",
+			Recent: tenMinuteRing(nil, nil)},
+		{AuthIndex: "codex-noor@example.com.json", Provider: "codex",
+			Recent: tenMinuteRing(map[int]int64{18: 4, 19: 3}, nil)},
+		{AuthIndex: "claude-siphorchannel@example.com.json", Provider: "claude",
+			Recent: tenMinuteRing(map[int]int64{16: 1}, map[int]int64{17: 2})},
+		{AuthIndex: "claude-noor@example.com.json", Provider: "claude",
+			Recent: tenMinuteRing(nil, nil)},
+		{AuthIndex: "claude-agency@example.com.json", Provider: "claude",
+			Recent: tenMinuteRing(map[int]int64{
+				10: 2, 11: 5, 12: 9, 13: 12, 14: 8, 15: 15, 16: 17, 17: 14, 18: 21, 19: 14,
+			}, nil)},
 	}
 }
 
@@ -715,10 +751,19 @@ func degradedRoster() []Identity {
 		{AuthIndex: "claude-failing@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-pending@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-disabled@example.com.json", Provider: "claude", Disabled: true},
-		{AuthIndex: "claude-unavailable@example.com.json", Provider: "claude", Unavailable: true},
+		// Parked by CPA after a run of failures, with the run still in its ring.
+		// A credential in cooldown is the one case where the strip and the
+		// routing label disagree on purpose: it was busy, and now nothing goes
+		// to it.
+		{AuthIndex: "claude-unavailable@example.com.json", Provider: "claude", Unavailable: true,
+			Recent: tenMinuteRing(map[int]int64{15: 3}, map[int]int64{16: 4, 17: 2})},
 		// In the roster, absent from the snapshot: quota-cache does not poll it.
 		{AuthIndex: "gemini-unsupported@example.com.json", Provider: "gemini"},
-		{AuthIndex: "codex-model@example.com.json", Provider: "codex"},
+		// A host whose ring is not CPA's current shape — twelve buckets of five
+		// minutes. Nothing may assume 10 minutes or 3h20m; both are read off
+		// what the host sent.
+		{AuthIndex: "codex-model@example.com.json", Provider: "codex",
+			Recent: ringOf(12, 5*time.Minute, map[int]int64{10: 1, 11: 2}, nil)},
 		{AuthIndex: "xai-raw@example.com.json", Provider: "xai"},
 	}
 }

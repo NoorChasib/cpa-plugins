@@ -110,6 +110,17 @@ Plan names arrive display-ready: Claude's `Max` and `Team` pass through, and
 Codex's plan enum is resolved to the tier name (`pro` is Pro 20x, `prolite` is
 Pro 5x). Set `plan-labels` only if a provider renames a tier.
 
+Each credential also carries **which of them CPA is actually routing to**, as a
+strip of request counts under its address. A credential sitting at 100% is
+either keeping up with the traffic or taking none of it, and those are opposite
+facts that look identical on a capacity bar. The counts are CPA's own — 20
+buckets of 10 minutes, the last 3h20m, read from the credential roster the
+plugin already asks for — so this costs no provider request, and the strip is
+absent rather than empty on a CPA that does not report them. Because that
+counter moves while the snapshot sits still, the document is rebuilt once a
+minute as well as on every Quota Cache write; `.../health` counts those rebuilds
+separately as `heartbeats`.
+
 The full field reference — every status, state, data issue, level, trend, and
 stale reason — is in [docs/summary-contract.md](docs/summary-contract.md).
 
@@ -140,8 +151,10 @@ once. There is no host to configure either, because the plugin serves the page
 and the page calls its own origin.
 
 Everything the page shows is precomputed here: percentages, levels, ordering,
-trend, and the wording of each card's subtitle. The only arithmetic in the
-browser is `resetAtEpoch − now`, to tick the countdowns.
+trend, the ink level of every block in an activity strip, and the wording of
+each card's subtitle. The only arithmetic in the browser is subtracting an
+instant from now — to tick the countdowns, and to age the last request under an
+address.
 
 ## Development
 

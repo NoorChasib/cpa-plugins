@@ -35,6 +35,16 @@ const (
 	LevelCritical = "critical"
 )
 
+// Activity intensity tiers, the ink ramp for one bucket of the request strip.
+// The thresholds that place a bucket on this ramp are in build.go, beside the
+// capacity thresholds they follow.
+const (
+	IntensityNone   = 0
+	IntensityLow    = 1
+	IntensityMedium = 2
+	IntensityHigh   = 3
+)
+
 // Trends.
 const (
 	TrendUp      = "up"
@@ -78,6 +88,22 @@ type Identity struct {
 	Email       string
 	Disabled    bool
 	Unavailable bool
+	// Recent is CPA's rolling request counter for this credential, oldest
+	// bucket first. It is the one part of the roster that answers a question
+	// the snapshot cannot: which credential CPA is actually routing to. Empty
+	// when the host does not report it.
+	Recent []RecentRequest
+}
+
+// RecentRequest is one bucket of that counter.
+//
+// Label is the host's own range in the CPA process's local time, "14:50-15:00".
+// It carries no date and no zone, so it is never parsed into an instant — only
+// the width between its halves is read, which is the same in any zone.
+type RecentRequest struct {
+	Label   string
+	Success int64
+	Failed  int64
 }
 
 // Sample is one observation of one window's remaining fraction, used for trend.
@@ -123,6 +149,54 @@ type Credential struct {
 	Plan              string `json:"plan"`
 	Status            string `json:"status"`
 	LastObservedEpoch int64  `json:"lastObservedEpoch"`
+	// Activity is what CPA has routed to this credential recently. It hangs off
+	// the credential rather than off a row because a request is made against a
+	// credential, not against a window: the same strip is correct on every card
+	// the credential appears in. Null when the host reports no counter at all.
+	Activity *Activity `json:"activity"`
+}
+
+// Activity is one credential's recent request traffic, as a fixed ring of
+// equal-width buckets, oldest first and newest last.
+//
+// It answers a question the quota figures cannot: a credential at 100% is
+// either being routed to and keeping up, or not being routed to at all, and
+// those are opposite facts about a pool that look identical on a capacity bar.
+type Activity struct {
+	// BucketSeconds is the width of each bucket and WindowSeconds the span of
+	// all of them. Both are reported rather than assumed: the host owns the
+	// ring, and a client that hardcoded "the last 3h20m" would mislabel the
+	// strip the day CPA changed it.
+	BucketSeconds int              `json:"bucketSeconds"`
+	WindowSeconds int              `json:"windowSeconds"`
+	Buckets       []ActivityBucket `json:"buckets"`
+	// Success and Failed total the buckets, so a client never sums them to
+	// print the count beside the strip.
+	Success int64 `json:"success"`
+	Failed  int64 `json:"failed"`
+	// LastRequestAtEpoch is the end of the newest bucket with any traffic in
+	// it, clamped to the build instant, and null when the whole window is
+	// empty. It is an upper bound rather than an exact instant: the ring counts
+	// per bucket and does not record when inside one a request landed.
+	LastRequestAtEpoch *int64 `json:"lastRequestAtEpoch"`
+	// Live is traffic in the bucket now in progress — the closest this data can
+	// come to "right now". It is served rather than derived because deriving it
+	// means knowing which bucket is current, which is the one thing the labels
+	// do not say.
+	Live bool `json:"live"`
+}
+
+// ActivityBucket is one interval of the ring. A bucket that saw nothing is
+// present with zeroes rather than omitted: the gaps are half of what the strip
+// says, and a ring with its empty buckets removed is a different shape.
+type ActivityBucket struct {
+	Success int64 `json:"success"`
+	Failed  int64 `json:"failed"`
+	// Intensity places the bucket on the strip's ink ramp, 0 for no traffic up
+	// to 3 for the busiest. Like every other threshold in this document it is
+	// decided here, so two clients cannot ink the same bucket differently.
+	// Clamp an unknown value to the top of the ramp you implement.
+	Intensity int `json:"intensity"`
 }
 
 type Provider struct {

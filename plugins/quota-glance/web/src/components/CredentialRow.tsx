@@ -1,6 +1,6 @@
 import { useNowSeconds } from "../lib/now"
-import { formatReset } from "../lib/time"
-import type { Credential, RowEntry } from "../lib/types"
+import { formatAgo, formatDuration, formatReset } from "../lib/time"
+import type { Activity, Credential, RowEntry } from "../lib/types"
 
 /**
  * The address, with the domain in muted ink so the distinguishing word reads
@@ -35,6 +35,102 @@ function Bar({ fraction, critical }: { fraction: number; critical: boolean }) {
         style={{ width: `${width}%` }}
       />
     </span>
+  )
+}
+
+/**
+ * The traffic strip: one block per bucket, oldest at the left, the bucket in
+ * progress at the right.
+ *
+ * A block is inked from the server's intensity, never from its own count, so
+ * the credential carrying the pool towers over the one taking a trickle instead
+ * of every row looking equally busy. Any failure in a bucket colours it red
+ * whatever its volume — a single failure inside a busy ten minutes is the thing
+ * most worth not losing.
+ *
+ * Empty buckets are drawn, not skipped. The gaps are half of what the strip
+ * says, and a row with its quiet buckets removed would read as continuous
+ * traffic.
+ */
+function TrafficStrip({ activity, span }: { activity: Activity; span: string }) {
+  return (
+    <span className="act" role="img" aria-label={`request activity over the last ${span}`}>
+      {activity.buckets.map((bucket, index) => (
+        <i
+          key={index}
+          className={bucket.failed > 0 ? "act-f" : `act-${Math.min(bucket.intensity, 3)}`}
+        />
+      ))}
+    </span>
+  )
+}
+
+/**
+ * The count beside the strip.
+ *
+ * Successes and failures are named separately rather than summed: "3 req" over
+ * a strip that is two thirds red describes the same numbers and none of the
+ * situation.
+ */
+function TrafficCount({ activity }: { activity: Activity }) {
+  const parts: string[] = []
+  if (activity.success > 0) parts.push(`${activity.success} req`)
+  return (
+    <>
+      {parts.join("")}
+      {activity.failed > 0 && (
+        <>
+          {parts.length > 0 && " · "}
+          <span className="text-crit">{activity.failed} failed</span>
+        </>
+      )}
+    </>
+  )
+}
+
+/**
+ * The strip, its count, and when the last request landed.
+ *
+ * "now" comes from the server's own `live` flag rather than from comparing
+ * `lastRequestAtEpoch` to the clock: only the server knows which bucket is the
+ * one in progress, and a request 30 seconds old and one 9 minutes old are both
+ * in it. Everything older is an age this page ticks itself, in the same
+ * vocabulary as every other countdown on it.
+ */
+function Traffic({ activity }: { activity: Activity }) {
+  const now = useNowSeconds()
+  const span = formatDuration(activity.windowSeconds)
+  const idle = activity.success === 0 && activity.failed === 0
+
+  return (
+    <div className="mt-[5px] flex items-center gap-[9px]">
+      <TrafficStrip activity={activity} span={span} />
+      <span
+        className={`num min-w-0 truncate text-[10px] ${
+          idle ? "text-ink-4" : activity.live ? "text-accent" : "text-ink-3"
+        }`}
+        title={idle ? `no requests in the last ${span}` : undefined}
+      >
+        {idle ? (
+          "idle"
+        ) : (
+          <>
+            {/* The count goes first and goes first at 390px, where the column
+              * is half as wide: the strip beside it already shows how much,
+              * roughly, and only this line can say when. */}
+            <span className="max-[640px]:hidden">
+              <TrafficCount activity={activity} />
+              {" · "}
+            </span>
+            {activity.live
+              ? "now"
+              : activity.lastRequestAtEpoch !== null
+                ? formatAgo(activity.lastRequestAtEpoch, now)
+                : span}
+          </>
+        )}
+      </span>
+    </div>
   )
 }
 
@@ -73,11 +169,18 @@ export function CredentialRow({ entry, credential }: { entry: RowEntry; credenti
 
   return (
     <div className={`cred ${degraded ? "opacity-60" : ""}`}>
-      <div className="cred-mail flex min-w-0 items-baseline gap-[6px]">
-        <Email address={credential?.email ?? entry.credentialId} />
-        {parked && (
-          <span className="shrink-0 text-[10.5px] text-ink-3">{parked}</span>
-        )}
+      <div className="cred-mail min-w-0">
+        <div className="flex min-w-0 items-baseline gap-[6px]">
+          <Email address={credential?.email ?? entry.credentialId} />
+          {parked && (
+            <span className="shrink-0 text-[10.5px] text-ink-3">{parked}</span>
+          )}
+        </div>
+        {/* Routing, not quota: the same strip on every card the credential
+          * appears in, because a request is made against a credential and not
+          * against one of its windows. Absent entirely when the host reports no
+          * counter, which leaves the row exactly as it was. */}
+        {credential?.activity && <Traffic activity={credential.activity} />}
       </div>
 
       {/* Fixed column, so the bars line up down the card whatever the plans are

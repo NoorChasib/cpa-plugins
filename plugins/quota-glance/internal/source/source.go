@@ -141,7 +141,30 @@ func identities(ctx context.Context, host Host) ([]aggregate.Identity, error) {
 			Email:       entry.Email,
 			Disabled:    entry.Disabled,
 			Unavailable: entry.Unavailable,
+			Recent:      recentOf(entry.RecentRequests),
 		})
 	}
 	return out, nil
+}
+
+// recentOf carries CPA's rolling request counter through in the order the host
+// reports it, oldest bucket first.
+//
+// It is copied rather than aliased because the host response is decoded per
+// call and this slice outlives it inside a published document. Nothing is
+// summed or rescaled here: the aggregate owns every judgement about what the
+// counts mean, including the scale they are drawn against.
+func recentOf(buckets []protocol.HostRecentRequestEntry) []aggregate.RecentRequest {
+	if len(buckets) == 0 {
+		return nil
+	}
+	out := make([]aggregate.RecentRequest, 0, len(buckets))
+	for _, bucket := range buckets {
+		out = append(out, aggregate.RecentRequest{
+			Label:   bucket.Time,
+			Success: bucket.Success,
+			Failed:  bucket.Failed,
+		})
+	}
+	return out
 }

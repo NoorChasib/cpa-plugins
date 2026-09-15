@@ -17,7 +17,117 @@
       "provider": "claude",
       "plan": "Max",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 1,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 0,
+            "failed": 2,
+            "intensity": 1
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          }
+        ],
+        "success": 1,
+        "failed": 2,
+        "lastRequestAtEpoch": 1789012200,
+        "live": false
+      }
     },
     {
       "id": "claude-agency@example.com.json",
@@ -25,7 +135,117 @@
       "provider": "claude",
       "plan": "Team",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 2,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 5,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 9,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 12,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 8,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 15,
+            "failed": 0,
+            "intensity": 3
+          },
+          {
+            "success": 17,
+            "failed": 0,
+            "intensity": 3
+          },
+          {
+            "success": 14,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 21,
+            "failed": 0,
+            "intensity": 3
+          },
+          {
+            "success": 14,
+            "failed": 0,
+            "intensity": 2
+          }
+        ],
+        "success": 117,
+        "failed": 0,
+        "lastRequestAtEpoch": 1789012800,
+        "live": true
+      }
     },
     {
       "id": "claude-chasibnoor@example.com.json",
@@ -33,7 +253,117 @@
       "provider": "claude",
       "plan": "Max",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 6,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 11,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 8,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 4,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 2,
+            "failed": 0,
+            "intensity": 1
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          }
+        ],
+        "success": 31,
+        "failed": 0,
+        "lastRequestAtEpoch": 1789006200,
+        "live": false
+      }
     },
     {
       "id": "claude-noor@example.com.json",
@@ -41,7 +371,117 @@
       "provider": "claude",
       "plan": "Team",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          }
+        ],
+        "success": 0,
+        "failed": 0,
+        "lastRequestAtEpoch": null,
+        "live": false
+      }
     },
     {
       "id": "claude-noorchasib@example.com.json",
@@ -49,7 +489,117 @@
       "provider": "claude",
       "plan": "Max",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          }
+        ],
+        "success": 0,
+        "failed": 0,
+        "lastRequestAtEpoch": null,
+        "live": false
+      }
     },
     {
       "id": "codex-noor@example.com.json",
@@ -57,7 +607,117 @@
       "provider": "codex",
       "plan": "Pro 20x",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 4,
+            "failed": 0,
+            "intensity": 3
+          },
+          {
+            "success": 3,
+            "failed": 0,
+            "intensity": 3
+          }
+        ],
+        "success": 7,
+        "failed": 0,
+        "lastRequestAtEpoch": 1789012800,
+        "live": true
+      }
     },
     {
       "id": "xai-noor@example.com.json",
@@ -65,7 +725,8 @@
       "provider": "xai",
       "plan": "SuperGrok Heavy",
       "status": "error",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": null
     }
   ],
   "providers": [

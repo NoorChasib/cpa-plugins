@@ -17,7 +17,8 @@
       "provider": "claude",
       "plan": "Max",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": null
     },
     {
       "id": "claude-stale@example.com.json",
@@ -25,7 +26,8 @@
       "provider": "claude",
       "plan": "Max",
       "status": "ok",
-      "lastObservedEpoch": 1789002000
+      "lastObservedEpoch": 1789002000,
+      "activity": null
     },
     {
       "id": "claude-failing@example.com.json",
@@ -33,7 +35,8 @@
       "provider": "claude",
       "plan": "Team",
       "status": "error",
-      "lastObservedEpoch": 1789012200
+      "lastObservedEpoch": 1789012200,
+      "activity": null
     },
     {
       "id": "claude-disabled@example.com.json",
@@ -41,7 +44,8 @@
       "provider": "claude",
       "plan": "Max",
       "status": "disabled",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": null
     },
     {
       "id": "claude-unavailable@example.com.json",
@@ -49,7 +53,117 @@
       "provider": "claude",
       "plan": "Max",
       "status": "unavailable",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 600,
+        "windowSeconds": 12000,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 3,
+            "failed": 0,
+            "intensity": 3
+          },
+          {
+            "success": 0,
+            "failed": 4,
+            "intensity": 3
+          },
+          {
+            "success": 0,
+            "failed": 2,
+            "intensity": 2
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          }
+        ],
+        "success": 3,
+        "failed": 6,
+        "lastRequestAtEpoch": 1789012200,
+        "live": false
+      }
     },
     {
       "id": "codex-model@example.com.json",
@@ -57,7 +171,77 @@
       "provider": "codex",
       "plan": "Pro 20x",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": {
+        "bucketSeconds": 300,
+        "windowSeconds": 3600,
+        "buckets": [
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 0,
+            "failed": 0,
+            "intensity": 0
+          },
+          {
+            "success": 1,
+            "failed": 0,
+            "intensity": 2
+          },
+          {
+            "success": 2,
+            "failed": 0,
+            "intensity": 3
+          }
+        ],
+        "success": 3,
+        "failed": 0,
+        "lastRequestAtEpoch": 1789012800,
+        "live": true
+      }
     },
     {
       "id": "claude-pending@example.com.json",
@@ -65,7 +249,8 @@
       "provider": "claude",
       "plan": "",
       "status": "pending",
-      "lastObservedEpoch": 0
+      "lastObservedEpoch": 0,
+      "activity": null
     },
     {
       "id": "gemini-unsupported@example.com.json",
@@ -73,7 +258,8 @@
       "provider": "gemini",
       "plan": "",
       "status": "unsupported",
-      "lastObservedEpoch": 0
+      "lastObservedEpoch": 0,
+      "activity": null
     },
     {
       "id": "xai-raw@example.com.json",
@@ -81,7 +267,8 @@
       "provider": "xai",
       "plan": "SuperGrok Heavy",
       "status": "ok",
-      "lastObservedEpoch": 1789012500
+      "lastObservedEpoch": 1789012500,
+      "activity": null
     }
   ],
   "providers": [

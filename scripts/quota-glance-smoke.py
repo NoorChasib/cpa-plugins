@@ -290,6 +290,26 @@ def checks(container, cache_path, now):
           f'{session["aggregate"]["subtext"]!r} · {len(session["entries"])} entries in weekly order')
     print(f'  identity      emails resolved, plans {plans}')
 
+    # Routing activity, which is the one field that comes from CPA's roster
+    # rather than from the snapshot. Every other test in this plugin supplies it
+    # from a fake host, so this is the only place the real ABI is asked whether
+    # it carries recent_requests at all — a rename upstream would leave every
+    # unit test passing and the strip permanently absent.
+    activity = [c['activity'] for c in document['credentials']]
+    assert all(a is not None for a in activity), (
+        'CPA reported no recent_requests for at least one credential: '
+        + json.dumps(document['credentials'], indent=2))
+    ring = activity[0]
+    assert ring['bucketSeconds'] > 0 and ring['windowSeconds'] > 0, ring
+    assert len(ring['buckets']) == ring['windowSeconds'] // ring['bucketSeconds'], ring
+    # Nothing is proxied through this container, so the ring is real and empty.
+    # Empty is not null, and the difference is what the page draws.
+    assert all(b['success'] == 0 and b['failed'] == 0 for b in ring['buckets']), ring
+    assert ring['success'] == 0 and ring['failed'] == 0, ring
+    assert ring['lastRequestAtEpoch'] is None and ring['live'] is False, ring
+    print(f'  activity      {len(ring["buckets"])} x {ring["bucketSeconds"]}s ring from the real '
+          f'roster; idle reads as empty, not absent')
+
     # 5. Conditional request.
     etag = headers.get('Etag') or headers.get('ETag')
     assert etag, headers

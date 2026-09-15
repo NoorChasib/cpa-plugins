@@ -33,6 +33,35 @@ export interface Credential {
   plan: string
   status: CredentialStatus
   lastObservedEpoch: number
+  /**
+   * What CPA has routed here recently, or null when the host reports no such
+   * counter at all — an older CPA. Null is not "nothing arrived": a credential
+   * nothing arrived at has a full ring of empty buckets, and the difference is
+   * the difference between "idle" and "unknown".
+   */
+  activity: Activity | null
+}
+
+/** One bucket of the ring. Empty buckets are present, and are half the shape. */
+export interface ActivityBucket {
+  success: number
+  failed: number
+  /** 0 for no traffic up to 3 for the busiest bucket in the provider. */
+  intensity: number
+}
+
+export interface Activity {
+  /** Both served, so nothing here has to assume CPA's current ring shape. */
+  bucketSeconds: number
+  windowSeconds: number
+  /** Oldest first. The last bucket is the one in progress. */
+  buckets: ActivityBucket[]
+  success: number
+  failed: number
+  /** Upper bound on the last request; null when the window is empty. */
+  lastRequestAtEpoch: number | null
+  /** Traffic in the bucket in progress — as close to "now" as this data goes. */
+  live: boolean
 }
 
 export interface Aggregate {
