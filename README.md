@@ -8,7 +8,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
-| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window (not yet published) |
+| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, and which credential is taking the requests |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
 ## Get started
@@ -23,9 +23,9 @@ Add this one source in CPA's Plugin Store:
 https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 ```
 
-All five catalog entries, download assets, and current native repository links use **NoorChasib/cpa-plugins**. Current packages target Linux amd64/glibc and include the optional [quota-cache preview](docs/quota-cache-preview.md). `preview/registry.json` is a compatibility alias with the same entries; if you already added that URL, keep it to avoid changing CPA's installed source identity.
+All six catalog entries, download assets, and current native repository links use **NoorChasib/cpa-plugins**. Current packages target Linux amd64/glibc and include the optional [quota-cache preview](docs/quota-cache-preview.md). `preview/registry.json` is a compatibility alias with the same entries; if you already added that URL, keep it to avoid changing CPA's installed source identity.
 
-Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no provider requests of its own; it is built in this repository but is not in the Plugin Store catalog yet, so install it from source.
+Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no provider requests of its own; the routing activity it shows comes from CPA's own request counter, in-process.
 
 
 Publish updates independently with a tag such as `quota-cache/v0.1.1`. The root workflow verifies that plugin, publishes its Linux amd64 package, and updates only its catalog entry in both source aliases. CPA then offers that plugin's update; installation/restarts remain under your control. See [release commands and recovery](docs/releases.md).
@@ -44,7 +44,7 @@ See each plugin's reference documentation for its exact build and verification c
 
 ## Compatibility
 
-Account Health, Auto Baseline, and Reset Priority currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
+Account Health, Auto Baseline, Reset Priority, Quota Cache, and Quota Glance currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 
