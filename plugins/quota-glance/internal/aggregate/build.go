@@ -17,6 +17,19 @@ const (
 	lowBelow      = 0.40
 )
 
+// Where a request bucket lands on the intensity ramp, as a share of the busiest
+// bucket in its provider. Same reasoning as the capacity thresholds above: the
+// rule is decided once, here, rather than in each client's stylesheet.
+const (
+	intensityMediumAbove = 0.34
+	intensityHighAbove   = 0.67
+
+	// defaultBucketSeconds is CPA's own width for a recent-request bucket. It
+	// is a fallback only — the width is read off the host's labels, so a host
+	// that changes it relabels the strip instead of quietly mislabelling it.
+	defaultBucketSeconds = 600
+)
+
 // Data issues attached to an entry the client can surface without guessing.
 const (
 	issuePercentOutOfRange = "percentOutOfRange"
@@ -218,6 +231,120 @@ func shortName(email string) string {
 	return email
 }
 
+// bucketSecondsOf reads the ring's bucket width off the host's own label,
+// "14:50-15:00".
+//
+// Only the difference between the two halves is used. The label is in the CPA
+// process's local time and carries no date, so parsing it into an instant would
+// be wrong twice a year and wrong every night at midnight; a width is the same
+// number in every zone. A label that spans midnight subtracts to a negative and
+// is wrapped rather than discarded.
+func bucketSecondsOf(recent []RecentRequest) int {
+	for _, bucket := range recent {
+		from, to, ok := strings.Cut(bucket.Label, "-")
+		if !ok {
+			continue
+		}
+		start, errStart := time.Parse("15:04", strings.TrimSpace(from))
+		end, errEnd := time.Parse("15:04", strings.TrimSpace(to))
+		if errStart != nil || errEnd != nil {
+			continue
+		}
+		width := int(end.Sub(start) / time.Second)
+		if width <= 0 {
+			width += 24 * 3600
+		}
+		if width > 0 && width <= 24*3600 {
+			return width
+		}
+	}
+	return defaultBucketSeconds
+}
+
+// intensityOf places one bucket on the ink ramp, against the busiest bucket
+// anywhere in its provider.
+//
+// Provider-wide on purpose. A strip scaled to its own row makes the credential
+// taking a trickle look exactly like the one carrying the pool, which is the
+// single question the strip exists to answer.
+func intensityOf(total, peak int64) int {
+	if total <= 0 || peak <= 0 {
+		return IntensityNone
+	}
+	switch share := float64(total) / float64(peak); {
+	case share > intensityHighAbove:
+		return IntensityHigh
+	case share > intensityMediumAbove:
+		return IntensityMedium
+	}
+	return IntensityLow
+}
+
+// peaksOf is the busiest bucket in each provider, the denominator every strip
+// in that provider is drawn against.
+func peaksOf(records []record) map[string]int64 {
+	peaks := map[string]int64{}
+	for _, r := range records {
+		for _, bucket := range r.identity.Recent {
+			if total := bucket.Success + bucket.Failed; total > peaks[r.identity.Provider] {
+				peaks[r.identity.Provider] = total
+			}
+		}
+	}
+	return peaks
+}
+
+// activityOf renders one credential's recent traffic.
+//
+// The host dates its buckets only with a local-time label, so instants are
+// derived from the width instead: buckets are aligned to multiples of that
+// width in Unix seconds — the same arithmetic CPA itself uses to choose a
+// bucket — and bucket i of n ends (n-1-i) widths before the end of the one now
+// in progress. A roster read microseconds either side of a boundary can date
+// every bucket one place out; the next rebuild corrects it, and the only field
+// that could mislead in the meantime is a last-request time ten minutes stale.
+func activityOf(recent []RecentRequest, peak int64, now time.Time) *Activity {
+	if len(recent) == 0 {
+		// This host reports no counter. Null says exactly that, where a ring of
+		// zeroes would claim a credential nothing has routed to in hours.
+		return nil
+	}
+	seconds := bucketSecondsOf(recent)
+	width := time.Duration(seconds) * time.Second
+	currentEnd := time.Unix((now.Unix()/int64(seconds))*int64(seconds), 0).UTC().Add(width)
+
+	activity := &Activity{
+		BucketSeconds: seconds,
+		WindowSeconds: seconds * len(recent),
+		Buckets:       make([]ActivityBucket, 0, len(recent)),
+	}
+	for i, bucket := range recent {
+		total := bucket.Success + bucket.Failed
+		activity.Success += bucket.Success
+		activity.Failed += bucket.Failed
+		activity.Buckets = append(activity.Buckets, ActivityBucket{
+			Success:   bucket.Success,
+			Failed:    bucket.Failed,
+			Intensity: intensityOf(total, peak),
+		})
+		if total == 0 {
+			continue
+		}
+		// The bucket's end is the tightest bound its width supports — except
+		// for the bucket in progress, which ends in the future. A last request
+		// dated ahead of now would count up on a page that only counts down.
+		end := currentEnd.Add(-time.Duration(len(recent)-1-i) * width)
+		if end.After(now) {
+			end = now
+		}
+		epoch := end.Unix()
+		activity.LastRequestAtEpoch = &epoch
+	}
+	newest := recent[len(recent)-1]
+	activity.Live = newest.Success+newest.Failed > 0
+	return activity
+}
+
 // record pairs one rostered credential with its snapshot entry.
 type record struct {
 	identity  Identity
@@ -329,6 +456,10 @@ func Build(in Input, now time.Time) Document {
 		return a.identity.AuthIndex < b.identity.AuthIndex
 	})
 
+	// One pass for the scale before any strip is drawn: every credential in a
+	// provider is inked against the same busiest bucket.
+	peaks := peaksOf(records)
+
 	for _, r := range records {
 		doc.Counters.Credentials++
 		// Counted from the poll, not from r.status. Status folds CPA's routing
@@ -353,6 +484,7 @@ func Build(in Input, now time.Time) Document {
 			Plan:              planLabelOf(r.identity.Provider, r.entry.Plan, in.PlanLabels),
 			Status:            r.status,
 			LastObservedEpoch: epochOf(r.freshest),
+			Activity:          activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
 		})
 	}
 

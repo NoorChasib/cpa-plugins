@@ -78,8 +78,11 @@ func main() {
 // Derived from the snapshot by default: every credential in the fixture, in an
 // order that is deliberately not the display order. A roster file overrides
 // that, because the roster carries facts the snapshot cannot — disabled,
-// unavailable, and a credential CPA knows about that quota-cache has never
-// polled — and those are exactly the states worth looking at a page for.
+// unavailable, a credential CPA knows about that quota-cache has never polled,
+// and `recent_requests`, the routing activity under each address — and those
+// are exactly the states worth looking at a page for. A derived roster carries
+// no activity, so the page renders as it does against a CPA that reports none:
+// pass -roster to see the strips.
 func rosterFor(snapshotPath, rosterPath string) ([]protocol.HostAuthFileEntry, error) {
 	if rosterPath != "" {
 		raw, err := os.ReadFile(rosterPath)

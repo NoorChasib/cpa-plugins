@@ -159,3 +159,51 @@ func TestUnopenablePathsAreRejectedWithoutBlocking(t *testing.T) {
 		t.Fatalf("Readable accepted a FIFO: %v", err)
 	}
 }
+
+// The roster is the only place the routing story comes from, and the fields
+// that carry it are the ones that change between reads of an unchanged
+// snapshot. Dropping them on the way through was the shape of this plugin
+// before the strip existed, and nothing else in the pipeline would have noticed.
+func TestRecentRequestsAreCarriedThroughInOrder(t *testing.T) {
+	host := fakeHost{files: []protocol.HostAuthFileEntry{{
+		AuthIndex: "claude-agency@example.com.json",
+		Provider:  "claude",
+		RecentRequests: []protocol.HostRecentRequestEntry{
+			{Time: "14:40-14:50", Success: 3},
+			{Time: "14:50-15:00", Success: 7, Failed: 1},
+			{Time: "15:00-15:10"},
+		},
+	}}}
+
+	got := Read(context.Background(), host, write(t, `{"schema":1,"entries":{},"provider_cooldown":{}}`))
+	if len(got.Identities) != 1 {
+		t.Fatalf("identities = %d; want 1", len(got.Identities))
+	}
+	want := []aggregate.RecentRequest{
+		{Label: "14:40-14:50", Success: 3},
+		{Label: "14:50-15:00", Success: 7, Failed: 1},
+		{Label: "15:00-15:10"},
+	}
+	ring := got.Identities[0].Recent
+	if len(ring) != len(want) {
+		t.Fatalf("ring has %d buckets; want %d", len(ring), len(want))
+	}
+	for i := range want {
+		if ring[i] != want[i] {
+			t.Fatalf("bucket %d = %+v; want %+v — the ring is reordered or rewritten", i, ring[i], want[i])
+		}
+	}
+}
+
+// A host that reports no ring must produce no ring, rather than an empty one:
+// the aggregate publishes those as different facts, and only this conversion
+// knows which it was given.
+func TestAnAbsentRingStaysAbsent(t *testing.T) {
+	host := fakeHost{files: []protocol.HostAuthFileEntry{
+		{AuthIndex: "claude-quiet@example.com.json", Provider: "claude"},
+	}}
+	got := Read(context.Background(), host, write(t, `{"schema":1,"entries":{},"provider_cooldown":{}}`))
+	if ring := got.Identities[0].Recent; ring != nil {
+		t.Fatalf("a host that reported no ring produced %d buckets", len(ring))
+	}
+}

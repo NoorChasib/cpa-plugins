@@ -482,3 +482,113 @@ func TestGeneratedTokenSurvivesRestart(t *testing.T) {
 		t.Fatalf("token file mode = %v; want 0600", perm)
 	}
 }
+
+// builtDocument is the first document with the fixture roster in it. The API
+// serves a valid empty one from construction, so a test that waits for "a
+// document" is served that instead and asserts against nothing.
+func builtDocument(doc map[string]any) bool {
+	credentials, ok := doc["credentials"].([]any)
+	return ok && len(credentials) == 7
+}
+
+// samplesOn counts the trend history on disk.
+func samplesOn(t *testing.T, dataDir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dataDir, "history.json"))
+	if err != nil {
+		t.Fatalf("history unreadable: %v", err)
+	}
+	var doc struct {
+		Samples []json.RawMessage `json:"samples"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return len(doc.Samples)
+}
+
+// Rebuilds now run on a timer as well as on a write, because request activity
+// moves while the snapshot sits still. History must not follow: a sample is an
+// observation, and quota-cache makes one every fifteen minutes however often
+// this plugin redraws. Recording every rebuild would store the same reading
+// sixty times an hour, inflate the ring fifteenfold, and feed the trend an hour
+// of history that contains one actual poll.
+func TestHistoryRecordsSnapshotsNotRebuilds(t *testing.T) {
+	p, _, cachePath := newFixturePlugin(t)
+	dataDir := filepath.Join(filepath.Dir(cachePath), "data")
+
+	// The API serves an empty document until the first build lands, so wait for
+	// the built one rather than for any document at all.
+	waitForDocument(t, p, builtDocument)
+	first := samplesOn(t, dataDir)
+	if first == 0 {
+		t.Fatal("the startup read recorded no history at all")
+	}
+
+	// What the heartbeat does: rebuild, with the same snapshot underneath.
+	for range 5 {
+		p.Rebuild()
+	}
+	if got := samplesOn(t, dataDir); got != first {
+		t.Fatalf("history grew from %d to %d samples across five rebuilds of one snapshot", first, got)
+	}
+
+	// A genuinely new snapshot is still recorded. Same readings, later write:
+	// it is the write that makes it an observation.
+	fresh := strings.Replace(string(fixtureSnapshot(t)),
+		`"written_at": "2026-09-10T03:55:00Z"`, `"written_at": "2026-09-10T04:10:00Z"`, 1)
+	if strings.Contains(fresh, "03:55:00Z\",\n  \"next_request") {
+		t.Fatal("fixture write time did not change; the test is asserting nothing")
+	}
+	if err := os.WriteFile(cachePath, []byte(fresh), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Rebuild()
+	if got := samplesOn(t, dataDir); got <= first {
+		t.Fatalf("a new snapshot added no history: %d samples, was %d", got, first)
+	}
+}
+
+// The strip is only as live as the document, and the document is only as live
+// as the roster read that built it. A rebuild with an unchanged snapshot must
+// still pick up new traffic.
+func TestARebuildPicksUpNewActivityWithoutANewSnapshot(t *testing.T) {
+	p, host, _ := newFixturePlugin(t)
+	waitForDocument(t, p, builtDocument)
+
+	host.mu.Lock()
+	for i := range host.files {
+		if host.files[i].AuthIndex == "claude-agency@example.com.json" {
+			host.files[i].RecentRequests = []protocol.HostRecentRequestEntry{
+				{Time: "03:50-04:00", Success: 2},
+				{Time: "04:00-04:10", Success: 9},
+			}
+		}
+	}
+	host.mu.Unlock()
+
+	p.Rebuild()
+	doc := waitForDocument(t, p, func(doc map[string]any) bool {
+		for _, raw := range doc["credentials"].([]any) {
+			credential := raw.(map[string]any)
+			if credential["id"] != "claude-agency@example.com.json" {
+				continue
+			}
+			return credential["activity"] != nil
+		}
+		return false
+	})
+
+	for _, raw := range doc["credentials"].([]any) {
+		credential := raw.(map[string]any)
+		if credential["id"] != "claude-agency@example.com.json" {
+			continue
+		}
+		activity := credential["activity"].(map[string]any)
+		if activity["success"].(float64) != 11 || activity["live"] != true {
+			t.Fatalf("activity did not follow the roster: %+v", activity)
+		}
+		return
+	}
+	t.Fatal("the credential vanished from the document")
+}

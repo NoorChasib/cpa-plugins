@@ -27,6 +27,12 @@ is a deliberate contract change.
   the printed label cannot disagree. Size bars from the fraction, print the int.
 - **Everything is precomputed.** Thresholds, wording, and ordering are decided
   server-side. A client that recomputes them will disagree with another client.
+- **Quota comes from the snapshot; routing activity comes from the host.**
+  `credentials[].activity` is the one part of this document that is not built
+  from the quota-cache snapshot, and the one part that moves between snapshot
+  writes. The plugin therefore rebuilds on a short timer as well as on a write.
+  That rebuild reads a file and asks CPA in-process for its roster; as
+  everywhere else here, **it contacts no provider**.
 - **`credentials[]` is pre-sorted** by each credential's `weekly` window reset,
   soonest first; those without one sort last. **Every row's `entries[]` repeats
   that order.** Do not re-sort.
@@ -133,6 +139,61 @@ derivation rather than a guess. An unrecognized enum value is rendered readably
 
 **Do not map this in the client.** An operator who needs a different name sets
 `plan-labels` in plugin configuration, and every client then agrees.
+
+### `activity` — what CPA has routed here recently, or `null`
+
+A credential at 100% is either being routed to and keeping up, or not being
+routed to at all. Those are opposite facts about a pool and they are the same
+capacity bar, so the routing half comes from CPA's own rolling request counter
+on the roster — not from the quota-cache snapshot, which knows nothing about it.
+
+It hangs off the **credential**, not off a row: a request is made against a
+credential and not against one of its windows, so the same block is correct on
+every card the credential appears in.
+
+```json
+"activity": {
+  "bucketSeconds": 600,
+  "windowSeconds": 12000,
+  "buckets": [{ "success": 0, "failed": 0, "intensity": 0 }],
+  "success": 117,
+  "failed": 0,
+  "lastRequestAtEpoch": 1789012800,
+  "live": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `bucketSeconds` / `windowSeconds` | The ring's shape, read off the host rather than assumed. CPA reports 20 buckets of 10 minutes today — the last 3h20m — and nothing here may hardcode that. |
+| `buckets` | **Oldest first**, newest last; the last bucket is the one in progress. Every bucket is present, including empty ones. |
+| `success` / `failed` | Totals over the window, so no client sums the ring to label it. |
+| `lastRequestAtEpoch` | The end of the newest non-empty bucket, clamped to the build instant. An **upper bound**, not an exact instant: the ring counts per bucket and does not record where inside one a request landed. `null` when the window is empty. |
+| `live` | Traffic in the bucket in progress. |
+
+**`null` is not "no traffic".** `activity: null` means the host reports no such
+counter — an older CPA — and the correct rendering is nothing at all. A
+credential nothing has routed to has a full ring of empty buckets, `success` and
+`failed` at 0, and `lastRequestAtEpoch: null`. One says unknown, the other says
+idle, and drawing them the same way is the one mistake this shape exists to
+prevent.
+
+**Use `live` rather than comparing `lastRequestAtEpoch` to your clock.** Only the
+server knows which bucket is in progress, and a request 30 seconds old and one 9
+minutes old are both inside it.
+
+#### `buckets[].intensity` — 0 to 3
+
+Where the bucket sits on the ink ramp: `0` no traffic, `3` as busy as the
+busiest bucket **anywhere in that provider**. Scaled provider-wide on purpose —
+a strip scaled to its own row makes the credential taking a trickle look exactly
+like the one carrying the pool, which is the single question the strip answers.
+
+Like every other threshold here it is decided server-side, so two clients cannot
+ink the same bucket differently. Clamp an unknown value to the top of the ramp
+you implement. A bucket with any `failed` in it should read as a failure at any
+volume: one failure inside a busy ten minutes is the thing most worth not
+losing.
 
 ### `level` — computed server-side, on both rows and entries
 

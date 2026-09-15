@@ -38,6 +38,10 @@ const EPOCH_FIELDS = new Set([
   "lastObservedEpoch",
   "soonestResetAtEpoch",
   "resetAtEpoch",
+  // Activity is dated against the build clock, so a fixture that rebased
+  // everything else would show a request from twenty minutes ago as days old —
+  // the one number on the page that would look broken rather than stale.
+  "lastRequestAtEpoch",
 ])
 
 type Doc = Record<string, unknown>
