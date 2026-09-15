@@ -1,6 +1,6 @@
 # Preserve settings and data during updates
 
-All five plugins are developed, packaged, and published from [NoorChasib/cpa-plugins](https://github.com/NoorChasib/cpa-plugins). Install and update each plugin independently through CPA's Plugin Store.
+All six plugins are developed, packaged, and published from [NoorChasib/cpa-plugins](https://github.com/NoorChasib/cpa-plugins). Install and update each plugin independently through CPA's Plugin Store.
 
 ## Store source
 

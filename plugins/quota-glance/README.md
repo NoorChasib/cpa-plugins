@@ -28,7 +28,13 @@ cause.
 
 ## Install
 
-Merge [`config.example.yaml`](config.example.yaml) into your plugin
+Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json`
+as your store source, then install **Quota Glance**. If you already use
+`preview/registry.json`, keep that source and select **Update** for this plugin;
+both catalogs advance together. Follow any disable/restart instruction CPA gives
+for a loaded native library.
+
+Then merge [`config.example.yaml`](config.example.yaml) into your plugin
 configuration, keeping your existing options:
 
 ```yaml
