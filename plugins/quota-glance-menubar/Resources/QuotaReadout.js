@@ -64,6 +64,10 @@
   window.fetch = async function(input, init) {
     let request;
     try {
+      // Constructing a Request from another Request can consume its body.
+      // Leave dashboard actions untouched before inspecting a GET request.
+      const method = init?.method ?? input?.method ?? "GET";
+      if (String(method).toUpperCase() !== "GET") return originalFetch(input, init);
       // Relative URLs are valid in browsers, including in Request constructors.
       request = new Request(input, init);
       if (!matches(request)) return originalFetch(input, init);
