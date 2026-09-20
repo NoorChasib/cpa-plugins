@@ -281,6 +281,7 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 		}
 		credits := object(root, "credits")
 		addBalance(q, "credits", client.Balance{Unit: "credits", Remaining: decimal(credits, "balance"), HasCredits: boolean(credits, "has_credits", "hasCredits"), Unlimited: boolean(credits, "unlimited")})
+		q.ResetCredits = resetCredits(root)
 	case "xai":
 		cfg := object(root, "config")
 		q.Plan = name(root, "subscriptionTier", "subscription_tier")
@@ -315,6 +316,30 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 	}
 	return q
 }
+
+// resetCredits reads Codex's banked rate-limit reset count off the usage
+// response that was already fetched, so knowing the count costs no request of
+// its own.
+//
+// The key is present and null on an account that has never held one, which is
+// not the same as absent: both mean nothing to spend, and both return nil so
+// the dashboard says nothing at all. A negative or fractional count is a
+// response this code does not understand, and is dropped rather than rendered.
+//
+// Expiry is deliberately not read here. It lives on a separate endpoint, and
+// the caller attaches it only when the count says there is something to expire.
+func resetCredits(root map[string]any) *client.ResetCredits {
+	o := object(root, "rate_limit_reset_credits", "rateLimitResetCredits")
+	if o == nil {
+		return nil
+	}
+	n, ok := integerField(o, "available_count", "availableCount")
+	if !ok || n <= 0 || n > maxDetails {
+		return nil
+	}
+	return &client.ResetCredits{AvailableCount: int(n)}
+}
+
 func codexGroup(q *client.Quota, id string, g map[string]any, now time.Time, feature string) {
 	if g == nil {
 		return
