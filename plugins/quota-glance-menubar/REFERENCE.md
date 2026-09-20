@@ -161,14 +161,21 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-On the Linux development host, the eight Swift core tests passed in the official
+The [first native macOS build](https://github.com/NoorChasib/cpa-plugins/actions/runs/35541273761)
+passed on 2026-09-20: all eight Swift tests, Apple silicon and Intel compilation,
+bundle metadata and ad-hoc signature checks, ZIP creation, and DMG creation,
+mounting, and payload verification. Native popover interaction and login-item
+behavior still require a user session on a Mac.
+
+On the Linux development host, the same eight core tests passed in the official
 Swift 6.0.3 container. Swift source parsing, shell syntax, bundle plist checks,
-and the root workflow's `actionlint` check also passed. Linux
-cannot compile AppKit/WebKit, sign the app, or verify native interaction. The
-macOS workflow is provided but has not been run as part of this local change.
-DMG creation and mounting also require macOS and have not run on this host.
-Developer ID signing, notarization, and Gatekeeper assessment additionally need
-the user's Apple secrets and have not run as part of this change.
+ShellCheck, and the root workflow's `actionlint` check also passed. Developer ID
+signing, notarization, and Gatekeeper assessments run separately on GitHub's Mac
+runner before a tagged release can be published.
+
+The [first signed build](https://github.com/NoorChasib/cpa-plugins/actions/runs/35541336282)
+also passed on 2026-09-20: Developer ID signing, Apple notarization of the app
+and DMG, stapled ticket validation, and Gatekeeper assessments for both.
 
 Before treating a Mac build as ready to use:
 
