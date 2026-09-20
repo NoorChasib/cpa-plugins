@@ -196,6 +196,15 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
+The v0.2.0 suite contains 18 Swift tests and nine JavaScript bridge tests. It
+covers actual popover reopening without reload, preference persistence, quota
+selection/freshness, and a native refresh through the full message bridge in a
+real WebKit view with no window attached. Bridge fixtures also exercise
+conditional responses, authentication fallback, failures/recovery, concurrent
+refreshes, and preservation of dashboard action request bodies. Multi-minute
+updates, sleep/wake, and native Settings interaction still need a user session
+on a Mac; the hidden-WebKit test checks the update mechanism, not OS scheduling.
+
 The [first native macOS build](https://github.com/NoorChasib/cpa-plugins/actions/runs/35541273761)
 passed on 2026-09-20: all eight Swift tests, Apple silicon and Intel compilation,
 bundle metadata and ad-hoc signature checks, ZIP creation, and DMG creation,

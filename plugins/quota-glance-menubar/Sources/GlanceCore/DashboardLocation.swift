@@ -1,6 +1,6 @@
 import Foundation
 
-/// The app owns the destination, never the page's credentials or quota data.
+/// The configured destination and its same-origin navigation policy.
 public struct DashboardLocation: Equatable {
     public let url: URL
 
