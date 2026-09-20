@@ -7,11 +7,11 @@ import XCTest
 @MainActor
 private final class RecordingWebView: WKWebView {
     var pageURL: URL?
-    var loading = false
+    var stubLoading = false
     var loads = 0
     var reloads = 0
     override var url: URL? { pageURL }
-    override var isLoading: Bool { loading }
+    override var isLoading: Bool { stubLoading }
     override func load(_ request: URLRequest) -> WKNavigation? {
         loads += 1
         return nil
@@ -55,10 +55,10 @@ final class DashboardLifecycleTests: XCTestCase {
         let webView = RecordingWebView(frame: .zero, configuration: WKWebViewConfiguration())
         let controller = DashboardViewController(webView: webView)
         controller.configure(try DashboardLocation("https://quota.example.com/app"))
-        webView.loading = true
+        webView.stubLoading = true
         controller.prepareToShow()
         XCTAssertEqual(webView.loads, 1)
-        webView.loading = false
+        webView.stubLoading = false
         controller.webView(webView, didFailProvisionalNavigation: nil, withError: URLError(.notConnectedToInternet))
         controller.prepareToShow()
         XCTAssertEqual(webView.loads, 2)
