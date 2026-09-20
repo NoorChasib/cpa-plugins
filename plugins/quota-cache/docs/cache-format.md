@@ -16,9 +16,12 @@ The outer snapshot stays at schema 1. The nested `quota.schema` is 1 and has its
 | `limits` | Named availability flags: optional `allowed` and `reached` booleans and Codex `metered_feature` |
 | `balances` | Named balances in explicitly stated units |
 | `unified_billing` | Grok's shared billing flag, if supplied |
+| `reset_credits` | Codex's banked rate-limit resets, when the account holds at least one |
 | `truncated` | True if a provider response exceeded the bounded entry count |
 
 Every window can contain `used_percent`, `duration_seconds`, `starts_at`, `resets_at`, and `period`. Unavailable values are omitted. Unlike the compatibility percentage, extended percentages preserve reported values above 100. Absolute timestamps use UTC; relative reset times are anchored to the observation, never recalculated on reads.
+
+`reset_credits` contains `available_count` and may contain `soonest_expiry`. It is omitted entirely unless the account holds at least one spendable banked reset, so its presence is the signal that there is one to spend. A banked reset is an entitlement, not allowance: spending one clears the account's five-hour and weekly Codex windows and moves the weekly reset date. `soonest_expiry` is the earliest expiry among credits whose status is `available` and whose deadline is still ahead of the observation; it is omitted when the inventory could not be read, which never fails the observation.
 
 Every balance contains `unit` and may contain `used`, `limit`, `remaining`, `used_percent`, `remaining_percent`, `resets_at`, `source`, `enabled`, `has_credits`, and `unlimited`. Amounts are decimal **strings**, preserving precision and any reported negative balance. Missing values mean unknown; `"0"` and `false` are explicit values. No remaining amount is inferred from a percentage or subtraction. `provider_units` means the endpoint does not provide a verified currency/unit contract; do not display it as dollars.
 
@@ -27,12 +30,12 @@ Every balance contains `unit` and may contain `used`, `limit`, `remaining`, `use
 | Provider | Cached fields from its existing response |
 | --- | --- |
 | Claude | `windows.five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`, `seven_day_cowork`, when supplied; `balances.extra_usage` with enabled state, monthly limit, used credits, and utilization in `provider_units` |
-| Codex | `windows.regular/primary` and `regular/secondary`; corresponding `limits.regular`; `code_review/primary` and `code_review/secondary` plus `limits.code_review`; `additional/<limit-name>/primary` and `/secondary` with associated flags; `balances.credits` with remaining credits, has-credits and unlimited flags; plan type; `limits.spend_control` and `balances.spend_control` with used/limit/remaining amounts, percentages, reset, and source in `provider_units` |
+| Codex | `windows.regular/primary` and `regular/secondary`; corresponding `limits.regular`; `code_review/primary` and `code_review/secondary` plus `limits.code_review`; `additional/<limit-name>/primary` and `/secondary` with associated flags; `balances.credits` with remaining credits, has-credits and unlimited flags; plan type; `limits.spend_control` and `balances.spend_control` with used/limit/remaining amounts, percentages, reset, and source in `provider_units`; `reset_credits.available_count` |
 | Grok | `windows.shared` percentage and billing-period start/end/type; `product/<product>` usage; `balances.included` used/monthly limit, `prepaid` remaining, and `on_demand` used/cap/enabled; amounts in `usd_cents`; unified billing and subscription tier |
 
 Codex primary/secondary IDs describe provider slots; use `duration_seconds` to identify five-hour versus weekly windows, since the slots can change. Additional Codex limits accept array and object forms. Grok retains the response's period type rather than assuming a weekly cycle. A Grok money object `{}` means zero under its documented proto3 encoding; an absent/null object means unknown.
 
-The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. At most 32 windows, 32 limit groups, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
+The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. One further Codex endpoint is read, and only to date banked resets: when `rate_limit_reset_credits.available_count` in the usage response is non-zero, `GET /wham/rate-limit-reset-credits` supplies `soonest_expiry`. An account with nothing banked is still exactly one request per poll. Credit ids, titles, and statuses are read and discarded; only the one timestamp is cached. At most 32 windows, 32 limit groups, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
 
 ## Canonical windows and subscription identity
 

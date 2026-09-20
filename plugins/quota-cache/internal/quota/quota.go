@@ -48,6 +48,14 @@ const (
 	claudeOAuthBeta = "oauth-2025-04-20"
 
 	codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
+	// codexResetCreditsURL enumerates the account's banked rate-limit resets.
+	// The usage response above already carries the count, so this is read only
+	// to date the credits: a banked reset lapses thirty days after it is
+	// granted, and a count that cannot say "one expires Friday" is how they are
+	// lost. It is requested only when the count is non-zero, so an account with
+	// none banked — the common case — costs exactly the one usage request it
+	// always did.
+	codexResetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 	// codexUserAgent is CLI-shaped because the ChatGPT backend edge rejects
 	// non-CLI clients on this endpoint. The comment segment identifies the
 	// real caller.
@@ -199,6 +207,15 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 		observation.ObservedAt = now
 	}
 	observation.Quota = details
+	// Dating the banked resets is a second request, so it is made only when the
+	// first one said there is something to date. A failure here is not a failed
+	// observation: the count is already known and everything else in this
+	// response is good, so the expiry is simply left unknown.
+	if provider == "codex" && details != nil && details.ResetCredits != nil {
+		if expiry, ok := codexResetCreditExpiry(ctx, doer, creds, now); ok {
+			details.ResetCredits.SoonestExpiry = &expiry
+		}
+	}
 	// Derived after ObservedAt is set: a weekly window is only synthesized when
 	// the primary observation actually succeeded.
 	observation.Windows = canonicalWindows(provider, details, observation)
@@ -299,6 +316,56 @@ func accountIDFromIDToken(idToken string) string {
 		}
 	}
 	return stringField(claims, "chatgpt_account_id")
+}
+
+// codexResetCreditExpiry returns the soonest expiry among the credits that are
+// still available to spend.
+//
+// Only entries whose status is exactly "available" are considered: a redeemed
+// or expired credit is in the list and has a date, and letting one of those set
+// the headline would announce a deadline that has already passed. An expiry
+// already behind us is dropped for the same reason.
+//
+// Every failure path returns false rather than an error. The caller has a
+// perfectly good observation in hand and this is an ornament on it; a provider
+// that renames a field here must cost the expiry line, never the poll.
+func codexResetCreditExpiry(ctx context.Context, doer Doer, creds credentials, now time.Time) (time.Time, bool) {
+	response, err := doer.HTTPDo(ctx, protocol.HostHTTPRequest{
+		Method: "GET",
+		URL:    codexResetCreditsURL,
+		Headers: map[string][]string{
+			"Authorization":      {"Bearer " + creds.accessToken},
+			"Accept":             {"application/json"},
+			"User-Agent":         {codexUserAgent},
+			"Chatgpt-Account-Id": {creds.accountID},
+		},
+	})
+	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 || len(response.Body) > maxResponseBytes {
+		return time.Time{}, false
+	}
+	root, err := decodeObject(response.Body)
+	if err != nil {
+		return time.Time{}, false
+	}
+	list, _ := root["credits"].([]any)
+	var soonest time.Time
+	for i, item := range list {
+		if i >= maxDetails {
+			break
+		}
+		credit, ok := item.(map[string]any)
+		if !ok || stringField(credit, "status") != "available" {
+			continue
+		}
+		at, ok := rfc3339Field(credit, "expires_at", "expiresAt")
+		if !ok || !at.After(now) {
+			continue
+		}
+		if soonest.IsZero() || at.Before(soonest) {
+			soonest = at
+		}
+	}
+	return soonest, !soonest.IsZero()
 }
 
 func parsePrimary(provider string, root map[string]any, now time.Time) (Observation, error) {

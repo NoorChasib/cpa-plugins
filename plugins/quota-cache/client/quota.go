@@ -16,7 +16,29 @@ type Quota struct {
 	Limits             map[string]Limit   `json:"limits,omitempty"`
 	Balances           map[string]Balance `json:"balances,omitempty"`
 	UnifiedBilling     *bool              `json:"unified_billing,omitempty"`
+	ResetCredits       *ResetCredits      `json:"reset_credits,omitempty"`
 	Truncated          bool               `json:"truncated,omitempty"`
+}
+
+// ResetCredits is Codex's inventory of banked rate-limit resets: entitlements
+// already granted to the account, which clear its current windows when spent.
+//
+// A banked reset is not extra allowance. Spending one restores the 5-hour and
+// weekly Codex windows and moves the weekly reset date, so it is a thing the
+// account holds rather than a thing it has used, and it belongs here beside the
+// balances rather than among the windows.
+//
+// Nil for every provider that has no such concept, and nil for a Codex account
+// that has none banked, so a reader may treat presence as "there is at least
+// one to spend".
+type ResetCredits struct {
+	AvailableCount int `json:"available_count"`
+	// SoonestExpiry is the earliest expiry among the available credits. A
+	// banked reset lapses thirty days after it is granted and the count alone
+	// cannot say that one is about to, which is the documented way operators
+	// lose them. Nil when the inventory endpoint was not read or did not date
+	// its entries; the count above is still authoritative.
+	SoonestExpiry *time.Time `json:"soonest_expiry,omitempty"`
 }
 type Window struct {
 	UsedPercent     *float64   `json:"used_percent,omitempty"`
