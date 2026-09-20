@@ -27,15 +27,17 @@ final class Probe: NSObject, SPUUpdaterDelegate {
     }
 }
 
-_ = NSApplication.shared
-let bundle = Bundle(path: CommandLine.arguments[1])!
-let probe = Probe(feed: CommandLine.arguments[2], expectValid: CommandLine.arguments[3] == "valid")
-let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
-let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: probe)
-try updater.start()
-updater.checkForUpdateInformation()
-DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-    fputs("Timed out probing the update feed.\n", stderr)
-    exit(1)
+MainActor.assumeIsolated {
+    _ = NSApplication.shared
+    let bundle = Bundle(path: CommandLine.arguments[1])!
+    let probe = Probe(feed: CommandLine.arguments[2], expectValid: CommandLine.arguments[3] == "valid")
+    let driver = SPUStandardUserDriver(hostBundle: bundle, delegate: nil)
+    let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: probe)
+    try updater.start()
+    updater.checkForUpdateInformation()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+        fputs("Timed out probing the update feed.\n", stderr)
+        exit(1)
+    }
+    withExtendedLifetime((updater, probe, driver)) { RunLoop.main.run() }
 }
-RunLoop.main.run()
