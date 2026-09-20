@@ -11,6 +11,10 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, and which credential is taking the requests |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
+For macOS, [Quota Glance Menu Bar](plugins/quota-glance-menubar/README.md) embeds
+your hosted dashboard in a compact menu bar popover. It installs on your Mac
+separately from the CPA plugins.
+
 ## Get started
 
 Open the README for the plugin you want. Each has a short installation/configuration guide. Install only the plugins you need.

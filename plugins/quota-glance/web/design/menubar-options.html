@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quota Glance · Menu bar sizes</title>
+<style>
+/* Both options embed the existing app, unchanged. This stylesheet owns only
+   the comparison board and simulated macOS shell, never dashboard content.
+   Palette: existing #101114 / #181a1e / #262a30 / #eef0f3, with a blue-gray
+   desktop to distinguish the popover boundary. System UI typography.
+   A: 400 x 620 compact vertical webview. B: 520 x 720 with more reading room.
+   Plan review: no custom summary, navigation, metrics, or dashboard CSS;
+   the user's single-source webview requirement determines both layouts. */
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#eef0f3;background:#12151b;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;-webkit-font-smoothing:antialiased}h1,h2,p{margin:0}button,a{font:inherit}button{cursor:pointer;color:inherit}button:focus-visible,a:focus-visible{outline:2px solid #70b1ff;outline-offset:3px}[hidden]{display:none!important}
+.page-head{max-width:1240px;margin:auto;padding:32px 24px 26px;display:flex;align-items:center;justify-content:space-between;gap:24px}.page-head h1{font-size:25px;font-weight:600;letter-spacing:-.7px}.page-head p{color:#a5acb8;margin-top:8px;font-size:13px;line-height:1.5}.view-switch{display:flex;flex-shrink:0;padding:4px;background:#1e232d;border:1px solid #303642;border-radius:9px}.view-switch button{border:0;background:none;padding:7px 11px;border-radius:5px;font-size:12px;color:#aeb5c1}.view-switch button[aria-pressed=true]{background:#3a4353;color:#fff}
+.board{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:24px;max-width:1240px;padding:0 24px;margin:auto}.option-copy{margin-bottom:16px}.option-copy h2{font-size:16px;font-weight:600;letter-spacing:-.2px;display:flex;align-items:center;gap:9px}.letter{color:#a8b4c7;font-size:12px;border:1px solid #3a4351;padding:3px 6px;border-radius:5px}.option-copy p{font-size:12px;color:#a5acb8;line-height:1.6;margin-top:8px;max-width:480px}.desktop{height:788px;position:relative;overflow:hidden;border:1px solid #414b5b;border-radius:12px;background:radial-gradient(ellipse at 15% 95%,#4e6383,transparent 65%),linear-gradient(140deg,#283b50,#263145 50%,#4e495c)}
+.menubar{height:30px;background:#c3ccd21a;border-bottom:1px solid #ffffff0c;display:flex;align-items:center;justify-content:flex-end;gap:15px;padding:0 14px;font-size:11px}.app-name{margin-right:auto;font-size:11px;font-weight:600;color:#e5e9ef}.status-item{height:26px;display:flex;align-items:center;border:0;border-radius:5px;padding:0 9px;background:#ffffff21}.status-item[aria-expanded=false]{background:none}.status-item svg{width:17px;height:17px}.system-icon{width:16px;height:16px}.clock{font-weight:500}.popover{position:absolute;right:16px;top:43px;width:400px;height:620px;max-width:calc(100% - 32px);background:#101114;border:1px solid #42464e;border-radius:13px;box-shadow:0 18px 42px #0006,0 3px 9px #0006;display:flex;flex-direction:column}.popover:before{content:"";position:absolute;right:155px;top:-7px;width:12px;height:12px;background:#101114;border-left:1px solid #42464e;border-top:1px solid #42464e;transform:rotate(45deg)}.webview{width:100%;min-height:0;flex:1;border:0;border-radius:12px;background:#101114}.roomy .popover{width:520px;height:720px}.caption{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#a5acb8;margin-top:12px}.caption span:last-child{white-space:nowrap}.page-foot{max-width:1240px;margin:auto;padding:23px 24px 30px;font-size:12px;line-height:1.7;color:#929ba9}.page-foot strong{font-weight:500;color:#c6cfdd}.page-foot a{color:#a8cafa;text-decoration:none}.page-foot a:hover{text-decoration:underline}.board.single{grid-template-columns:minmax(0,650px);justify-content:center}
+@media(max-width:1100px){.board{grid-template-columns:1fr;max-width:700px;gap:30px}.page-head{max-width:700px}.page-foot{max-width:700px}}@media(max-width:600px){.page-head{padding:24px 16px;align-items:flex-start;flex-direction:column;gap:18px}.board{padding:0 10px}.menubar{gap:10px;padding:0 10px}.popover{right:8px;max-width:calc(100% - 16px)}.popover:before{right:143px}.caption{font-size:10px}.page-foot{padding:24px 14px}}
+</style>
+</head>
+<body>
+<header class="page-head"><div><h1>Your page. A smaller window.</h1><p>Quota Glance embedded directly in a macOS menu bar popover.</p></div><nav class="view-switch" aria-label="Compare sizes"><button aria-pressed="true" data-view="both">Side by side</button><button aria-pressed="false" data-view="a">A only</button><button aria-pressed="false" data-view="b">B only</button></nav></header>
+<main class="board" id="board">
+<section class="option" id="option-a" aria-labelledby="label-a"><div class="option-copy"><h2 id="label-a"><span class="letter">A</span> Compact</h2><p>A small popover for a quick check. The page uses its existing narrow layout; scroll to see the rest.</p></div><div class="desktop" id="desktop-a"></div><div class="caption"><span>Original page · Normal text size</span><span>400 × 620 pt</span></div></section>
+<section class="option roomy" id="option-b" aria-labelledby="label-b"><div class="option-copy"><h2 id="label-b"><span class="letter">B</span> More room</h2><p>The same page with more width and height. More credentials stay visible, with extra room for addresses and reset text.</p></div><div class="desktop" id="desktop-b"></div><div class="caption"><span>Original page · Normal text size</span><span>520 × 720 pt</span></div></section>
+</main>
+<footer class="page-foot"><strong>I’d start with A</strong> for a menu bar utility. Choose B if you prefer more room to read.<br>Both previews embed the current app with development fixture data. Scroll inside either popover, or click its menu bar icon to close and reopen it. <a href="../?token=dev-token" target="_blank" rel="noopener">Open the page on its own ↗</a><br>The Mac app would load your hosted page in a WKWebView. Page updates appear on reload; the wrapper only owns the menu bar icon and popover.</footer>
+<script>
+// Run with `make web-dev` from plugins/quota-glance, then open
+// /design/menubar-options.html. dev-token belongs to the existing fixture
+// server. Both frames load the app entry point; no dashboard markup is copied.
+const icon='<svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="2" y="3" width="3" height="12" rx="1" stroke="currentColor"/><rect x="7.5" y="3" width="3" height="12" rx="1" stroke="currentColor"/><rect x="13" y="3" width="3" height="12" rx="1" stroke="currentColor"/><path d="M3.5 14V6M9 14V10M14.5 14V12" stroke="currentColor" stroke-width="2"/></svg>';
+function mount(id){document.getElementById('desktop-'+id).innerHTML=`<div class="menubar"><span class="app-name">Finder</span><button class="status-item" aria-label="Toggle Quota Glance ${id.toUpperCase()}" aria-expanded="true" aria-controls="popover-${id}">${icon}</button><svg class="system-icon" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" role="img" aria-label="Wi-Fi"><path d="M2 5Q10-2 18 5M5 8Q10 3 15 8M8 11Q10 9 12 11"/><circle cx="10" cy="14" r=".7" fill="currentColor"/></svg><svg class="system-icon" viewBox="0 0 22 14" fill="none" stroke="currentColor" role="img" aria-label="Battery"><rect x="1" y="2" width="17" height="10" rx="2"/><path d="M20 5v4" stroke-width="2"/><rect x="3" y="4" width="12" height="6" rx="1" fill="currentColor"/></svg><span class="clock">Sun 10:24</span></div><section class="popover" id="popover-${id}" aria-label="Design ${id.toUpperCase()} quota popover"><iframe class="webview" title="Quota Glance ${id==='a'?'compact':'roomy'} preview" src="../?token=dev-token"></iframe></section>`;
+const status=document.querySelector(`#desktop-${id} .status-item`),popover=document.getElementById('popover-'+id);
+function closeOnEscape(event){if(event.key==='Escape'){popover.hidden=true;status.setAttribute('aria-expanded','false');status.focus()}}
+status.addEventListener('click',()=>{popover.hidden=!popover.hidden;status.setAttribute('aria-expanded',String(!popover.hidden))});popover.addEventListener('keydown',closeOnEscape);
+// Same-origin development frame: Escape simulates closing a native popover.
+const frame=popover.querySelector('iframe');frame.addEventListener('load',()=>{frame.contentWindow.addEventListener('keydown',closeOnEscape)});
+}
+mount('a');mount('b');
+document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{const view=button.dataset.view;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));document.getElementById('option-a').hidden=view==='b';document.getElementById('option-b').hidden=view==='a';document.getElementById('board').classList.toggle('single',view!=='both')}));
+</script>
+</body>
+</html>
