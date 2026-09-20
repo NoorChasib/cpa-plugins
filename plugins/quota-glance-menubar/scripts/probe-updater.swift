@@ -27,7 +27,7 @@ final class Probe: NSObject, SPUUpdaterDelegate {
     }
 }
 
-MainActor.assumeIsolated {
+try MainActor.assumeIsolated {
     _ = NSApplication.shared
     let bundle = Bundle(path: CommandLine.arguments[1])!
     let probe = Probe(feed: CommandLine.arguments[2], expectValid: CommandLine.arguments[3] == "valid")
