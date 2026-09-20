@@ -125,7 +125,11 @@ final class QuotaReadoutController: NSObject {
         polling = true
         poll += 1
         let currentPoll = poll
-        webView.callAsyncJavaScript("await window.__quotaGlanceReadout?.refresh()", arguments: [:], in: nil, in: .page) { [weak self] result in
+        webView.callAsyncJavaScript("""
+            if (!window.__quotaGlanceReadout) throw new Error('Readout unavailable');
+            await window.__quotaGlanceReadout.refresh();
+            return true;
+            """, arguments: [:], in: nil, in: .page) { [weak self] result in
             guard let self, currentPoll == self.poll else { return }
             self.polling = false
             if case .failure = result { self.markUnavailable() }
