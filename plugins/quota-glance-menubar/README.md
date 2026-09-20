@@ -8,7 +8,7 @@ Requires macOS 13 or newer and a working
 
 ## Install from a DMG
 
-Open `Quota-Glance-0.2.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
+Open `Quota-Glance-0.3.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
 then eject the disk image and open the installed app. Right-click its menu bar
 icon, choose **Settings**, and enable **Open at login** to start it whenever you
 sign in, including after a restart. Your saved URL and session persist.
@@ -39,7 +39,7 @@ To create the drag-to-Applications disk image instead:
 make dmg
 ```
 
-The image is written to `dist/Quota-Glance-0.2.0-macOS.dmg`.
+The image is written to `dist/Quota-Glance-0.3.0-macOS.dmg`.
 Local builds are ad-hoc signed; notarized release builds run through GitHub
 after the Apple signing secrets are configured.
 

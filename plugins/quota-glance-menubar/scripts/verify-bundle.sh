@@ -12,5 +12,13 @@ read -r -a architectures <<< "${APP_ARCHS:-arm64 x86_64}"
 for arch in "${architectures[@]}"; do
     xcrun lipo "$app/Contents/MacOS/QuotaGlance" -verify_arch "$arch"
 done
-codesign --verify --strict "$app"
+test -s "$app/Contents/Resources/Sparkle-LICENSE.txt"
+framework="$app/Contents/Frameworks/Sparkle.framework"
+for binary in "$framework/Sparkle" "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app/Contents/MacOS/Updater"; do
+    test -x "$binary"
+    for arch in "${architectures[@]}"; do xcrun lipo "$binary" -verify_arch "$arch"; done
+done
+otool -L "$app/Contents/MacOS/QuotaGlance" | grep -F '@rpath/Sparkle.framework/Versions/B/Sparkle'
+otool -l "$app/Contents/MacOS/QuotaGlance" | grep -F '@executable_path/../Frameworks'
+codesign --verify --deep --strict "$app"
 echo 'Bundle, menu bar mode, architectures and signature verified.'

@@ -8,11 +8,17 @@
     <key>CFBundleName</key><string>Quota Glance</string>
     <key>CFBundleDisplayName</key><string>Quota Glance</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>0.2.0</string>
+    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleVersion</key><string>0.3.0</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
+    <key>SUFeedURL</key><string>https://raw.githubusercontent.com/NoorChasib/cpa-plugins/quota-glance-updates/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>bkaI9VdrVBqgAbafuA0/zo07QnubgAfxs26N+ySmjkw=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSAppTransportSecurity</key>

@@ -133,7 +133,7 @@ make sign-release   # sign/notarize the existing built app; requires Apple secre
 make ci             # scripts, tests, universal build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.2.0` and must be three numeric components. For a faster
+`VERSION` defaults to `0.3.0` and must be three numeric components. For a faster
 local build, use `make build ARCHS=arm64` or `ARCHS=x86_64`. `INSTALL_DIR` can
 override the default `~/Applications` install directory. Quit a running copy
 before installing its replacement.
@@ -164,8 +164,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.2.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.2.0
+git tag quota-glance-menubar/v0.3.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.3.0
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed
@@ -196,7 +196,7 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The v0.2.0 suite contains 18 Swift tests and nine JavaScript bridge tests. It
+The v0.3.0 suite contains 18 Swift tests and nine JavaScript bridge tests. It
 covers actual popover reopening without reload, preference persistence, quota
 selection/freshness, and a native refresh through the full message bridge in a
 real WebKit view with no window attached. Bridge fixtures also exercise
