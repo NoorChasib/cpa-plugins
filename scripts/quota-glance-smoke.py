@@ -162,8 +162,8 @@ def checks(container, cache_path, now):
 
     base = origin()
 
-    def request(path, token=None, management=False, headers=None, timeout=5):
-        req = urllib.request.Request(base + path)
+    def request(path, token=None, management=False, headers=None, timeout=5, method=None, body=None):
+        req = urllib.request.Request(base + path, data=body, method=method)
         if management:
             req.add_header('Authorization', 'Bearer ' + MANAGEMENT_KEY)
         elif token:
@@ -327,6 +327,58 @@ def checks(container, cache_path, now):
     assert status == 200, status
     print(f'  health        200 · watching={health["watcher"]["watching"]} '
           f'dir={health["watcher"]["directory"]} · windows {len(json.loads(windows_body)["windows"])}')
+
+    # 6b. The redeem route, which is the only one that would change anything.
+    #
+    #     Nothing here can actually be spent: these are synthetic Claude
+    #     credentials with no banked Codex resets, and the plugin refuses a
+    #     credential its own document does not offer. That refusal is exactly
+    #     what makes this checkable — a 4xx from the plugin proves CPA routed
+    #     the POST here, and a 404 would mean it never arrived. Nothing else in
+    #     the suite can tell those apart: every unit test calls Handle directly,
+    #     so a CPA that drops POSTs would leave them all passing and the button
+    #     permanently broken.
+    redeem = f'/plugins/{PLUGIN}/redeem'
+    payload = json.dumps({'credentialId': 'does-not-exist.json', 'confirmed': True}).encode()
+    json_header = {'Content-Type': 'application/json'}
+
+    status, _, _ = request('/v0/management' + redeem, management=True, method='POST',
+                           body=payload, headers=json_header)
+    assert status != 404, (
+        'CPA did not dispatch POST to the management redeem route; the button cannot work')
+    assert status == 409, f'management redeem: {status} (expected 409 not_redeemable)'
+
+    # An unconfirmed body must be refused even though everything else about it
+    # is well formed. Spending a credit cannot be undone, so the confirmation is
+    # required rather than assumed.
+    status, _, _ = request('/v0/management' + redeem, management=True, method='POST',
+                           body=json.dumps({'credentialId': 'x', 'confirmed': False}).encode(),
+                           headers=json_header)
+    assert status == 400, f'unconfirmed redeem: {status} (expected 400)'
+
+    # And the read routes stay read-only through CPA's own dispatch.
+    status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True,
+                           method='POST', body=payload, headers=json_header)
+    assert status == 404, f'POST to the summary route: {status} (expected 404)'
+
+    # The public door. CPA authenticates nothing on a resource path, so a bare
+    # POST must be refused by the plugin's own token check. At the audited CPA
+    # revision resource routes are GET-only, in which case CPA answers 404
+    # before the plugin sees it — both are acceptable, and which one happens is
+    # worth printing, because it decides whether a reader with no console
+    # session can redeem at all.
+    status, _, _ = request('/v0/resource' + redeem, method='POST', body=payload,
+                           headers=json_header)
+    assert status in (401, 404, 405), f'bare resource redeem: {status}'
+    if status == 401:
+        token_door = 'dispatched; plugin token check ran'
+        ok, _, _ = request('/v0/resource' + redeem, token=WEB_TOKEN, method='POST',
+                           body=payload, headers=json_header)
+        assert ok == 409, f'token redeem: {ok} (expected 409 not_redeemable)'
+    else:
+        token_door = f'not dispatched by CPA ({status}); console session required'
+    print(f'  redeem        management POST dispatched, confirmation enforced; '
+          f'token door {token_door}')
 
     # 7. The update path, through whatever filesystem the deployment actually
     #    uses. A bind mount is exactly where inotify delivery gets unreliable,

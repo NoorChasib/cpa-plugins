@@ -154,6 +154,34 @@ type Credential struct {
 	// credential, not against a window: the same strip is correct on every card
 	// the credential appears in. Null when the host reports no counter at all.
 	Activity *Activity `json:"activity"`
+	// ResetCredits is the account's banked rate-limit resets, and is null for
+	// every credential that has none — which is every credential on a provider
+	// with no such concept, and a Codex account that has not been granted one.
+	// Null rather than a zero count, so a client renders nothing at all rather
+	// than having to decide that "0 banked" is not worth a badge.
+	ResetCredits *ResetCredits `json:"resetCredits"`
+}
+
+// ResetCredits is what a credential holds in banked rate-limit resets.
+//
+// It is not remaining capacity and never becomes a bar: it is a count of
+// entitlements that, when one is spent, clear the account's windows outright.
+// That is why it hangs off the credential beside the plan badge rather than
+// appearing on any of the window cards it would reset.
+type ResetCredits struct {
+	// AvailableCount is at least 1 whenever this object exists.
+	AvailableCount int `json:"availableCount"`
+	// ExpiresAtEpoch and ExpiresInSeconds date the soonest credit that can
+	// still be spent, and are null when the provider did not say. A banked
+	// reset lapses thirty days after it is granted, so a count with no deadline
+	// beside it is the shape in which they are quietly lost.
+	ExpiresAtEpoch   *int64 `json:"expiresAtEpoch"`
+	ExpiresInSeconds *int64 `json:"expiresInSeconds"`
+	// Redeemable is false when this plugin cannot spend the credit on the
+	// operator's behalf — the credential is not one CPA can hand a token for,
+	// or redemption is switched off in configuration. The count still shows;
+	// only the button goes. Clients must not offer redemption without it.
+	Redeemable bool `json:"redeemable"`
 }
 
 // Activity is one credential's recent request traffic, as a fixed ring of

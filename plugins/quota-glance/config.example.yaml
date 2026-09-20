@@ -19,6 +19,15 @@ plugins:
       web-token: ""
       # Age at which an observation is shown with a staleness badge.
       stale-after: 45m
+      # Using a banked Codex rate-limit reset from the dashboard. Default
+      # true. This is the one thing quota-glance does that reaches a provider,
+      # it happens only when you press the button and confirm, and it cannot
+      # be undone — spending a credit clears that account's session and weekly
+      # windows and moves its weekly reset date.
+      #
+      # Set false to keep the count and the expiry on the card and remove the
+      # button. The plugin then has no code path to a provider at all.
+      allow-redeem: true
       # Optional. Plan names are already display-ready: Claude reports "Max"
       # and "Team", and Codex's plan enum is mapped to the name the tier is
       # sold under ("pro" -> "Pro 20x", "prolite" -> "Pro 5x"). Override only

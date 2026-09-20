@@ -16,7 +16,15 @@ function catalogOf(summary: Summary): Map<string, Credential> {
   return new Map(summary.credentials.map((credential) => [credential.id, credential]))
 }
 
-function Body({ summary, offline }: { summary: Summary | undefined; offline: boolean }) {
+function Body({
+  summary,
+  offline,
+  onRedeemed,
+}: {
+  summary: Summary | undefined
+  offline: boolean
+  onRedeemed: () => void
+}) {
   if (!summary) {
     // Nothing has ever arrived. If the request is still in flight that is a
     // first paint; if it failed there is no data to keep showing, and a
@@ -49,18 +57,31 @@ function Body({ summary, offline }: { summary: Summary | undefined; offline: boo
   return (
     <>
       {providers.map((provider) => (
-        <ProviderSection key={provider.id} provider={provider} credentials={credentials} />
+        <ProviderSection
+          key={provider.id}
+          provider={provider}
+          credentials={credentials}
+          onRedeemed={onRedeemed}
+        />
       ))}
     </>
   )
 }
 
-function Dashboard({ summary, offline }: { summary: Summary | undefined; offline: boolean }) {
+function Dashboard({
+  summary,
+  offline,
+  onRedeemed,
+}: {
+  summary: Summary | undefined
+  offline: boolean
+  onRedeemed: () => void
+}) {
   return (
     <div className="mx-auto max-w-[820px] px-[22px] pb-14 pt-8 max-[640px]:px-[14px] max-[640px]:pb-11 max-[640px]:pt-[22px]">
       <Header summary={summary} />
       <Banners summary={summary} offline={offline} />
-      <Body summary={summary} offline={offline} />
+      <Body summary={summary} offline={offline} onRedeemed={onRedeemed} />
       {summary && <Footer counters={summary.counters} />}
     </div>
   )
@@ -104,7 +125,15 @@ export function App() {
     <NowProvider value={now}>
       {/* query.data survives a failed refetch, which is what keeps the last
         * good figures on screen while the banner explains the silence. */}
-      <Dashboard summary={query.data} offline={query.isError} />
+      {/* Spending a credit changes nothing this document can show until
+        * quota-cache polls again — it owns the count — but everything else on
+        * the page is worth bringing forward, and the outcome message says which
+        * part is still lagging. */}
+      <Dashboard
+        summary={query.data}
+        offline={query.isError}
+        onRedeemed={() => void query.refetch()}
+      />
     </NowProvider>
   )
 }

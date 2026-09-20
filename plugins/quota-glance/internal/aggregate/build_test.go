@@ -91,6 +91,10 @@ func buildFixture(t *testing.T) Document {
 		Snapshot:   loadSnapshot(t, "seven-credentials.json"),
 		Identities: fixtureRoster(),
 		StaleAfter: 45 * time.Minute,
+		// The committed contract is the one the web app develops against, so it
+		// is built the way a default install runs: redemption allowed, and the
+		// per-credential judgement left to the builder.
+		Redeemable: true,
 	}, at(t, 0))
 }
 
@@ -794,6 +798,7 @@ func buildDegraded(t *testing.T) Document {
 		Identities: degradedRoster(),
 		Samples:    degradedSamples(t),
 		StaleAfter: 45 * time.Minute,
+		Redeemable: true,
 	}, at(t, 0))
 }
 

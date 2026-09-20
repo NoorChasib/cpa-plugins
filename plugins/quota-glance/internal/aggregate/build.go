@@ -55,6 +55,11 @@ type Input struct {
 	// PlanLabels overrides the built-in plan display names, keyed by the
 	// provider-reported value in lower case.
 	PlanLabels map[string]string
+	// Redeemable reports whether this plugin is configured and able to spend a
+	// banked reset on the operator's behalf. It is an input rather than a
+	// constant because it depends on configuration and on the host callbacks
+	// available at runtime, neither of which this package may look at.
+	Redeemable bool
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on
@@ -485,6 +490,7 @@ func Build(in Input, now time.Time) Document {
 			Status:            r.status,
 			LastObservedEpoch: epochOf(r.freshest),
 			Activity:          activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
+			ResetCredits:      resetCreditsOf(r, in.Redeemable, now),
 		})
 	}
 
@@ -499,6 +505,43 @@ func Build(in Input, now time.Time) Document {
 	doc.NextAttemptEpoch = epochPointerOf(soonestAttempt)
 	applyStaleness(&doc, in, newestObservation, now)
 	return doc
+}
+
+// resetCreditsOf carries the snapshot's banked-reset count onto the credential,
+// and is nil whenever there is nothing to say — no entry, no count, or a count
+// the snapshot reports as zero. Nil is what makes the badge absent rather than
+// present and empty, which is the whole of the requirement.
+//
+// A stale entry still counts. The number moves only when the operator spends
+// one or a grant lapses, so the last observation is very likely still true, and
+// suppressing it would hide a credit on exactly the snapshot age where noticing
+// its expiry matters most. Redeemability is the caller's judgement, not the
+// snapshot's.
+func resetCreditsOf(r record, redeemable bool, now time.Time) *ResetCredits {
+	if !r.hasEntry || r.entry.Quota == nil || r.entry.Quota.ResetCredits == nil {
+		return nil
+	}
+	source := r.entry.Quota.ResetCredits
+	if source.AvailableCount < 1 {
+		return nil
+	}
+	credits := &ResetCredits{
+		AvailableCount: source.AvailableCount,
+		// Only a credential CPA is willing to hand a token for can be spent,
+		// and a credential CPA will not route to is one it will not authorize
+		// either. The count still shows on a parked credential; the button does
+		// not, because offering an action that is going to fail is worse than
+		// not offering it.
+		Redeemable: redeemable && r.identity.Provider == "codex" && !r.identity.Disabled && !r.identity.Unavailable,
+	}
+	// An expiry already behind us is dropped rather than counted down past
+	// zero: quota-cache filters the same way at the poll, and this covers the
+	// gap between that poll and this build.
+	if at := source.SoonestExpiry; at != nil && at.After(now) {
+		epoch, seconds := at.Unix(), int64(at.Sub(now)/time.Second)
+		credits.ExpiresAtEpoch, credits.ExpiresInSeconds = &epoch, &seconds
+	}
+	return credits
 }
 
 func epochOf(t time.Time) int64 {

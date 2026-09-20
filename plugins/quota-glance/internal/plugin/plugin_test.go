@@ -26,6 +26,10 @@ type fakeHost struct {
 	files []protocol.HostAuthFileEntry
 	err   error
 	lines []logLine
+	// requests records every provider request the plugin made. The lifecycle
+	// tests assert it stays empty: building and serving the document must never
+	// reach a provider, whatever redemption is configured to allow.
+	requests []protocol.HostHTTPRequest
 }
 
 func (h *fakeHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) {
@@ -38,6 +42,25 @@ func (h *fakeHost) Log(_ context.Context, level, message string, fields map[stri
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lines = append(h.lines, logLine{level, message, fields})
+}
+
+func (h *fakeHost) GetAuth(context.Context, string) ([]byte, error) {
+	return []byte(`{"access_token":"synthetic","account_id":"synthetic-account"}`), nil
+}
+
+func (h *fakeHost) HTTPDo(_ context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.requests = append(h.requests, request)
+	return protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"credits":[]}`)}, nil
+}
+
+func (h *fakeHost) providerRequests() []protocol.HostHTTPRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]protocol.HostHTTPRequest, len(h.requests))
+	copy(out, h.requests)
+	return out
 }
 
 func (h *fakeHost) logged() []logLine {
@@ -287,21 +310,29 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	// Three authenticated routes, and two public ones: the page, which carries
-	// no data, and the document's fallback path, which carries this plugin's
-	// own token check because CPA carries none.
-	if len(registration.Routes) != 3 || len(registration.Resources) != 2 {
+	// Four authenticated routes, and three public ones: the page, which carries
+	// no data, and the document's fallback path plus the redeem action, both of
+	// which carry this plugin's own token check because CPA carries none.
+	if len(registration.Routes) != 4 || len(registration.Resources) != 3 {
 		t.Fatalf("registration = %+v", registration)
 	}
-	if registration.Resources[0].Path != "/app" || registration.Resources[1].Path != "/summary" {
+	if registration.Resources[0].Path != "/app" || registration.Resources[1].Path != "/summary" || registration.Resources[2].Path != "/redeem" {
 		t.Fatalf("public resources = %+v", registration.Resources)
 	}
+	// Exactly one route may be anything other than GET, and it must be the one
+	// that spends a credit. A second write route appearing here without a
+	// deliberate change to this list is the thing worth catching.
+	writes := map[string]string{"/plugins/" + ID + "/redeem": "POST"}
 	for _, route := range registration.Routes {
 		if route.Menu != "" {
 			t.Fatalf("management route %s carries Menu %q, which CPA turns into a public resource", route.Path, route.Menu)
 		}
-		if route.Method != "GET" {
-			t.Fatalf("route %s is %s", route.Path, route.Method)
+		want, isWrite := writes[route.Path]
+		if !isWrite {
+			want = "GET"
+		}
+		if route.Method != want {
+			t.Fatalf("route %s is %s, want %s", route.Path, route.Method, want)
 		}
 	}
 	// Every registered resource path has at least one segment after the plugin

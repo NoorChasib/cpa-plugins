@@ -3,15 +3,26 @@
 One page showing how much capacity is left across every credential and every
 rate-limit window, and when more arrives.
 
-Quota Glance makes **no provider requests and no CPA management-API calls**. It
-reads the snapshot [Quota Cache](../quota-cache/README.md) already writes and
-serves it as one aggregated document. Quota Cache remains the only component
-that ever contacts a provider; a second poller would compete for the same rate
-limits it exists to protect.
+Quota Glance makes **no scheduled provider requests and no CPA management-API
+calls**. It reads the snapshot [Quota Cache](../quota-cache/README.md) already
+writes and serves it as one aggregated document. Quota Cache remains the only
+component that *polls* a provider; a second poller would compete for the same
+rate limits it exists to protect.
+
+There is one exception, and it is a write rather than a poll: **using a banked
+Codex rate-limit reset**. That cannot come out of a snapshot, so when you press
+the button and confirm, this plugin spends the credit itself. It happens on that
+one request and on no timer — see [Banked resets](#banked-resets), or set
+`allow-redeem: false` to show the count without the button.
 
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
+- Quota Cache **0.1.8 or newer** for banked Codex rate-limit resets. The count
+  and its expiry are fields 0.1.8 added to the snapshot, so against anything
+  older the **Banked resets** block simply never appears — the rest of the
+  dashboard is unaffected, and it starts appearing on its own once Quota Cache
+  is updated. Nothing to reconfigure.
 - Quota Cache **0.1.6 or newer** for the full session / weekly / weekly-Fable
   layout. Anthropic moved model-scoped allowances into a structured `limits[]`
   array and nulled the flat keys that carried them; 0.1.6 reads both, so
@@ -47,6 +58,7 @@ plugins:
       data-dir: /CLIProxyAPI/plugins/data/quota-glance
       web-token: ""
       stale-after: 45m
+      allow-redeem: true
 ```
 
 `cache-path` must match Quota Cache's own. Quota Glance refuses to start if it
@@ -72,6 +84,8 @@ it is typed in once per browser and saved there.
 | `GET /v0/resource/plugins/quota-glance/summary` | `Authorization: Bearer <web-token>` | The same document, for a reader with no console session. |
 | `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error. |
 | `GET /v0/management/plugins/quota-glance/windows` | CPA management key | Observed window keys and which credentials report them. |
+| `POST /v0/management/plugins/quota-glance/redeem` | CPA management key | Spend one banked Codex rate-limit reset. |
+| `POST /v0/resource/plugins/quota-glance/redeem` | `Authorization: Bearer <web-token>` | The same action, for a reader with no console session. |
 
 **One document, two doors.** From the console the page spends the session that
 is already there: it recovers the management key from the console's own browser
@@ -130,6 +144,55 @@ separately as `heartbeats`.
 The full field reference — every status, state, data issue, level, trend, and
 stale reason — is in [docs/summary-contract.md](docs/summary-contract.md).
 
+## Banked resets
+
+Codex banks **rate-limit resets**: entitlements already granted to your account
+that clear its current windows when you spend one. A credential holding at least
+one gets a **Banked resets** block above its window cards, with the count and
+when the soonest one lapses. A credential holding none shows nothing at all —
+no badge, no zero, no empty row.
+
+Both halves cost what they should. The count rides along on the usage response
+Quota Cache already fetches, so knowing it costs no request. The expiry needs a
+second endpoint, so Quota Cache asks for it **only when the count is non-zero** —
+an account with nothing banked is still exactly one request per poll. That
+matters because the deadline is the part people lose: a banked reset expires
+thirty days after it is granted, and a count with no date beside it is the shape
+in which they quietly lapse.
+
+**Using one** opens a confirmation first, and the sentence it leads with is the
+one that matters: a banked reset is not extra allowance. Spending it restores
+that account's session and weekly Codex windows and moves its weekly reset date,
+it brings your existing allowance forward rather than adding to it, and **it
+cannot be undone**. Confirm and the plugin reads your credits, spends the one
+closest to expiring, and reports what happened.
+
+A few things the design refuses to guess about:
+
+- **The count on the card does not drop straight away.** It comes from Quota
+  Cache's snapshot, which owns the schedule, so it corrects at the next poll —
+  and the message after a redemption says so rather than letting the page
+  disagree with itself.
+- **A request that never completed is not a request that did nothing.** If the
+  connection drops mid-flight the credit may already be spent, so the dashboard
+  says the outcome is unknown and points you at your Codex usage instead of
+  offering a retry that could cost a second one.
+- **Two presses cannot become two credits.** A second attempt against the same
+  credential while the first is in flight is refused outright.
+
+The button is absent — not greyed out — whenever it cannot work: with
+`allow-redeem: false`, on a credential CPA has parked or disabled, and on an
+API-key login, which has no reset credits at all. The count still shows in every
+one of those cases.
+
+**Redeeming needs a CPA console session.** The route is registered on the
+`web-token` door too, but CPA dispatches only GET to a resource route — `make
+smoke` drives a real CPA and reports a 404 there — so a browser signed in with
+only the fallback password shows the count and the expiry, and says to sign in
+to the console instead of offering a button that cannot work. If CPA ever
+dispatches POST to resource routes, the door opens with no change here, and the
+smoke output says which behaviour is live.
+
 ## The dashboard
 
 `GET /v0/resource/plugins/quota-glance/app` serves one self-contained HTML
@@ -155,6 +218,19 @@ Anywhere else, the sign-in screen offers both doors: a link to the console, and
 a password field. Whichever you use is saved in that browser, so it is asked
 once. There is no host to configure either, because the plugin serves the page
 and the page calls its own origin.
+
+**Cards fold.** Click any window card's header — the whole header is the
+control — and its credential rows collapse away, leaving the title, the trend
+mark, the big percentage and the server's subtext. That is deliberate: folding a
+card should hide the detail, not the headline, so a folded page still answers
+"how much is left and when does more arrive" at a glance.
+
+Which cards you folded is remembered in that browser, under
+`quota-glance.collapsed` in local storage. It is a preference about how one
+person reads the page rather than a fact about anyone's quota, so it never
+enters the document — the plugin still serves the same bytes to every reader.
+Cards are keyed by provider and row, so folding Claude's **Session** leaves
+Codex's alone.
 
 Everything the page shows is precomputed here: percentages, levels, ordering,
 trend, the ink level of every block in an activity strip, and the wording of
