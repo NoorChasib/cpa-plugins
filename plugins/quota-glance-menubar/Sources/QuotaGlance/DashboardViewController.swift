@@ -16,10 +16,10 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
     private lazy var retryButton = NSButton(title: "Try Again", target: self, action: #selector(retry))
     private lazy var settingsButton = NSButton(title: "Settings…", target: self, action: #selector(openSettings))
 
-    init() {
+    init(webView suppliedWebView: WKWebView? = nil) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = suppliedWebView ?? WKWebView(frame: .zero, configuration: configuration)
         super.init(nibName: nil, bundle: nil)
         webView.navigationDelegate = self
         webView.uiDelegate = self

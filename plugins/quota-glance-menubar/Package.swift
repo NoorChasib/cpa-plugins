@@ -11,6 +11,7 @@ var targets: [Target] = [
 #if os(macOS)
 products.append(.executable(name: "QuotaGlance", targets: ["QuotaGlance"]))
 targets.append(.executableTarget(name: "QuotaGlance", dependencies: ["GlanceCore"]))
+targets.append(.testTarget(name: "QuotaGlanceTests", dependencies: ["QuotaGlance", "GlanceCore"]))
 #endif
 
 let package = Package(
