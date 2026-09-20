@@ -9,6 +9,7 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
     private var hasDocument = false
     private var failed = false
     private let webView: WKWebView
+    private(set) lazy var readout = QuotaReadoutController(webView: webView)
     private let statusView = NSView()
     private let statusTitle = NSTextField(labelWithString: "Loading your dashboard…")
     private let statusMessage = NSTextField(wrappingLabelWithString: "")
@@ -66,7 +67,13 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
     }
 
     func configure(_ location: DashboardLocation) {
+        guard self.location != location else { return }
         self.location = location
+        readout.configure(location)
+        readout.onRecover = { [weak self] in
+            guard let self, !self.webView.isLoading else { return }
+            if self.failed || self.webView.url == nil { self.goToDashboard() }
+        }
         hasDocument = false
         goToDashboard()
     }
@@ -80,13 +87,11 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
     }
 
     func prepareToShow() {
-        // A new document picks up hosted page updates. Do not interrupt an
-        // in-progress navigation or a CPA console sign-in on another path.
+        // Opening is presentation only: keep scroll, forms, and the document.
+        // Explicit Reload Page still picks up deployments when requested.
         guard !webView.isLoading else { return }
         if failed || webView.url == nil {
             goToDashboard()
-        } else if let current = webView.url, location?.isDashboard(current) == true {
-            reloadPage()
         }
     }
 
@@ -109,6 +114,7 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
 
     private func showError(_ message: String) {
         failed = true
+        readout.markUnavailable()
         webView.isHidden = true
         statusView.isHidden = false
         spinner.stopAnimation(nil)
@@ -124,6 +130,7 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         statusView.isHidden = true
         webView.isHidden = false
         spinner.stopAnimation(nil)
+        readout.refreshIfEnabled()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

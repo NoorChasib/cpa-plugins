@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
     private lazy var settingsWindow = SettingsWindowController(settings: settings) { [weak self] location in
         self?.dashboard.configure(location)
+        self?.dashboard.readout.setEnabled(self?.settings.quotaSelection != nil)
+        self?.updateReadout()
         self?.installApplicationMenu()
         self?.showPopover()
     }
@@ -17,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installApplicationMenu()
         dashboard.onSettings = { [weak self] in self?.showSettings() }
-        if let location = settings.location { dashboard.configure(location) }
         popover.contentViewController = dashboard
         popover.contentSize = NSSize(width: 400, height: 620)
         popover.behavior = .transient
@@ -32,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(statusItemClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+        dashboard.readout.onChange = { [weak self] in self?.updateReadout() }
+        if let location = settings.location { dashboard.configure(location) }
+        dashboard.readout.setEnabled(settings.quotaSelection != nil)
+        updateReadout()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, self?.popover.isShown == true {
                 self?.popover.performClose(nil)
@@ -43,12 +48,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        dashboard.readout.stop()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if settings.location == nil { showSettings() } else { showPopover() }
         return true
+    }
+
+    private func updateReadout() {
+        let selection = settings.quotaSelection
+        let value = dashboard.readout.state.presentation(for: selection)
+        statusItem.length = selection == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        if let button = statusItem.button {
+            button.title = value.text.isEmpty ? "" : " " + value.text
+            button.imagePosition = selection == nil ? .imageOnly : .imageLeading
+            button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+            button.toolTip = value.detail
+            button.setAccessibilityLabel("Quota Glance. " + value.detail)
+        }
+        settingsWindow.updateQuotas(dashboard.readout.state.windows)
     }
 
     @objc private func statusItemClicked() {

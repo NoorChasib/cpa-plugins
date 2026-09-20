@@ -37,6 +37,7 @@ else
     xcrun lipo -create "${executables[@]}" -output "$app/Contents/MacOS/QuotaGlance"
 fi
 chmod +x "$app/Contents/MacOS/QuotaGlance"
+cp Resources/QuotaReadout.js "$app/Contents/Resources/QuotaReadout.js"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"

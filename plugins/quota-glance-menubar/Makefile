@@ -6,6 +6,7 @@ SWIFT ?= swift
 
 .PHONY: test build install run package dmg sign-release check-scripts verify-bundle ci
 test:
+	node --test scripts/tests/*.test.mjs
 	$(SWIFT) test
 check-scripts:
 	bash -n scripts/build-app.sh scripts/install-app.sh scripts/verify-bundle.sh scripts/build-dmg.sh scripts/sign-release.sh

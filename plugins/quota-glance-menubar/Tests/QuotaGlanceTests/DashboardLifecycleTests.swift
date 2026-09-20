@@ -33,6 +33,7 @@ final class DashboardLifecycleTests: XCTestCase {
         webView.pageURL = location.url
         controller.prepareToShow()
         controller.prepareToShow()
+        controller.configure(location) // Saving only the quota must preserve the page too.
         XCTAssertEqual(webView.loads, 1, "Reopening must preserve the existing document and scroll position")
         XCTAssertEqual(webView.reloads, 0, "Opening the menu must not refresh the page")
     }
