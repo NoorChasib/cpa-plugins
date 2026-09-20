@@ -1,0 +1,18 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Quota Glance</title>
+        <item>
+            <title>0.3.0</title>
+            <pubDate>Sun, 20 Sep 2026 23:42:00 +0000</pubDate>
+            <sparkle:version>0.3.0</sparkle:version>
+            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance-menubar/v0.3.0/Quota-Glance-0.3.0-macOS.dmg" length="1363945" type="application/octet-stream" sparkle:edSignature="O0QwUuwHvBDPO2NbqrhXng+kokvX74CyMzNPR8B6hqo9O8pTSd0USnIt4pvEUE/VN+TIwGVAnd0WaGzcHE/mCQ=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: DDnvjJPppTwthRCxiBTf6IkvbE9wWcGZRJoxDF2VKWhQUgN8k+bW0zeOxK8z6tuqnmN2AzNrGJPB0ml/a16rCg==
+length: 1085
+-->
