@@ -1,14 +1,16 @@
 import AppKit
 import GlanceCore
+import Sparkle
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    private let updaterController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     private let settings = AppSettings()
     private let dashboard = DashboardViewController()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem!
     private var keyMonitor: Any?
-    private lazy var settingsWindow = SettingsWindowController(settings: settings) { [weak self] location in
+    private lazy var settingsWindow = SettingsWindowController(settings: settings, updater: updaterController.updater) { [weak self] location in
         self?.dashboard.configure(location)
         self?.dashboard.readout.setEnabled(self?.settings.quotaSelection != nil)
         self?.updateReadout()
@@ -17,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        updaterController.startUpdater()
         installApplicationMenu()
         dashboard.onSettings = { [weak self] in self?.showSettings() }
         popover.contentViewController = dashboard
@@ -107,6 +110,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showPopover()
     }
 
+    @objc private func checkForUpdates() {
+        popover.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        updaterController.checkForUpdates(nil)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(checkForUpdates): return updaterController.updater.canCheckForUpdates
+        case #selector(openDashboard), #selector(reloadPage), #selector(openInBrowser): return settings.location != nil
+        default: return true
+        }
+    }
+
     @objc private func reloadPage() { dashboard.reloadPage() }
 
     @objc private func openInBrowser() {
@@ -116,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func contextMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.autoenablesItems = false
+        menu.autoenablesItems = true
         for (title, action, key) in [
             ("Show Dashboard", #selector(openDashboard), ""),
             ("Reload Page", #selector(reloadPage), "r"),
@@ -131,6 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let preferences = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         preferences.target = self
         menu.addItem(preferences)
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Quota Glance", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return menu

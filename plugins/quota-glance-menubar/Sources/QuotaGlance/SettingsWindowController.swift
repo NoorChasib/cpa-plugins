@@ -1,10 +1,12 @@
 import AppKit
 import GlanceCore
 import ServiceManagement
+import Sparkle
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
     private let settings: AppSettings
+    private let updater: SPUUpdater
     private let onSave: (DashboardLocation) -> Void
     private let urlField = NSTextField()
     private let quotaPicker = NSPopUpButton()
@@ -12,10 +14,11 @@ final class SettingsWindowController: NSWindowController {
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private lazy var loginCheckbox = NSButton(checkboxWithTitle: "Open at login", target: self, action: #selector(toggleLogin))
 
-    init(settings: AppSettings, onSave: @escaping (DashboardLocation) -> Void) {
+    init(settings: AppSettings, updater: SPUUpdater, onSave: @escaping (DashboardLocation) -> Void) {
         self.settings = settings
+        self.updater = updater
         self.onSave = onSave
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 460),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 520),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Quota Glance Settings"
         window.isReleasedWhenClosed = false
@@ -90,7 +93,12 @@ final class SettingsWindowController: NSWindowController {
         let save = NSButton(title: "Save and Open", target: self, action: #selector(saveSettings))
         save.bezelStyle = .rounded
         save.keyEquivalent = "\r"
-        let stack = NSStackView(views: [title, explanation, urlField, signIn, quotaLabel, quotaPicker, quotaHelp, loginCheckbox, feedback, save])
+        let automaticChecks = NSButton(checkboxWithTitle: "Automatically check for updates", target: nil, action: nil)
+        automaticChecks.bind(.value, to: updater, withKeyPath: "automaticallyChecksForUpdates", options: nil)
+        let automaticInstall = NSButton(checkboxWithTitle: "Download and install updates automatically", target: nil, action: nil)
+        automaticInstall.bind(.value, to: updater, withKeyPath: "automaticallyDownloadsUpdates", options: nil)
+        automaticInstall.bind(.enabled, to: updater, withKeyPath: "allowsAutomaticUpdates", options: nil)
+        let stack = NSStackView(views: [title, explanation, urlField, signIn, quotaLabel, quotaPicker, quotaHelp, loginCheckbox, automaticChecks, automaticInstall, feedback, save])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12

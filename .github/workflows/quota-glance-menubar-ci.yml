@@ -74,13 +74,17 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: make sign-release
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          make sign-release
+          make appcast
       - name: Checksums for the verified downloads
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd dist
           shasum -a 256 "Quota-Glance-$VERSION-macOS.dmg" "Quota-Glance-$VERSION-macOS.zip" > SHA256SUMS
+          if [[ -f appcast.xml ]]; then shasum -a 256 appcast.xml >> SHA256SUMS; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Quota-Glance-macOS
@@ -88,6 +92,7 @@ jobs:
             plugins/quota-glance-menubar/dist/Quota-Glance-*-macOS.zip
             plugins/quota-glance-menubar/dist/Quota-Glance-*-macOS.dmg
             plugins/quota-glance-menubar/dist/SHA256SUMS
+            plugins/quota-glance-menubar/dist/appcast.xml
           if-no-files-found: error
 
   publish:
@@ -98,6 +103,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: Quota-Glance-macOS
@@ -121,6 +129,8 @@ jobs:
 
           Opening the popover preserves the page and scroll position. In Settings → Menu bar quota, choose a quota window to show its remaining percentage beside the icon. It updates every minute while your Mac is awake, even with the popover closed. Choose Icon only to disable it.
 
+          Starting with v0.3.0, right-click the menu bar icon and choose Check for Updates… to download and install future releases in the app. Automatic checks are enabled by default; Settings also offers automatic installation. Users on older versions need to install this DMG once to get the updater.
+
           The app and DMG are Developer ID signed, notarized by Apple, and include stapled notarization tickets.
 
           The app embeds your hosted dashboard directly; future page changes appear on reload. The ZIP is an alternative download containing the same app. SHA256SUMS covers both downloads.
@@ -129,5 +139,7 @@ jobs:
           # an existing release or change this monorepo's Latest release.
           gh release create "$TAG" --verify-tag --draft --latest=false \
             --title "Quota Glance for Mac v$VERSION" --notes-file release-notes.md \
-            "Quota-Glance-$VERSION-macOS.dmg" "Quota-Glance-$VERSION-macOS.zip" SHA256SUMS
+            "Quota-Glance-$VERSION-macOS.dmg" "Quota-Glance-$VERSION-macOS.zip" SHA256SUMS appcast.xml
           gh release edit "$TAG" --draft=false --latest=false
+          python3 ../plugins/quota-glance-menubar/scripts/publish-appcast.py \
+            --validate appcast.xml --version "$VERSION" --assets . --publish

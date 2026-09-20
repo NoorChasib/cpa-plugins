@@ -112,8 +112,8 @@ PY
 
 # Hardened runtime and a secure timestamp are required for notarization. WebKit
 # owns its rendering processes; the host app needs no custom JIT entitlements.
-codesign --force --sign "$identity" --keychain "$keychain" --options runtime --timestamp "$app"
-codesign --verify --strict "$app"
+bash scripts/sign-bundle.sh "$app" "$identity" --keychain "$keychain" --options runtime --timestamp
+codesign --verify --deep --strict "$app"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$stage/app.zip"
 notarize "$stage/app.zip" app
 xcrun stapler staple "$app"
