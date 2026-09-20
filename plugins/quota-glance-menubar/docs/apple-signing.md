@@ -138,9 +138,11 @@ run from `main`. Release tags must point to a commit already on `main`.
 - **Downloaded app behavior:** native execution, popover interaction, login-item
   registration, and the first signed release still need verification on a Mac.
 
-The workflow and scripts have been checked locally, but signing and notarization
-have not run: this development host is Linux and your secrets have not been
-configured through this task. Changing the hosted dashboard later does not
-require signing the wrapper again; only new native app releases do.
+The [first signed workflow run](https://github.com/NoorChasib/cpa-plugins/actions/runs/35541336282)
+passed on 2026-09-20 after the repository secrets were configured. Both the app
+and DMG passed Developer ID signing, Apple notarization, stapled ticket
+validation, and Gatekeeper assessment. Interactive behavior still needs a Mac
+user session. Changing the hosted dashboard later does not require signing the
+wrapper again; only new native app releases do.
 
 Primary-source details are recorded in [apple-signing-sources.md](apple-signing-sources.md).
