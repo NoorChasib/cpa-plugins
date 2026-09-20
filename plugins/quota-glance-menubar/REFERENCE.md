@@ -7,9 +7,10 @@ plugin. It is deliberately absent from the Linux plugin registry and release
 workflow. It does not have a Go module or load into CPA.
 
 The native app owns the status icon, popover, URL preference, login-item setting,
-and WebKit lifetime. The hosted page owns every quota card, number, action,
-credential, and data request. No copy of the dashboard HTML, CSS, API client, or
-polling logic is bundled here, and the icon does not fetch its own quota value.
+and WebKit lifetime. The hosted page owns the dashboard UI and sign-in. A small
+bundled JavaScript bridge observes its summary responses and supplies quota
+labels and remaining percentages to the native menu bar. No copy of the
+dashboard HTML or CSS is bundled here.
 WebKit displays the page at normal scale using its existing narrow layout.
 
 The popover is 400 × 620 points, reduced only when the current screen's usable
@@ -20,11 +21,11 @@ store or start another page instance.
 ## Loading and page updates
 
 The first load requests the configured URL without satisfying it from the
-local HTTP cache. Reopening the popover revalidates the current dashboard page
-with `reloadFromOrigin()`, picking up deployed page changes without rebuilding
-the Mac app. Reopening can therefore reset unfinished form input on that page.
-An in-progress navigation is left alone. If the web view is on another path,
-such as the CPA console's sign-in screen, reopening keeps that page intact.
+local HTTP cache. Reopening the popover preserves the loaded document, scroll
+position, and unfinished input. Saving Settings with the same URL also preserves
+the page. An in-progress navigation is left alone. The same applies to the CPA
+console’s sign-in screen. Use **Reload Page** to pick up a web app deployment;
+there is no need to rebuild the Mac app.
 
 The context menu's **Show Dashboard** returns to the configured URL after
 console sign-in. **Reload Page** revalidates the current page; it does not force
@@ -38,6 +39,35 @@ network failures do not echo potentially sensitive URLs. Web content process
 termination offers recovery instead of leaving an empty popover. Errors in the
 page's own quota API continue to use the page's existing UI.
 
+## Menu bar percentage
+
+After signing in, choose **Settings → Menu bar quota**. Choices use the page’s
+provider and row labels, for example **Claude · Weekly (Fable)**. The percentage
+is the aggregate **remaining** quota, matching the page. **Icon only** is the
+default. Selection persists between launches independently of Open at login.
+
+While a quota is selected, a native timer requests the existing cached summary
+every 60 seconds (with up to five seconds of timer tolerance), even when the
+popover is closed. It does not invoke provider polling, navigate, or reload the
+page. The bridge reuses the page’s successful same-origin GET request, including
+its authentication, proxy prefix, and ETag. Native messages contain only quota
+IDs, labels, percentages, and freshness state. Unauthorized responses stop
+background credential retries until the page signs in successfully again.
+
+A scoped App Nap activity keeps this user-requested readout active while the
+Mac is awake; it permits normal system sleep. Wake requests a fresh reading.
+Icon-only mode stops the native timer and activity. macOS scheduling and network
+availability may delay updates. Missing quota data, stale server data, failed
+requests, and readings older than 150 seconds display **—%**. The last quota
+list remains available in Settings across temporary failures. Hover over the
+icon for the selected quota and status. A failed document or terminated WebKit
+process is retried by the background timer when a quota is selected.
+
+The normal page continues using its own refresh behavior. Background readout
+requests do not rewrite the dashboard’s UI or affect its open dialogs. No
+hosted-page change is required for summary schema version 1. A future breaking
+summary schema change would require updating this small native bridge.
+
 ## Authentication and navigation
 
 Use the full page URL, preserving any reverse-proxy prefix. HTTP and HTTPS are
@@ -47,8 +77,10 @@ certificate validation.
 
 The saved URL must not contain URL userinfo or common password/token query
 parameters. Sign in on the page using `web-token`, or navigate to the CPA
-console through the page's existing link. The app never reads, injects, copies,
-or logs that credential. It does not inherit a session from another browser.
+console through the page's existing link. The bridge reuses the successful
+summary request inside WebKit; credentials never cross the native message
+boundary or enter preferences or logs. The app does not inherit a session
+from another browser.
 
 Same-origin navigation stays inside the web view, including the console and
 its sign-in flow. A user-clicked external HTTP(S) link opens in the default
@@ -64,7 +96,9 @@ session or password. You may need to sign in separately in that browser.
 
 The bundle ID is `com.noorchasib.quota-glance-menubar` and the executable is
 `QuotaGlance`. The `dashboardURL` preference is stored in that app's standard
-UserDefaults domain. `WKWebsiteDataStore.default()` keeps website data on disk
+UserDefaults domain. The optional `menuBarQuota` preference stores the provider
+and row IDs; changing the dashboard URL clears this selection.
+`WKWebsiteDataStore.default()` keeps website data on disk
 under the app's WebKit storage, including the page's saved sign-in. Replacing
 the app in place retains these stores. Changing the URL does not delete the
 previous server's web data.
@@ -84,10 +118,11 @@ shortcuts to settings and web inputs.
 
 ## Build commands
 
-Run from this directory on macOS with Xcode Command Line Tools (Swift 5.9+):
+Run from this directory on macOS with Xcode Command Line Tools (Swift 5.9+).
+The test suite also requires Node.js 20+; the installed app does not.
 
 ```sh
-make test           # URL validation and navigation behavior
+make test           # core state, lifecycle, hidden WebKit, and JS bridge tests
 make build          # arm64 + x86_64, merged into a universal .app
 make verify-bundle  # bundle metadata, architectures, and signature
 make install        # build, copy to ~/Applications, open
@@ -98,7 +133,7 @@ make sign-release   # sign/notarize the existing built app; requires Apple secre
 make ci             # scripts, tests, universal build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.1.0` and must be three numeric components. For a faster
+`VERSION` defaults to `0.2.0` and must be three numeric components. For a faster
 local build, use `make build ARCHS=arm64` or `ARCHS=x86_64`. `INSTALL_DIR` can
 override the default `~/Applications` install directory. Quit a running copy
 before installing its replacement.
@@ -129,8 +164,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.1.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.1.0
+git tag quota-glance-menubar/v0.2.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.2.0
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed
@@ -192,9 +227,13 @@ Before treating a Mac build as ready to use:
 5. Deploy a visible page change or use **Reload Page**; verify the next dashboard
    reload shows it. Test an unreachable server, a wrong path, and recovery with
    **Try Again**. Verify Settings remains accessible.
-6. Enable Open at login from the installed app and verify macOS registration.
+6. Select a quota in Settings, close the popover for several minutes, and verify
+   the readout updates. Reopen and check scroll position is preserved. Try an
+   unreachable server, sign-out/sign-in, sleep/wake, changing quotas, and Icon
+   only. Unavailable data should show —%, and valid zero quota should show 0%.
+7. Enable Open at login from the installed app and verify macOS registration.
    Test login itself on a Mac with a user session; CI cannot establish it.
-7. Run `make dmg`, open the resulting image, and drag the app to Applications.
+8. Run `make dmg`, open the resulting image, and drag the app to Applications.
    Eject the DMG, launch the installed app, and enable Open at login. Confirm it
    opens after logging out and back in. Opening directly from the DMG should
    explain that installation is required before enabling Open at login.

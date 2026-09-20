@@ -119,6 +119,8 @@ jobs:
 
           To start automatically after restarting your Mac, right-click the menu bar icon, choose Settings, and enable Open at login. Your URL and saved web session persist between launches.
 
+          Opening the popover preserves the page and scroll position. In Settings → Menu bar quota, choose a quota window to show its remaining percentage beside the icon. It updates every minute while your Mac is awake, even with the popover closed. Choose Icon only to disable it.
+
           The app and DMG are Developer ID signed, notarized by Apple, and include stapled notarization tickets.
 
           The app embeds your hosted dashboard directly; future page changes appear on reload. The ZIP is an alternative download containing the same app. SHA256SUMS covers both downloads.
