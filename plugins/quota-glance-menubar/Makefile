@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
-VERSION ?= 0.1.0
+VERSION ?= 0.2.0
 ARCHS ?= arm64 x86_64
 SWIFT ?= swift
 

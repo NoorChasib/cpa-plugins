@@ -7,9 +7,9 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 
-version="${VERSION:-0.1.0}"
+version="${VERSION:-0.2.0}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo 'VERSION must have three numeric components, such as 0.1.0.' >&2
+    echo 'VERSION must have three numeric components, such as 0.2.0.' >&2
     exit 1
 fi
 read -r -a architectures <<< "${APP_ARCHS:-arm64 x86_64}"

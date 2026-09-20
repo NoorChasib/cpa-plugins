@@ -25,7 +25,7 @@ final class QuotaReadoutController: NSObject {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, self.timer != nil else { return }
                 self.poll += 1
                 self.polling = false
@@ -89,7 +89,7 @@ final class QuotaReadoutController: NSObject {
         activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                         reason: "Update the selected menu bar quota")
         let clock = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor [weak self] in self?.refresh() }
         }
         clock.tolerance = 5
         RunLoop.main.add(clock, forMode: .common)

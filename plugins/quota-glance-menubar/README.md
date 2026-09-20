@@ -8,7 +8,7 @@ Requires macOS 13 or newer and a working
 
 ## Install from a DMG
 
-Open `Quota-Glance-0.1.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
+Open `Quota-Glance-0.2.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
 then eject the disk image and open the installed app. Right-click its menu bar
 icon, choose **Settings**, and enable **Open at login** to start it whenever you
 sign in, including after a restart. Your saved URL and session persist.
@@ -39,7 +39,7 @@ To create the drag-to-Applications disk image instead:
 make dmg
 ```
 
-The image is written to `dist/Quota-Glance-0.1.0-macOS.dmg`.
+The image is written to `dist/Quota-Glance-0.2.0-macOS.dmg`.
 Local builds are ad-hoc signed; notarized release builds run through GitHub
 after the Apple signing secrets are configured.
 
@@ -57,7 +57,10 @@ of adding `?token=` to the saved URL.
 Click the menu bar chart icon to open or close the page. Scroll inside the
 popover to see more. Right-click or Control-click the icon for **Settings**,
 **Show Dashboard**, **Reload Page**, **Open in Browser**, and **Quit**.
-Enable **Open at login** in Settings if desired.
+In **Settings → Menu bar quota**, choose a window such as **Claude · Weekly
+(Fable)** to show its remaining percentage beside the icon. It updates every
+minute while your Mac is awake, including when the popover is closed. Choose
+**Icon only** to hide it. Enable **Open at login** if desired.
 
 See [REFERENCE.md](REFERENCE.md) for refresh behavior, builds, stored data,
 and Mac verification steps.
