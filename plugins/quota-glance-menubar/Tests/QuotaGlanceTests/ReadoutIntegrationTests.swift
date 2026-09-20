@@ -26,7 +26,6 @@ final class ReadoutIntegrationTests: XCTestCase {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: directory.appendingPathComponent("Resources/QuotaReadout.js"))
         let location = try DashboardLocation("https://quota.example.com/proxy/v0/resource/plugins/quota-glance/app")
-        let script = try XCTUnwrap(QuotaReadoutController.script(source, for: location, session: "integration"))
         let config = WKWebViewConfiguration()
         // A deterministic transport in a real WebKit page, with no visible
         // window and no page timer. The native call alone initiates the update.
@@ -36,10 +35,16 @@ final class ReadoutIntegrationTests: XCTestCase {
           id:'claude',title:'Claude',order:1,rows:[{rowId:'weekly_fable',title:'Weekly (Fable)',order:1,
           aggregate:{memberCount:1,remainingPercent:window.testPercent}}]}]}));
         """
-        let receiver = ReadoutReceiver()
-        config.userContentController.add(receiver, name: "quotaGlanceReadout")
-        config.userContentController.addUserScript(WKUserScript(source: transport + "\n" + script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let webView = WKWebView(frame: .zero, configuration: config)
+        let readout = QuotaReadoutController(webView: webView)
+        defer { readout.stop() }
+        readout.configure(location, scriptSource: transport + "\n" + source)
+        let updated = XCTestExpectation(description: "Hidden WebKit updated the native quota state")
+        let selection = QuotaSelection(providerID: "claude", rowID: "weekly_fable")
+        readout.onChange = {
+            if readout.state.presentation(for: selection).text == "18%" { updated.fulfill() }
+        }
+        defer { readout.onChange = nil }
         let ready = NavigationReady()
         webView.navigationDelegate = ready
         webView.loadHTMLString("<html><body>Dashboard fixture</body></html>", baseURL: location.url)
@@ -49,10 +54,10 @@ final class ReadoutIntegrationTests: XCTestCase {
           await fetch('/proxy/v0/resource/plugins/quota-glance/summary');
           await window.__quotaGlanceReadout.refresh();
           window.testPercent = 18;
-          await window.__quotaGlanceReadout.refresh();
           return true;
           """, arguments: [:], in: nil, in: .page)
-        await fulfillment(of: [receiver.updated], timeout: 5)
+        readout.refresh()
+        await fulfillment(of: [updated], timeout: 10)
     }
 }
 
@@ -60,16 +65,4 @@ final class ReadoutIntegrationTests: XCTestCase {
 private final class NavigationReady: NSObject, WKNavigationDelegate {
     let finished = XCTestExpectation(description: "WebKit loaded the fixture")
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished.fulfill() }
-}
-
-@MainActor
-private final class ReadoutReceiver: NSObject, WKScriptMessageHandler {
-    let updated = XCTestExpectation(description: "Hidden WebKit sent the updated quota")
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any],
-              let snapshot = body["snapshot"] as? [String: Any],
-              let windows = snapshot["windows"] as? [[String: Any]],
-              windows.first?["remainingPercent"] as? Int == 18 else { return }
-        updated.fulfill()
-    }
 }

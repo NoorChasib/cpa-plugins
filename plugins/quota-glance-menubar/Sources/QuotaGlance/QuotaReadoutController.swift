@@ -35,15 +35,14 @@ final class QuotaReadoutController: NSObject {
         }
     }
 
-    func configure(_ location: DashboardLocation) {
+    func configure(_ location: DashboardLocation, scriptSource: String? = nil) {
         self.location = location
         session = UUID().uuidString
         poll += 1
         polling = false
         state = QuotaReadoutState()
         guard let webView,
-              let file = Bundle.main.url(forResource: "QuotaReadout", withExtension: "js"),
-              let source = try? String(contentsOf: file, encoding: .utf8),
+              let source = scriptSource ?? Self.bundledScript(),
               let script = Self.script(source, for: location, session: session) else {
             onChange?()
             return
@@ -52,6 +51,11 @@ final class QuotaReadoutController: NSObject {
         content.removeAllUserScripts()
         content.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         onChange?()
+    }
+
+    private static func bundledScript() -> String? {
+        guard let file = Bundle.main.url(forResource: "QuotaReadout", withExtension: "js") else { return nil }
+        return try? String(contentsOf: file, encoding: .utf8)
     }
 
     static func script(_ source: String, for location: DashboardLocation, session: String) -> String? {
@@ -146,9 +150,9 @@ final class QuotaReadoutController: NSObject {
               let data = try? JSONSerialization.data(withJSONObject: message.body),
               let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
               envelope.session == session else { return }
-        let expectedPort = location.url.port ?? (location.url.scheme == "https" ? 443 : 80)
+        let expectedPort = location.url.port ?? (location.url.scheme?.lowercased() == "https" ? 443 : 80)
         let originPort = message.frameInfo.securityOrigin.port
-        guard (originPort == 0 ? (location.url.scheme == "https" ? 443 : 80) : originPort) == expectedPort else { return }
+        guard (originPort == 0 ? (location.url.scheme?.lowercased() == "https" ? 443 : 80) : originPort) == expectedPort else { return }
         if envelope.kind == "snapshot", let snapshot = envelope.snapshot {
             state.receive(snapshot)
             onChange?()
