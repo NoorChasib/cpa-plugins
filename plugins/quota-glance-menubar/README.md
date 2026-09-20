@@ -20,6 +20,15 @@ keeps downloads as build artifacts. Tagged releases require Developer ID
 signing and Apple notarization; see the one-time
 [Apple account setup](docs/apple-signing.md) before publishing the first release.
 
+## Update from the menu bar
+
+From v0.3.0 onward, right-click the icon and choose **Check for Updates…**.
+The app downloads verified updates from GitHub, installs them, and relaunches.
+It also checks daily by default. **Settings** lets you turn checks off or opt
+into automatic downloading and installation. Your dashboard and preferences
+are retained. If you are on v0.2.0 or earlier, install the new DMG once to get
+this updater.
+
 ## Build on your Mac
 
 On your Mac, install Xcode Command Line Tools if needed (`xcode-select --install`),
@@ -31,7 +40,7 @@ make install
 ```
 
 This builds a universal app, installs it at `~/Applications/Quota Glance.app`,
-and opens it. No third-party Swift packages are required.
+and opens it. SwiftPM downloads the pinned Sparkle updater dependency.
 
 To create the drag-to-Applications disk image instead:
 
@@ -56,7 +65,8 @@ of adding `?token=` to the saved URL.
 
 Click the menu bar chart icon to open or close the page. Scroll inside the
 popover to see more. Right-click or Control-click the icon for **Settings**,
-**Show Dashboard**, **Reload Page**, **Open in Browser**, and **Quit**.
+**Show Dashboard**, **Reload Page**, **Open in Browser**, **Check for Updates…**,
+and **Quit**.
 In **Settings → Menu bar quota**, choose a window such as **Claude · Weekly
 (Fable)** to show its remaining percentage beside the icon. It updates every
 minute while your Mac is awake, including when the popover is closed. Choose

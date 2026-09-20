@@ -130,6 +130,7 @@ make run            # build and open directly from dist
 make package        # build and verify, then create a versioned ZIP
 make dmg            # build, create and mount-verify a drag-to-Applications DMG
 make sign-release   # sign/notarize the existing built app; requires Apple secrets
+make appcast        # after signing: generate, sign, and test the update feed
 make ci             # scripts, tests, universal build, verification, ZIP + DMG
 ```
 
@@ -140,9 +141,11 @@ before installing its replacement.
 
 Builds use a separate SwiftPM scratch directory per architecture and `lipo` to
 merge them. An AppKit script renders the app icon, and `iconutil` creates its
-ICNS. The completed bundle is ad-hoc signed and verified. There are no package
-dependencies, Xcode project files, signing accounts, or provisioning profiles
-to configure. Distribution signed with Developer ID and notarization is not
+ICNS. SwiftPM verifies the checksum of the pinned Sparkle 2.10.0 binary
+package. The build embeds its universal framework and license with symlinks
+preserved. All nested helpers, the framework, and the app are signed inside
+out. The local bundle is ad-hoc signed; no signing account or provisioning
+profile needs configuring. Distribution signed with Developer ID and notarization is not
 part of this local build flow.
 
 The DMG uses macOS `hdiutil` to create a compressed, read-only image containing
@@ -157,6 +160,41 @@ The active workflow is
 [quota-glance-menubar-ci.yml](../../.github/workflows/quota-glance-menubar-ci.yml).
 It runs on macOS, builds both architectures, and uploads the ZIP, DMG, and
 checksums. It does not modify either CPA registry or run a plugin release.
+
+## In-app updates
+
+Sparkle 2.10.0 owns downloading, signature verification, installation, and
+relaunch. **Check for Updates…** is available from the status icon and application
+menu; its enabled state follows Sparkle’s updater state. The popover closes when
+a manual check starts. Automatic checks run daily by default. Settings binds
+directly to Sparkle’s persistent preferences, so launch never resets a user’s
+choice. Automatic downloading and installation is opt-in. Sparkle may install
+on quit or prompt a long-running app to relaunch; it handles authorization if
+the install location needs it. Installation from a mounted DMG is unsupported;
+copy the app to Applications first.
+
+Both the archive and appcast have Ed25519 signatures. `SUPublicEDKey` is embedded
+in the signed bundle; `SUVerifyUpdateBeforeExtraction` and `SURequireSignedFeed`
+require verification before extracting updates and when reading feed content.
+Apple Developer ID signatures and notarization remain required. The native
+updater contacts GitHub independently of the dashboard; it does not send the
+dashboard URL, credentials, or quota data. System profiling is disabled by
+Sparkle’s default.
+
+The fixed feed URL is the `appcast.xml` file on the repository’s
+`quota-glance-updates` branch. It contains the latest complete DMG from a public
+app-specific GitHub release; no deltas are generated. The release job generates
+and signs the feed using the exact Sparkle tools verified by SwiftPM. It checks
+that the signing seed matches the bundle public key, then probes the valid and
+altered feeds using Sparkle and the actual app bundle. After publishing the
+GitHub release, the job commits the signed feed bytes unchanged through GitHub’s
+Contents API. A retry is idempotent, and a slower older release cannot replace
+a newer feed. GitHub’s raw-file cache can delay visibility for a few minutes.
+
+The `SPARKLE_ED25519_PRIVATE_KEY` Actions secret stores the base64-encoded
+32-byte seed, separately from Apple signing credentials. Keep an offline backup;
+never commit it. Setup and recovery are in [docs/updates.md](docs/updates.md).
+Users on versions before v0.3.0 must install the updater-enabled DMG once.
 
 ## GitHub Releases
 
@@ -196,7 +234,7 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The v0.3.0 suite contains 18 Swift tests and nine JavaScript bridge tests. It
+The dashboard suite contains 18 Swift tests and nine JavaScript bridge tests. It
 covers actual popover reopening without reload, preference persistence, quota
 selection/freshness, and a native refresh through the full message bridge in a
 real WebKit view with no window attached. Bridge fixtures also exercise

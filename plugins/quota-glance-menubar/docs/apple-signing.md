@@ -94,7 +94,8 @@ git push origin quota-glance-menubar/v0.3.0
 ```
 
 GitHub then builds and publishes the DMG and ZIP on the repository's Releases
-page. Tagged releases require the five secrets and successful notarization;
+page. Tagged releases require the five Apple secrets, the separate
+[Sparkle signing secret](updates.md), and successful notarization;
 they never fall back to publishing an ad-hoc-signed app. Normal branch and PR
 checks keep using ad-hoc signing and do not receive these credentials.
 
@@ -109,7 +110,9 @@ checks keep using ad-hoc signing and do not receive these credentials.
    with Gatekeeper.
 5. Recreate the downloadable ZIP from the stapled app. Create and sign the DMG,
    notarize it, staple its ticket, and check its signature and Gatekeeper status.
-6. Calculate checksums over the final downloads, then publish only those bytes.
+6. Generate and sign the Sparkle feed, verify its signing key and valid/altered
+   feed behavior, then calculate checksums over the final downloads and feed.
+7. Publish those bytes as a GitHub release, then advance the stable update feed.
 
 The two submissions cover the separately downloadable app ZIP and DMG. ZIP files
 cannot themselves be stapled, which is why the app inside is stapled before

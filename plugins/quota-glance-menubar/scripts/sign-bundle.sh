@@ -12,5 +12,9 @@ for component in \
     "$framework/Versions/B/Updater.app" \
     "$framework" \
     "$app"; do
-    codesign --force --sign "$identity" "$@" "$component"
+    if [[ "$component" == */Downloader.xpc ]]; then
+        codesign --force --sign "$identity" "$@" --preserve-metadata=entitlements "$component"
+    else
+        codesign --force --sign "$identity" "$@" "$component"
+    fi
 done

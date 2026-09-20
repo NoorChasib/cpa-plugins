@@ -4,7 +4,7 @@ VERSION ?= 0.3.0
 ARCHS ?= arm64 x86_64
 SWIFT ?= swift
 
-.PHONY: test build install run package dmg sign-release appcast check-scripts verify-bundle ci
+.PHONY: test build install run package dmg sign-release appcast check-updater check-scripts verify-bundle ci
 test:
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 	node --test scripts/tests/*.test.mjs
@@ -27,6 +27,8 @@ dmg: build verify-bundle
 # Uses the exact app that already passed ci; never rebuild after notarization.
 sign-release:
 	APP_ARCHS='$(ARCHS)' bash scripts/sign-release.sh
-appcast:
+check-updater:
+	xcrun swiftc scripts/probe-updater.swift -F 'dist/Quota Glance.app/Contents/Frameworks' -framework Sparkle -Xlinker -rpath -Xlinker '$(CURDIR)/dist/Quota Glance.app/Contents/Frameworks' -o .build/probe-updater
+appcast: check-updater
 	bash scripts/build-appcast.sh
-ci: check-scripts test package dmg
+ci: check-scripts test package dmg check-updater

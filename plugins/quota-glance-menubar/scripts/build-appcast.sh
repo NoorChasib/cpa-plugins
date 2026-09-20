@@ -19,5 +19,7 @@ dist/sparkle-tools/generate_appcast --ed-key-file "$stage/key" \
     --maximum-deltas 0 "$stage/updates"
 dist/sparkle-tools/sign_update --ed-key-file "$stage/key" --verify "$stage/updates/appcast.xml"
 python3 scripts/publish-appcast.py --validate "$stage/updates/appcast.xml" --version "$version" --assets dist
+# Launch Sparkle itself against a local feed, including an altered-feed test.
+python3 scripts/test-update-feed.py .build/probe-updater "$app" "$stage/updates/appcast.xml"
 cp "$stage/updates/appcast.xml" dist/appcast.xml
 echo 'Signed update feed generated and verified for the final notarized DMG.'
