@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
+import type { ServerResponse } from "node:http"
 import { fileURLToPath } from "node:url"
 import type { Plugin } from "vite"
 
@@ -25,6 +26,10 @@ import type { Plugin } from "vite"
 
 const MANAGEMENT_PATH = "/v0/management/plugins/quota-glance/summary"
 const RESOURCE_PATH = "/v0/resource/plugins/quota-glance/summary"
+const REDEEM_PATHS = new Set([
+  "/v0/management/plugins/quota-glance/redeem",
+  "/v0/resource/plugins/quota-glance/redeem",
+])
 export const DEV_TOKEN = "dev-token"
 
 const fixture = (name: string): string =>
@@ -42,6 +47,9 @@ const EPOCH_FIELDS = new Set([
   // everything else would show a request from twenty minutes ago as days old —
   // the one number on the page that would look broken rather than stale.
   "lastRequestAtEpoch",
+  // The banked-reset deadline, so the countdown beside a credit reads the same
+  // distance from now as it would against a live snapshot.
+  "expiresAtEpoch",
 ])
 
 type Doc = Record<string, unknown>
@@ -146,6 +154,13 @@ function expiring(doc: Doc, inSeconds: number): Doc {
   return doc
 }
 
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status
+  res.setHeader("Content-Type", "application/json; charset=utf-8")
+  res.setHeader("Cache-Control", "no-store")
+  res.end(JSON.stringify(body))
+}
+
 export function goldenFixtureRoute(): Plugin {
   // Fixed for the life of the dev server. See rebase().
   let offset: number | null = null
@@ -154,6 +169,31 @@ export function goldenFixtureRoute(): Plugin {
     name: "quota-glance:golden-fixture-route",
     apply: "serve",
     configureServer(server) {
+      // The redeem action, which the real plugin answers and which spends a
+      // credit for real. Here it spends nothing and replies with whichever
+      // ending ?redeem= names, so the dialog, the outcome line and every
+      // failure message can be reviewed without a Codex account.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost")
+        if (req.method !== "POST" || !REDEEM_PATHS.has(url.pathname)) return next()
+
+        const endings: Record<string, () => void> = {
+          reset: () => json(res, 200, { outcome: "reset", windowsReset: 2, remainingCount: 1, snapshotPending: true }),
+          "nothing-to-reset": () =>
+            json(res, 200, { outcome: "nothingToReset", windowsReset: 0, remainingCount: 0, snapshotPending: true }),
+          "no-credit": () =>
+            json(res, 200, { outcome: "noCredit", windowsReset: 0, remainingCount: 0, snapshotPending: true }),
+          refused: () => json(res, 502, { error: "provider_refused" }),
+          unavailable: () => json(res, 502, { error: "provider_unavailable" }),
+          "in-flight": () => json(res, 409, { error: "already_in_flight" }),
+          "switched-off": () => json(res, 404, { error: "not_found" }),
+        }
+        const pick = endings[url.searchParams.get("redeem") ?? "reset"] ?? endings.reset!
+        // Slow enough to see the button settle into its pending state, which is
+        // the half of this interaction a static review cannot check.
+        setTimeout(pick, 700)
+      })
+
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost")
         const viaCPA = url.pathname === MANAGEMENT_PATH

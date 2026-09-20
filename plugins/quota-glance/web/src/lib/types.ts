@@ -40,6 +40,37 @@ export interface Credential {
    * the difference between "idle" and "unknown".
    */
   activity: Activity | null
+  /**
+   * Banked rate-limit resets this account holds, or null when it holds none —
+   * which is every credential on a provider that has no such thing, and every
+   * Codex account that has not been granted one. Null is the signal to render
+   * nothing at all, rather than a badge reading zero.
+   */
+  resetCredits: ResetCredits | null
+}
+
+/**
+ * Entitlements that clear this account's windows when one is spent. Not
+ * capacity, and never drawn as a bar: spending one resets the session and
+ * weekly Codex windows outright and moves the weekly reset date.
+ */
+export interface ResetCredits {
+  /** At least 1 whenever this object exists. */
+  availableCount: number
+  /**
+   * The soonest credit that can still be spent. Null when the provider did not
+   * date it — a banked reset lapses thirty days after it is granted, so the
+   * absence of a deadline is worth rendering differently from a distant one.
+   */
+  expiresAtEpoch: number | null
+  expiresInSeconds: number | null
+  /**
+   * Whether this dashboard may spend it. False when redeeming is switched off,
+   * when the credential is parked, or when it is not one this plugin can
+   * authenticate. The count still shows; only the button goes. Never offer
+   * redemption without this.
+   */
+  redeemable: boolean
 }
 
 /** One bucket of the ring. Empty buckets are present, and are half the shape. */

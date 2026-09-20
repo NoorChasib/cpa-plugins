@@ -18,7 +18,8 @@
       "plan": "Max",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "claude-stale@example.com.json",
@@ -27,7 +28,8 @@
       "plan": "Max",
       "status": "ok",
       "lastObservedEpoch": 1789002000,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "claude-failing@example.com.json",
@@ -36,7 +38,8 @@
       "plan": "Team",
       "status": "error",
       "lastObservedEpoch": 1789012200,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "claude-disabled@example.com.json",
@@ -45,7 +48,8 @@
       "plan": "Max",
       "status": "disabled",
       "lastObservedEpoch": 1789012500,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "claude-unavailable@example.com.json",
@@ -163,7 +167,8 @@
         "failed": 6,
         "lastRequestAtEpoch": 1789012200,
         "live": false
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "codex-model@example.com.json",
@@ -241,6 +246,12 @@
         "failed": 0,
         "lastRequestAtEpoch": 1789012800,
         "live": true
+      },
+      "resetCredits": {
+        "availableCount": 1,
+        "expiresAtEpoch": null,
+        "expiresInSeconds": null,
+        "redeemable": true
       }
     },
     {
@@ -250,7 +261,8 @@
       "plan": "",
       "status": "pending",
       "lastObservedEpoch": 0,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "gemini-unsupported@example.com.json",
@@ -259,7 +271,8 @@
       "plan": "",
       "status": "unsupported",
       "lastObservedEpoch": 0,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     },
     {
       "id": "xai-raw@example.com.json",
@@ -268,7 +281,8 @@
       "plan": "SuperGrok Heavy",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     }
   ],
   "providers": [

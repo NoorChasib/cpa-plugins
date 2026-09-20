@@ -195,6 +195,91 @@ you implement. A bucket with any `failed` in it should read as a failure at any
 volume: one failure inside a busy ten minutes is the thing most worth not
 losing.
 
+### `resetCredits` — banked resets this account holds, or `null`
+
+Codex banks **rate-limit resets**: entitlements already granted to the account
+that clear its current windows when one is spent. It is not extra allowance.
+Spending one restores that account's session and weekly Codex windows and moves
+its weekly reset date, which is why it hangs off the **credential** rather than
+off any of the windows it would reset — showing it once per card would put three
+controls on screen for one irreversible action.
+
+`null` means there is nothing to show, and the correct rendering is **nothing at
+all** — no badge, no zero. That covers every credential on a provider with no
+such concept and every Codex account that has not been granted one, which is the
+ordinary case.
+
+```json
+"resetCredits": {
+  "availableCount": 2,
+  "expiresAtEpoch": 1790251200,
+  "expiresInSeconds": 1238400,
+  "redeemable": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `availableCount` | At least 1 whenever this object exists. |
+| `expiresAtEpoch` / `expiresInSeconds` | The soonest credit that can still be spent. **`null` when the provider did not date it** — render that differently from a distant deadline rather than implying safety. |
+| `redeemable` | Whether this dashboard may spend it. |
+
+**A banked reset lapses thirty days after it is granted**, which is the
+documented way operators lose them, so the deadline is carried beside the count
+rather than left to be discovered. quota-cache reads it from a second endpoint
+and only when the count is non-zero; a credit it could not date still reports
+its count.
+
+**Never offer redemption without `redeemable`.** It is false when redeeming is
+switched off in configuration (`allow-redeem: false`), when CPA has the
+credential parked or disabled, and when the credential is not one this plugin
+can authenticate — an API-key login has no reset credits at all. The count still
+shows in every one of those cases; only the control goes.
+
+### Spending one — `POST .../redeem`
+
+The one route on this plugin that changes anything, and the one place it
+contacts a provider. It exists on both doors, authenticated exactly as
+`/summary` is on each:
+
+| Route | Auth |
+| --- | --- |
+| `POST /v0/management/plugins/quota-glance/redeem` | CPA management key |
+| `POST /v0/resource/plugins/quota-glance/redeem` | `Authorization: Bearer <web-token>` |
+
+```json
+{ "credentialId": "codex-noor@example.com.json", "confirmed": true }
+```
+
+`confirmed` must be `true`. The dialog belongs in the client, but a request that
+arrives without an answer to it is refused rather than assumed — spending a
+credit cannot be undone. The body must be JSON; a form-encoded content type is
+rejected, because a form post is the one a cross-site page can make without
+script. The credential must be one the served document already reports as
+`redeemable`, so a caller cannot nominate a credential the dashboard is not
+offering.
+
+```json
+{ "outcome": "reset", "windowsReset": 2, "remainingCount": 1, "snapshotPending": true }
+```
+
+| `outcome` | Meaning |
+| --- | --- |
+| `reset` | The credit was spent and windows were cleared. |
+| `nothingToReset` | The provider accepted it but no window needed clearing. **The credit is still gone** — it is consumed on acceptance, and saying otherwise invites a second press. |
+| `noCredit` | Nothing was left to spend; the count on the card was out of date. Nothing was consumed. |
+
+`snapshotPending` is `true` because the count on the card comes from
+quota-cache's snapshot and will not move until its next poll. Say so rather than
+letting the dashboard silently disagree with itself.
+
+Failures carry a fixed code and never provider text: `provider_refused`,
+`provider_unavailable`, `already_in_flight`, `not_redeemable`,
+`credential_unusable`, `confirmation_required`, `invalid_request`. A `404` means
+redeeming is switched off. **A request that never completed is not a request
+that did nothing** — the credit may have been spent, so report the uncertainty
+instead of inviting a retry.
+
 ### `level` — computed server-side, on both rows and entries
 
 `critical` below 20% remaining, `low` below 40%, otherwise `ok`. The design

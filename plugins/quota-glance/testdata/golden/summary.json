@@ -127,7 +127,8 @@
         "failed": 2,
         "lastRequestAtEpoch": 1789012200,
         "live": false
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "claude-agency@example.com.json",
@@ -245,7 +246,8 @@
         "failed": 0,
         "lastRequestAtEpoch": 1789012800,
         "live": true
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "claude-chasibnoor@example.com.json",
@@ -363,7 +365,8 @@
         "failed": 0,
         "lastRequestAtEpoch": 1789006200,
         "live": false
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "claude-noor@example.com.json",
@@ -481,7 +484,8 @@
         "failed": 0,
         "lastRequestAtEpoch": null,
         "live": false
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "claude-noorchasib@example.com.json",
@@ -599,7 +603,8 @@
         "failed": 0,
         "lastRequestAtEpoch": null,
         "live": false
-      }
+      },
+      "resetCredits": null
     },
     {
       "id": "codex-noor@example.com.json",
@@ -717,6 +722,12 @@
         "failed": 0,
         "lastRequestAtEpoch": 1789012800,
         "live": true
+      },
+      "resetCredits": {
+        "availableCount": 2,
+        "expiresAtEpoch": 1790251200,
+        "expiresInSeconds": 1238400,
+        "redeemable": true
       }
     },
     {
@@ -726,7 +737,8 @@
       "plan": "SuperGrok Heavy",
       "status": "error",
       "lastObservedEpoch": 1789012500,
-      "activity": null
+      "activity": null,
+      "resetCredits": null
     }
   ],
   "providers": [

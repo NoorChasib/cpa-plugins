@@ -251,6 +251,40 @@ func (hostBridge) ListAuth(ctx context.Context) ([]protocol.HostAuthFileEntry, e
 	return response.Files, nil
 }
 
+// GetAuth returns the raw physical credential JSON for one auth index. The
+// document contains OAuth tokens: the redeem path decodes only the two fields
+// one Codex request needs and never logs, persists, or renders it. Nothing else
+// in this plugin calls it.
+func (hostBridge) GetAuth(ctx context.Context, authIndex string) ([]byte, error) {
+	result, err := callHost(ctx, protocol.MethodHostAuthGet, protocol.HostAuthGetRequest{AuthIndex: authIndex})
+	if err != nil {
+		return nil, err
+	}
+	var response protocol.HostAuthGetResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, errors.New("decode host.auth.get response")
+	}
+	if len(response.JSON) == 0 {
+		return nil, errors.New("host.auth.get returned an empty document")
+	}
+	return []byte(response.JSON), nil
+}
+
+// HTTPDo performs one upstream HTTP request through CPA's proxy-aware client.
+// It is reached only from the redeem path, on the request goroutine of a POST
+// the operator confirmed; no timer and no rebuild in this plugin calls it.
+func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	result, err := callHost(ctx, protocol.MethodHostHTTPDo, request)
+	if err != nil {
+		return protocol.HostHTTPResponse{}, err
+	}
+	var response protocol.HostHTTPResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return protocol.HostHTTPResponse{}, errors.New("decode host.http.do response")
+	}
+	return response, nil
+}
+
 func (hostBridge) Log(ctx context.Context, level, message string, fields map[string]any) {
 	_, _ = callHost(ctx, protocol.MethodHostLog, protocol.HostLogRequest{
 		Level:   level,

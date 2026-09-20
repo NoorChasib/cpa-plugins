@@ -2,9 +2,17 @@
 // It matches the declaration in plugins/quota-cache, the other consumer of the
 // same snapshot, so both agree on the host contract.
 //
-// Only the callbacks quota-glance actually needs are declared: it reads a file
-// and serves memory, and makes no provider or management-API request of any
-// kind. There is deliberately no HTTP host method here.
+// Only the callbacks quota-glance actually needs are declared. Everything the
+// dashboard renders is read from a file and served from memory: no scheduled
+// work in this plugin contacts a provider, and quota-cache remains the only
+// component that polls one.
+//
+// host.auth.get and host.http.do are the two exceptions, and they exist for
+// exactly one action: spending a banked Codex rate-limit reset when the
+// operator presses the button and confirms. That is a write the snapshot
+// cannot carry and quota-cache's poller has no business performing, and it
+// happens only on an explicit request — never on a timer, never on a rebuild,
+// and never on any route that merely reads. See internal/redeem.
 package protocol
 
 import (
@@ -26,6 +34,12 @@ const (
 
 	MethodHostLog      = "host.log"
 	MethodHostAuthList = "host.auth.list"
+	// MethodHostAuthGet and MethodHostHTTPDo are reachable only from the
+	// redeem path. host.auth.get returns the physical credential document,
+	// OAuth tokens included, so its result is decoded for the two fields one
+	// request needs and never logged, persisted, or rendered.
+	MethodHostAuthGet = "host.auth.get"
+	MethodHostHTTPDo  = "host.http.do"
 )
 
 type Envelope struct {
@@ -150,6 +164,37 @@ type HostAuthFileEntry struct {
 
 type HostAuthListResponse struct {
 	Files []HostAuthFileEntry `json:"files"`
+}
+
+type HostAuthGetRequest struct {
+	AuthIndex string `json:"auth_index"`
+}
+
+// HostAuthGetResponse is the host.auth.get result. JSON is the complete
+// physical credential document and therefore contains OAuth tokens; callers
+// decode only the fields they need and never log, persist, or render it.
+type HostAuthGetResponse struct {
+	AuthIndex string          `json:"auth_index"`
+	Name      string          `json:"name,omitempty"`
+	Path      string          `json:"path,omitempty"`
+	JSON      json.RawMessage `json:"json"`
+}
+
+// HostHTTPRequest is the host.http.do request (snake_case keys; Body is
+// base64-encoded by encoding/json).
+type HostHTTPRequest struct {
+	Method  string              `json:"method,omitempty"`
+	URL     string              `json:"url,omitempty"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	Body    []byte              `json:"body,omitempty"`
+}
+
+// HostHTTPResponse is the host.http.do result. Upstream returns the untagged
+// pluginapi.HTTPResponse, so the wire keys are capitalized.
+type HostHTTPResponse struct {
+	StatusCode int                 `json:"StatusCode"`
+	Headers    map[string][]string `json:"Headers"`
+	Body       []byte              `json:"Body"`
 }
 
 type HostLogRequest struct {

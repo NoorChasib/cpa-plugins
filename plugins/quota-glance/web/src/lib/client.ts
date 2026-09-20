@@ -70,7 +70,7 @@ function devScenario(url: string): string {
   // production bundle, where the only thing on the other end is the plugin.
   const dev = new URLSearchParams(window.location.search)
   const forwarded = new URLSearchParams()
-  for (const key of ["scenario", "rebase", "expiring"]) {
+  for (const key of ["scenario", "rebase", "expiring", "redeem"]) {
     const value = dev.get(key)
     if (value !== null) forwarded.set(key, value)
   }

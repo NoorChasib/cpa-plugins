@@ -1,10 +1,18 @@
 // Package plugin wires the pieces together: read the snapshot, build the
 // document, publish it, and serve.
 //
-// This plugin makes zero provider requests and zero CPA management-API calls.
-// quota-cache owns the polling schedule and is the only component that contacts
-// a provider; a second poller would compete for the same rate limits. Identity
-// comes from an in-process host callback, which costs nothing and needs no key.
+// Nothing this plugin does on a schedule contacts a provider, and it makes zero
+// CPA management-API calls. quota-cache owns the polling schedule and remains
+// the only component that polls a provider; a second poller would compete for
+// the same rate limits. Identity comes from an in-process host callback, which
+// costs nothing and needs no key.
+//
+// The single exception is redemption, in internal/redeem: spending a banked
+// Codex rate-limit reset is a write, it cannot come out of a snapshot, and it
+// happens only when the operator presses the button and confirms. It runs on
+// the request goroutine of one POST route and on no timer, so the rebuild path
+// below is as free of provider contact as it ever was. Set allow-redeem to
+// false and the capability is never constructed.
 package plugin
 
 import (
@@ -22,6 +30,7 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/api"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/store"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/watch"
@@ -41,6 +50,11 @@ const (
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
 	Log(context.Context, string, string, map[string]any)
+	// GetAuth and HTTPDo are used only by the redeem path. GetAuth returns the
+	// physical credential document, OAuth tokens included; it is decoded for
+	// the two fields one Codex request needs and never logged or persisted.
+	GetAuth(context.Context, string) ([]byte, error)
+	HTTPDo(context.Context, protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error)
 }
 
 type settings struct {
@@ -48,6 +62,9 @@ type settings struct {
 	dataDir    string
 	staleAfter time.Duration
 	planLabels map[string]string
+	// allowRedeem gates the whole redeem path. When false the redeemer is never
+	// built and the route 404s, so the plugin cannot reach a provider at all.
+	allowRedeem bool
 }
 
 type Plugin struct {
@@ -96,6 +113,11 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				{Method: "GET", Path: "/plugins/" + ID + "/summary", Description: "Aggregated quota document the dashboard renders"},
 				{Method: "GET", Path: "/plugins/" + ID + "/health", Description: "Snapshot time, watcher state, and last error"},
 				{Method: "GET", Path: "/plugins/" + ID + "/windows", Description: "Observed window keys and the credentials reporting them"},
+				// The one route on this plugin that changes anything. It spends
+				// a banked Codex rate-limit reset, which is irreversible, and
+				// it refuses any body that does not carry an explicit
+				// confirmation.
+				{Method: "POST", Path: "/plugins/" + ID + "/redeem", Description: "Spend one banked Codex rate-limit reset for a credential"},
 			},
 			// The page, and the document down its fallback path. CPA
 			// authenticates neither — the page carries no data, and the
@@ -104,6 +126,13 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 			Resources: []protocol.ResourceRoute{
 				{Path: "/app", Menu: "Quota Glance", Description: "Remaining quota across every credential and window"},
 				{Path: "/summary", Description: "Aggregated quota document; requires the plugin web token"},
+				// Registered for the reader who has no console session, and
+				// carrying the same token check as /summary. Whether CPA
+				// dispatches a POST to a resource path at all is the host's
+				// decision, not this plugin's: where it does not, redemption is
+				// a console-session action and the dashboard says so rather
+				// than offering a button that cannot work.
+				{Path: "/redeem", Description: "Spend one banked Codex rate-limit reset; requires the plugin web token"},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -126,14 +155,15 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
 	cfg := struct {
-		Enabled    *bool             `yaml:"enabled"`
-		CachePath  string            `yaml:"cache-path"`
-		DataDir    string            `yaml:"data-dir"`
-		WebToken   string            `yaml:"web-token"`
-		StaleAfter string            `yaml:"stale-after"`
-		PlanLabels map[string]string `yaml:"plan-labels"`
-		Priority   *int              `yaml:"priority"`
-		Store      map[string]any    `yaml:"store"`
+		Enabled     *bool             `yaml:"enabled"`
+		CachePath   string            `yaml:"cache-path"`
+		DataDir     string            `yaml:"data-dir"`
+		WebToken    string            `yaml:"web-token"`
+		StaleAfter  string            `yaml:"stale-after"`
+		PlanLabels  map[string]string `yaml:"plan-labels"`
+		AllowRedeem *bool             `yaml:"allow-redeem"`
+		Priority    *int              `yaml:"priority"`
+		Store       map[string]any    `yaml:"store"`
 	}{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yamlDecoder(req.ConfigYAML)
@@ -195,9 +225,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	p.configMu.Lock()
 	p.store = current
+	allowRedeem := cfg.AllowRedeem == nil || *cfg.AllowRedeem
 	p.settings = settings{
 		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
-		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels),
+		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels), allowRedeem: allowRedeem,
 	}
 	served := p.api
 	p.configMu.Unlock()
@@ -207,6 +238,14 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	// may be using — exactly as it was.
 	served.Enable()
 	served.SetToken(token)
+	// Nil when redemption is off, which closes the route rather than leaving it
+	// open behind a flag: with no redeemer there is no code path from a request
+	// to a provider.
+	if allowRedeem {
+		served.SetRedeemer(redeem.New(hostRedeem{p.host}))
+	} else {
+		served.SetRedeemer(nil)
+	}
 	if generated {
 		// Logged once, when it is first minted, because the operator has no
 		// other way to learn it. It is persisted, so a restart reuses it.
@@ -250,6 +289,7 @@ func registration() protocol.Registration {
 				{Name: "web-token", Type: "string", Description: "Fallback password for the dashboard when there is no CPA console session; generated and logged once if empty"},
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
+				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex rate-limit reset from the dashboard; default true. Set false to show the count without a button"},
 			},
 		},
 		Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true},
@@ -290,6 +330,7 @@ func (p *Plugin) Rebuild() {
 			Samples:      current.Samples(),
 			StaleAfter:   settings.staleAfter,
 			PlanLabels:   settings.planLabels,
+			Redeemable:   settings.allowRedeem,
 		}, now)
 		if result.Reason == "" {
 			good := doc
@@ -405,6 +446,25 @@ func resolveToken(configured, dataDir string) (token string, generated bool, err
 		return "", false, errors.New("web token cannot be persisted; set web-token in configuration or make data-dir writable")
 	}
 	return token, true, nil
+}
+
+// hostRedeem adapts the plugin host to the two callbacks the redeem path needs,
+// and to nothing else. Passing the whole host would hand the provider client
+// ListAuth as well, which it has no business calling.
+type hostRedeem struct{ host Host }
+
+func (h hostRedeem) GetAuth(ctx context.Context, authIndex string) ([]byte, error) {
+	if h.host == nil {
+		return nil, errors.New("host unavailable")
+	}
+	return h.host.GetAuth(ctx, authIndex)
+}
+
+func (h hostRedeem) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	if h.host == nil {
+		return protocol.HostHTTPResponse{}, errors.New("host unavailable")
+	}
+	return h.host.HTTPDo(ctx, request)
 }
 
 // hostSource adapts the plugin host to the narrower callback the source needs.

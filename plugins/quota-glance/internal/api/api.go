@@ -8,12 +8,14 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/web"
 )
 
@@ -72,6 +75,26 @@ type API struct {
 	hasToken  bool
 	disabled  bool
 	limiter   *limiter
+
+	// redeemer is nil unless redemption is configured on. Holding the capability
+	// rather than a flag means a disabled plugin has no way to make the request
+	// at all, instead of a branch that could be got wrong.
+	redeemer Redeemer
+}
+
+// Redeemer is the one action this API can take on the world. It is an interface
+// so the serving layer keeps no dependency on the provider client, and so a
+// test can assert what was and was not attempted.
+type Redeemer interface {
+	Redeem(ctx context.Context, provider, credentialID string) (redeem.Result, error)
+}
+
+// SetRedeemer installs, or removes, the ability to spend a banked reset. Nil
+// closes the route: it 404s exactly as it did before the feature existed.
+func (a *API) SetRedeemer(r Redeemer) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.redeemer = r
 }
 
 // Disable and Enable close and reopen every route. A plugin turned off in
@@ -162,14 +185,26 @@ func (a *API) managementPath(suffix string) string {
 // Resource paths are matched exactly. CPA does no prefix matching on them and
 // neither does this: an unexpected path is a 404, not a best guess.
 func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.ManagementResponse {
-	if req.Method != http.MethodGet {
-		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
-	}
 	a.mu.RLock()
 	disabled := a.disabled
 	a.mu.RUnlock()
 	if disabled {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "disabled"})
+	}
+	// Exactly one path accepts a method other than GET, and it accepts only
+	// POST. Everything else on this plugin reads, and a read that answered a
+	// POST would be the seam through which a write arrived somewhere unintended.
+	if req.Method == http.MethodPost {
+		switch req.Path {
+		case a.managementPath("/redeem"):
+			return a.redeemResponse(req, now, false)
+		case a.resourcePath("/redeem"):
+			return a.redeemResponse(req, now, true)
+		}
+		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
+	}
+	if req.Method != http.MethodGet {
+		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 	}
 	switch req.Path {
 	case a.resourcePath("/app"):
@@ -196,6 +231,126 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 		return a.windowsResponse()
 	}
 	return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
+}
+
+// redeemResponse spends one banked reset. It is the only route on this plugin
+// that changes anything anywhere.
+//
+// Three things must hold before the provider is contacted, and each of them is
+// checked here rather than trusted from the caller:
+//
+//  1. The caller is authenticated, by whichever of the two doors it arrived at.
+//  2. The body carries an explicit confirmation. The dialog lives in the
+//     browser, where it belongs, but a request that arrives without one — a
+//     stray fetch, a replayed URL, a script — must not spend a credit merely
+//     because it was well formed.
+//  3. The served document says this credential has a redeemable credit. That is
+//     what stops a POST naming an arbitrary credential from turning into a
+//     provider request, and it is why the check reads the document rather than
+//     asking the provider.
+func (a *API) redeemResponse(req protocol.ManagementRequest, now time.Time, viaToken bool) protocol.ManagementResponse {
+	if viaToken && !a.authorized(req.Headers) {
+		if !a.limiter.allowFailure(now) {
+			return protocol.ManagementResponse{
+				StatusCode: http.StatusTooManyRequests,
+				Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
+			}
+		}
+		return protocol.ManagementResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    http.Header{"Cache-Control": {"no-store"}},
+		}
+	}
+
+	a.mu.RLock()
+	redeemer, doc := a.redeemer, a.doc
+	a.mu.RUnlock()
+	if redeemer == nil {
+		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
+	}
+
+	// JSON only. A form-encoded body is the one a cross-site form can send
+	// without the browser asking permission first; requiring JSON means any
+	// request that gets here had to be made by script on this origin, on top of
+	// the credential it already had to present in a header.
+	if media := req.Headers.Get("Content-Type"); media != "" {
+		if base, _, _ := strings.Cut(media, ";"); !strings.EqualFold(strings.TrimSpace(base), "application/json") {
+			return jsonResponse(http.StatusUnsupportedMediaType, map[string]string{"error": "unsupported_media_type"})
+		}
+	}
+	var body struct {
+		CredentialID string `json:"credentialId"`
+		Confirmed    bool   `json:"confirmed"`
+	}
+	if len(req.Body) > 4096 || json.Unmarshal(req.Body, &body) != nil {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	}
+	if !body.Confirmed {
+		// Spending a credit is irreversible, so the absence of a confirmation
+		// is refused rather than defaulted.
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "confirmation_required"})
+	}
+
+	credential, ok := redeemableCredential(doc, body.CredentialID)
+	if !ok {
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), redeem.Timeout)
+	defer cancel()
+	result, err := redeemer.Redeem(ctx, credential.Provider, credential.ID)
+	if err != nil {
+		return redeemError(err)
+	}
+	return jsonResponse(http.StatusOK, map[string]any{
+		"outcome":        result.Outcome,
+		"windowsReset":   result.WindowsReset,
+		"remainingCount": result.RemainingCount,
+		// Said here rather than inferred in the client: the count on the card
+		// comes from quota-cache's snapshot and will not move until its next
+		// poll, and a dashboard that silently disagreed with itself for ten
+		// minutes is worse than one that says why.
+		"snapshotPending": true,
+	})
+}
+
+// redeemableCredential finds the credential the document says can be redeemed
+// against. Reading the served document rather than the request is the point: a
+// caller cannot nominate a credential the dashboard is not already offering.
+func redeemableCredential(doc aggregate.Document, id string) (aggregate.Credential, bool) {
+	if id == "" {
+		return aggregate.Credential{}, false
+	}
+	for _, credential := range doc.Credentials {
+		if credential.ID != id {
+			continue
+		}
+		if credential.ResetCredits == nil || !credential.ResetCredits.Redeemable || credential.ResetCredits.AvailableCount < 1 {
+			return aggregate.Credential{}, false
+		}
+		return credential, true
+	}
+	return aggregate.Credential{}, false
+}
+
+// redeemError maps a redemption failure onto a status and a fixed code.
+//
+// Provider error text is never forwarded. It is unbounded input that would land
+// in a dashboard and a log, and none of it tells the operator anything the code
+// below does not.
+func redeemError(err error) protocol.ManagementResponse {
+	switch {
+	case errors.Is(err, redeem.ErrInFlight):
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "already_in_flight"})
+	case errors.Is(err, redeem.ErrNotCodex):
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
+	case errors.Is(err, redeem.ErrNoAccessToken), errors.Is(err, redeem.ErrNoAccountID):
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "credential_unusable"})
+	case errors.Is(err, redeem.ErrRefused):
+		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_refused"})
+	default:
+		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_unavailable"})
+	}
 }
 
 // tokenSummaryResponse is the public, plugin-authenticated path.
