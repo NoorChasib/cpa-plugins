@@ -161,3 +161,15 @@ test('zero, absent data and stale snapshots stay distinct', async () => {
   assert.equal(snapshot.windows[0].remainingPercent, 0);
   assert.equal(snapshot.windows[1].remainingPercent, null);
 });
+
+test('leaves non-summary Request bodies usable by dashboard actions', async () => {
+  const h = harness();
+  let body;
+  h.respond(async request => {
+    body = await request.text();
+    return new Response('{}');
+  });
+  await h.window.fetch(new Request(`${origin}/action`, { method: 'POST', body: '{"confirm":true}' }));
+  assert.equal(body, '{"confirm":true}');
+  assert.equal(h.messages.length, 0);
+});
