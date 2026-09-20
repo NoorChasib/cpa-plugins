@@ -1,0 +1,131 @@
+name: Quota Glance Menu Bar
+
+on:
+  push:
+    branches: [main]
+    tags: ['quota-glance-menubar/v*']
+    paths:
+      - 'plugins/quota-glance-menubar/**'
+      - '.github/workflows/quota-glance-menubar-ci.yml'
+  pull_request:
+    paths:
+      - 'plugins/quota-glance-menubar/**'
+      - '.github/workflows/quota-glance-menubar-ci.yml'
+  workflow_dispatch:
+    inputs:
+      notarize:
+        description: 'Sign and notarize artifacts from main without publishing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quota-glance-menubar-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: plugins/quota-glance-menubar
+        shell: bash --noprofile --norc -euo pipefail {0}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select bundle version
+        id: version
+        env:
+          REF: ${{ github.ref }}
+          TAG: ${{ github.ref_name }}
+          SIGNED_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        run: |
+          if [[ "$SIGNED_CHECK" == true && "$REF" != refs/heads/main ]]; then
+            echo 'Manual signing checks must run from main.' >&2
+            exit 1
+          fi
+          if [[ "$REF" == refs/tags/* ]]; then
+            git merge-base --is-ancestor HEAD origin/main
+            if [[ ! "$TAG" =~ ^quota-glance-menubar/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo 'Expected quota-glance-menubar/vMAJOR.MINOR.PATCH' >&2
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
+          else
+            version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Test, build universal app, verify bundle, and package ZIP and DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make ci VERSION="$VERSION"
+      - name: Developer ID sign, notarize, staple, and assess release downloads
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/quota-glance-menubar/v')) || (github.event_name == 'workflow_dispatch' && inputs.notarize && github.ref == 'refs/heads/main')
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: make sign-release
+      - name: Checksums for the verified downloads
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd dist
+          shasum -a 256 "Quota-Glance-$VERSION-macOS.dmg" "Quota-Glance-$VERSION-macOS.zip" > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Quota-Glance-macOS
+          path: |
+            plugins/quota-glance-menubar/dist/Quota-Glance-*-macOS.zip
+            plugins/quota-glance-menubar/dist/Quota-Glance-*-macOS.dmg
+            plugins/quota-glance-menubar/dist/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/quota-glance-menubar/v')
+    needs: macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Quota-Glance-macOS
+          path: release
+      - name: Publish the verified app downloads
+        working-directory: release
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.macos.outputs.version }}
+        run: |
+          sha256sum --check SHA256SUMS
+          cat > release-notes.md <<'NOTES'
+          Quota Glance for macOS 13 or later, supporting Apple silicon and Intel.
+
+          Download the DMG, drag Quota Glance to Applications, then eject the disk image and open the installed app. Enter your hosted dashboard URL and sign in on the page.
+
+          To start automatically after restarting your Mac, right-click the menu bar icon, choose Settings, and enable Open at login. Your URL and saved web session persist between launches.
+
+          The app and DMG are Developer ID signed, notarized by Apple, and include stapled notarization tickets.
+
+          The app embeds your hosted dashboard directly; future page changes appear on reload. The ZIP is an alternative download containing the same app. SHA256SUMS covers both downloads.
+          NOTES
+          # Stage all assets before making the release visible. Never replace
+          # an existing release or change this monorepo's Latest release.
+          gh release create "$TAG" --verify-tag --draft --latest=false \
+            --title "Quota Glance for Mac v$VERSION" --notes-file release-notes.md \
+            "Quota-Glance-$VERSION-macOS.dmg" "Quota-Glance-$VERSION-macOS.zip" SHA256SUMS
+          gh release edit "$TAG" --draft=false --latest=false
