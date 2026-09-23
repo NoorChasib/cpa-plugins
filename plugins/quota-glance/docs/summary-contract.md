@@ -247,6 +247,13 @@ contacts a provider. It exists on both doors, authenticated exactly as
 | `POST /v0/management/plugins/quota-glance/redeem` | CPA management key |
 | `POST /v0/resource/plugins/quota-glance/redeem` | `Authorization: Bearer <web-token>` |
 
+Only the management route works today. The plugin registers the resource route,
+but current CPA dispatches only GET to resource routes, so a POST there returns
+404 before the plugin sees it. A client without a CPA console session must hide
+the button rather than call the resource route. `make smoke` reports which
+behaviour the running CPA has, and the resource route starts working with no
+plugin change if CPA ever dispatches POST there.
+
 ```json
 { "credentialId": "codex-noor@example.com.json", "confirmed": true }
 ```
