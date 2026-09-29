@@ -6,7 +6,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | --- | --- |
 | [Account Health Pushover](plugins/account-health-pushover/README.md) | Notifications when credentials need attention; optional weekly quota alerts |
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
-| [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | Codex's model picker limited to the models you choose, with new GPT models still appearing automatically |
+| [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | A Codex model list URL with only the models you choose, with new GPT models still appearing automatically |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
 | [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, and which credential is taking the requests |
@@ -49,7 +49,7 @@ See each plugin's reference documentation for its exact build and verification c
 
 ## Compatibility
 
-Account Health, Auto Baseline, Reset Priority, Quota Cache, and Quota Glance currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and needs CPA v8.0.0 or later; it is verified in CPA v8.0.4. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
+Account Health, Auto Baseline, Reset Priority, Quota Cache, and Quota Glance currently declare ABI 1 / RPC schema 4. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 

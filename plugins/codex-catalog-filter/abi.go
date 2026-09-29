@@ -39,9 +39,10 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/protocol"
 )
 
-// No host API pointer is retained: filtering needs no host callbacks, auth
-// access, or HTTP client. The read lock spans each admitted Go call, and
-// Shutdown takes the write lock so it drains calls already in flight.
+// No host API pointer is retained: the catalog is fetched from CPA over plain
+// HTTP, with no host callbacks or auth access. The read lock spans each
+// admitted Go call, and Shutdown takes the write lock so it drains calls
+// already in flight; a catalog fetch is bounded by its own timeout.
 var (
 	globalMu     sync.RWMutex
 	globalPlugin nativePlugin
@@ -51,9 +52,6 @@ type nativePlugin interface {
 	Handle(string, []byte) (any, error)
 	Shutdown()
 }
-
-// unchanged is the interceptor answer that leaves CPA's response as it was.
-var unchanged = []byte(`{"ok":true,"result":{}}`)
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, api *C.cliproxy_plugin_api) C.int {
@@ -81,19 +79,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		return 1
 	}
 	response.ptr, response.len = nil, 0
-	if method == nil || (request == nil && requestLen != 0) {
-		writeResponse(response, errorEnvelope("invalid_request", "invalid native request"))
-		return 1
-	}
-	name := C.GoString(method)
-	view := func() []byte { return unsafe.Slice((*byte)(unsafe.Pointer(request)), int(requestLen)) }
-	if answer, handled := shortcut(name, uint64(requestLen), view); handled {
-		if writeResponse(response, answer) {
-			return 0
-		}
-		return 1
-	}
-	if uint64(requestLen) > protocol.MaxRequestBytes {
+	if method == nil || uint64(requestLen) > protocol.MaxRequestBytes || (request == nil && requestLen != 0) {
 		writeResponse(response, errorEnvelope("invalid_request", "invalid native request"))
 		return 1
 	}
@@ -101,26 +87,11 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	if requestLen > 0 {
 		raw = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
 	}
-	result, ok := dispatch(name, raw)
+	result, ok := dispatch(C.GoString(method), raw)
 	if !writeResponse(response, result) || !ok {
 		return 1
 	}
 	return 0
-}
-
-// shortcut answers an interceptor call that cannot carry a model list without
-// copying it into Go. CPA calls the interceptor for every non-streaming
-// response, so this is the common path. view aliases host memory that is valid
-// only during the call; Screen reads it in place and retains nothing. One too
-// large to be a model list is left alone rather than logged as a failure.
-func shortcut(name string, size uint64, view func() []byte) ([]byte, bool) {
-	if name != protocol.MethodResponseInterceptAfter {
-		return nil, false
-	}
-	if size > protocol.MaxRequestBytes || (size > 0 && !pluginimpl.Screen(view())) {
-		return unchanged, true
-	}
-	return nil, false
 }
 
 // dispatch runs under globalMu.RLock, including response encoding in its caller.
@@ -136,7 +107,7 @@ func dispatch(method string, raw []byte) (encoded []byte, ok bool) {
 	result, err := globalPlugin.Handle(method, raw)
 	if err != nil {
 		// Never echo an arbitrary decoder/config error: it can contain
-		// untrusted wire values or response bodies.
+		// untrusted wire values or request headers.
 		return errorEnvelope("plugin_error", "plugin request rejected"), false
 	}
 	encoded, err = okEnvelope(result)

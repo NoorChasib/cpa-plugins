@@ -53,10 +53,9 @@ PY
     python3 scripts/verify-cpa-package.py --cpa-source "$CPA_SMOKE_WORK/source"
     ;;
   codex-catalog-filter)
-    # The model-list hook first shipped in CPA v8.0.0, so behavior is verified
-    # in pinned v8.0.4; the suite run that follows covers v7.2.155 coexistence.
+    # Serving the catalog is verified in pinned v8.0.4; the suite run that
+    # follows covers v7.2.155 coexistence.
     docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
-    docker pull --platform linux/amd64 python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
     make ci smoke
     ;;
 esac

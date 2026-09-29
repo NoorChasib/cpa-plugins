@@ -5,21 +5,20 @@ package protocol
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 )
 
 const (
-	ABIVersion    uint32 = 1
-	SchemaVersion uint32 = 6
-	// MaxRequestBytes bounds one native request before it is copied into Go.
-	// A Codex catalog carries full model instructions and is several MiB once
-	// base64-encoded on the wire, so this is far above token-usage's 1 MiB.
-	MaxRequestBytes = 64 << 20
+	ABIVersion      uint32 = 1
+	SchemaVersion   uint32 = 6
+	MaxRequestBytes        = 1 << 20
 
-	MethodPluginRegister         = "plugin.register"
-	MethodPluginReconfigure      = "plugin.reconfigure"
-	MethodPluginQuiesce          = "plugin.quiesce"
-	MethodPluginShutdown         = "plugin.shutdown"
-	MethodResponseInterceptAfter = "response.intercept_after"
+	MethodPluginRegister     = "plugin.register"
+	MethodPluginReconfigure  = "plugin.reconfigure"
+	MethodPluginQuiesce      = "plugin.quiesce"
+	MethodPluginShutdown     = "plugin.shutdown"
+	MethodManagementRegister = "management.register"
+	MethodManagementHandle   = "management.handle"
 )
 
 type Envelope struct {
@@ -62,29 +61,36 @@ type ConfigField struct {
 	Description string
 }
 
-// A response interceptor sees every successful non-streaming response and,
-// from CPA v8.0.0, every model-list response. Nothing else is advertised.
+// The management API is the only capability: it carries the one resource
+// route. No interceptor is declared, so CPA's own responses never reach here.
 type RegistrationCapabilities struct {
-	ResponseInterceptor bool `json:"response_interceptor"`
+	ManagementAPI bool `json:"management_api"`
 }
 
-// ResponseInterceptRequest has no JSON tags upstream, so fields travel in
-// PascalCase and byte slices as base64. Only the fields read here are declared;
-// request headers, request bodies, and metadata are skipped without decoding.
-type ResponseInterceptRequest struct {
-	SourceFormat    string
-	Model           string
-	RequestedModel  string
-	Stream          bool
-	StatusCode      int
-	ResponseHeaders http.Header
-	Body            []byte
+type ManagementRegistration struct {
+	Resources []ResourceRoute `json:"resources,omitempty"`
 }
 
-// An empty response ({}) leaves CPA's current headers and body unchanged.
-// CPA replaces the body only when Body is non-empty.
-type ResponseInterceptResponse struct {
-	Headers      http.Header `json:",omitempty"`
-	Body         []byte      `json:",omitempty"`
-	ClearHeaders []string    `json:",omitempty"`
+// Resources are public GET routes under /v0/resource/plugins/<pluginID>/.
+// CPA does not authenticate them. An empty Menu keeps them out of the sidebar.
+type ResourceRoute struct {
+	Path        string
+	Menu        string
+	Description string
+}
+
+// Resource requests carry every client header, including credentials.
+type ManagementRequest struct {
+	Method  string
+	Path    string
+	Headers http.Header
+	Query   url.Values
+}
+
+// Body remains base64 on the RPC wire at schema 6. CPA returns the decoded
+// bytes without legacy HTML-entity rewriting.
+type ManagementResponse struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
 }

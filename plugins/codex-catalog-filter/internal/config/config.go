@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/catalog"
@@ -16,14 +17,25 @@ const (
 	maxDocumentBytes = 64 << 10
 	maxPatterns      = 256
 	maxPatternBytes  = 256
+	// DefaultCPAURL is CPA's listener as seen from inside its own process in
+	// the standard image. The plugin fetches the unfiltered catalog from it.
+	DefaultCPAURL = "http://127.0.0.1:8317"
 )
 
 type Config struct {
 	Include  []string `yaml:"include"`
 	Exclude  []string `yaml:"exclude"`
 	Action   string   `yaml:"action"`
+	CPAURL   string   `yaml:"cpa-url"`
 	Enabled  bool     `yaml:"enabled"`
 	Priority int      `yaml:"priority"`
+}
+
+// Settings is the validated, immutable result of Parse.
+type Settings struct {
+	Rules *catalog.Rules
+	// CPAURL is an origin without a trailing slash, such as http://127.0.0.1:8317.
+	CPAURL string
 }
 
 // Host-owned store metadata is decoded without expanding its contents and then
@@ -35,7 +47,7 @@ type rawConfig struct {
 
 // Parse validates the plugin's YAML and compiles its rules. Unknown keys are
 // rejected so a misspelled include cannot silently disable filtering.
-func Parse(raw []byte) (*catalog.Rules, error) {
+func Parse(raw []byte) (*Settings, error) {
 	if len(raw) == 0 || len(raw) > maxDocumentBytes {
 		return nil, errors.New("configuration is required and must be bounded")
 	}
@@ -75,5 +87,23 @@ func Parse(raw []byte) (*catalog.Rules, error) {
 	if err != nil {
 		return nil, errors.New("invalid include or exclude pattern")
 	}
-	return rules, nil
+	origin, err := parseOrigin(c.CPAURL)
+	if err != nil {
+		return nil, err
+	}
+	return &Settings{Rules: rules, CPAURL: origin}, nil
+}
+
+// parseOrigin accepts only scheme://host[:port], so the configured value can
+// never smuggle a path, query, or credentials into the catalog request.
+func parseOrigin(raw string) (string, error) {
+	if raw == "" {
+		return DefaultCPAURL, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return "", errors.New("cpa-url must be an http or https origin such as http://127.0.0.1:8317")
+	}
+	return u.Scheme + "://" + u.Host, nil
 }

@@ -5,6 +5,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -48,75 +51,38 @@ func TestABIEnvelopes(t *testing.T) {
 	}
 }
 
-// The oversized-request answer is a literal; it must stay an OK envelope whose
-// result decodes to an interceptor response that changes nothing.
-func TestUnchangedEnvelopeKeepsResponse(t *testing.T) {
-	var env protocol.Envelope
-	if err := json.Unmarshal(unchanged, &env); err != nil || !env.OK || env.Error != nil {
-		t.Fatalf("unchanged = %s, %v", unchanged, err)
-	}
-	var result protocol.ResponseInterceptResponse
-	if err := json.Unmarshal(env.Result, &result); err != nil || result.Body != nil || result.Headers != nil || result.ClearHeaders != nil {
-		t.Fatalf("unchanged result = %s, %v", env.Result, err)
-	}
-	encoded, err := okEnvelope(protocol.ResponseInterceptResponse{})
-	if err != nil || string(encoded) != string(unchanged) {
-		t.Fatalf("an empty interceptor response encodes as %s, want %s", encoded, unchanged)
-	}
-}
-
-func TestDispatchInterceptThroughRealPlugin(t *testing.T) {
+// A full native round trip through the real plugin, with CPA's catalog served
+// by a local stand-in, as the resource handler would see it.
+func TestDispatchServesFilteredCatalogThroughRealPlugin(t *testing.T) {
+	cpa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.URL.Query().Get("client_version") != "0.159.0" || r.Header.Get("Authorization") != "Bearer client-key" {
+			http.Error(w, `{"error":"unexpected"}`, http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"list"}]}`))
+	}))
+	defer cpa.Close()
 	globalMu.Lock()
 	globalPlugin = pluginimpl.New()
 	globalMu.Unlock()
 	defer cliproxyPluginShutdown()
-	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("include: ['gpt-*']\n"), SchemaVersion: protocol.SchemaVersion})
-	globalMu.RLock()
-	_, ok := dispatch(protocol.MethodPluginRegister, config)
-	globalMu.RUnlock()
-	if !ok {
-		t.Fatal("register failed")
-	}
-	request, _ := json.Marshal(map[string]any{
-		"SourceFormat": "openai", "StatusCode": 200,
-		"Body": []byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"list"}]}`),
+	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("include: ['gpt-*']\ncpa-url: " + cpa.URL + "\n"), SchemaVersion: protocol.SchemaVersion})
+	request, _ := json.Marshal(protocol.ManagementRequest{
+		Method: http.MethodGet, Path: pluginimpl.CatalogPath,
+		Headers: http.Header{"Authorization": {"Bearer client-key"}},
+		Query:   url.Values{"client_version": {"0.159.0"}},
 	})
 	globalMu.RLock()
-	raw, ok := dispatch(protocol.MethodResponseInterceptAfter, request)
+	_, registered := dispatch(protocol.MethodPluginRegister, config)
+	raw, ok := dispatch(protocol.MethodManagementHandle, request)
 	globalMu.RUnlock()
 	var env struct {
 		OK     bool
-		Result struct{ Body []byte }
+		Result protocol.ManagementResponse
 	}
-	if !ok || json.Unmarshal(raw, &env) != nil || !env.OK || string(env.Result.Body) != `{"models":[{"slug":"gpt-6-sol","visibility":"list"}]}` {
+	if !registered || !ok || json.Unmarshal(raw, &env) != nil || !env.OK || env.Result.StatusCode != http.StatusOK ||
+		string(env.Result.Body) != `{"models":[{"slug":"gpt-6-sol","visibility":"list"}]}` {
 		t.Fatalf("dispatch = %s", raw)
-	}
-}
-
-func TestShortcutAnswersWithoutCopying(t *testing.T) {
-	never := func() []byte { t.Fatal("request view read"); return nil }
-	// Field order as CPA encodes pluginapi.ResponseInterceptRequest.
-	completion := []byte(`{"RequestID":"r","SourceFormat":"openai","Model":"gpt-6-sol","RequestedModel":"gpt-6-sol","Stream":false,"OriginalRequest":"e30=","Body":"e30=","StatusCode":200}`)
-	catalog := []byte(`{"RequestID":"r","SourceFormat":"openai","Model":"","RequestedModel":"","Stream":false,"OriginalRequest":null,"RequestBody":null,"Body":"eyJtb2RlbHMiOltdfQ==","StatusCode":200}`)
-	view := func(raw []byte) func() []byte { return func() []byte { return raw } }
-	cases := []struct {
-		name    string
-		method  string
-		size    uint64
-		view    func() []byte
-		handled bool
-	}{
-		{"oversized interceptor call", protocol.MethodResponseInterceptAfter, protocol.MaxRequestBytes + 1, never, true},
-		{"ordinary completion", protocol.MethodResponseInterceptAfter, uint64(len(completion)), view(completion), true},
-		{"model list candidate", protocol.MethodResponseInterceptAfter, uint64(len(catalog)), view(catalog), false},
-		{"empty interceptor call", protocol.MethodResponseInterceptAfter, 0, never, false},
-		{"oversized lifecycle call", protocol.MethodPluginRegister, protocol.MaxRequestBytes + 1, never, false},
-	}
-	for _, tc := range cases {
-		answer, handled := shortcut(tc.method, tc.size, tc.view)
-		if handled != tc.handled || (handled && string(answer) != string(unchanged)) {
-			t.Errorf("%s: answer %s, handled %v", tc.name, answer, handled)
-		}
 	}
 }
 
@@ -131,7 +97,7 @@ func TestABIErrorsAndPanicsDoNotEchoPayload(t *testing.T) {
 		}}
 		globalMu.Unlock()
 		globalMu.RLock()
-		raw, ok := dispatch(protocol.MethodResponseInterceptAfter, nil)
+		raw, ok := dispatch(protocol.MethodManagementHandle, nil)
 		globalMu.RUnlock()
 		if ok || strings.Contains(string(raw), "secret-payload") {
 			t.Fatalf("unsafe result %s", raw)
@@ -151,7 +117,7 @@ func TestShutdownDrainsAdmittedNativeCall(t *testing.T) {
 	callDone := make(chan struct{})
 	go func() {
 		globalMu.RLock()
-		dispatch(protocol.MethodResponseInterceptAfter, nil)
+		dispatch(protocol.MethodManagementHandle, nil)
 		globalMu.RUnlock()
 		close(callDone)
 	}()
@@ -171,7 +137,7 @@ func TestShutdownDrainsAdmittedNativeCall(t *testing.T) {
 	}
 	<-callDone
 	globalMu.RLock()
-	_, ok := dispatch(protocol.MethodResponseInterceptAfter, nil)
+	_, ok := dispatch(protocol.MethodManagementHandle, nil)
 	globalMu.RUnlock()
 	if ok {
 		t.Fatal("dispatch accepted after shutdown")

@@ -19,7 +19,7 @@ Use a version higher than that plugin's catalog version. Other IDs are `account-
 
 The root **Release one plugin** workflow automatically:
 
-- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance. Token Usage retains its browser, SQLite/native, and official-image store checks. Codex Catalog Filter also runs its catalog smoke in pinned CPA v8.0.4, because the model-list hook it needs first shipped in CPA v8.0.0.
+- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance. Token Usage retains its browser, SQLite/native, and official-image store checks. Codex Catalog Filter also runs its catalog-URL smoke in pinned CPA v8.0.4, the version it is verified on.
 - Loads the candidate with the four currently published peers in pinned CPA v7.2.155. It checks coexistence, status access, persistence/restart, and optional Quota Cache operation. Peers are downloaded with catalog checksum verification, not rebuilt or released.
 - Packages the exact tested library, license, and Token Usage third-party notices, with checksums and verification evidence.
 - Uploads to a draft GitHub release, reads every asset back, verifies its bytes, and publishes the release. Published bytes are never overwritten.

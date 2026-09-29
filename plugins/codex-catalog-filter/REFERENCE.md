@@ -1,54 +1,77 @@
 # Codex Catalog Filter reference
 
-Maintained contract for **Codex Catalog Filter 0.1.0**, written 2026-09-29 against CPA **v8.0.4** (commit `d33f63f`) and Codex CLI **0.159.0**. Install steps are in the [README](README.md); test evidence is in [verification](docs/verification.md).
+Maintained contract for **Codex Catalog Filter 0.1.0**, written 2026-09-29 against CPA **v8.0.4** (commit `d33f63f`) and Codex CLI **0.159**. Install steps are in the [README](README.md); test evidence is in [verification](docs/verification.md).
 
-## How Codex gets its model list from CPA
+## How Codex gets its model list
 
-Codex builds its picker by calling `GET {base_url}/models?client_version=<version>` on the configured provider. CPA answers with a Codex-native catalog:
+Codex builds its model picker from a Codex-native catalog:
 
 ```json
 {"models":[{"slug":"gpt-6-sol","visibility":"list", ...}, ...]}
 ```
 
-Codex shows every entry whose `visibility` is `list`; `hide` entries stay usable by exact name but are not shown. CPA builds this catalog from every model it can route, so Claude, Grok, OpenRouter (`or-*`), and alias models appear in Codex too. CPA itself does not filter it, apart from a fixed list of image and video models it always hides.
+It shows every entry whose `visibility` is `list`. `hide` entries stay usable by exact name but are not shown. Each entry is a complete Codex model description: `display_name`, reasoning levels, shell type, truncation policy, instructions, and more are required. A catalog therefore cannot be a bare list of names.
 
-From CPA v8.0.0 (upstream commit `5b278561`, "expose model list responses to plugin interceptors"), `BaseAPIHandler.WriteModelListResponse` passes each model-list body through every plugin's response interceptor before writing it. A non-empty returned body replaces the response. That hook is the only thing this plugin uses.
+By default Codex fetches `{base_url}/models?client_version=<version>`. CPA answers that with every model it can route, including Claude, Grok, OpenRouter, and alias models. CPA has no separate Codex catalog URL and no setting to filter this one.
 
-## What is rewritten
+A provider's `model_catalog_url` replaces that address with any absolute URL. For that URL, Codex:
 
-The plugin advertises one capability, `response_interceptor`. CPA also calls that hook for every successful non-streaming response, so each call is checked cheapest-first, and anything that fails a check is answered with an empty result (`{}`), which leaves CPA's response exactly as it was:
+- appends `client_version`;
+- sends the same provider credential it uses for inference, such as the output of an `auth.command`;
+- rejects redirects;
+- refuses a response larger than **1 MiB**;
+- gives up after **5 seconds**.
 
-1. The plugin has rules with at least one `include` pattern.
-2. `SourceFormat` is `openai`. The Claude and Gemini model lists arrive as `claude` and `gemini`.
-3. `Model` and `RequestedModel` are empty and `Stream` is false. Model responses always carry a model.
-4. `OriginalRequest` and `RequestBody` are absent. Model lists have no request body.
-5. The status is 200, and the body starts with `{"models":` (after optional whitespace). Only the first 48 decoded bytes are read for this. OpenAI and Grok lists start with `object` or `data`.
-6. The whole body parses as a JSON object with exactly one `models` array, every entry of which is an object with one non-empty string `slug`. Gemini's catalog also has a `models` array, but its entries have `name`, not `slug`.
+This plugin provides that URL.
 
-Checks 2 to 4 run on the host's request buffer in place, before anything is copied into Go, and stop at the first disqualifying field. CPA encodes `SourceFormat` and `Model` ahead of every header and body, so an ordinary response is rejected after roughly its first hundred bytes, whatever its size. Only a candidate that passes them is copied and decoded, and even then only a short body prefix is decoded until check 6.
+## The catalog URL
 
-Only then are entries filtered. An entry is **kept** when its slug matches at least one `include` pattern and no `exclude` pattern. Every other entry is removed (`action: remove`, the default) or has its `visibility` set to `"hide"` (`action: hide`; the member is added when absent).
+The plugin declares one capability, `management_api`, and uses it only to register one resource route with no sidebar menu:
 
-The rewrite splices bytes rather than re-encoding JSON. Kept entries, the separators between them, and everything outside the `models` array are copied verbatim. CPA's deliberate non-escaping of `<`, `>`, and `&` in instructions therefore survives. Under `hide`, only the `visibility` value of a changed entry differs.
+```text
+GET /v0/resource/plugins/codex-catalog-filter/models?client_version=<version>
+```
 
-CPA's Home mode builds its Codex catalog through the same writer, so it is filtered identically.
+For each request the plugin:
 
-## Fail-open rules
+1. Reads CPA's own catalog from `{cpa-url}/v1/models?client_version=<same version>`. The only header it forwards is the caller's `Authorization`. It sends its own `User-Agent`, so CPA never routes the request to its Claude or Grok list formats.
+2. Keeps entries whose slug matches at least one `include` pattern and no `exclude` pattern. Every other entry is removed (`action: remove`, the default) or has its `visibility` set to `"hide"` (`action: hide`; the member is added when absent).
+3. Returns the result as `application/json` with `Cache-Control: no-store`.
 
-The plugin never makes a response worse than CPA's original. It returns the original body unchanged when:
+CPA has no host call that returns its model catalog, which is why step 1 goes over HTTP. `cpa-url` defaults to `http://127.0.0.1:8317`, CPA's own listener as seen from inside its process in the standard image.
 
-- the body is malformed, truncated, has trailing data, has duplicate `models`, `slug`, or `visibility` members, or any entry lacks a string `slug`;
-- the `models` array is empty;
-- filtering would change nothing;
-- filtering would leave **no entry with `visibility: list`**. Codex does not treat a catalog without a listed model as authoritative and falls back to its bundled catalog, so emitting one would be worse than not filtering;
-- the native request exceeds 64 MiB (checked before it is copied);
-- the plugin is not yet configured, has no `include` patterns, or has been shut down.
+The rewrite splices bytes rather than re-encoding JSON. Kept entries, the separators between them, and everything outside the `models` array are copied verbatim, including CPA's deliberate non-escaping of `<`, `>`, and `&` in instructions. Under `hide`, only the `visibility` value of a changed entry differs.
 
-The output is validated as JSON before it is returned. A panic inside a call is recovered and reported to CPA as a plugin error, which CPA logs and ignores for that response.
+The plugin declares no interceptor, so CPA's own `/v1/models` responses, in every format, never pass through it.
+
+## Keys and exposure
+
+CPA does not authenticate plugin resource routes, so the URL itself needs no key of its own and no configuration in Codex beyond `model_catalog_url`. The content still requires a CPA client key: CPA checks the forwarded `Authorization` exactly as it would if Codex asked it directly. A request with no key, or a wrong one, receives CPA's own `401` response.
+
+Failed client keys do not count toward CPA's management-key IP ban (five failures, 30 minutes). That ban applies only to `/v0/management` and `/v8/management`, which this route never touches.
+
+Anyone who can reach CPA can see that the route exists. Only a valid client key returns a catalog.
+
+## When something goes wrong
+
+| Situation | Response | What Codex does |
+| --- | --- | --- |
+| Nothing to filter: no `include`, every entry allowed, or CPA's body is not a well-formed Codex catalog | CPA's catalog, unchanged | Shows it |
+| Filtering would leave no entry with `visibility: list` | CPA's catalog, unchanged | Shows it |
+| Missing or wrong key | CPA's `401` | Uses its cached catalog while fresh, otherwise its bundled one |
+| CPA unreachable, a 5xx or redirect, no answer within 4 seconds, or more than 32 MiB | `502 {"error":"cpa_unavailable"}` | Same |
+| Plugin not configured yet, or shutting down | `503` | Same |
+| Configuration rejected, such as `action: drop` | The route is gone: `404` | Same |
+
+Codex's bundled catalog lists only OpenAI models, so a failure never exposes your other models.
+
+The plugin never emits a catalog without a listed model. Codex treats such a catalog as non-authoritative and merges it into its bundled list, so emitting one would be worse than not filtering.
+
+Configuration changes apply on CPA's next configuration reload, without a restart. If CPA rejects the configuration, it logs `plugin.reconfigure failed` and deactivates the plugin. Fixing the value brings the route back, again without a restart.
 
 ## Configuration
 
-`plugins.configs.codex-catalog-filter` accepts `include`, `exclude`, and `action`, alongside the host-owned `enabled`, `priority`, and `store` keys. Unknown keys are rejected, so a misspelled `include` cannot silently disable filtering.
+`plugins.configs.codex-catalog-filter` accepts `include`, `exclude`, `action`, and `cpa-url`, alongside the host-owned `enabled`, `priority`, and `store` keys. Unknown keys are rejected, so a misspelled `include` cannot silently disable filtering.
 
 **Patterns** are shell-style globs matched against the whole slug, case-sensitively:
 
@@ -60,47 +83,52 @@ The output is validated as JSON before it is returned. A panic inside a call is 
 | `[!a-z]`, `[^a-z]` | one character not listed |
 | `\x` | the literal character `x` |
 
-Each list holds at most 256 patterns of at most 256 bytes, without surrounding spaces. `gpt-[0-9]*` matches `gpt-6-sol`, `gpt-5.6-terra`, and `gpt-5.5`, but not `gpt-image-2` or `gpt-reserve`. Note that it also matches future GPT slugs CPA adds, such as `gpt-6.1-sol`, which is the point: new GPT models appear without a configuration change. Use `exclude` to drop specific ones.
+Each list holds at most 256 patterns of at most 256 bytes, without surrounding spaces. `gpt-[0-9]*` matches `gpt-6-sol`, `gpt-5.6-terra`, and `gpt-5.5`, but not `gpt-image-2` or `gpt-reserve`. It also matches GPT slugs CPA adds later, which is the point. List exact slugs instead if you want new models to wait for a configuration change.
 
 **Actions:**
 
-- `remove` (default) deletes other entries. The catalog Codex downloads is smaller. If you still select a removed model explicitly (`codex -m claude-...`), Codex uses its generic fallback metadata for it and logs a fallback warning.
+- `remove` (default) deletes other entries. If you still select a removed model explicitly (`codex -m claude-...`), Codex uses its generic fallback metadata for it and logs a fallback warning.
 - `hide` keeps every entry but hides the others. An explicitly selected model keeps CPA's real metadata (context window, reasoning levels, instructions).
 
-**Installing** does not need a restart either. CPA loads the library once both are present: the file at `plugins/linux/amd64/codex-catalog-filter-v<version>.so` (the name the Plugin Store uses) and an enabled `plugins.configs.codex-catalog-filter` block. A `store.version` in that block makes CPA load only that version's file.
+**`cpa-url`** must be an `http` or `https` origin with no path, query, or credentials, such as `http://127.0.0.1:8317`.
 
-**Changing the configuration** takes effect on CPA's next configuration reload; a restart is not needed. If CPA rejects the plugin's configuration (for example `action: drop`), CPA logs `plugin.reconfigure failed` and deactivates the plugin, so catalogs pass through unfiltered. Fixing the configuration re-registers it, again without a restart.
+## Codex caching and its bundled catalog
 
-## Codex caching and ETags
+Codex keeps the catalog in `~/.codex/models_cache.json` with a five-minute TTL. It stores the response's `ETag` (neither CPA nor this plugin sends one) and never makes a conditional request. Delete the cache file to force an immediate refetch after changing configuration. Remove `model_catalog_json` from Codex's configuration: while it is set, Codex reads that static file and never fetches.
 
-Codex 0.159.0 stores the catalog in `~/.codex/models_cache.json` with a five-minute TTL, along with the `ETag` header of the `/models` response. It never sends a conditional request. It only compares that stored ETag with any `X-Models-Etag` header on later `/responses` traffic, to decide between extending the cache TTL and refetching.
+Codex treats a fetched catalog as authoritative only when it lists at least one model and either Codex is signed in with a ChatGPT account or the provider uses an `env_key` or bearer-token API key. Otherwise, as with command-based provider auth and no ChatGPT sign-in, Codex merges the fetched catalog into the one bundled with the binary. Two consequences follow:
 
-CPA v8.0.4 sets no `ETag` or `Content-Length` on model lists; the Codex catalog is written chunked. There is therefore nothing to keep in sync. If a later CPA does derive either header from the unfiltered bytes, the plugin removes it whenever it rewrites the body, rather than pass on a validator for different bytes.
+- `codex debug models` can show bundled entries, such as `gpt-daybreak-blue-latest` (hidden) or a new GPT model CPA does not serve yet. Codex 0.159.1 bundles `gpt-6.1-sol`, for example.
+- An entry removed here whose slug Codex also bundles comes back from the bundled copy, still listed. Excluding `gpt-5.5` with `action: remove` leaves Codex's own `gpt-5.5` in the picker. With `action: hide`, the hidden entry replaces the bundled one of the same slug, so it disappears.
 
-Two Codex settings bypass CPA entirely and must be removed for the filter to have any effect: `model_catalog_json` (a static catalog file; Codex then never fetches) and, on a provider, `model_catalog_url` (a different catalog source).
+## Limits
 
-Codex treats a fetched catalog as authoritative only when it lists at least one model and Codex is signed in with a ChatGPT account or uses API-key discovery. Otherwise, as with command-based provider auth and no ChatGPT sign-in, Codex merges CPA's catalog into the catalog bundled with the binary. `codex debug models` can then also show bundled entries such as `gpt-daybreak-blue-latest`. In Codex 0.159.0 every bundled entry that is not in the target GPT set is `hide`, so the listed set is still what the filter keeps.
-
-That merge has one consequence for `exclude`. A removed entry whose slug is also in Codex's bundled catalog comes back from the bundled copy, still listed; for example, excluding `gpt-5.5` with `action: remove` leaves Codex's own `gpt-5.5` in the picker. With `action: hide`, CPA's hidden entry replaces the bundled one of the same slug, so it disappears. Use `hide` if you exclude a model Codex ships with and Codex merges rather than replaces.
-
-## Cost and limits
-
-- Declaring a response interceptor means CPA serializes every successful non-streaming response, including its request bodies, and hands it to the plugin. That host-side cost is inherent to the capability. The plugin's own share is small: it screens each call in place and rejects an ordinary response in about a microsecond with under 1 KiB allocated, measured on an 89 MB request. Streaming responses and WebSocket traffic, which Codex uses for turns, never reach it.
-- The rule applies to every client that requests the Codex catalog through CPA, not per client or per API key. CPA gives the interceptor no request URL or key identity, and upstream declined per-key model lists in core.
-- A slug CPA serves under a routing prefix (`team/gpt-6-sol`) is matched as the whole string; `gpt-[0-9]*` does not match it, but `*gpt-[0-9]*` does.
+- Codex rejects a `model_catalog_url` response over 1 MiB. CPA's full catalog entries are about 60 KiB each, mostly instructions, so a filtered catalog stays under the limit up to roughly 16 entries. Nine entries measured 568,006 bytes. The plugin does not trim to fit; narrow `include` if Codex reports a catalog error.
+- Every catalog request costs one extra local `/v1/models` request in CPA's own log.
+- CPA serves no plugin resource routes in Home mode.
+- The filter applies to everyone who uses the URL; per-key catalogs are out of scope.
 
 ## Compatibility and verification
 
 | Item | Value |
 | --- | --- |
 | Native contract | ABI **1**, RPC schema **6**, `cliproxy_plugin_init`, Go `c-shared` |
-| Capability | `response_interceptor` only; no host callbacks, routes, storage, or network access |
-| CPA minimum | **v8.0.0**. Older releases (the suite pins v7.2.155) load it, but never send model lists through the hook. |
-| Verified CPA | **v8.0.4**, commit `d33f63f`, image `eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d` |
-| Verified Codex | CLI **0.159.0** (`codex debug models` against the filtered catalog) |
+| Capability | `management_api`, for one menu-less resource route; no interceptor, host callbacks, or storage |
+| Verified CPA | **v8.0.4**, commit `d33f63f`, image `eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d`. The suite's v7.2.155 image loads it alongside the other plugins, but serving the catalog there is untested. |
+| Verified Codex | CLI **0.159.1** (`codex debug models` through `model_catalog_url`); source read at 0.159.0 |
 | Platform | **Linux amd64 only**, CGO enabled, Go 1.27.1; module language floor Go 1.26.0 |
 
-Sources in CPA v8.0.4: `sdk/api/handlers/handlers_interceptors.go` (`WriteModelListResponse`, `applyResponseInterceptors`), `internal/pluginhost/adapters_interceptors.go` (`InterceptResponseExcept`), `internal/api/server_routes.go` (`unifiedModelsHandler`), `internal/client/codex/models/models.go` (`BuildResponseForClient`, `MarshalCompact`), and `sdk/pluginapi/types.go` (`ResponseInterceptRequest`, which has no JSON tags, so fields travel in PascalCase with byte slices as base64). In Codex 0.159.0: `codex-rs/codex-api/src/endpoint/models.rs`, `codex-rs/models-manager/src/manager.rs`, and `codex-rs/models-manager/src/cache.rs`.
+Sources in CPA v8.0.4:
+
+- `internal/api/server_management.go` (`pluginResourceNoRoute`: no authentication) and `internal/pluginhost/management.go` (`ServeResourceHTTP`, resource registration, menu-less routes);
+- `internal/api/server_routes.go` (`unifiedModelsHandler`) and `sdk/api/handlers/openai/openai_handlers.go` (`OpenAIModels`).
+
+In Codex 0.159.0:
+
+- `codex-rs/model-provider-info/src/lib.rs` (`model_catalog_url`);
+- `codex-rs/model-provider/src/models_endpoint.rs` (catalog URL, credential, 1 MiB limit, redirect rejection, 5-second timeout);
+- `codex-rs/models-manager/src/manager.rs` and `cache.rs`;
+- `codex-rs/protocol/src/openai_models.rs` (`ModelInfo`).
 
 ## Development
 
@@ -110,6 +138,6 @@ make ci      # gofmt, vet, unit and race tests, Linux amd64 shared library
 make smoke   # the library in pinned official CPA v8.0.4; requires Docker
 ```
 
-`make smoke` needs the CPA image above and `python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285` pulled first; it never pulls. It uses synthetic static models and keys only.
+`make smoke` needs the CPA image above pulled first; it never pulls. It uses synthetic static models and keys only.
 
 Release with the root workflow and a `codex-catalog-filter/vX.Y.Z` tag; see [releases](../../docs/releases.md). Its gate runs `make ci smoke`, then loads the candidate with the published peers in the suite's pinned v7.2.155 image to check coexistence.

@@ -4,7 +4,7 @@ plugins:
   configs:
     codex-catalog-filter:
       enabled: true
-      # Slugs Codex keeps. Without at least one pattern, nothing is filtered.
+      # Slugs Codex keeps. Without at least one pattern, the catalog is served unfiltered.
       include:
         - "gpt-[0-9]*"
         - "codex-*" # keeps codex-auto-review for approvals_reviewer = "auto_review"
@@ -13,3 +13,8 @@ plugins:
       #   - "gpt-6.1-*"
       # remove (default) deletes other entries; hide keeps them selectable by name.
       # action: remove
+      # Where the plugin reads CPA's own catalog, from inside CPA's container.
+      # cpa-url: "http://127.0.0.1:8317"
+
+# Then, in Codex's config.toml, on the provider that already uses CPA:
+#   model_catalog_url = "http://your-cpa-host:8317/v0/resource/plugins/codex-catalog-filter/models"

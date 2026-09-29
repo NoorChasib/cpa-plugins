@@ -1,10 +1,10 @@
 # Codex Catalog Filter
 
-Show only the models you choose in Codex's model picker when Codex uses CPA as its provider. CPA sends Codex one catalog of every model it can route, including Claude, Grok, and OpenRouter aliases. This plugin filters that catalog on the way out. New GPT models added to CPA still appear automatically, and nothing changes on the Codex side.
+Give Codex a model list that contains only the models you choose. CPA's own Codex catalog includes every model CPA can route, such as Claude, Grok, and OpenRouter aliases. This plugin serves a filtered copy at its own URL, and Codex's `model_catalog_url` points there. New GPT models added to CPA still appear automatically.
 
-Nothing else is touched: OpenAI-, Claude-, and Gemini-format model lists and every model request pass through unchanged.
+CPA's own model lists are not changed. Any Codex install without `model_catalog_url` still sees everything.
 
-Requires **CPA v8.0.0 or later** (verified on v8.0.4) on **Linux amd64**. Older CPA loads the plugin but never sends it a model list.
+Verified on **CPA v8.0.4**, **Linux amd64**, with Codex CLI 0.159.
 
 ## Install
 
@@ -25,23 +25,30 @@ plugins:
         - "codex-*"
 ```
 
-`gpt-[0-9]*` matches GPT models such as `gpt-6-sol` and `gpt-5.5`, but not `gpt-image-2`. Keep `codex-*`: it retains `codex-auto-review`, the hidden model Codex uses when `approvals_reviewer = "auto_review"`.
+`gpt-[0-9]*` matches GPT models such as `gpt-6-sol` and `gpt-5.5`, but not `gpt-image-2`. Keep `codex-*`: it retains `codex-auto-review`, the hidden model Codex uses when `approvals_reviewer = "auto_review"`. Until `include` lists at least one pattern, the URL serves CPA's catalog unfiltered.
 
-Until `include` lists at least one pattern, the plugin leaves every catalog unchanged.
+## Point Codex at it
 
-## First use
+In Codex's `config.toml`, add `model_catalog_url` to the provider that already uses CPA, and remove any `model_catalog_json` line:
 
-1. If your Codex `config.toml` sets `model_catalog_json`, remove it. While it is set, Codex never asks CPA for models.
-2. Delete `~/.codex/models_cache.json`, or wait up to five minutes for Codex to refresh it.
-3. Run `codex debug models`. Only models matching `include` should have `"visibility": "list"`.
+```toml
+[model_providers.cliproxyapi]
+base_url = "http://your-cpa-host:8317/v1"
+model_catalog_url = "http://your-cpa-host:8317/v0/resource/plugins/codex-catalog-filter/models"
+```
+
+The URL needs no key of its own. Codex sends its usual CPA key with the request, and the plugin uses that key to read CPA's catalog.
+
+Then delete `~/.codex/models_cache.json`, or wait up to five minutes, and run `codex debug models`. Only models matching `include` should have `"visibility": "list"`.
 
 Options:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `include` | none | Glob patterns for the model slugs to keep. `*` matches any characters, including `/`. |
+| `include` | none | Glob patterns for the model slugs to keep. `*` matches any characters, including `/`. Exact names work too. |
 | `exclude` | none | Patterns that drop a slug even when `include` matches it. |
 | `action` | `remove` | `remove` deletes other entries. `hide` keeps them with `visibility: hide`, so they stay selectable by exact name. |
+| `cpa-url` | `http://127.0.0.1:8317` | Where the plugin reads CPA's own catalog. Change it only if CPA listens elsewhere inside its container. |
 
 ## More detail
 
