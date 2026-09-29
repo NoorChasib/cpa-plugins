@@ -1,0 +1,15 @@
+# Merge into the existing plugins mapping of CPA's config.yaml.
+plugins:
+  enabled: true
+  configs:
+    codex-catalog-filter:
+      enabled: true
+      # Slugs Codex keeps. Without at least one pattern, nothing is filtered.
+      include:
+        - "gpt-[0-9]*"
+        - "codex-*" # keeps codex-auto-review for approvals_reviewer = "auto_review"
+      # Slugs dropped even when include matches them.
+      # exclude:
+      #   - "gpt-6.1-*"
+      # remove (default) deletes other entries; hide keeps them selectable by name.
+      # action: remove
