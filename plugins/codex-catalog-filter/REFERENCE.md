@@ -67,6 +67,8 @@ Each list holds at most 256 patterns of at most 256 bytes, without surrounding s
 - `remove` (default) deletes other entries. The catalog Codex downloads is smaller. If you still select a removed model explicitly (`codex -m claude-...`), Codex uses its generic fallback metadata for it and logs a fallback warning.
 - `hide` keeps every entry but hides the others. An explicitly selected model keeps CPA's real metadata (context window, reasoning levels, instructions).
 
+**Installing** does not need a restart either. CPA loads the library once both are present: the file at `plugins/linux/amd64/codex-catalog-filter-v<version>.so` (the name the Plugin Store uses) and an enabled `plugins.configs.codex-catalog-filter` block. A `store.version` in that block makes CPA load only that version's file.
+
 **Changing the configuration** takes effect on CPA's next configuration reload; a restart is not needed. If CPA rejects the plugin's configuration (for example `action: drop`), CPA logs `plugin.reconfigure failed` and deactivates the plugin, so catalogs pass through unfiltered. Fixing the configuration re-registers it, again without a restart.
 
 ## Codex caching and ETags

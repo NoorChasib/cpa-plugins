@@ -55,6 +55,10 @@ CPA v8.0.4's built-in Codex model list includes `gpt-6.1-sol`, which `gpt-[0-9]*
 - Idle: Codex also listed `claude-fable-5-1`, `cpa-sonnet`, `grok-4.7`, and `or-kimi-k2`.
 - With `exclude: [gpt-5.5]`: under `remove`, CPA's catalog no longer contained `gpt-5.5`, but Codex still listed its bundled copy. Under `hide`, Codex showed it as `hide`.
 
+## Install without a restart
+
+The CPA v8.0.4 image started with no Codex Catalog Filter file or configuration. The library was then copied to `plugins/linux/amd64/codex-catalog-filter-v0.1.0.so`, which alone changed nothing. Next, a hand-written `codex-catalog-filter` block was appended to `config.yaml`, including a complete `store:` block in the Plugin Store's layout. CPA's configuration reload loaded and registered the plugin from that path, and the Codex catalog was filtered within 2 seconds, with no restart.
+
 ## Suite coexistence in CPA v7.2.155
 
 `python3 scripts/quota-cache-smoke.py --candidate codex-catalog-filter` passed. The candidate loaded and registered alongside the six published peers in the suite's pinned v7.2.155 image, with status routes, persistence, restart, and both optional-cache modes checked. A run with `--candidate token-usage` also passed and skipped the unreleased plugin, as the release tooling now does for any peer without a catalog entry. `python3 -m unittest discover -s scripts/tests` (10 tests) and `python3 scripts/check-catalog.py` passed.
