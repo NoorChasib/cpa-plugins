@@ -2,20 +2,37 @@
 # Do not replace unrelated routing, auth, logging, model, or management settings.
 #
 # The plugin edits ONLY these keys of this same file when it promotes a baseline:
-#   claude-header-defaults.user-agent / .package-version / .runtime-version
-#   codex-header-defaults.user-agent
+#   CPA v8 layout (config-version: 8)                      legacy name
+#   oauth.providers.claude.header-defaults.user-agent      claude-header-defaults.user-agent
+#     ... .package-version / .runtime-version                ... .package-version / .runtime-version
+#   oauth.providers.codex.header-defaults.user-agent       codex-header-defaults.user-agent
+# It writes the block CPA reads: an existing v8 block, else an existing legacy block,
+# else the v8 path when the file declares config-version: 8, else the legacy path.
+# A present v8 key wins over its legacy name, even when blank. Any save from CPA's
+# Management Center panel rewrites this whole file in the v8 layout.
 # Everything else (comments, order, os/arch/timeout, beta-features, ...) is preserved.
 # A copy of the previous file is kept at config.yaml.auto-baseline.bak before each write.
 
-# Optional. When absent CPA uses its compiled defaults (2.1.220 / 0.94.0 / v26.3.0 in
-# v7.2.146); the plugin treats those as the effective baseline and only ever raises it.
+# Optional. When absent CPA uses its compiled defaults (2.1.280 / 0.112.1 / v26.3.0 in
+# v8.0.4); the plugin treats those as the effective baseline and only ever raises it.
+# In the v8 layout these values apply to OAuth credentials only, not to API keys.
+# oauth:
+#   providers:
+#     claude:
+#       header-defaults:
+#         user-agent: "claude-cli/2.1.280 (external, cli)"
+#         package-version: "0.112.1"
+#         runtime-version: "v26.3.0"
+#     # Required for a learned Codex baseline to have ANY effect: CPA otherwise forces
+#     # its compiled Codex User-Agent on every outbound request.
+#     codex:
+#       disable-codex-cloaking: true
+#
+# The same settings in the legacy layout:
 # claude-header-defaults:
-#   user-agent: "claude-cli/2.1.220 (external, cli)"
-#   package-version: "0.94.0"
+#   user-agent: "claude-cli/2.1.280 (external, cli)"
+#   package-version: "0.112.1"
 #   runtime-version: "v26.3.0"
-
-# Required for a learned Codex baseline to have ANY effect: CPA otherwise forces its
-# compiled Codex User-Agent on every outbound request regardless of codex-header-defaults.
 # codex:
 #   disable-codex-cloaking: true
 
@@ -82,11 +99,11 @@ plugins:
 
       # Floors against spoofed ancient versions: never write a baseline below these,
       # even if config.yaml carries an older explicit value. Defaults are the compiled
-      # defaults of the audited CPA build (v7.2.146). They do not need adjusting after
+      # defaults of the audited CPA build (v8.0.4). They do not need adjusting after
       # CPA upgrades; once a baseline block exists in this file CPA uses it instead of
       # its compiled constant, so an upgrade never resets or lowers the baseline.
-      claude-min-version: 2.1.220
-      codex-min-version: 0.146.0
+      claude-min-version: 2.1.280
+      codex-min-version: 0.154.0
 
       # Optional stricter mode: never promote a provider whose baseline in this file
       # is implicit (compiled default assumed). Only matters before the first
