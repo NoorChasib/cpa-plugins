@@ -172,7 +172,7 @@ func (h *harness) observeClaude(sessions ...string) {
 
 func claudeHeaders(session string) map[string][]string {
 	h := map[string][]string{
-		"User-Agent":                  {"claude-cli/2.1.258 (external, sdk-ts, agent-sdk/0.3.170)"},
+		"User-Agent":                  {"claude-cli/2.1.318 (external, sdk-ts, agent-sdk/0.3.170)"},
 		"X-App":                       {"cli"},
 		"Anthropic-Version":           {"2023-06-01"},
 		"Anthropic-Beta":              {"claude-code-20250219,oauth-2025-04-20"},
@@ -204,7 +204,7 @@ func codexHeaders(ua, session string) map[string][]string {
 	}
 }
 
-const codexUA = "codex-tui/0.152.1 (Ubuntu 24.4.0; x86_64) WezTerm/20240203 (codex-tui; 0.152.1)"
+const codexUA = "codex-tui/0.160.1 (Ubuntu 24.4.0; x86_64) WezTerm/20240203 (codex-tui; 0.160.1)"
 
 // gatedApply blocks each Apply call until released and records calls.
 type gatedApply struct {
@@ -285,7 +285,7 @@ func TestQuorumPromotesClaudeIntoConfig(t *testing.T) {
 	text := h.readConfig()
 	for _, want := range []string{
 		"claude-header-defaults:",
-		`user-agent: "claude-cli/2.1.258 (external, cli)"`,
+		`user-agent: "claude-cli/2.1.318 (external, cli)"`,
 		`package-version: "0.112.1"`,
 		`runtime-version: "v26.3.0"`,
 		"port: 8317",
@@ -301,19 +301,19 @@ func TestQuorumPromotesClaudeIntoConfig(t *testing.T) {
 	if _, err := os.Stat(h.backupPath()); err != nil {
 		t.Errorf("backup missing in state dir: %v", err)
 	}
-	if !h.logs.contains("promoted claude baseline 2.1.220 -> 2.1.258") {
+	if !h.logs.contains("promoted claude baseline 2.1.280 -> 2.1.318") {
 		t.Errorf("promotion not logged: %v", h.logs.lines)
 	}
 
 	snap := h.status()
 	claude := h.claude()
-	if claude.Effective.Version.String() != "2.1.258" || !claude.Effective.Explicit {
+	if claude.Effective.Version.String() != "2.1.318" || !claude.Effective.Explicit {
 		t.Errorf("effective after promotion = %+v", claude.Effective)
 	}
 	if claude.LastPromotion == nil {
 		t.Fatal("last promotion missing")
 	}
-	if claude.LastPromotion.From.String() != "2.1.220" || claude.LastPromotion.Observations != 3 || claude.LastPromotion.DistinctSessions != 2 || claude.LastPromotion.Source != sourceObserved {
+	if claude.LastPromotion.From.String() != "2.1.280" || claude.LastPromotion.Observations != 3 || claude.LastPromotion.DistinctSessions != 2 || claude.LastPromotion.Source != sourceObserved {
 		t.Errorf("last promotion = %+v", claude.LastPromotion)
 	}
 	if len(claude.Pending) != 0 {
@@ -330,7 +330,7 @@ func TestQuorumPromotesClaudeIntoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state load: %v", err)
 	}
-	if len(st.History) != 1 || st.Baselines[fingerprint.ProviderClaude].Version.String() != "2.1.258" {
+	if len(st.History) != 1 || st.Baselines[fingerprint.ProviderClaude].Version.String() != "2.1.318" {
 		t.Errorf("state = %+v", st)
 	}
 
@@ -349,11 +349,11 @@ func TestDefaultQuorumAcceptsAnonymousClients(t *testing.T) {
 	h := newHarness(t, withConfig(func(c *config.Config) { c.MinDistinctSessions = config.DefaultMinDistinctSessions }))
 	h.eng.Start()
 	h.observeClaude("", "")
-	if strings.Contains(h.readConfig(), "2.1.258") {
+	if strings.Contains(h.readConfig(), "2.1.318") {
 		t.Fatal("promoted with two observations")
 	}
 	h.observeClaude("")
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("anonymous observations did not reach the default quorum:\n%s", h.readConfig())
 	}
 	if lp := h.claude().LastPromotion; lp == nil || lp.Observations != 3 || lp.DistinctSessions != 0 {
@@ -372,10 +372,10 @@ func TestDryRunNeverWrites(t *testing.T) {
 		t.Error("dry-run wrote a backup")
 	}
 	claude := h.claude()
-	if claude.LastPromotion == nil || !claude.LastPromotion.DryRun || claude.LastPromotion.Candidate.Version.String() != "2.1.258" || claude.LastPromotion.AwaitingReload {
+	if claude.LastPromotion == nil || !claude.LastPromotion.DryRun || claude.LastPromotion.Candidate.Version.String() != "2.1.318" || claude.LastPromotion.AwaitingReload {
 		t.Errorf("dry-run promotion record = %+v", claude.LastPromotion)
 	}
-	if !h.logs.contains("dry-run would promote claude baseline 2.1.220 -> 2.1.258") {
+	if !h.logs.contains("dry-run would promote claude baseline 2.1.280 -> 2.1.318") {
 		t.Errorf("dry-run not logged: %v", h.logs.lines)
 	}
 	if len(claude.Pending) != 1 || !claude.Pending[0].QuorumMet {
@@ -415,13 +415,13 @@ func TestCooldownDefersSecondWriteUntilTimer(t *testing.T) {
 	h := newHarness(t, withConfig(func(c *config.Config) { c.PromotionCooldown = time.Minute }))
 	h.eng.Start()
 	h.observeClaude("a", "b", "c")
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Fatal("first promotion did not happen")
 	}
 	for _, s := range []string{"a", "b", "c"} {
-		h.eng.Observe(claudeHeadersVersion(s, "2.1.270", "0.120.0"))
+		h.eng.Observe(claudeHeadersVersion(s, "2.1.330", "0.120.0"))
 	}
-	if strings.Contains(h.readConfig(), "2.1.270") {
+	if strings.Contains(h.readConfig(), "2.1.330") {
 		t.Fatal("second promotion ignored cooldown")
 	}
 	if h.claude().NextWriteAfter.IsZero() {
@@ -431,7 +431,7 @@ func TestCooldownDefersSecondWriteUntilTimer(t *testing.T) {
 		t.Fatal("no retry timer armed")
 	}
 	h.clk.Advance(time.Minute)
-	if text := h.readConfig(); !strings.Contains(text, "2.1.270") || !strings.Contains(text, "0.120.0") {
+	if text := h.readConfig(); !strings.Contains(text, "2.1.330") || !strings.Contains(text, "0.120.0") {
 		t.Errorf("promotion did not fire after cooldown:\n%s", text)
 	}
 }
@@ -440,19 +440,19 @@ func TestOnDiskRecheckSkipsWhenSomeoneElseRaisedBaseline(t *testing.T) {
 	h := newHarness(t)
 	h.eng.Start()
 	h.observeClaude("a", "b")
-	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.300 (external, cli)\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.360 (external, cli)\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.observeClaude("c")
 	text := h.readConfig()
-	if strings.Contains(text, "2.1.258") || !strings.Contains(text, "2.1.300") {
+	if strings.Contains(text, "2.1.318") || !strings.Contains(text, "2.1.360") {
 		t.Errorf("baseline downgraded:\n%s", text)
 	}
-	if !h.logs.contains("skipped claude candidate 2.1.258") {
+	if !h.logs.contains("skipped claude candidate 2.1.318") {
 		t.Errorf("skip not logged: %v", h.logs.lines)
 	}
 	claude := h.claude()
-	if claude.Effective.Version.String() != "2.1.300" || len(claude.Pending) != 0 {
+	if claude.Effective.Version.String() != "2.1.360" || len(claude.Pending) != 0 {
 		t.Errorf("status after skip = %+v", claude)
 	}
 	if le := h.status().LastError; le != "" {
@@ -462,15 +462,15 @@ func TestOnDiskRecheckSkipsWhenSomeoneElseRaisedBaseline(t *testing.T) {
 
 func TestExplicitOldBaselineOnDiskIsRaised(t *testing.T) {
 	h := newHarness(t)
-	if err := os.WriteFile(h.config, []byte(pluginsEnabledYAML+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.230 (external, cli)\"\n  package-version: \"0.95.0\"\n  runtime-version: \"v26.3.0\"\n  os: \"Linux\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.config, []byte(pluginsEnabledYAML+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.290 (external, cli)\"\n  package-version: \"0.95.0\"\n  runtime-version: \"v26.3.0\"\n  os: \"Linux\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Start()
-	if v := h.claude().Effective; v.Version.String() != "2.1.230" || !v.Explicit {
+	if v := h.claude().Effective; v.Version.String() != "2.1.290" || !v.Explicit {
 		t.Fatalf("effective = %+v", v)
 	}
 	h.observeClaude("a", "b", "c")
-	if text := h.readConfig(); !strings.Contains(text, "2.1.258") || !strings.Contains(text, `os: "Linux"`) {
+	if text := h.readConfig(); !strings.Contains(text, "2.1.318") || !strings.Contains(text, `os: "Linux"`) {
 		t.Errorf("config:\n%s", text)
 	}
 }
@@ -486,7 +486,7 @@ func TestMalformedExplicitBaselineRefusesPromotion(t *testing.T) {
 		t.Fatalf("malformed baseline not surfaced: %+v", claude)
 	}
 	h.observeClaude("a", "b", "c")
-	if text := h.readConfig(); !strings.Contains(text, "my-proxy/1.0") || strings.Contains(text, "2.1.258") {
+	if text := h.readConfig(); !strings.Contains(text, "my-proxy/1.0") || strings.Contains(text, "2.1.318") {
 		t.Errorf("malformed explicit baseline was overwritten:\n%s", text)
 	}
 	if got := h.status().Counters.Decisions[learner.DecisionBaselineMalformed]; got != 3 {
@@ -501,7 +501,7 @@ func TestMalformedExplicitBaselineRefusesPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("promotion did not resume on retained evidence after repair:\n%s", h.readConfig())
 	}
 	// Codex is independent.
@@ -521,7 +521,7 @@ func TestMalformedExplicitBaselineRefusesPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	h2.observeClaude("c")
-	if strings.Contains(h2.readConfig(), "2.1.258") {
+	if strings.Contains(h2.readConfig(), "2.1.318") {
 		t.Error("pre-write check did not refuse the malformed baseline")
 	}
 	if le := h2.status().LastError; !strings.Contains(le, learner.DecisionBaselineMalformed) {
@@ -596,7 +596,7 @@ func TestPluginDisabledOnDiskRefusesWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.eng.Reconfigure(h.cfg)
-			if !strings.Contains(h.readConfig(), "2.1.258") {
+			if !strings.Contains(h.readConfig(), "2.1.318") {
 				t.Error("promotion did not resume after re-enable")
 			}
 		})
@@ -630,11 +630,11 @@ func TestRequireExplicitBaseline(t *testing.T) {
 		t.Error("evidence dropped")
 	}
 	// An explicit (older) baseline on disk satisfies the requirement.
-	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.230 (external, cli)\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.290 (external, cli)\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("explicit baseline not promoted:\n%s", h.readConfig())
 	}
 }
@@ -650,7 +650,7 @@ func TestMissingOrUnwritableConfigLearnsButDoesNotPromote(t *testing.T) {
 	if len(claude.Pending) != 1 || !claude.Pending[0].QuorumMet {
 		t.Errorf("evidence lost: %+v", claude.Pending)
 	}
-	if le := h.status().LastError; !strings.Contains(le, "cannot promote claude 2.1.258") {
+	if le := h.status().LastError; !strings.Contains(le, "cannot promote claude 2.1.318") {
 		t.Errorf("last error = %q", le)
 	}
 
@@ -721,7 +721,7 @@ func TestUnsupportedDeploymentModeDisablesWrites(t *testing.T) {
 		t.Errorf("explicit config-path should report the mode but not block: %+v", s.Config)
 	}
 	h2.observeClaude("a", "b", "c")
-	if !strings.Contains(h2.readConfig(), "2.1.258") {
+	if !strings.Contains(h2.readConfig(), "2.1.318") {
 		t.Error("explicit config-path did not allow the write")
 	}
 }
@@ -761,7 +761,7 @@ func TestStateSurvivesRestartAndInvalidEntriesAreDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bogus := fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: fingerprint.MustParseVersion("2.1.259"), UserAgent: "claude-cli/2.1.259 (external, sdk-ts)", PackageVersion: "0.1.0", RuntimeVersion: "v1.0.0"}
+	bogus := fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: fingerprint.MustParseVersion("2.1.319"), UserAgent: "claude-cli/2.1.319 (external, sdk-ts)", PackageVersion: "0.1.0", RuntimeVersion: "v1.0.0"}
 	st.Pending = append(st.Pending, learner.Pending{Key: bogus.Key(), Candidate: bogus, Records: []learner.Record{{SessionID: "x", At: t0}}, FirstSeen: t0, LastSeen: t0})
 	if err := statefile.Save(h.cfg.StateDir, st, t0); err != nil {
 		t.Fatal(err)
@@ -777,10 +777,10 @@ func TestStateSurvivesRestartAndInvalidEntriesAreDropped(t *testing.T) {
 		t.Errorf("drop not logged: %v", h.logs.lines)
 	}
 	eng2.Observe(claudeHeaders("a"))
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("evidence did not survive restart:\n%s", h.readConfig())
 	}
-	if strings.Contains(h.readConfig(), "2.1.259") {
+	if strings.Contains(h.readConfig(), "2.1.319") {
 		t.Error("invalid restored candidate was promoted")
 	}
 }
@@ -880,7 +880,7 @@ func TestStopAndReconfigure(t *testing.T) {
 		t.Errorf("status after re-enable = %+v", s)
 	}
 	h.observeClaude("a", "a")
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Error("promotion did not happen with relaxed quorum")
 	}
 }
@@ -948,7 +948,7 @@ func TestReadyCandidateDuringWorkerTriggersRescan(t *testing.T) {
 	close(gate.release)
 	h.waitWorkerIdle()
 	text := h.readConfig()
-	if !strings.Contains(text, "2.1.258") || !strings.Contains(text, codexUA) {
+	if !strings.Contains(text, "2.1.318") || !strings.Contains(text, codexUA) {
 		t.Errorf("rescan lost the codex promotion:\n%s", text)
 	}
 	if gate.count() != 2 {
@@ -1010,7 +1010,7 @@ func TestWorkerPanicFaultsEngineUntilReconfigure(t *testing.T) {
 	if s := h.status(); s.Faulted {
 		t.Error("fault not cleared by reconfigure")
 	}
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("promotion did not resume after reconfigure (calls=%d)", calls)
 	}
 	h.eng.Stop() // must not hang: WaitGroup was released despite the panic
@@ -1112,7 +1112,7 @@ func TestResetClearsPending(t *testing.T) {
 func TestReportObservationGoesThroughQuorum(t *testing.T) {
 	h := newHarness(t)
 	h.eng.Start()
-	report := Report{Provider: "claude", UserAgent: "claude-cli/2.1.258 (external, cli)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0", OS: "Linux", Arch: "x64", SessionID: "host-1"}
+	report := Report{Provider: "claude", UserAgent: "claude-cli/2.1.318 (external, cli)", PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0", OS: "Linux", Arch: "x64", SessionID: "host-1"}
 	out := h.eng.ReportObservation(report)
 	if !out.Accepted || out.Decision != learner.DecisionTracked || out.Queued {
 		t.Fatalf("outcome = %+v", out)
@@ -1123,7 +1123,7 @@ func TestReportObservationGoesThroughQuorum(t *testing.T) {
 	report.SessionID = "host-2"
 	h.eng.ReportObservation(report)
 	out = h.eng.ReportObservation(report)
-	if out.Decision != learner.DecisionQuorum || !strings.Contains(h.readConfig(), "2.1.258") {
+	if out.Decision != learner.DecisionQuorum || !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Errorf("outcome = %+v config:\n%s", out, h.readConfig())
 	}
 }
@@ -1134,21 +1134,21 @@ func TestReportObservationValidationAndForce(t *testing.T) {
 	if out := h.eng.ReportObservation(Report{Provider: "gemini"}); out.Accepted || !strings.Contains(out.Reason, "provider") {
 		t.Errorf("bad provider = %+v", out)
 	}
-	if out := h.eng.ReportObservation(Report{Provider: "claude", UserAgent: "claude-cli/2.1.258 (external, cli)", PackageVersion: "bad"}); out.Accepted || out.Reason != fingerprint.ReasonPackageVersion {
+	if out := h.eng.ReportObservation(Report{Provider: "claude", UserAgent: "claude-cli/2.1.318 (external, cli)", PackageVersion: "bad"}); out.Accepted || out.Reason != fingerprint.ReasonPackageVersion {
 		t.Errorf("bad package = %+v", out)
 	}
-	if out := h.eng.ReportObservation(Report{Provider: "claude", UserAgent: "claude-cli/2.1.258 (external, mcp)", PackageVersion: "0.1.0", RuntimeVersion: "v1.0.0", OS: "L", Arch: "x"}); out.Accepted || out.Reason != fingerprint.ReasonEntrypointDenied {
+	if out := h.eng.ReportObservation(Report{Provider: "claude", UserAgent: "claude-cli/2.1.318 (external, mcp)", PackageVersion: "0.1.0", RuntimeVersion: "v1.0.0", OS: "L", Arch: "x"}); out.Accepted || out.Reason != fingerprint.ReasonEntrypointDenied {
 		t.Errorf("denied entrypoint = %+v", out)
 	}
 	out := h.eng.ReportObservation(Report{Provider: "claude", UserAgent: "claude-cli/2.1.100 (external, cli)", PackageVersion: "0.1.0", RuntimeVersion: "v1.0.0", OS: "L", Arch: "x", Force: true})
 	if out.Queued || !strings.Contains(out.Reason, learner.DecisionBelowFloor) {
 		t.Errorf("force below floor = %+v", out)
 	}
-	out = h.eng.ReportObservation(Report{Provider: "codex", UserAgent: "codex-tui/0.160.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.160.0)", Force: true})
+	out = h.eng.ReportObservation(Report{Provider: "codex", UserAgent: "codex-tui/0.168.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.168.0)", Force: true})
 	if !out.Queued || !out.Accepted {
 		t.Fatalf("force = %+v", out)
 	}
-	if !strings.Contains(h.readConfig(), "codex-tui/0.160.0") {
+	if !strings.Contains(h.readConfig(), "codex-tui/0.168.0") {
 		t.Errorf("forced promotion missing:\n%s", h.readConfig())
 	}
 	if lp := h.codex().LastPromotion; lp == nil || !lp.Forced || lp.Source != sourceManagement {
@@ -1156,7 +1156,7 @@ func TestReportObservationValidationAndForce(t *testing.T) {
 	}
 	dry := newHarness(t, withConfig(func(c *config.Config) { c.DryRun = true }))
 	dry.eng.Start()
-	dry.eng.ReportObservation(Report{Provider: "codex", UserAgent: "codex-tui/0.160.0 (x)", Force: true})
+	dry.eng.ReportObservation(Report{Provider: "codex", UserAgent: "codex-tui/0.168.0 (x)", Force: true})
 	if dry.readConfig() != baseConfig {
 		t.Error("forced dry-run wrote config")
 	}
@@ -1208,7 +1208,7 @@ func TestObserveIsSafeConcurrently(t *testing.T) {
 	}
 	wg.Wait()
 	h.eng.Shutdown()
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Error("promotion missing after concurrent observations")
 	}
 }
@@ -1240,7 +1240,7 @@ func TestStateDirChangeMigratesState(t *testing.T) {
 	// (sessions a, b) meets quorum, so Reconfigure's kick promoted right away
 	// with 3 observations from 3 distinct sessions, and the save landed in
 	// the NEW dir.
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Error("promotion missing after migration")
 	}
 	if lp := h.claude().LastPromotion; lp == nil || lp.Observations != 3 || lp.DistinctSessions != 3 {
@@ -1282,7 +1282,7 @@ func TestPanicUnderLockIsRecovered(t *testing.T) {
 		t.Error("promotionInFlight still set")
 	}
 	// The write itself completed before the hook fired.
-	if !strings.Contains(h.readConfig(), "2.1.258") {
+	if !strings.Contains(h.readConfig(), "2.1.318") {
 		t.Error("write missing")
 	}
 }
@@ -1293,9 +1293,9 @@ func TestForcedQueueKeepsHighestAndReplaysAfterStop(t *testing.T) {
 	h.eng.Start()
 	h.observeClaude("a", "b", "c") // occupies the worker
 	gate.awaitEntry(t)
-	lo := "codex-tui/0.150.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.150.0)"
-	hi := "codex-tui/0.160.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.160.0)"
-	hiTie := "codex-tui/0.160.0 (Ubuntu 24.4.0; x86_64) WezTerm/1 (codex-tui; 0.160.0)"
+	lo := "codex-tui/0.158.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.158.0)"
+	hi := "codex-tui/0.168.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.168.0)"
+	hiTie := "codex-tui/0.168.0 (Ubuntu 24.4.0; x86_64) WezTerm/1 (codex-tui; 0.168.0)"
 	for _, ua := range []string{lo, hi, hiTie} {
 		if out := h.eng.ReportObservation(Report{Provider: "codex", UserAgent: ua, Force: true}); !out.Queued {
 			t.Fatalf("%s not queued: %+v", ua, out)
@@ -1344,7 +1344,7 @@ func TestReloadConfirmationIsValueCorrelated(t *testing.T) {
 	}
 	// Someone edits the file to a DIFFERENT value before CPA reloads: the
 	// reconfigure must not confirm our promotion.
-	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.258 (external, cli)\"\n  package-version: \"9.9.9\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.318 (external, cli)\"\n  package-version: \"9.9.9\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
@@ -1352,7 +1352,7 @@ func TestReloadConfirmationIsValueCorrelated(t *testing.T) {
 		t.Errorf("confirmed although the on-disk tuple differs: %+v", c.LastPromotion)
 	}
 	// Restoring the exact tuple confirms it on the next read.
-	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.258 (external, cli)\"\n  package-version: \"0.112.1\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.318 (external, cli)\"\n  package-version: \"0.112.1\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
@@ -1388,7 +1388,7 @@ func TestReconfigureWriteChangeDrainsAndGenerationAbortsStaleAttempt(t *testing.
 	// further attempt may write under the new dry-run config.
 	before := h.readConfig()
 	for _, s := range []string{"a", "b", "c"} {
-		h.eng.Observe(claudeHeadersVersion(s, "2.1.270", "0.120.0"))
+		h.eng.Observe(claudeHeadersVersion(s, "2.1.330", "0.120.0"))
 	}
 	h.waitWorkerIdle()
 	if h.readConfig() != before {

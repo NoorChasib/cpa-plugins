@@ -524,8 +524,8 @@ func configFields() []hostapi.ConfigField {
 		{Name: "min-distinct-sessions", Type: "integer", Description: "Distinct client session IDs those observations must span (default 1; anonymous requests never count as a session). Set 2 when clients send X-Claude-Code-Session-Id."},
 		{Name: "observation-window", Type: "string", Description: "How long an observation counts toward quorum (default 24h)."},
 		{Name: "promotion-cooldown", Type: "string", Description: "Minimum spacing between config.yaml writes (default 60s)."},
-		{Name: "claude-min-version", Type: "string", Description: "Never write a Claude baseline below this version (default 2.1.220, the compiled default of the audited CPA build)."},
-		{Name: "codex-min-version", Type: "string", Description: "Never write a Codex baseline below this version (default 0.146.0, the compiled default of the audited CPA build)."},
+		{Name: "claude-min-version", Type: "string", Description: "Never write a Claude baseline below this version (default 2.1.280, the compiled default of the audited CPA build v8.0.4)."},
+		{Name: "codex-min-version", Type: "string", Description: "Never write a Codex baseline below this version (default 0.154.0, the compiled default of the audited CPA build v8.0.4)."},
 		{Name: "require-explicit-baseline", Type: "boolean", Description: "Never promote a provider whose config.yaml baseline is implicit (compiled default assumed). Safe choice after a CPA upgrade (default false)."},
 		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" (default UTC). Presentation only."},
 	}

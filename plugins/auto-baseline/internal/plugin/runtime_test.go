@@ -170,7 +170,7 @@ func decode(t *testing.T, raw []byte) hostapi.Envelope {
 
 func claudeHeaders(session string) map[string][]string {
 	return map[string][]string{
-		"User-Agent":                  {"claude-cli/2.1.258 (external, sdk-ts, agent-sdk/0.3.170)"},
+		"User-Agent":                  {"claude-cli/2.1.318 (external, sdk-ts, agent-sdk/0.3.170)"},
 		"X-App":                       {"cli"},
 		"Anthropic-Version":           {"2023-06-01"},
 		"Anthropic-Beta":              {"claude-code-20250219,oauth-2025-04-20"},
@@ -301,10 +301,10 @@ func TestInterceptObservesAndReturnsNoop(t *testing.T) {
 	}
 	f.intercept(claudeHeaders("s1"))
 	text := f.readConfig()
-	if !strings.Contains(text, `user-agent: "claude-cli/2.1.258 (external, cli)"`) || !strings.Contains(text, `package-version: "0.112.1"`) {
+	if !strings.Contains(text, `user-agent: "claude-cli/2.1.318 (external, cli)"`) || !strings.Contains(text, `package-version: "0.112.1"`) {
 		t.Errorf("config after quorum:\n%s", text)
 	}
-	if !f.host.logged("promoted claude baseline 2.1.220 -> 2.1.258") {
+	if !f.host.logged("promoted claude baseline 2.1.280 -> 2.1.318") {
 		t.Errorf("promotion not logged: %v", f.host.logs)
 	}
 	env := decode(t, f.rt.Dispatch(hostapi.MethodRequestInterceptAfter, []byte(`{"Headers":{}}`)))
@@ -386,7 +386,7 @@ func TestQuiesceAndReconfigureResume(t *testing.T) {
 	}
 	f.intercept(claudeHeaders("a"))
 	f.intercept(claudeHeaders("a"))
-	if !strings.Contains(f.readConfig(), "2.1.258") {
+	if !strings.Contains(f.readConfig(), "2.1.318") {
 		t.Error("learning did not resume after reconfigure")
 	}
 	env = f.lifecycle(hostapi.MethodPluginReconfigure, "enabled: false\nstate-dir: "+f.state+"\n", hostapi.SchemaVersion)
@@ -488,7 +488,7 @@ func TestStatusHTMLRendersAndEscapes(t *testing.T) {
 		t.Fatalf("resp = %d %v", resp.StatusCode, resp.Headers)
 	}
 	body := string(resp.Body)
-	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.258", "claude-cli/2.1.220 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Action", "PDT", "Assumed CPA build", "floor 2.1.220", "Backup dir", `<span class="pill info">authenticated view</span>`} {
+	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.318", "claude-cli/2.1.280 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Action", "PDT", "Assumed CPA build", "floor 2.1.280", "Backup dir", `<span class="pill info">authenticated view</span>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}
@@ -547,7 +547,7 @@ func TestRenderManagementStatusPageEscapesRenderedFields(t *testing.T) {
 		}
 	}
 	// data-* attributes on Promote now rows are attribute-escaped.
-	snap.Baselines = []engine.ProviderStatus{{Provider: fingerprint.ProviderClaude, Managed: true, Pending: []learner.Evidence{{Candidate: fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: fingerprint.MustParseVersion("2.1.258"), UserAgent: `x" onmouseover="alert(1)`, OS: "Linux", Arch: "x64"}}}}}
+	snap.Baselines = []engine.ProviderStatus{{Provider: fingerprint.ProviderClaude, Managed: true, Pending: []learner.Evidence{{Candidate: fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: fingerprint.MustParseVersion("2.1.318"), UserAgent: `x" onmouseover="alert(1)`, OS: "Linux", Arch: "x64"}}}}}
 	body = string(renderStatusPage(snap, true))
 	if strings.Contains(body, `data-user-agent="x" onmouseover`) {
 		t.Error("data attribute not escaped")
@@ -579,7 +579,7 @@ func TestResourcePageIsRedacted(t *testing.T) {
 			t.Errorf("resource page leaks %q", leak)
 		}
 	}
-	for _, want := range []string{"2.1.258", "claude-cli/2.1.220 (external, cli)", "Assumed CPA build", "Requests seen", "autoBaselineAuth", `managementPath("/status/html")`, "session-note"} {
+	for _, want := range []string{"2.1.318", "claude-cli/2.1.280 (external, cli)", "Assumed CPA build", "Requests seen", "autoBaselineAuth", `managementPath("/status/html")`, "session-note"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("resource page missing %q", want)
 		}
@@ -716,7 +716,7 @@ func TestMutationCSRFGate(t *testing.T) {
 func TestObserveRoute(t *testing.T) {
 	f := newFixture(t)
 	f.register("")
-	body := []byte(`{"provider":"claude","user_agent":"claude-cli/2.1.258 (external, cli)","package_version":"0.112.1","runtime_version":"v26.3.0","os":"Linux","arch":"x64","session_id":"host-a"}`)
+	body := []byte(`{"provider":"claude","user_agent":"claude-cli/2.1.318 (external, cli)","package_version":"0.112.1","runtime_version":"v26.3.0","os":"Linux","arch":"x64","session_id":"host-a"}`)
 	if resp := f.manage("POST", mgmtPrefix+managementObservePath, nil, body); resp.StatusCode != 403 {
 		t.Errorf("no CSRF header -> %d %s", resp.StatusCode, resp.Body)
 	}
@@ -729,7 +729,7 @@ func TestObserveRoute(t *testing.T) {
 	if !out.Accepted || out.Decision != "tracked" || out.Queued {
 		t.Errorf("outcome = %+v", out)
 	}
-	resp = f.manage("POST", mgmtPrefix+managementObservePath, csrfHeaders(nil), []byte(`{"provider":"claude","user_agent":"claude-cli/2.1.258 (external, cli)","package_version":"x"}`))
+	resp = f.manage("POST", mgmtPrefix+managementObservePath, csrfHeaders(nil), []byte(`{"provider":"claude","user_agent":"claude-cli/2.1.318 (external, cli)","package_version":"x"}`))
 	if resp.StatusCode != 422 || !strings.Contains(string(resp.Body), "claude_package_version_malformed") {
 		t.Errorf("invalid -> %d %s", resp.StatusCode, resp.Body)
 	}
@@ -739,12 +739,12 @@ func TestObserveRoute(t *testing.T) {
 	if resp = f.manage("POST", mgmtPrefix+managementObservePath, csrfHeaders(nil), []byte(strings.Repeat("x", maxObserveBodyBytes+1))); resp.StatusCode != 413 {
 		t.Errorf("oversize -> %d %s", resp.StatusCode, resp.Body)
 	}
-	resp = f.manage("POST", mgmtPrefix+managementObservePath, csrfHeaders(nil), []byte(`{"provider":"codex","user_agent":"codex-tui/0.152.1 (Ubuntu 24.4.0; x86_64) WezTerm/1 (codex-tui; 0.152.1)","force":true}`))
+	resp = f.manage("POST", mgmtPrefix+managementObservePath, csrfHeaders(nil), []byte(`{"provider":"codex","user_agent":"codex-tui/0.160.1 (Ubuntu 24.4.0; x86_64) WezTerm/1 (codex-tui; 0.160.1)","force":true}`))
 	mustUnmarshal(t, resp.Body, &out)
 	if resp.StatusCode != 202 || !out.Queued || !strings.Contains(out.Reason, "queued") {
 		t.Errorf("force -> %d %+v", resp.StatusCode, out)
 	}
-	if !strings.Contains(f.readConfig(), "codex-tui/0.152.1") {
+	if !strings.Contains(f.readConfig(), "codex-tui/0.160.1") {
 		t.Errorf("forced promotion missing:\n%s", f.readConfig())
 	}
 }
@@ -779,7 +779,7 @@ func TestInvalidReconfigureQuiescesRunningEngine(t *testing.T) {
 	}
 	f.intercept(claudeHeaders("b"))
 	f.intercept(claudeHeaders("a"))
-	if strings.Contains(f.readConfig(), "2.1.258") {
+	if strings.Contains(f.readConfig(), "2.1.318") {
 		t.Error("write happened after an invalid reconfigure")
 	}
 	if _, err := os.Stat(filepath.Join(f.state, "state.json")); err != nil {
@@ -813,7 +813,7 @@ func TestEnableAfterDisabledAppliesNewConfigBeforeStart(t *testing.T) {
 	for _, sess := range []string{"a", "b", "a"} {
 		f.intercept(claudeHeaders(sess))
 	}
-	if !strings.Contains(f.readConfig(), "2.1.258") {
+	if !strings.Contains(f.readConfig(), "2.1.318") {
 		t.Error("learning did not work after enable")
 	}
 }
