@@ -54,7 +54,7 @@ PY
     ;;
   codex-catalog-filter)
     # Serving the catalog is verified in pinned v8.0.4; the suite run that
-    # follows covers v7.2.155 coexistence.
+    # follows covers coexistence in the same pinned v8.0.4.
     docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
     make ci smoke
     ;;

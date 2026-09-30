@@ -10,7 +10,7 @@ Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 
 ### Build from source
 
-Target: Linux amd64, native ABI 1 / schema 4+, including CPA v7.2.155. The writer uses Linux file locking. You need Go 1.26+ and a C toolchain; verification uses Go 1.27.1.
+Target: Linux amd64, native ABI 1 / schema 4+, including CPA v7.2.155 and v8.0.4. The writer uses Linux file locking. You need Go 1.26+ and a C toolchain; verification uses Go 1.27.1.
 
 From the repository root:
 
