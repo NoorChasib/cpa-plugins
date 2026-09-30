@@ -3,6 +3,8 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
@@ -21,7 +24,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.8"
+var Version = "0.1.9"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -42,6 +45,10 @@ type Plugin struct {
 	statusMu       sync.Mutex
 	statusReads    uint64
 	lastStatusRead time.Time
+	// openRouterKey is the configured OpenRouter management key, or empty. The
+	// fetcher reads it on every scan, so adding, rotating or removing the key
+	// takes effect without restarting the writer.
+	openRouterKey atomic.Pointer[string]
 }
 
 func New(host Host) *Plugin { return &Plugin{host: host} }
@@ -112,12 +119,13 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
 	cfg := struct {
-		Path     string         `yaml:"cache-path"`
-		Interval string         `yaml:"poll-interval"`
-		Spacing  string         `yaml:"request-spacing"`
-		Enabled  *bool          `yaml:"enabled"`
-		Priority *int           `yaml:"priority"`
-		Store    map[string]any `yaml:"store"`
+		Path          string         `yaml:"cache-path"`
+		Interval      string         `yaml:"poll-interval"`
+		Spacing       string         `yaml:"request-spacing"`
+		OpenRouterKey string         `yaml:"openrouter-management-key"`
+		Enabled       *bool          `yaml:"enabled"`
+		Priority      *int           `yaml:"priority"`
+		Store         map[string]any `yaml:"store"`
 	}{Path: client.DefaultPath, Interval: "15m", Spacing: "10s"}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
@@ -157,6 +165,9 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.wake <- spacing
 	}
 	p.opts = opts
+	// Stored before a writer starts, so its first scan already sees the key.
+	openRouterKey := strings.TrimSpace(cfg.OpenRouterKey)
+	p.openRouterKey.Store(&openRouterKey)
 	if cfg.Enabled != nil && !*cfg.Enabled && p.cache != nil {
 		p.cancel()
 		<-p.done
@@ -164,7 +175,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.cache = nil
 	}
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
-		current, err := cache.Open(opts, hostFetcher{p.host})
+		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey})
 		if err != nil {
 			return protocol.Registration{}, err
 		}
@@ -177,6 +188,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		{Name: "cache-path", Type: "string", Description: "Shared private snapshot path; preserve across restarts"},
 		{Name: "poll-interval", Type: "string", Description: "Minimum interval per credential; default 15m"},
 		{Name: "request-spacing", Type: "string", Description: "Minimum spacing between provider requests; default 10s"},
+		{Name: "openrouter-management-key", Type: "string", Description: "OpenRouter management key for reading your account balance; empty disables it. It can also create and delete API keys, so give it an expiry"},
 	}}, Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true}}, nil
 }
 
@@ -212,7 +224,29 @@ func (p *Plugin) stop(final bool) {
 }
 func (p *Plugin) Shutdown() { p.stop(true) }
 
-type hostFetcher struct{ host Host }
+type hostFetcher struct {
+	host          Host
+	openRouterKey *atomic.Pointer[string]
+}
+
+func (f hostFetcher) openRouter() string {
+	if f.openRouterKey == nil {
+		return ""
+	}
+	if key := f.openRouterKey.Load(); key != nil {
+		return *key
+	}
+	return ""
+}
+
+// openRouterAccount names the OpenRouter account after a fingerprint of its
+// key, never the key itself. Rotating the key therefore retires the old entry
+// and polls the new one straight away, rather than leaving a corrected key
+// waiting out the failure backoff its mistyped predecessor earned.
+func openRouterAccount(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "key-" + hex.EncodeToString(sum[:6])
+}
 
 func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 	roster, err := f.host.ListAuth(ctx)
@@ -230,15 +264,34 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 		}
 		accounts = append(accounts, cache.Account{Provider: provider, AuthIndex: entry.AuthIndex})
 	}
+	if key := f.openRouter(); key != "" {
+		accounts = append(accounts, cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)})
+	}
 	return accounts, nil
 }
 func (f hostFetcher) Fetch(ctx context.Context, account cache.Account) (cache.Observation, error) {
+	if account.Provider == quota.OpenRouterProvider {
+		key := f.openRouter()
+		// Removed or rotated since the scan that listed this account. The next
+		// scan drops it; a request made with a key nobody configured any more
+		// would be the wrong account's balance.
+		if key == "" || openRouterAccount(key) != account.AuthIndex {
+			return cache.Observation{}, errors.New("credential read failed")
+		}
+		doer := &captureDoer{host: f.host}
+		observation, err := quota.FetchOpenRouter(ctx, doer, key, time.Now().UTC())
+		return observed(doer, observation, err)
+	}
 	raw, err := f.host.GetAuth(ctx, account.AuthIndex)
 	if err != nil {
 		return cache.Observation{}, errors.New("credential read failed")
 	}
 	doer := &captureDoer{host: f.host}
 	observation, err := quota.Fetch(ctx, doer, account.Provider, raw, time.Now().UTC())
+	return observed(doer, observation, err)
+}
+
+func observed(doer *captureDoer, observation quota.Observation, err error) (cache.Observation, error) {
 	result := cache.Observation{RequestSent: doer.sent, HTTPStatus: doer.status}
 	if doer.status == 429 {
 		return result, cache.RateLimited{RetryAfter: doer.retryAfter}

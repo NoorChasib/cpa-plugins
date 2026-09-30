@@ -20,10 +20,10 @@
       <div class="card stat"><div class="label">Next eligible poll</div><div id="next-call" class="value time-value">—</div><div class="hint">Accounts run one at a time</div></div>
     </section>
     <section class="section" aria-labelledby="accounts-heading">
-      <div class="section-head"><h2 id="accounts-heading">Accounts</h2><span id="account-count" class="hint"></span><label class="filter">Provider <select id="provider"><option value="all">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="xai">Grok</option></select></label></div>
+      <div class="section-head"><h2 id="accounts-heading">Accounts</h2><span id="account-count" class="hint"></span><label class="filter">Provider <select id="provider"><option value="all">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="xai">Grok</option><option value="openrouter">OpenRouter</option></select></label></div>
       <div class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Account observations">
         <table><thead><tr><th scope="col">Account</th><th scope="col">Quota used</th><th scope="col">Observation</th><th scope="col">Last attempt</th><th scope="col">Next eligible</th><th scope="col">Status</th></tr></thead><tbody id="accounts"></tbody></table>
-      </div><p id="accounts-empty" class="empty" hidden>No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA; the next scheduled scan will discover it.</p></div>
+      </div><p id="accounts-empty" class="empty" hidden>No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration; the next scheduled scan will discover it.</p></div>
     </section>
     <section class="section" aria-labelledby="history-heading">
       <div class="section-head"><h2 id="history-heading">Recent polling activity</h2><span id="history-count" class="hint"></span></div>

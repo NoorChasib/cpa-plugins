@@ -231,6 +231,28 @@
           "observed_at": "2026-09-10T03:55:00Z"
         }
       ]
+    },
+    "openrouter:key-8d41e07a2b9c": {
+      "provider": "openrouter",
+      "auth_index": "key-8d41e07a2b9c",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:40:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "last_error": "quota fetch failed",
+      "failures": 2,
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T01:00:00Z",
+        "balances": {
+          "credits": {
+            "unit": "usd",
+            "used": "36.8",
+            "limit": "40"
+          }
+        }
+      }
     }
   }
 }

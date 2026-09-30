@@ -86,6 +86,11 @@ function stale(doc: Doc, reason: string): Doc {
   return { ...doc, stale: true, staleReason: reason }
 }
 
+/** Overrides every balance in a document, for the card states no fixture holds. */
+function withBalance(doc: Doc, patch: Doc): Doc {
+  return { ...doc, balances: ((doc.balances as Doc[] | undefined) ?? []).map((balance) => ({ ...balance, ...patch })) }
+}
+
 type Outcome = Doc | "unauthorized" | "down"
 
 /** The states §5 of the handoff requires the app to render legibly. */
@@ -124,6 +129,31 @@ function scenarios(): Record<string, () => Outcome> {
       credentials: [],
       providers: [],
     }),
+
+    // The OpenRouter card's other two faces. The degraded fixture already
+    // carries a low balance whose last poll failed and has gone stale; these
+    // are the two states no fixture holds. The wording is the server's.
+    "balance-out": () =>
+      withBalance(golden(), {
+        remaining: -1.2,
+        remainingText: "-$1.20",
+        used: 101.7,
+        level: "critical",
+        subtext: "Out of credit · $101.70 spent of $100.50 purchased",
+      }),
+    "balance-unread": () =>
+      withBalance(golden(), {
+        hasReading: false,
+        remaining: 0,
+        remainingText: "",
+        purchased: 0,
+        used: 0,
+        level: "",
+        observedAtEpoch: 0,
+        state: "pending",
+        dataIssues: ["refreshPending"],
+        subtext: "Waiting for Quota Cache to read the balance.",
+      }),
 
     // The plugin has been updated past what this bundle knows how to read.
     "future-schema": () => ({ ...golden(), schemaVersion: 2 }),
