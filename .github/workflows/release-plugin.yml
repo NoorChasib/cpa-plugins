@@ -5,6 +5,7 @@ on:
     tags:
       - 'account-health-pushover/v*'
       - 'auto-baseline/v*'
+      - 'codex-catalog-filter/v*'
       - 'reset-priority/v*'
       - 'quota-cache/v*'
       - 'quota-glance/v*'
@@ -20,6 +21,7 @@ on:
           - quota-glance
           - account-health-pushover
           - auto-baseline
+          - codex-catalog-filter
           - reset-priority
           - token-usage
 

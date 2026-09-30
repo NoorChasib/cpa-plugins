@@ -23,6 +23,7 @@ LIBRARIES = {
     'auto-baseline': 'auto-baseline.so',
     'token-usage': 'dist/token-usage.so',
     'quota-glance': 'dist/quota-glance.so',
+    'codex-catalog-filter': 'dist/codex-catalog-filter.so',
 }
 
 # Descriptive catalog metadata for a plugin that has never been released, and so
@@ -35,6 +36,13 @@ FIRST_RELEASE = {
         'description': 'One dashboard for remaining quota across every credential and rate-limit window, read from Quota Cache. Signs in with your CPA console session. Preview: Linux amd64 only.',
         'author': 'NoorChasib',
         'license': 'MIT',
+    },
+    'codex-catalog-filter': {
+        'name': 'Codex Catalog Filter',
+        'description': "Choose model by model what Codex shows: a Codex Models console page with a switch per model, and a filtered catalog URL for Codex's model_catalog_url. CPA's own model lists are unchanged. Linux amd64 only.",
+        'author': 'NoorChasib',
+        'license': 'MIT',
+        'tags': ['Codex', 'Models', 'Catalog'],
     },
 }
 

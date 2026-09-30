@@ -42,6 +42,7 @@ jobs:
           # would drag Node into a workflow that otherwise needs only Go. The
           # bundle is committed, so build embeds the current one either way.
           make -C plugins/quota-glance build
+          make -C plugins/codex-catalog-filter c-shared
       - name: Pinned CPA coexistence, private routes, persistence, and restart
         run: |
           docker pull eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b

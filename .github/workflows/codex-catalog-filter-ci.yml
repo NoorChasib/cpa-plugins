@@ -1,0 +1,41 @@
+name: Codex Catalog Filter
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-catalog-filter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: plugins/*/go.sum
+      - name: Require the selected Go toolchain
+        run: test "$(go env GOVERSION)" = go1.27.1
+      - name: Format, vet, unit, race, and native build
+        run: make -C plugins/codex-catalog-filter ci
+      # Unit tests call Handle() against a stand-in for CPA. Only this proves
+      # CPA loads the library, registers the catalog URL, and lets the plugin
+      # read CPA's own catalog over loopback. It runs in pinned v8.0.4, the
+      # version this plugin is verified on, not the v7.2.155 image the suite
+      # coexistence check uses.
+      - name: Filtered Codex catalog URL inside pinned official CPA v8.0.4
+        run: |
+          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+          make -C plugins/codex-catalog-filter smoke
