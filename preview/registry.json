@@ -61,6 +61,33 @@
       }
     },
     {
+      "name": "Codex Catalog Filter",
+      "description": "Choose model by model what Codex shows: a Codex Models console page with a switch per model, and a filtered catalog URL for Codex's model_catalog_url. CPA's own model lists are unchanged. Linux amd64 only.",
+      "author": "NoorChasib",
+      "license": "MIT",
+      "tags": [
+        "Codex",
+        "Models",
+        "Catalog"
+      ],
+      "id": "codex-catalog-filter",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/codex-catalog-filter",
+      "version": "0.1.0",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/codex-catalog-filter/v0.1.0/codex-catalog-filter_0.1.0_linux_amd64.zip",
+            "sha256": "04082008f6bbc0475a5f5c3afc600bc25d1d428c45b275f38ff351ae13f1db18",
+            "size": 3228938
+          }
+        ]
+      }
+    },
+    {
       "id": "quota-cache",
       "name": "Quota Cache",
       "description": "Serialized weekly quota polling with a persistent cache and provider-wide 429 cooldowns. Preview: Linux amd64 only.",
