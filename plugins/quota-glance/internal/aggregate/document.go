@@ -132,6 +132,49 @@ type Document struct {
 	Counters         Counters     `json:"counters"`
 	Credentials      []Credential `json:"credentials"`
 	Providers        []Provider   `json:"providers"`
+	// Balances are prepaid accounts that belong to no CPA credential — today,
+	// the OpenRouter account quota-cache reads with a management key of its
+	// own. Always an array; empty when none is configured. They take no part in
+	// the header instants, the counters, or staleReason above, which all
+	// describe credentials: each balance carries its own.
+	Balances []Balance `json:"balances"`
+}
+
+// Balance is the money left on one prepaid account.
+//
+// It is never a bar. The provider reports all-time totals, so a fraction would
+// be a share of everything ever bought, which says nothing about whether the
+// next request will be paid for. The amount is the headline, and the level is
+// judged against the operator's own warn-below threshold.
+type Balance struct {
+	// ID is quota-cache's name for the account: a fingerprint of the key it is
+	// read with, so it changes when the key is rotated.
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Title    string `json:"title"`
+	Order    int    `json:"order"`
+	// Currency is ISO 4217. Every amount below is in it.
+	Currency string `json:"currency"`
+	// HasReading is false until a poll has succeeded. Every amount is then zero
+	// and means nothing, and Level is "": render a dash, never $0.00, because an
+	// unread balance and an empty one are opposite facts.
+	HasReading bool `json:"hasReading"`
+	// Remaining is Purchased minus Used, and is negative on an overdrawn
+	// account. RemainingText is the same amount as the dashboard prints it.
+	Remaining     float64 `json:"remaining"`
+	RemainingText string  `json:"remainingText"`
+	Purchased     float64 `json:"purchased"`
+	Used          float64 `json:"used"`
+	// WarnBelow is the configured threshold. Level is low below it and critical
+	// once nothing is left.
+	WarnBelow float64 `json:"warnBelow"`
+	Level     string  `json:"level"`
+	// Subtext is the line under the amount, already written out.
+	Subtext          string   `json:"subtext"`
+	ObservedAtEpoch  int64    `json:"observedAtEpoch"`
+	NextAttemptEpoch int64    `json:"nextAttemptEpoch"`
+	DataIssues       []string `json:"dataIssues"`
+	State            string   `json:"state"`
 }
 
 type Counters struct {

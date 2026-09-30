@@ -60,6 +60,9 @@ type Input struct {
 	// constant because it depends on configuration and on the host callbacks
 	// available at runtime, neither of which this package may look at.
 	Redeemable bool
+	// BalanceWarnBelow is the amount below which a prepaid balance is reported
+	// low. Zero turns the warning off; an empty balance is critical regardless.
+	BalanceWarnBelow float64
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on
@@ -381,6 +384,7 @@ func Build(in Input, now time.Time) Document {
 		GeneratedAtEpoch: now.Unix(),
 		Credentials:      []Credential{},
 		Providers:        []Provider{},
+		Balances:         balancesOf(in, now),
 	}
 
 	records := make([]record, 0, len(in.Identities))

@@ -98,6 +98,11 @@ func rosterFor(snapshotPath, rosterPath string) ([]protocol.HostAuthFileEntry, e
 	snapshot := source.Read(context.Background(), nil, snapshotPath)
 	files := []protocol.HostAuthFileEntry{}
 	for _, entry := range snapshot.Snapshot.Entries {
+		// OpenRouter is read with quota-cache's own management key and is
+		// never in CPA's roster; listing it would invent a credential.
+		if entry.Provider == "openrouter" {
+			continue
+		}
 		files = append(files, protocol.HostAuthFileEntry{
 			AuthIndex: entry.AuthIndex, Provider: entry.Provider, Name: entry.AuthIndex,
 		})

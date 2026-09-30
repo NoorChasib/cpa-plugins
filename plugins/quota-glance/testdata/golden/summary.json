@@ -1176,5 +1176,26 @@
         }
       ]
     }
+  ],
+  "balances": [
+    {
+      "id": "key-3fa9c1b2d4e5",
+      "provider": "openrouter",
+      "title": "OpenRouter",
+      "order": 10,
+      "currency": "USD",
+      "hasReading": true,
+      "remaining": 74.75,
+      "remainingText": "$74.75",
+      "purchased": 100.5,
+      "used": 25.75,
+      "warnBelow": 5,
+      "level": "ok",
+      "subtext": "$25.75 spent of $100.50 purchased · warns below $5.00",
+      "observedAtEpoch": 1789012320,
+      "nextAttemptEpoch": 1789013220,
+      "dataIssues": [],
+      "state": "ok"
+    }
   ]
 }

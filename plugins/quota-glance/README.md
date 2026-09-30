@@ -18,6 +18,9 @@ one request and on no timer — see [Banked resets](#banked-resets), or set
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
+- Quota Cache **0.1.9 or newer**, with an OpenRouter management key, for the
+  [OpenRouter balance](#openrouter-balance). Without either, the card is simply
+  absent and nothing else changes.
 - Quota Cache **0.1.8 or newer** for banked Codex rate-limit resets. The count
   and its expiry are fields 0.1.8 added to the snapshot, so against anything
   older the **Banked resets** block simply never appears — the rest of the
@@ -59,6 +62,7 @@ plugins:
       web-token: ""
       stale-after: 45m
       allow-redeem: true
+      openrouter-warn-below: 5
 ```
 
 `cache-path` must match Quota Cache's own. Quota Glance refuses to start if it
@@ -193,6 +197,31 @@ to the console instead of offering a button that cannot work. If CPA ever
 dispatches POST to resource routes, the door opens with no change here, and the
 smoke output says which behaviour is live.
 
+## OpenRouter balance
+
+Quota Glance can show how much money is left on your OpenRouter account, as an
+**OpenRouter** card below the quota providers. Setting it up is one step, in
+Quota Cache rather than here: give Quota Cache **0.1.9 or newer** an
+OpenRouter management key, as described in
+[its README](../quota-cache/README.md#openrouter-balance-optional). Read that
+section before creating one; a management key is a powerful credential. Quota
+Cache then polls the balance on its normal schedule, and the card appears after
+its first poll. Without a key there is no card and the page is unchanged.
+
+The card shows the dollar amount left: what you have bought, minus what you
+have spent. It turns **amber below `openrouter-warn-below`** (default `$5`) and
+**red once nothing is left**, whatever the threshold. Change the threshold in
+the plugin's settings in the CPA panel; it applies without a restart. Set it
+to `0` to keep the card green until the balance runs out.
+
+It is a figure, not a bar. OpenRouter reports only lifetime totals, so a
+percentage would be a share of everything you have ever bought, which says
+nothing about whether your next request will be paid for. Like every other
+figure here it comes from the snapshot: Quota Glance makes no OpenRouter
+request of its own, and the card says when a figure is stale or the last poll
+failed. See [docs/summary-contract.md](docs/summary-contract.md#balances--prepaid-accounts)
+for the fields.
+
 ## The dashboard
 
 `GET /v0/resource/plugins/quota-glance/app` serves one self-contained HTML
@@ -268,7 +297,8 @@ localStorage.setItem('cli-proxy-auth', JSON.stringify({state: {managementKey: 'd
 `?scenario=` then selects a state to look at —
 `degraded`, `stale-cache`, `stale-schema`, `never-observed`, `empty`,
 `future-schema`, `down`, `unauthorized`, `cpa-expired` (CPA refuses, so the
-password fallback takes over). Point `QUOTA_GLANCE_PROXY` at a real
+password fallback takes over), `balance-out` and `balance-unread` (the
+OpenRouter card overdrawn, and before its first poll). Point `QUOTA_GLANCE_PROXY` at a real
 CPA host to develop against live data instead. `web/design/mockup.html` is the
 approved design the app is built to match.
 

@@ -149,6 +149,40 @@ export interface Provider {
   rows: Row[]
 }
 
+/**
+ * Money left on a prepaid account that belongs to no CPA credential — the
+ * OpenRouter account quota-cache reads with a management key of its own.
+ *
+ * Never a bar: the provider reports all-time totals, so a fraction would be a
+ * share of everything ever bought. The amount is the headline and `level` is
+ * already judged against the operator's warn-below threshold.
+ */
+export interface Balance {
+  id: string
+  provider: string
+  title: string
+  order: number
+  currency: string
+  /**
+   * False until a poll has succeeded. The amounts are then zero and mean
+   * nothing, and `level` is "": print a dash, never $0.00.
+   */
+  hasReading: boolean
+  /** Negative on an overdrawn account. */
+  remaining: number
+  /** `remaining` as the dashboard prints it: "$74.75", "-$1.20". */
+  remainingText: string
+  purchased: number
+  used: number
+  warnBelow: number
+  level: Level
+  subtext: string
+  observedAtEpoch: number
+  nextAttemptEpoch: number
+  dataIssues: string[]
+  state: EntryState
+}
+
 export interface Summary {
   schemaVersion: number
   generatedAtEpoch: number
@@ -159,4 +193,6 @@ export interface Summary {
   counters: Counters
   credentials: Credential[]
   providers: Provider[]
+  /** Always an array from this plugin; optional for a proxied older one. */
+  balances?: Balance[]
 }

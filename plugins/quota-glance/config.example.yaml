@@ -28,6 +28,11 @@ plugins:
       # Set false to keep the count and the expiry on the card and remove the
       # button. The plugin then has no code path to a provider at all.
       allow-redeem: true
+      # The OpenRouter balance, in dollars, below which its card turns amber.
+      # Default 5; the card turns red once nothing is left whatever this says,
+      # and 0 keeps it green until then. The card appears only when
+      # quota-cache has an openrouter-management-key (0.1.9 or newer).
+      openrouter-warn-below: 5
       # Optional. Plan names are already display-ready: Claude reports "Max"
       # and "Team", and Codex's plan enum is mapped to the name the tier is
       # sold under ("pro" -> "Pro 20x", "prolite" -> "Pro 5x"). Override only
@@ -43,3 +48,6 @@ plugins:
       # supplies canonical windows.
       enabled: true
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
+      # Optional: an OpenRouter management key for the balance card. See
+      # quota-cache's README before adding one; it is a powerful key.
+      # openrouter-management-key: sk-or-v1-...
