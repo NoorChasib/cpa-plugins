@@ -4,7 +4,7 @@ Every plugin keeps its own version. Releases currently target **Linux amd64 only
 
 ## Publish a change
 
-1. Change the plugin and bump its native version. Account Health, Quota Cache, and Token Usage have `Version` in `internal/plugin/plugin.go` and a matching Makefile `VERSION`. Auto Baseline and Reset Priority use `PluginVersion` in `internal/plugin/runtime.go`; their Makefiles derive it automatically.
+1. Change the plugin and bump its native version. Account Health, Codex Catalog Filter, Quota Cache, and Token Usage have `Version` in `internal/plugin/plugin.go` and a matching Makefile `VERSION`. Auto Baseline and Reset Priority use `PluginVersion` in `internal/plugin/runtime.go`; their Makefiles derive it automatically.
 2. Update any plugin-specific version fixtures and run its existing checks. Token Usage deliberately binds the candidate version in its package helper, local registry, native/browser fixtures, browser package metadata, and historical workflow references. Its `scripts/check-candidate.py` and existing tests must all agree. Do not edit the root catalogs yet: they describe published downloads.
 3. Commit and push the change to `main`. Then tag that exact commit with the plugin ID and numeric version:
 
@@ -15,11 +15,11 @@ Every plugin keeps its own version. Releases currently target **Linux amd64 only
 
 Push each release tag separately; GitHub does not generate push events when more than three tags are pushed together.
 
-Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
+Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `codex-catalog-filter`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
 
 The root **Release one plugin** workflow automatically:
 
-- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance. Token Usage retains its browser, SQLite/native, and official-image store checks.
+- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance. Token Usage retains its browser, SQLite/native, and official-image store checks. Codex Catalog Filter also runs its catalog-URL smoke in pinned CPA v8.0.4, the version it is verified on.
 - Loads the candidate with the four currently published peers in pinned CPA v7.2.155. It checks coexistence, status access, persistence/restart, and optional Quota Cache operation. Peers are downloaded with catalog checksum verification, not rebuilt or released.
 - Packages the exact tested library, license, and Token Usage third-party notices, with checksums and verification evidence.
 - Uploads to a draft GitHub release, reads every asset back, verifies its bytes, and publishes the release. Published bytes are never overwritten.

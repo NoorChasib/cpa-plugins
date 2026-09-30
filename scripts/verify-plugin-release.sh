@@ -2,7 +2,7 @@
 set -euo pipefail
 plugin=${1:?plugin required}
 case "$plugin" in
-  quota-cache|quota-glance|account-health-pushover|reset-priority|auto-baseline|token-usage) ;;
+  quota-cache|quota-glance|account-health-pushover|reset-priority|auto-baseline|token-usage|codex-catalog-filter) ;;
   *) echo 'Unknown plugin' >&2; exit 1 ;;
 esac
 cd "$(dirname "$0")/../plugins/$plugin"
@@ -51,5 +51,11 @@ PY
     cmp "$CPA_SMOKE_WORK/token-usage-production.so" dist/token-usage.so
     (cd dist && sha256sum -c checksums.txt)
     python3 scripts/verify-cpa-package.py --cpa-source "$CPA_SMOKE_WORK/source"
+    ;;
+  codex-catalog-filter)
+    # Serving the catalog is verified in pinned v8.0.4; the suite run that
+    # follows covers v7.2.155 coexistence.
+    docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+    make ci smoke
     ;;
 esac

@@ -21,6 +21,7 @@ PLUGINS = {
     'auto-baseline': 'auto-baseline.so',
     'token-usage': 'dist/token-usage.so',
     'quota-glance': 'dist/quota-glance.so',
+    'codex-catalog-filter': 'dist/codex-catalog-filter.so',
 }
 
 def run(*args):
@@ -30,12 +31,16 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--candidate', choices=PLUGINS, help='Test one local build with the other published plugins')
 args = parser.parse_args()
 published = {p['id']: p for p in load_catalog()['plugins']} if args.candidate else {}
+# A peer that has never been released has no download yet. Skip it rather than
+# fail every other plugin's release until its first publication lands.
+LOADED = [plugin for plugin in PLUGINS if not args.candidate or plugin == args.candidate or plugin in published]
 
 with tempfile.TemporaryDirectory(prefix='cpa-suite-smoke-') as tmp:
     work = Path(tmp)
     plugins, auth = work/'plugins', work/'auth'
     plugins.mkdir(); auth.mkdir()
-    for plugin, library in PLUGINS.items():
+    for plugin in LOADED:
+        library = PLUGINS[plugin]
         if args.candidate and plugin != args.candidate:
             (plugins/(plugin+'.so')).write_bytes(released_library(published[plugin]))
         else:
@@ -86,6 +91,10 @@ plugins:
       enabled: true
       cache-path: /work/quota-cache-snapshot.json
       data-dir: /work/quota-glance
+    codex-catalog-filter:
+      enabled: true
+      models:
+        claude-fable-5-1: false
 ''')
     container = run('docker','create','--pull=never','-p','127.0.0.1::8317',
                     '--user',str(os.getuid())+':'+str(os.getgid()),
@@ -112,7 +121,7 @@ plugins:
         ready()
         registered = get('plugins')
         records = {entry['id']:entry for entry in registered['plugins']}
-        for plugin in PLUGINS:
+        for plugin in LOADED:
             assert records[plugin]['registered'] and records[plugin]['effective_enabled'], 'plugin inactive: '+plugin
             assert records[plugin]['metadata']['github_repository'] == 'https://github.com/NoorChasib/cpa-plugins', 'legacy repository metadata: '+plugin
             if args.candidate and plugin != args.candidate:
@@ -173,7 +182,7 @@ plugins:
             get('plugins/'+plugin+'/status')
         logs=run('docker','logs',container)
         assert '7.2.155' in logs, 'unexpected CPA runtime version'
-        evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in PLUGINS}}
+        evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in LOADED}}
         # Prove the other four register without the cache library or snapshot.
         # Test both opted-in waiting and explicitly standalone configuration.
         run('docker','stop',container)

@@ -1,0 +1,42 @@
+<main class="page">
+  <header class="header">
+    <div>
+      <h1>Codex Models</h1>
+      <p class="subtitle">Choose which of CPA's models appear in Codex. Codex picks up saved changes the next time it refreshes its model list, within five minutes.</p>
+      <div class="pills"><span id="list-state" class="pill">Checking session</span><span id="new-models" class="pill" hidden></span><span id="action" class="pill" hidden></span></div>
+    </div>
+    <div class="actions"><button type="button" id="refresh" class="secondary">Refresh</button></div>
+  </header>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div id="notice" class="alert info" role="status">Checking your existing console session…</div>
+  <noscript><p class="alert">Enable JavaScript to load this page using your existing console session.</p></noscript>
+  <section id="workspace" aria-label="Codex models" aria-busy="false" hidden>
+    <div class="card setting">
+      <h2>Codex setting</h2>
+      <p class="hint">Add this line to the CPA provider in Codex's <code>config.toml</code>, and remove any <code>model_catalog_json</code> line:</p>
+      <pre id="codex-setting"></pre>
+    </div>
+    <div class="card toolbar" role="group" aria-label="Model list controls">
+      <div class="field"><label for="search">Filter</label><input id="search" type="search" maxlength="256" placeholder="Model or name" autocomplete="off" spellcheck="false"></div>
+      <div class="bulk"><button type="button" id="enable-shown" class="secondary">Enable shown</button><button type="button" id="disable-shown" class="secondary">Disable shown</button></div>
+      <span id="counts" class="result"></span>
+      <div class="save"><button type="button" id="discard" class="secondary" disabled>Discard</button><button type="button" id="save" disabled>Save</button></div>
+    </div>
+    <p id="warning" class="alert warn" hidden></p>
+    <div class="card">
+      <div class="table-wrap" role="region" aria-label="Models, horizontally scrollable" tabindex="0">
+        <table>
+          <thead><tr><th scope="col">In Codex</th><th scope="col">Model</th><th scope="col">Name</th><th scope="col">Notes</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p id="empty" class="empty" hidden></p>
+    </div>
+    <section id="stale" class="card" aria-labelledby="stale-heading" hidden>
+      <h2 id="stale-heading">Switches for models Codex was not offered</h2>
+      <p class="hint">These switches are saved but match nothing in the latest list. They take effect again if CPA offers the model later.</p>
+      <ul id="stale-list" class="stale-list"></ul>
+    </section>
+    <p id="seen" class="interval"></p>
+  </section>
+</main>
