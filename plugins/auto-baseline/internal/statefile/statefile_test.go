@@ -181,3 +181,46 @@ func TestCloneIsDeep(t *testing.T) {
 		t.Fatal("nil clone")
 	}
 }
+
+func TestPauseAndLayoutFieldsRoundTripAndStayOptional(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	st := New()
+	v := fingerprint.MustParseVersion("2.1.318")
+	cand := fingerprint.Candidate{Provider: fingerprint.ProviderClaude, Version: v, UserAgent: fingerprint.CanonicalClaudeUserAgent(v), PackageVersion: "0.112.1", RuntimeVersion: "v26.3.0"}
+	st.RecordPromotion(Promotion{At: t0, Provider: fingerprint.ProviderClaude, Candidate: cand, Target: "oauth.providers.claude.header-defaults", NotEffectiveAt: t0.Add(time.Minute)})
+	st.Paused[fingerprint.ProviderClaude] = &Pause{At: t0, Candidate: cand, Reason: "promotion_not_effective", Detail: "d"}
+	if err := Save(dir, st, t0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got.Paused[fingerprint.ProviderClaude]
+	if p == nil || p.Reason != "promotion_not_effective" || p.Candidate.Key() != cand.Key() || p.ConfigSHA256 != "" {
+		t.Errorf("pause = %+v", p)
+	}
+	lp := got.LastPromotion[fingerprint.ProviderClaude]
+	if lp == nil || lp.Target != "oauth.providers.claude.header-defaults" || !lp.NotEffectiveAt.Equal(t0.Add(time.Minute)) {
+		t.Errorf("last promotion = %+v", lp)
+	}
+	clone := got.Clone()
+	clone.Paused[fingerprint.ProviderClaude].Reason = "changed"
+	if got.Paused[fingerprint.ProviderClaude].Reason != "promotion_not_effective" {
+		t.Error("Clone shares pause records")
+	}
+
+	// A state file written by 0.1.4 (no paused/target fields) still loads.
+	old := `{"schema_version":1,"saved_at":"2026-09-02T12:00:00Z","baselines":{},"pending":[],"history":[],"counters":{"requests":1,"ignored":0,"accepted":0,"rejected":0}}`
+	if err := os.WriteFile(Path(dir), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(dir)
+	if err != nil || got.Paused == nil || len(got.Paused) != 0 || got.Counters.Requests != 1 {
+		t.Errorf("0.1.4 state = %+v (%v)", got, err)
+	}
+	raw, err := os.ReadFile(Path(dir))
+	if err == nil && strings.Contains(string(raw), "paused") {
+		t.Error("fixture unexpectedly carries paused")
+	}
+}

@@ -488,7 +488,7 @@ func TestStatusHTMLRendersAndEscapes(t *testing.T) {
 		t.Fatalf("resp = %d %v", resp.StatusCode, resp.Headers)
 	}
 	body := string(resp.Body)
-	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.318", "claude-cli/2.1.280 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Action", "PDT", "Assumed CPA build", "floor 2.1.280", "Backup dir", `<span class="pill info">authenticated view</span>`} {
+	for _, want := range []string{"<title>Auto Baseline", "dry-run", "America/Los_Angeles", "2.1.318", "claude-cli/2.1.280 (external, cli)", "disable-codex-cloaking", "X-Auto-Baseline-Action", "PDT", "Assumed CPA build", "floor 2.1.280", "Backup dir", "legacy layout", "user-agent default", "writes <code>claude-header-defaults</code>", `<span class="pill info">authenticated view</span>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("HTML missing %q", want)
 		}

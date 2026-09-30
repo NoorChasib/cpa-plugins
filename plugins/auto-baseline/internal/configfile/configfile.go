@@ -1,10 +1,12 @@
 // Package configfile locates CPA's config.yaml, reads the effective Claude
 // and Codex header baselines out of it, and performs surgical in-place edits
 // of the baseline keys with the yaml.v3 Node API so comments, key order, and
-// unrelated settings are preserved. The rationale (why the file is the only
-// lever, how CPA's watcher and its own WriteConfig behave, and why the write
-// is in place rather than rename-based) is in docs/architecture.md sections
-// 2.3 and 5.
+// unrelated settings are preserved. It understands both CPA config layouts:
+// the legacy root keys and the v8 layout (config-version: 8), resolving each
+// baseline leaf with CPA's own per-leaf precedence. The rationale (why the
+// file is the only lever, how CPA's watcher and its own WriteConfig behave,
+// why the write is in place rather than rename-based, and how the two layouts
+// interact) is in docs/architecture.md sections 2.3, 2.4, and 5.
 package configfile
 
 import (
@@ -23,12 +25,18 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
 )
 
-// YAML keys edited or read by the plugin (internal/config/config.go:131,138
-// and config_types.go:115-131,147-150 in the audited CPA build).
+// YAML keys edited or read by the plugin. Legacy root keys:
+// internal/config/config.go:144,154 and config_types.go:126-143,182-184 in
+// the audited CPA build; their v8 paths: internal/config/config_v8.go:47-50.
 const (
 	keyClaudeHeaderDefaults = "claude-header-defaults"
 	keyCodexHeaderDefaults  = "codex-header-defaults"
 	keyCodex                = "codex"
+	keyClaude               = "claude"
+	keyOAuth                = "oauth"
+	keyProviders            = "providers"
+	keyHeaderDefaults       = "header-defaults"
+	keyConfigVersion        = "config-version"
 	keyUserAgent            = "user-agent"
 	keyPackageVersion       = "package-version"
 	keyRuntimeVersion       = "runtime-version"
@@ -70,6 +78,16 @@ var (
 	// plugins.configs.auto-baseline does not exist: the plugin only ever
 	// edits keys inside a subtree the operator already created.
 	ErrPluginSubtreeMissing = errors.New("plugin_subtree_missing: plugins.configs.auto-baseline is not present in config.yaml")
+	// ErrUnsupportedConfigVersion is returned when config-version is present
+	// but is not the integer 8. CPA refuses to load such a file
+	// (config_v8.go:208-210), so the plugin refuses to touch it.
+	ErrUnsupportedConfigVersion = errors.New("unsupported_config_version: config-version is present but is not 8")
+	// ErrNotEffective is the pre-write loop guard: re-reading the rendered
+	// bytes with CPA's layout rules did not yield exactly the promoted
+	// baseline (or changed another setting the plugin reads). Nothing is
+	// written. This is what stops a write CPA would discard on reload from
+	// being retried every cooldown.
+	ErrNotEffective = errors.New("promotion_not_effective: CPA would not load the promoted baseline from the rendered config.yaml")
 )
 
 // Traversal bounds for alias / merge-key resolution.
@@ -79,6 +97,56 @@ const (
 	pluginID = "auto-baseline"
 )
 
+// Layout names where a setting lives in config.yaml.
+type Layout string
+
+// Config layouts. LayoutV8 is the nested layout CPA writes after a
+// /v8/management save (config-version: 8); LayoutLegacy is the flat layout
+// with root keys such as claude-header-defaults.
+const (
+	LayoutLegacy Layout = "legacy"
+	LayoutV8     Layout = "v8"
+)
+
+// Source says where CPA takes an effective value from: a v8 key, a legacy
+// key, or its compiled default (key absent or blank).
+type Source string
+
+// Value sources, in CPA's precedence order.
+const (
+	SourceV8      Source = "v8"
+	SourceLegacy  Source = "legacy"
+	SourceDefault Source = "default"
+)
+
+// keyPath is a YAML mapping path from the document root.
+type keyPath []string
+
+func (p keyPath) String() string { return strings.Join(p, ".") }
+
+// Paths of the settings the plugin reads or writes, in both layouts.
+var (
+	legacyClaudeBlock   = keyPath{keyClaudeHeaderDefaults}
+	v8ClaudeBlock       = keyPath{keyOAuth, keyProviders, keyClaude, keyHeaderDefaults}
+	legacyCodexBlock    = keyPath{keyCodexHeaderDefaults}
+	v8CodexBlock        = keyPath{keyOAuth, keyProviders, keyCodex, keyHeaderDefaults}
+	legacyCodexCloaking = keyPath{keyCodex, keyDisableCodexCloaking}
+	v8CodexCloaking     = keyPath{keyOAuth, keyProviders, keyCodex, keyDisableCodexCloaking}
+)
+
+// blockPaths returns the legacy and v8 paths of a provider's header-defaults
+// block.
+func blockPaths(provider fingerprint.Provider) (legacy, v8 keyPath, err error) {
+	switch provider {
+	case fingerprint.ProviderClaude:
+		return legacyClaudeBlock, v8ClaudeBlock, nil
+	case fingerprint.ProviderCodex:
+		return legacyCodexBlock, v8CodexBlock, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported provider %q", provider)
+	}
+}
+
 // Effective describes the baseline CPA currently applies for one provider.
 type Effective struct {
 	Provider       fingerprint.Provider
@@ -86,28 +154,50 @@ type Effective struct {
 	UserAgent      string
 	PackageVersion string
 	RuntimeVersion string
-	// Explicit reports whether the user-agent key was present in the file;
-	// when false the compiled default of the audited build is assumed.
+	// Explicit reports whether the file supplied a non-blank user-agent (in
+	// either layout); when false the compiled default of the audited build is
+	// assumed.
 	Explicit bool
 	// Malformed is set when an explicit user-agent did not parse as a client
 	// UA. CPA itself falls back to its compiled default version in that case
-	// (helps/claude_device_profile.go:588-594), but the plugin must not treat
+	// (helps/claude_device_profile.go:591-598), but the plugin must not treat
 	// the compiled default as comparable: it refuses to promote for the
 	// provider until the operator fixes the value.
 	Malformed bool
 	// Unsupported names a structural problem inside this provider's block
-	// (duplicate key, alias/merge cycle) that makes the block unreadable and
-	// uneditable; empty when the block is fine.
+	// (duplicate key, alias/merge cycle, a v8 parent or leaf CPA cannot
+	// decode) that makes the block unreadable and uneditable; empty when the
+	// block is fine.
 	Unsupported string
+	// UserAgentSource, PackageVersionSource, and RuntimeVersionSource record
+	// where each value came from (v8, legacy, or default). Codex has no
+	// package or runtime version and leaves those empty.
+	UserAgentSource      Source
+	PackageVersionSource Source
+	RuntimeVersionSource Source
+	// Target is the layout a promotion writes to and TargetPath the dotted
+	// path of that block: an existing v8 block, else an existing legacy
+	// block, else the v8 path when the file declares config-version: 8,
+	// else the legacy path.
+	Target     Layout
+	TargetPath string
 }
 
 // Snapshot is what the plugin learned from one read of config.yaml.
 type Snapshot struct {
-	Path                 string
-	SHA256               string
-	Claude               Effective
-	Codex                Effective
-	DisableCodexCloaking bool
+	Path   string
+	SHA256 string
+	// Layout is LayoutV8 when the file declares config-version: 8 and
+	// LayoutLegacy otherwise. It only decides where a block that does not
+	// exist yet is created; existing keys are read in both layouts.
+	Layout Layout
+	Claude Effective
+	Codex  Effective
+	// DisableCodexCloaking is the effective codex.disable-codex-cloaking
+	// (v8: oauth.providers.codex.disable-codex-cloaking); its source is
+	// DisableCodexCloakingSource.
+	DisableCodexCloaking       bool
+	DisableCodexCloakingSource Source
 	// PluginsEnabled / InstanceEnabled mirror plugins.enabled and
 	// plugins.configs.auto-baseline.enabled on disk. A missing key reads as
 	// false, exactly like CPA (PluginInstanceConfig.Enabled nil -> false).
@@ -140,7 +230,7 @@ func (e Effective) Blocked() string {
 // ResolvePath decides which config.yaml to manage: an explicit override, the
 // -config/--config flag of the running CPA process (Linux /proc, best effort),
 // or <cwd>/config.yaml, which is CPA's own default
-// (cmd/server/main.go:103, 518-527).
+// (cmd/server/main.go:153, 583-594 in the audited build).
 func ResolvePath(override string) (string, string) {
 	if p := strings.TrimSpace(override); p != "" {
 		return p, "config-path"
@@ -307,26 +397,20 @@ func parse(path string, raw []byte) (Snapshot, *yaml.Node, error) {
 		return Snapshot{}, nil, err
 	}
 	snap := Snapshot{Path: path, SHA256: hash(raw)}
-
-	claudeBlock, err := resolvedLookup(root, keyClaudeHeaderDefaults)
-	if err != nil {
+	if snap.Layout, err = documentLayout(root); err != nil {
 		return Snapshot{}, nil, err
 	}
-	snap.Claude = effectiveClaude(claudeBlock)
-
-	codexBlock, err := resolvedLookup(root, keyCodexHeaderDefaults)
-	if err != nil {
-		return Snapshot{}, nil, err
+	// Root-level lookup failures (a cycle or duplicate reached from the
+	// root) make the whole file unreadable; anything deeper is confined to
+	// the provider that owns it.
+	for _, key := range []string{keyClaudeHeaderDefaults, keyCodexHeaderDefaults, keyCodex, keyOAuth} {
+		if _, err := resolvedLookup(root, key); err != nil {
+			return Snapshot{}, nil, err
+		}
 	}
-	snap.Codex = effectiveCodex(codexBlock)
-
-	codexNode, err := resolvedLookup(root, keyCodex)
-	if err != nil {
-		return Snapshot{}, nil, err
-	}
-	if b, ok := boolAt(codexNode, keyDisableCodexCloaking); ok {
-		snap.DisableCodexCloaking = b
-	}
+	snap.Claude = readProvider(root, fingerprint.ProviderClaude, snap.Layout)
+	snap.Codex = readProvider(root, fingerprint.ProviderCodex, snap.Layout)
+	snap.DisableCodexCloaking, snap.DisableCodexCloakingSource = readCodexCloaking(root)
 
 	pluginsNode, err := resolvedLookup(root, keyPlugins)
 	if err != nil {
@@ -513,17 +597,6 @@ func resolvedLookupGuarded(mapping *yaml.Node, key string, visited map[*yaml.Nod
 	return nil, nil
 }
 
-func scalar(mapping *yaml.Node, key string) (string, bool, error) {
-	v, err := resolvedLookup(mapping, key)
-	if err != nil {
-		return "", false, err
-	}
-	if v == nil || v.Kind != yaml.ScalarNode {
-		return "", false, nil
-	}
-	return strings.TrimSpace(v.Value), true, nil
-}
-
 // unsupportedReason maps a structural error to the status/decision bucket.
 func unsupportedReason(err error) string {
 	if errors.Is(err, ErrDuplicateKey) {
@@ -532,64 +605,230 @@ func unsupportedReason(err error) string {
 	return "unsupported_config_shape"
 }
 
-func effectiveClaude(block *yaml.Node) Effective {
-	eff := Effective{
-		Provider:       fingerprint.ProviderClaude,
-		Version:        fingerprint.CompiledClaudeBaselineVersion,
-		UserAgent:      fingerprint.CompiledClaudeUserAgent,
-		PackageVersion: fingerprint.CompiledClaudePackageVersion,
-		RuntimeVersion: fingerprint.CompiledClaudeRuntimeVersion,
+// documentLayout reports LayoutV8 when the root declares config-version: 8.
+// CPA accepts only the integer 8 there (config_v8.go:208-210); any other
+// present value makes the file unloadable, so it is refused.
+func documentLayout(root *yaml.Node) (Layout, error) {
+	v, err := resolvedLookup(root, keyConfigVersion)
+	if err != nil {
+		return "", err
 	}
-	// CPA treats blank strings as absent (hdrDefault in
-	// helps/claude_device_profile.go:133-139).
-	ua, ok, err := scalar(block, keyUserAgent)
+	if v == nil {
+		return LayoutLegacy, nil
+	}
+	if v.Kind != yaml.ScalarNode || v.Tag != "!!int" || v.Value != "8" {
+		return "", ErrUnsupportedConfigVersion
+	}
+	return LayoutV8, nil
+}
+
+// resolvePath follows path from root with resolvedLookup at every level and
+// returns nil when any key is missing.
+func resolvePath(root *yaml.Node, path keyPath) (*yaml.Node, error) {
+	node := root
+	for _, key := range path {
+		next, err := resolvedLookup(node, key)
+		if err != nil || next == nil {
+			return nil, err
+		}
+		node = next
+	}
+	return node, nil
+}
+
+// checkV8Parents mirrors CPA's shape check on v8 paths
+// (config_v8.go:191-206): every existing ancestor of a v8 leaf must be a
+// mapping, or CPA refuses to load the whole file. prefixes is the number of
+// leading keys of path that are ancestors of the leaves the plugin touches.
+func checkV8Parents(root *yaml.Node, path keyPath, prefixes int) error {
+	for i := 1; i <= prefixes && i <= len(path); i++ {
+		node, err := resolvePath(root, path[:i])
+		if err != nil {
+			return err
+		}
+		if node == nil {
+			return nil
+		}
+		if node.Kind != yaml.MappingNode {
+			return fmt.Errorf("%w: %s must be a mapping", ErrUnsupportedShape, path[:i])
+		}
+	}
+	return nil
+}
+
+// leafValue reads one leaf the way CPA's loader does. A present v8 leaf wins
+// over its legacy counterpart even when it is null or blank: flattenV8 moves
+// every present v8 leaf over the legacy one (config_v8.go:215-220). A leaf
+// that ends up blank falls back to the compiled default (hdrDefault,
+// helps/claude_device_profile.go:129-134; SanitizeClaudeHeaderDefaults trims
+// first). A non-scalar leaf cannot be decoded into CPA's string field.
+func leafValue(v8Block, legacyBlock *yaml.Node, key string) (string, Source, error) {
+	for _, layer := range []struct {
+		block  *yaml.Node
+		source Source
+	}{{v8Block, SourceV8}, {legacyBlock, SourceLegacy}} {
+		v, err := resolvedLookup(layer.block, key)
+		if err != nil {
+			return "", "", err
+		}
+		if v == nil {
+			continue
+		}
+		if v.Kind != yaml.ScalarNode {
+			return "", "", fmt.Errorf("%w: %s is not a scalar", ErrUnsupportedShape, key)
+		}
+		value := ""
+		if v.Tag != "!!null" {
+			value = strings.TrimSpace(v.Value)
+		}
+		if value == "" {
+			return "", SourceDefault, nil
+		}
+		return value, layer.source, nil
+	}
+	return "", SourceDefault, nil
+}
+
+// compiledEffective is the baseline CPA applies when the file sets nothing.
+func compiledEffective(provider fingerprint.Provider) Effective {
+	if provider == fingerprint.ProviderCodex {
+		return Effective{
+			Provider:        provider,
+			Version:         fingerprint.CompiledCodexBaselineVersion,
+			UserAgent:       fingerprint.CompiledCodexUserAgent,
+			UserAgentSource: SourceDefault,
+		}
+	}
+	return Effective{
+		Provider:             provider,
+		Version:              fingerprint.CompiledClaudeBaselineVersion,
+		UserAgent:            fingerprint.CompiledClaudeUserAgent,
+		PackageVersion:       fingerprint.CompiledClaudePackageVersion,
+		RuntimeVersion:       fingerprint.CompiledClaudeRuntimeVersion,
+		UserAgentSource:      SourceDefault,
+		PackageVersionSource: SourceDefault,
+		RuntimeVersionSource: SourceDefault,
+	}
+}
+
+// readProvider resolves one provider's effective baseline leaf by leaf
+// (v8 leaf, then legacy leaf, then compiled default) and decides where a
+// promotion for it would be written.
+func readProvider(root *yaml.Node, provider fingerprint.Provider, layout Layout) Effective {
+	eff := compiledEffective(provider)
+	legacyPath, v8Path, err := blockPaths(provider)
 	if err != nil {
 		eff.Unsupported = unsupportedReason(err)
 		return eff
 	}
-	if ok && ua != "" {
+	legacyBlock, v8Block, err := providerBlocks(root, legacyPath, v8Path)
+	if err != nil {
+		eff.Unsupported = unsupportedReason(err)
+		return eff
+	}
+	eff.Target, eff.TargetPath = writeTarget(legacyBlock, v8Block, layout, legacyPath, v8Path)
+
+	ua, uaSource, err := leafValue(v8Block, legacyBlock, keyUserAgent)
+	if err != nil {
+		eff.Unsupported = unsupportedReason(err)
+		return eff
+	}
+	eff.UserAgentSource = uaSource
+	if ua != "" {
 		eff.Explicit = true
 		eff.UserAgent = ua
-		if v, okVersion := fingerprint.ParseClaudeUserAgentVersion(ua); okVersion {
+		parse := fingerprint.ParseClaudeUserAgentVersion
+		if provider == fingerprint.ProviderCodex {
+			parse = fingerprint.ParseCodexUserAgentVersion
+		}
+		if v, ok := parse(ua); ok {
 			eff.Version = v
 		} else {
 			eff.Malformed = true
 		}
 	}
-	if pv, ok, err := scalar(block, keyPackageVersion); err != nil {
-		eff.Unsupported = unsupportedReason(err)
-	} else if ok && pv != "" {
-		eff.PackageVersion = pv
+	if provider != fingerprint.ProviderClaude {
+		return eff
 	}
-	if rv, ok, err := scalar(block, keyRuntimeVersion); err != nil {
-		eff.Unsupported = unsupportedReason(err)
-	} else if ok && rv != "" {
-		eff.RuntimeVersion = rv
+	for _, leaf := range []struct {
+		key    string
+		value  *string
+		source *Source
+	}{
+		{keyPackageVersion, &eff.PackageVersion, &eff.PackageVersionSource},
+		{keyRuntimeVersion, &eff.RuntimeVersion, &eff.RuntimeVersionSource},
+	} {
+		value, source, err := leafValue(v8Block, legacyBlock, leaf.key)
+		if err != nil {
+			eff.Unsupported = unsupportedReason(err)
+			continue
+		}
+		*leaf.source = source
+		if value != "" {
+			*leaf.value = value
+		}
 	}
 	return eff
 }
 
-func effectiveCodex(block *yaml.Node) Effective {
-	eff := Effective{
-		Provider:  fingerprint.ProviderCodex,
-		Version:   fingerprint.CompiledCodexBaselineVersion,
-		UserAgent: fingerprint.CompiledCodexUserAgent,
+// providerBlocks resolves a provider's legacy and v8 header-defaults blocks
+// (alias- and merge-aware), after checking that CPA can load the v8 path.
+func providerBlocks(root *yaml.Node, legacyPath, v8Path keyPath) (legacyBlock, v8Block *yaml.Node, err error) {
+	if err := checkV8Parents(root, v8Path, len(v8Path)); err != nil {
+		return nil, nil, err
 	}
-	ua, ok, err := scalar(block, keyUserAgent)
-	if err != nil {
-		eff.Unsupported = unsupportedReason(err)
-		return eff
+	if legacyBlock, err = resolvePath(root, legacyPath); err != nil {
+		return nil, nil, err
 	}
-	if ok && ua != "" {
-		eff.Explicit = true
-		eff.UserAgent = ua
-		if v, okVersion := fingerprint.ParseCodexUserAgentVersion(ua); okVersion {
-			eff.Version = v
-		} else {
-			eff.Malformed = true
+	if v8Block, err = resolvePath(root, v8Path); err != nil {
+		return nil, nil, err
+	}
+	return legacyBlock, v8Block, nil
+}
+
+// writeTarget picks where a provider's block is written: the existing v8
+// block, else the existing legacy block, else the v8 path in a
+// config-version: 8 file, else the legacy path. Because the legacy path is
+// only chosen when no v8 block exists, the plugin never creates a legacy
+// leaf while its v8 counterpart exists (CPA would discard it on reload).
+func writeTarget(legacyBlock, v8Block *yaml.Node, layout Layout, legacyPath, v8Path keyPath) (Layout, string) {
+	switch {
+	case v8Block != nil:
+		return LayoutV8, v8Path.String()
+	case legacyBlock != nil:
+		return LayoutLegacy, legacyPath.String()
+	case layout == LayoutV8:
+		return LayoutV8, v8Path.String()
+	default:
+		return LayoutLegacy, legacyPath.String()
+	}
+}
+
+// readCodexCloaking resolves codex.disable-codex-cloaking with the same
+// v8-over-legacy precedence. A present v8 leaf wins even when it is null or
+// false; a value that is not a boolean reads as false.
+func readCodexCloaking(root *yaml.Node) (bool, Source) {
+	if checkV8Parents(root, v8CodexCloaking, len(v8CodexCloaking)-1) != nil {
+		return false, SourceDefault
+	}
+	for _, layer := range []struct {
+		path   keyPath
+		source Source
+	}{{v8CodexCloaking, SourceV8}, {legacyCodexCloaking, SourceLegacy}} {
+		v, err := resolvePath(root, layer.path)
+		if err != nil {
+			return false, SourceDefault
 		}
+		if v == nil {
+			continue
+		}
+		var b bool
+		if v.Kind == yaml.ScalarNode && v.Tag != "!!null" {
+			_ = v.Decode(&b)
+		}
+		return b, layer.source
 	}
-	return eff
+	return false, SourceDefault
 }
 
 // Apply performs one read-modify-write cycle:
@@ -598,17 +837,21 @@ func effectiveCodex(block *yaml.Node) Effective {
 //     baseline;
 //  2. call check(snapshot) so the caller can re-verify "strictly newer than
 //     what is on disk right now" against fresh data;
-//  3. mutate only the provider's baseline keys in the yaml.v3 node tree
-//     (refusing unsupported shapes rather than destroying content);
-//  4. copy the previous bytes to <backupDir>/config.yaml.auto-baseline.bak;
-//  5. re-read and re-hash the file immediately before the destructive write
+//  3. mutate only the provider's baseline keys in the yaml.v3 node tree, in
+//     the block writeTarget selects (refusing unsupported shapes rather than
+//     destroying content);
+//  4. re-parse the rendered bytes with CPA's layout rules and fail with
+//     ErrNotEffective unless they carry exactly the candidate (the loop
+//     guard);
+//  5. copy the previous bytes to <backupDir>/config.yaml.auto-baseline.bak;
+//  6. re-read and re-hash the file immediately before the destructive write
 //     and fail with ErrChanged if another writer got there first;
-//  6. write the new bytes in place.
+//  7. write the new bytes in place.
 //
 // The returned Snapshot reflects the state read in step 1 (before the edit).
 func Apply(path, backupDir string, candidate fingerprint.Candidate, check func(Snapshot) error) (Snapshot, error) {
-	snap, _, err := applyEdit(path, backupDir, check, func(doc *yaml.Node, raw []byte) ([]byte, error) {
-		return render(doc, raw, candidate)
+	snap, _, err := applyEdit(path, backupDir, check, func(before Snapshot, doc *yaml.Node, raw []byte) ([]byte, error) {
+		return renderPromotion(before, doc, raw, candidate)
 	})
 	return snap, err
 }
@@ -620,7 +863,7 @@ func Apply(path, backupDir string, candidate fingerprint.Candidate, check func(S
 // already carried the target value is left untouched (no backup, no write,
 // nothing for CPA's watcher to reload).
 func ApplyDryRun(path, backupDir string, enabled bool, check func(Snapshot) error) (snap Snapshot, changed bool, err error) {
-	return applyEdit(path, backupDir, check, func(doc *yaml.Node, raw []byte) ([]byte, error) {
+	return applyEdit(path, backupDir, check, func(_ Snapshot, doc *yaml.Node, raw []byte) ([]byte, error) {
 		return renderDryRun(doc, raw, enabled)
 	})
 }
@@ -628,7 +871,7 @@ func ApplyDryRun(path, backupDir string, enabled bool, check func(Snapshot) erro
 // applyEdit is the shared read-modify-write cycle behind Apply and
 // ApplyDryRun; edit produces the new bytes from the parsed document. changed
 // is false when the rendered bytes equal the file and nothing was written.
-func applyEdit(path, backupDir string, check func(Snapshot) error, edit func(doc *yaml.Node, raw []byte) ([]byte, error)) (Snapshot, bool, error) {
+func applyEdit(path, backupDir string, check func(Snapshot) error, edit func(before Snapshot, doc *yaml.Node, raw []byte) ([]byte, error)) (Snapshot, bool, error) {
 	raw, err := readBounded(path)
 	if err != nil {
 		return Snapshot{}, false, err
@@ -642,7 +885,7 @@ func applyEdit(path, backupDir string, check func(Snapshot) error, edit func(doc
 			return snap, false, err
 		}
 	}
-	updated, err := edit(doc, raw)
+	updated, err := edit(snap, doc, raw)
 	if err != nil {
 		return snap, false, err
 	}
@@ -669,6 +912,84 @@ func applyEdit(path, backupDir string, check func(Snapshot) error, edit func(doc
 	return snap, true, nil
 }
 
+// Preview runs the promotion read-modify-write up to, but not including, any
+// disk write: it parses the file, calls check, renders the edit in memory,
+// and runs the same loop guard as Apply. Dry-run uses it so an operator sees
+// the exact target and any refusal before live writes are enabled.
+func Preview(path string, candidate fingerprint.Candidate, check func(Snapshot) error) (Snapshot, error) {
+	raw, err := readBounded(path)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snap, doc, err := parse(path, raw)
+	if err != nil {
+		return snap, err
+	}
+	if check != nil {
+		if err := check(snap); err != nil {
+			return snap, err
+		}
+	}
+	_, err = renderPromotion(snap, doc, raw, candidate)
+	return snap, err
+}
+
+// renderPromotion renders a promotion and then applies the loop guard: the
+// rendered bytes are parsed again with CPA's layout rules, and the result
+// must carry exactly the candidate for its provider while every other value
+// the plugin reads stays as it was.
+func renderPromotion(before Snapshot, doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte, error) {
+	out, err := render(doc, raw, candidate)
+	if err != nil {
+		return nil, err
+	}
+	after, _, err := parse(before.Path, out)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNotEffective, err)
+	}
+	if !CarriesCandidate(effectiveOf(after, candidate.Provider), candidate) {
+		return nil, fmt.Errorf("%w (%s)", ErrNotEffective, candidate.Provider)
+	}
+	other := fingerprint.ProviderCodex
+	if candidate.Provider == fingerprint.ProviderCodex {
+		other = fingerprint.ProviderClaude
+	}
+	if !sameValues(effectiveOf(before, other), effectiveOf(after, other)) ||
+		before.DisableCodexCloaking != after.DisableCodexCloaking ||
+		before.PluginsEnabled != after.PluginsEnabled ||
+		before.InstanceEnabled != after.InstanceEnabled ||
+		before.DryRun != after.DryRun ||
+		before.Layout != after.Layout {
+		return nil, fmt.Errorf("%w: the edit would change a setting other than the %s baseline", ErrNotEffective, candidate.Provider)
+	}
+	return out, nil
+}
+
+// CarriesCandidate reports whether an effective baseline is exactly the
+// promoted tuple, read from explicit, well-formed keys.
+func CarriesCandidate(eff Effective, c fingerprint.Candidate) bool {
+	if eff.Blocked() != "" || !eff.Explicit || eff.UserAgent != c.UserAgent {
+		return false
+	}
+	if c.Provider == fingerprint.ProviderClaude {
+		return eff.PackageVersion == c.PackageVersion && eff.RuntimeVersion == c.RuntimeVersion
+	}
+	return true
+}
+
+func sameValues(a, b Effective) bool {
+	return a.Version == b.Version && a.UserAgent == b.UserAgent && a.PackageVersion == b.PackageVersion &&
+		a.RuntimeVersion == b.RuntimeVersion && a.Explicit == b.Explicit && a.Malformed == b.Malformed &&
+		a.Unsupported == b.Unsupported
+}
+
+func effectiveOf(snap Snapshot, provider fingerprint.Provider) Effective {
+	if provider == fingerprint.ProviderCodex {
+		return snap.Codex
+	}
+	return snap.Claude
+}
+
 // render applies the edit to the parsed document and encodes it. raw is the
 // original file bytes, used to preserve a trailing newline convention.
 func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte, error) {
@@ -682,33 +1003,102 @@ func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte
 	if err := checkDuplicateKeys(root); err != nil {
 		return nil, err
 	}
-	switch candidate.Provider {
-	case fingerprint.ProviderClaude:
-		block, err := ensureMapping(root, keyClaudeHeaderDefaults)
-		if err != nil {
+	legacyPath, v8Path, err := blockPaths(candidate.Provider)
+	if err != nil {
+		return nil, err
+	}
+	layout, err := documentLayout(root)
+	if err != nil {
+		return nil, err
+	}
+	legacyBlock, v8Block, err := providerBlocks(root, legacyPath, v8Path)
+	if err != nil {
+		return nil, err
+	}
+	target, _ := writeTarget(legacyBlock, v8Block, layout, legacyPath, v8Path)
+	path := legacyPath
+	if target == LayoutV8 {
+		path = v8Path
+	}
+	block, err := ensurePath(root, path)
+	if err != nil {
+		return nil, err
+	}
+	values := [][2]string{{keyUserAgent, candidate.UserAgent}}
+	if candidate.Provider == fingerprint.ProviderClaude {
+		values = append(values,
+			[2]string{keyPackageVersion, candidate.PackageVersion},
+			[2]string{keyRuntimeVersion, candidate.RuntimeVersion})
+	}
+	for _, kv := range values {
+		if err := setScalar(block, kv[0], kv[1]); err != nil {
 			return nil, err
 		}
-		for _, kv := range [][2]string{
-			{keyUserAgent, candidate.UserAgent},
-			{keyPackageVersion, candidate.PackageVersion},
-			{keyRuntimeVersion, candidate.RuntimeVersion},
-		} {
-			if err := setScalar(block, kv[0], kv[1]); err != nil {
-				return nil, err
-			}
+	}
+	if target == LayoutV8 {
+		keys := make([]string, len(values))
+		for i, kv := range values {
+			keys[i] = kv[0]
 		}
-	case fingerprint.ProviderCodex:
-		block, err := ensureMapping(root, keyCodexHeaderDefaults)
-		if err != nil {
-			return nil, err
-		}
-		if err := setScalar(block, keyUserAgent, candidate.UserAgent); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unsupported provider %q", candidate.Provider)
+		dropShadowedLegacy(root, legacyPath, keys)
 	}
 	return encodeDocument(doc, raw)
+}
+
+// ensurePath walks path from root with ensureMapping, creating missing
+// mappings and refusing aliases, merge keys, and non-mapping values at every
+// level.
+func ensurePath(root *yaml.Node, path keyPath) (*yaml.Node, error) {
+	node := root
+	for _, key := range path {
+		next, err := ensureMapping(node, key)
+		if err != nil {
+			return nil, err
+		}
+		node = next
+	}
+	return node, nil
+}
+
+// dropShadowedLegacy removes the legacy leaves the plugin just wrote in the
+// v8 block, and the legacy block itself once nothing is left in it. CPA's
+// loader deletes exactly these conflicting leaves on every load and then
+// rewrites the whole file with 4-space indentation and anchors expanded
+// (config_load.go:209-222, NormalizeConfigLayout); removing them here keeps
+// the plugin's write the only change to the file. Only a plain, explicit
+// legacy mapping is edited; one shared through an alias or merge key is left
+// for CPA, which does not change what CPA loads.
+func dropShadowedLegacy(root *yaml.Node, legacyPath keyPath, keys []string) {
+	if len(legacyPath) != 1 {
+		return
+	}
+	block, err := lookupExplicit(root, legacyPath[0])
+	if err != nil || block == nil || block.Anchor != "" {
+		return
+	}
+	switch {
+	case isEmptyScalar(block):
+	case block.Kind == yaml.MappingNode && !hasMergeKey(block) && checkDuplicateKeys(block) == nil:
+		for _, key := range keys {
+			for i := 0; i+1 < len(block.Content); i += 2 {
+				if k := block.Content[i]; k.Kind == yaml.ScalarNode && k.Value == key {
+					block.Content = append(block.Content[:i], block.Content[i+2:]...)
+					break
+				}
+			}
+		}
+		if len(block.Content) > 0 {
+			return
+		}
+	default:
+		return
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if k := root.Content[i]; k.Kind == yaml.ScalarNode && !isMergeKey(k) && k.Value == legacyPath[0] {
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			return
+		}
+	}
 }
 
 // renderDryRun edits plugins.configs.auto-baseline.dry-run. Every mapping on

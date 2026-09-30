@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/config"
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/configfile"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/engine"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/statefile"
@@ -74,6 +75,10 @@ type pageProvider struct {
 	NextWriteAfter pageTime
 	AwaitingReload bool
 	PendingCount   int
+	// Sources summarizes where each baseline value comes from (v8, legacy,
+	// default), e.g. "user-agent v8 · package-version legacy".
+	Sources string
+	Paused  bool
 }
 
 type pageCandidate struct {
@@ -96,16 +101,18 @@ type pageCandidate struct {
 }
 
 type pageHistory struct {
-	At        pageTime
-	Provider  string
-	From      string
-	To        string
-	Tuple     string
-	Source    string
-	DryRun    bool
-	Forced    bool
-	Awaiting  bool
-	Confirmed bool
+	At           pageTime
+	Provider     string
+	From         string
+	To           string
+	Tuple        string
+	Source       string
+	DryRun       bool
+	Forced       bool
+	Awaiting     bool
+	Confirmed    bool
+	NotEffective bool
+	Target       string
 }
 
 type pageCounter struct {
@@ -243,8 +250,9 @@ button.row{padding:4px 10px;font-size:12px}
   {{range .Providers}}
   <div class="stat">
     <div class="label">{{.Name}} baseline</div>
-    <div class="value">{{.Effective.Version}} {{if .Effective.Explicit}}<span class="pill info">explicit</span>{{else}}<span class="pill">implicit</span>{{end}}{{if .Effective.Unsupported}} <span class="pill err">{{.Effective.Unsupported}}</span>{{else if .Effective.Malformed}} <span class="pill err">malformed</span>{{end}}{{if .AwaitingReload}} <span class="pill warn">awaiting reload</span>{{end}}</div>
+    <div class="value">{{.Effective.Version}} {{if .Effective.Explicit}}<span class="pill info">explicit</span>{{else}}<span class="pill">implicit</span>{{end}}{{if .Effective.Unsupported}} <span class="pill err">{{.Effective.Unsupported}}</span>{{else if .Effective.Malformed}} <span class="pill err">malformed</span>{{end}}{{if .AwaitingReload}} <span class="pill warn">awaiting reload</span>{{end}}{{if .Paused}} <span class="pill err">paused</span>{{end}}</div>
     <div class="hint"><code>{{.Effective.UserAgent}}</code></div>
+    {{if .Sources}}<div class="hint">{{.Sources}}{{if .Effective.WriteTarget}} · writes <code>{{.Effective.WriteTarget}}</code>{{end}}</div>{{end}}
     <div class="hint">{{if .Managed}}floor {{.MinVersion}} · {{.PendingCount}} pending{{else}}not managed{{end}}</div>
   </div>
   {{end}}
@@ -257,6 +265,7 @@ button.row{padding:4px 10px;font-size:12px}
     <div class="label">Config file</div>
     <div class="value">{{if .Config.ModeUnsupported}}<span class="pill err">{{.Config.Mode}} mode</span>{{else if .Config.Writable}}<span class="pill ok">writable</span>{{else}}<span class="pill err">not writable</span>{{end}}</div>
     {{if .Config.Path}}<div class="hint"><code>{{.Config.Path}}</code> via {{.Config.Source}}</div>{{end}}
+    {{if .Config.Layout}}<div class="hint">{{.Config.Layout}} layout</div>{{end}}
   </div>
   <div class="stat">
     <div class="label">Backup dir</div>
@@ -356,7 +365,7 @@ button.row{padding:4px 10px;font-size:12px}
         <td><code>{{.Tuple}}</code></td>
         <td>{{.Source}}{{if .Forced}} <span class="pill warn">forced</span>{{end}}</td>
         <td>{{if .DryRun}}<span class="pill warn">dry-run</span>{{else}}<span class="pill info">written</span>{{end}}</td>
-        <td>{{if .DryRun}}<span class="dash">—</span>{{else if .Awaiting}}<span class="pill warn">awaiting</span>{{else if .Confirmed}}<span class="pill ok">confirmed</span>{{else}}<span class="dash">—</span>{{end}}</td>
+        <td>{{if .DryRun}}<span class="dash">—</span>{{else if .Awaiting}}<span class="pill warn">awaiting</span>{{else if .Confirmed}}<span class="pill ok">confirmed</span>{{else if .NotEffective}}<span class="pill err">not effective</span>{{else}}<span class="dash">—</span>{{end}}{{if .Target}} <span class="sub"><code>{{.Target}}</code></span>{{end}}</td>
       </tr>
     {{end}}
     </tbody>
@@ -373,7 +382,7 @@ button.row{padding:4px 10px;font-size:12px}
   </tbody></table></div></div>
 </div>
 
-<p class="footnote">{{if .Authenticated}}Promote now queues an immediate promotion of that exact tuple, the dry-run switch edits only <code>plugins.configs.auto-baseline.dry-run</code> in CPA's config.yaml (CPA hot-reloads it), and Clear pending discards collected evidence. All actions post to same-origin management routes with the plugin action header; CPA must receive the management authentication header through the browser session or reverse proxy.{{else}}File paths, error text, and session identifiers are redacted on this unauthenticated page. When opened from the same origin as a signed-in management console, the full authenticated view loads in place.{{end}} Hover any timestamp for the exact UTC instant.</p>
+<p class="footnote">{{if .Authenticated}}Promote now queues an immediate promotion of that exact tuple, the dry-run switch edits only <code>plugins.configs.auto-baseline.dry-run</code> in CPA's config.yaml (CPA hot-reloads it), and Clear pending discards collected evidence and resumes a provider paused after a promotion that did not take effect. All actions post to same-origin management routes with the plugin action header; CPA must receive the management authentication header through the browser session or reverse proxy.{{else}}File paths, error text, and session identifiers are redacted on this unauthenticated page. When opened from the same origin as a signed-in management console, the full authenticated view loads in place.{{end}} Hover any timestamp for the exact UTC instant.</p>
 </div>
 <script>` + browserAuthScript + `{{if .Authenticated}}` + managementActionsScript + `{{else}}` + resourceBootstrapScript + `{{end}}</script>
 </body>
@@ -431,6 +440,8 @@ func buildStatusPageData(snap engine.Snapshot, authenticated bool) statusPageDat
 			NextWriteAfter: when(p.NextWriteAfter),
 			AwaitingReload: p.AwaitingReload,
 			PendingCount:   len(p.Pending),
+			Sources:        sourcesHint(p.Effective.Sources),
+			Paused:         p.Paused != nil,
 		}
 		for _, w := range p.Warnings {
 			// The Codex cloaking caveat gets its own alert; other provider
@@ -465,6 +476,9 @@ func buildStatusPageData(snap engine.Snapshot, authenticated bool) statusPageDat
 				QuorumMet:      ev.QuorumMet,
 				Blocked:        p.Effective.Unsupported,
 			})
+			if p.Paused != nil && data.Pending[len(data.Pending)-1].Blocked == "" {
+				data.Pending[len(data.Pending)-1].Blocked = p.Paused.Reason
+			}
 			if p.Effective.Malformed && data.Pending[len(data.Pending)-1].Blocked == "" {
 				data.Pending[len(data.Pending)-1].Blocked = "baseline_malformed"
 			}
@@ -491,17 +505,30 @@ func buildStatusPageData(snap engine.Snapshot, authenticated bool) statusPageDat
 
 func historyRow(p statefile.Promotion, when func(time.Time) pageTime) pageHistory {
 	return pageHistory{
-		At:        when(p.At),
-		Provider:  providerName(p.Provider),
-		From:      p.From.String(),
-		To:        p.Candidate.Version.String(),
-		Tuple:     tupleLabel(p.Candidate),
-		Source:    p.Source,
-		DryRun:    p.DryRun,
-		Forced:    p.Forced,
-		Awaiting:  p.AwaitingReload,
-		Confirmed: !p.DryRun && !p.AwaitingReload && !p.ConfirmedAt.IsZero(),
+		At:           when(p.At),
+		Provider:     providerName(p.Provider),
+		From:         p.From.String(),
+		To:           p.Candidate.Version.String(),
+		Tuple:        tupleLabel(p.Candidate),
+		Source:       p.Source,
+		DryRun:       p.DryRun,
+		Forced:       p.Forced,
+		Awaiting:     p.AwaitingReload,
+		Confirmed:    !p.DryRun && !p.AwaitingReload && !p.ConfirmedAt.IsZero(),
+		NotEffective: !p.DryRun && !p.NotEffectiveAt.IsZero(),
+		Target:       p.Target,
 	}
+}
+
+// sourcesHint renders per-leaf value sources in a fixed order.
+func sourcesHint(sources map[string]configfile.Source) string {
+	var parts []string
+	for _, key := range []string{"user-agent", "package-version", "runtime-version"} {
+		if source, ok := sources[key]; ok {
+			parts = append(parts, key+" "+string(source))
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 func tupleLabel(c fingerprint.Candidate) string {

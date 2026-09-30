@@ -54,6 +54,7 @@ type harness struct {
 	mode        configfile.DeploymentMode
 	apply       ApplyFunc
 	dryRunApply DryRunApplyFunc
+	read        ReadFunc
 	async       func(func())
 }
 
@@ -81,6 +82,10 @@ func withMode(mode configfile.DeploymentMode) harnessOption {
 
 func withDryRunApply(apply DryRunApplyFunc) harnessOption {
 	return func(h *harness) { h.dryRunApply = apply }
+}
+
+func withRead(read ReadFunc) harnessOption {
+	return func(h *harness) { h.read = read }
 }
 
 func withGoroutines() harnessOption {
@@ -116,6 +121,7 @@ func (h *harness) newEngine(cfg config.Config) *Engine {
 		RunAsync:    h.async,
 		Apply:       h.apply,
 		ApplyDryRun: h.dryRunApply,
+		Read:        h.read,
 		DetectMode:  func() configfile.DeploymentMode { return h.mode },
 	})
 }
@@ -1343,21 +1349,27 @@ func TestReloadConfirmationIsValueCorrelated(t *testing.T) {
 		t.Fatal("precondition: awaiting reload")
 	}
 	// Someone edits the file to a DIFFERENT value before CPA reloads: the
-	// reconfigure must not confirm our promotion.
+	// reconfigure must not confirm our promotion. The read happens after the
+	// write, so the promotion is recorded as not effective and the provider
+	// pauses instead of being rewritten.
 	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.318 (external, cli)\"\n  package-version: \"9.9.9\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
-	if c := h.claude(); !c.AwaitingReload {
+	c := h.claude()
+	if c.AwaitingReload || !c.LastPromotion.ConfirmedAt.IsZero() || c.LastPromotion.NotEffectiveAt.IsZero() {
 		t.Errorf("confirmed although the on-disk tuple differs: %+v", c.LastPromotion)
 	}
-	// Restoring the exact tuple confirms it on the next read.
+	if c.Paused == nil || c.Paused.Reason != DecisionPromotionNotEffective {
+		t.Errorf("provider not paused: %+v", c.Paused)
+	}
+	// Restoring the exact tuple lifts the pause on the next read.
 	if err := os.WriteFile(h.config, []byte(baseConfig+"claude-header-defaults:\n  user-agent: \"claude-cli/2.1.318 (external, cli)\"\n  package-version: \"0.112.1\"\n  runtime-version: \"v26.3.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.eng.Reconfigure(h.cfg)
-	if c := h.claude(); c.AwaitingReload || c.LastPromotion.ConfirmedAt.IsZero() {
-		t.Errorf("exact tuple not confirmed: %+v", c.LastPromotion)
+	if c := h.claude(); c.AwaitingReload || c.Paused != nil {
+		t.Errorf("exact tuple did not lift the pause: %+v %+v", c.LastPromotion, c.Paused)
 	}
 }
 

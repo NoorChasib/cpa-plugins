@@ -307,7 +307,7 @@ func managementRegistration() hostapi.ManagementRegistration {
 			{Method: "GET", Path: managementStatusPath, Description: "Auto-baseline status snapshot (JSON)"},
 			{Method: "GET", Path: managementStatusPagePath, Description: "Auto-baseline status page (browser HTML)"},
 			{Method: "POST", Path: managementObservePath, Description: "Report a client fingerprint observation (host reporting)"},
-			{Method: "POST", Path: managementResetPath, Description: "Clear pending baseline candidates"},
+			{Method: "POST", Path: managementResetPath, Description: "Clear pending baseline candidates and resume paused providers"},
 			{Method: "POST", Path: managementDryRunPath, Description: "Set plugins.configs.auto-baseline.dry-run in CPA's config.yaml"},
 		},
 		Resources: []hostapi.ResourceRoute{
@@ -378,7 +378,7 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 			return okEnvelope(forbiddenResponse())
 		}
 		eng.Reset()
-		return okEnvelope(jsonResponse(200, map[string]string{"status": "ok", "detail": "pending candidates cleared"}))
+		return okEnvelope(jsonResponse(200, map[string]string{"status": "ok", "detail": "pending candidates cleared; paused providers resumed"}))
 
 	case method == "POST" && strings.HasSuffix(path, managementDryRunPath) && !isResourcePath(path):
 		if !mutationRequestAllowed(req.Headers) {
@@ -516,8 +516,8 @@ func configFields() []hostapi.ConfigField {
 		{Name: "config-path", Type: "string", Description: "Path of CPA's config.yaml. Default: the running process's -config flag, else <cwd>/config.yaml."},
 		{Name: "state-dir", Type: "string", Description: "Directory for state.json (default plugins/auto-baseline, relative to the CPA working directory)."},
 		{Name: "backup-dir", Type: "string", Description: "Directory that receives config.yaml.auto-baseline.bak before each write (default: state-dir)."},
-		{Name: "manage-claude", Type: "boolean", Description: "Learn and promote claude-header-defaults (default true)."},
-		{Name: "manage-codex", Type: "boolean", Description: "Learn and promote codex-header-defaults.user-agent (default true; requires codex.disable-codex-cloaking: true to take effect)."},
+		{Name: "manage-claude", Type: "boolean", Description: "Learn and promote the Claude header defaults: oauth.providers.claude.header-defaults (legacy name claude-header-defaults) (default true)."},
+		{Name: "manage-codex", Type: "boolean", Description: "Learn and promote the Codex header-defaults user-agent: oauth.providers.codex.header-defaults (legacy name codex-header-defaults) (default true; requires oauth.providers.codex.disable-codex-cloaking, legacy codex.disable-codex-cloaking, set to true to take effect)."},
 		{Name: "claude-entrypoints", Type: "array", Description: "Claude Code entrypoints whose fingerprints may be learned (default cli, sdk-cli, claude-vscode, sdk-ts, sdk-py)."},
 		{Name: "require-claude-code-beta", Type: "boolean", Description: "Require the claude-code-20250219 beta in anthropic-beta before a Claude request counts (default true)."},
 		{Name: "min-observations", Type: "integer", Description: "Observations of one identical fingerprint tuple required inside observation-window (default 3)."},

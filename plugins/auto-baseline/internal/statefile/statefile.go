@@ -59,6 +59,28 @@ type Promotion struct {
 	// shows the value). ConfirmedAt records when that happened.
 	AwaitingReload bool      `json:"awaiting_reload,omitempty"`
 	ConfirmedAt    time.Time `json:"confirmed_at,omitempty"`
+	// NotEffectiveAt records when a fresh read after the write showed that
+	// config.yaml no longer carries the promoted tuple (the write did not
+	// take effect).
+	NotEffectiveAt time.Time `json:"not_effective_at,omitzero"`
+	// Target is the dotted config.yaml path the block was written to (or,
+	// for dry-run, would be written to).
+	Target string `json:"target,omitempty"`
+}
+
+// Pause records why automatic promotion is suspended for a provider. It is
+// set when a written promotion did not take effect (cleared by the
+// operator: the reset route or a write-affecting reconfigure) or when the
+// pre-write loop guard refused a write (cleared as soon as config.yaml
+// changes, recorded in ConfigSHA256).
+type Pause struct {
+	At        time.Time             `json:"at"`
+	Candidate fingerprint.Candidate `json:"candidate"`
+	Reason    string                `json:"reason"`
+	Detail    string                `json:"detail,omitempty"`
+	// ConfigSHA256 is set for guard refusals: the pause lifts once the file
+	// hash differs.
+	ConfigSHA256 string `json:"config_sha256,omitempty"`
 }
 
 // Counters are monotonically increasing diagnostics.
@@ -83,6 +105,9 @@ type State struct {
 	LastError     string                              `json:"last_error,omitempty"`
 	LastErrorAt   time.Time                           `json:"last_error_at,omitempty"`
 	LastWriteAt   map[fingerprint.Provider]time.Time  `json:"last_write_at,omitempty"`
+	// Paused lists providers whose automatic promotion is suspended. The
+	// field is additive: older plugin versions ignore it.
+	Paused map[fingerprint.Provider]*Pause `json:"paused,omitempty"`
 }
 
 // New returns an empty state.
@@ -92,6 +117,7 @@ func New() *State {
 		Baselines:     make(map[fingerprint.Provider]Baseline),
 		LastPromotion: make(map[fingerprint.Provider]*Promotion),
 		LastWriteAt:   make(map[fingerprint.Provider]time.Time),
+		Paused:        make(map[fingerprint.Provider]*Pause),
 		Counters:      Counters{RejectReasons: make(map[string]uint64), Decisions: make(map[string]uint64)},
 	}
 }
@@ -106,6 +132,14 @@ func (s *State) normalize() {
 	}
 	if s.LastWriteAt == nil {
 		s.LastWriteAt = make(map[fingerprint.Provider]time.Time)
+	}
+	if s.Paused == nil {
+		s.Paused = make(map[fingerprint.Provider]*Pause)
+	}
+	for p, pause := range s.Paused {
+		if pause == nil {
+			delete(s.Paused, p)
+		}
 	}
 	if s.Counters.RejectReasons == nil {
 		s.Counters.RejectReasons = make(map[string]uint64)
@@ -250,6 +284,11 @@ func (s *State) Clone() *State {
 		LastError:   s.LastError,
 		LastErrorAt: s.LastErrorAt,
 		LastWriteAt: make(map[fingerprint.Provider]time.Time, len(s.LastWriteAt)),
+		Paused:      make(map[fingerprint.Provider]*Pause, len(s.Paused)),
+	}
+	for k, v := range s.Paused {
+		cp := *v
+		out.Paused[k] = &cp
 	}
 	for k, v := range s.Baselines {
 		out.Baselines[k] = v
