@@ -117,16 +117,16 @@
       "id": "quota-glance",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/quota-glance",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance/v0.3.0/quota-glance_0.3.0_linux_amd64.zip",
-            "sha256": "de8f2d3f17c5780c245894b6d3409d3b80a12f274115dc71a1aa1392d7e6ec8a",
-            "size": 4544884
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance/v0.4.0/quota-glance_0.4.0_linux_amd64.zip",
+            "sha256": "9221a7cfaf31b654f85b9ef2ecbee06623bb89b3b80be9d38f090f950926a203",
+            "size": 4573733
           }
         ]
       }
