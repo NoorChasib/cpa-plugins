@@ -72,6 +72,7 @@ The page ran in Chromium through agent-browser, against a throwaway CPA v8.0.4 c
 - **After a CPA restart:** the page still listed every model with no new Codex fetch.
 - **Discard:** it restored a pending switch and disabled **Save**.
 - **Stale switch:** a switch for a model not in the list appeared under "Switches for models Codex was not offered". **Forget** and **Save** removed it from `config.yaml`.
+- **Always dark:** with the browser's colour-scheme preference set to light, the page still rendered on the dark background `#0c111d`.
 
 Not covered by an automated browser test in CI. The console's obfuscated (`enc::v1::`) storage and legacy fallback use Token Usage's audited reader unchanged, but were not exercised here.
 

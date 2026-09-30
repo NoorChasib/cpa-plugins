@@ -1,8 +1,8 @@
 /* Visual tokens and base components adapted from Token Usage 4286578, itself
- * adapted from Account Health Pushover and Auto Baseline. Copyright (c) 2026
- * NoorChasib. MIT licensed; permission and warranty notice in LICENSE. */
-:root{color-scheme:light dark;--bg:#f6f7f9;--surface:#fff;--border:#e4e7ec;--text:#101828;--muted:#667085;--ok-bg:#ecfdf3;--ok-fg:#067647;--ok-bd:#abefc6;--warn-bg:#fffaeb;--warn-fg:#b54708;--warn-bd:#fedf89;--err-bg:#fef3f2;--err-fg:#b42318;--err-bd:#fecdca;--info-bg:#eff8ff;--info-fg:#175cd3;--info-bd:#b2ddff;--neutral-bg:#f2f4f7;--neutral-fg:#344054;--neutral-bd:#e4e7ec;--accent:#2563eb;--accent-hover:#1d4ed8;--accent-fg:#fff;--off:#d0d5dd}
-@media(prefers-color-scheme:dark){:root{--bg:#0c111d;--surface:#131a2b;--border:#1f2a3d;--text:#e6eaf2;--muted:#94a3b8;--ok-bg:#052e21;--ok-fg:#5ee6a8;--ok-bd:#0f5c47;--warn-bg:#3a2a06;--warn-fg:#fcd34d;--warn-bd:#6b4d0b;--err-bg:#3b0f0f;--err-fg:#fca5a5;--err-bd:#7f1d1d;--info-bg:#0f2148;--info-fg:#93c5fd;--info-bd:#1e3a8a;--neutral-bg:#1a2436;--neutral-fg:#cbd5e1;--neutral-bd:#2c3a52;--accent:#3b82f6;--accent-hover:#60a5fa;--accent-fg:#0c111d;--off:#3a475e}}
+ * adapted from Account Health Pushover and Auto Baseline. Always dark, in the
+ * palette those pages use in dark mode. Copyright (c) 2026 NoorChasib. MIT
+ * licensed; permission and warranty notice in LICENSE. */
+:root{color-scheme:dark;--bg:#0c111d;--surface:#131a2b;--border:#1f2a3d;--text:#e6eaf2;--muted:#94a3b8;--ok-bg:#052e21;--ok-fg:#5ee6a8;--ok-bd:#0f5c47;--warn-bg:#3a2a06;--warn-fg:#fcd34d;--warn-bd:#6b4d0b;--err-bg:#3b0f0f;--err-fg:#fca5a5;--err-bd:#7f1d1d;--info-bg:#0f2148;--info-fg:#93c5fd;--info-bd:#1e3a8a;--neutral-bg:#1a2436;--neutral-fg:#cbd5e1;--neutral-bd:#2c3a52;--accent:#3b82f6;--accent-hover:#60a5fa;--accent-fg:#0c111d;--off:#3a475e}
 *{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;background:var(--bg);color:var(--text)}body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 .page{max-width:1100px;margin:0 auto;padding:28px 24px 48px}.header{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
 h1{margin:0;font-size:22px;font-weight:650;letter-spacing:-.01em}h2{margin:0 0 6px;font-size:15px;font-weight:600}.subtitle{margin:4px 0 10px;color:var(--muted);max-width:720px}

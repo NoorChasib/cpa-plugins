@@ -61,7 +61,7 @@ Anyone who can reach CPA can see that the routes exist. Only a valid client key 
 
 ## The Codex Models page
 
-The page is fixed HTML, CSS, and JavaScript. It contains no model data, and its Content-Security-Policy pins the script and style by hash, allows requests only to the same origin, and allows framing only by the same origin.
+The page is fixed HTML, CSS, and JavaScript, always dark in the palette the other plugins' pages use in dark mode. It contains no model data, and its Content-Security-Policy pins the script and style by hash, allows requests only to the same origin, and allows framing only by the same origin.
 
 It uses the console's remembered session, read the same way as Token Usage's sidebar. It needs **Remember password** on this exact origin and API base, and it never offers a login of its own.
 
