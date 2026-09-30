@@ -93,7 +93,8 @@ plugins:
       data-dir: /work/quota-glance
     codex-catalog-filter:
       enabled: true
-      include: ["gpt-[0-9]*", "codex-*"]
+      models:
+        claude-fable-5-1: false
 ''')
     container = run('docker','create','--pull=never','-p','127.0.0.1::8317',
                     '--user',str(os.getuid())+':'+str(os.getgid()),

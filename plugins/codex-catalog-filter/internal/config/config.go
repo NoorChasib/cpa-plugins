@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/catalog"
@@ -14,21 +15,23 @@ import (
 )
 
 const (
-	maxDocumentBytes = 64 << 10
-	maxPatterns      = 256
-	maxPatternBytes  = 256
+	maxDocumentBytes = 256 << 10
+	maxSwitches      = 4096
+	maxSlugBytes     = 256
 	// DefaultCPAURL is CPA's listener as seen from inside its own process in
 	// the standard image. The plugin fetches the unfiltered catalog from it.
 	DefaultCPAURL = "http://127.0.0.1:8317"
 )
 
 type Config struct {
-	Include  []string `yaml:"include"`
-	Exclude  []string `yaml:"exclude"`
-	Action   string   `yaml:"action"`
-	CPAURL   string   `yaml:"cpa-url"`
-	Enabled  bool     `yaml:"enabled"`
-	Priority int      `yaml:"priority"`
+	// Models holds the per-model switches the settings page writes.
+	Models    map[string]bool `yaml:"models"`
+	NewModels string          `yaml:"new-models"`
+	Action    string          `yaml:"action"`
+	CPAURL    string          `yaml:"cpa-url"`
+	DataDir   string          `yaml:"data-dir"`
+	Enabled   bool            `yaml:"enabled"`
+	Priority  int             `yaml:"priority"`
 }
 
 // Settings is the validated, immutable result of Parse.
@@ -36,6 +39,8 @@ type Settings struct {
 	Rules *catalog.Rules
 	// CPAURL is an origin without a trailing slash, such as http://127.0.0.1:8317.
 	CPAURL string
+	// DataDir is a clean absolute path, or empty for the plugin's default.
+	DataDir string
 }
 
 // Host-owned store metadata is decoded without expanding its contents and then
@@ -45,8 +50,8 @@ type rawConfig struct {
 	Store  yaml.Node `yaml:"store"`
 }
 
-// Parse validates the plugin's YAML and compiles its rules. Unknown keys are
-// rejected so a misspelled include cannot silently disable filtering.
+// Parse validates the plugin's YAML and builds its rules. Unknown keys are
+// rejected so a misspelled setting cannot silently change what Codex sees.
 func Parse(raw []byte) (*Settings, error) {
 	if len(raw) == 0 || len(raw) > maxDocumentBytes {
 		return nil, errors.New("configuration is required and must be bounded")
@@ -65,6 +70,14 @@ func Parse(raw []byte) (*Settings, error) {
 		return nil, errors.New("one configuration document required")
 	}
 	c := decoded.Config
+	enableNew := true
+	switch strings.TrimSpace(c.NewModels) {
+	case "", "enabled":
+	case "disabled":
+		enableNew = false
+	default:
+		return nil, errors.New("new-models must be enabled or disabled")
+	}
 	action := catalog.Remove
 	switch strings.TrimSpace(c.Action) {
 	case "", string(catalog.Remove):
@@ -73,25 +86,26 @@ func Parse(raw []byte) (*Settings, error) {
 	default:
 		return nil, errors.New("action must be remove or hide")
 	}
-	for name, patterns := range map[string][]string{"include": c.Include, "exclude": c.Exclude} {
-		if len(patterns) > maxPatterns {
-			return nil, fmt.Errorf("%s lists more than %d patterns", name, maxPatterns)
-		}
-		for _, pattern := range patterns {
-			if pattern == "" || len(pattern) > maxPatternBytes || strings.TrimSpace(pattern) != pattern {
-				return nil, fmt.Errorf("%s patterns must be non-empty, without surrounding spaces, and at most %d bytes", name, maxPatternBytes)
-			}
+	if len(c.Models) > maxSwitches {
+		return nil, fmt.Errorf("models lists more than %d switches", maxSwitches)
+	}
+	for slug := range c.Models {
+		if slug == "" || len(slug) > maxSlugBytes || strings.TrimSpace(slug) != slug {
+			return nil, fmt.Errorf("models keys must be non-empty model slugs, without surrounding spaces, of at most %d bytes", maxSlugBytes)
 		}
 	}
-	rules, err := catalog.NewRules(c.Include, c.Exclude, action)
+	rules, err := catalog.NewRules(c.Models, enableNew, action)
 	if err != nil {
-		return nil, errors.New("invalid include or exclude pattern")
+		return nil, err
 	}
 	origin, err := parseOrigin(c.CPAURL)
 	if err != nil {
 		return nil, err
 	}
-	return &Settings{Rules: rules, CPAURL: origin}, nil
+	if c.DataDir != "" && (len(c.DataDir) > 4096 || strings.ContainsRune(c.DataDir, 0) || !filepath.IsAbs(c.DataDir) || filepath.Clean(c.DataDir) != c.DataDir || filepath.Dir(c.DataDir) == c.DataDir) {
+		return nil, errors.New("data-dir must be a clean absolute path")
+	}
+	return &Settings{Rules: rules, CPAURL: origin, DataDir: c.DataDir}, nil
 }
 
 // parseOrigin accepts only scheme://host[:port], so the configured value can

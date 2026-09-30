@@ -66,7 +66,7 @@ func TestDispatchServesFilteredCatalogThroughRealPlugin(t *testing.T) {
 	globalPlugin = pluginimpl.New()
 	globalMu.Unlock()
 	defer cliproxyPluginShutdown()
-	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("include: ['gpt-*']\ncpa-url: " + cpa.URL + "\n"), SchemaVersion: protocol.SchemaVersion})
+	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("models: {claude-x: false}\ncpa-url: " + cpa.URL + "\ndata-dir: " + t.TempDir() + "\n"), SchemaVersion: protocol.SchemaVersion})
 	request, _ := json.Marshal(protocol.ManagementRequest{
 		Method: http.MethodGet, Path: pluginimpl.CatalogPath,
 		Headers: http.Header{"Authorization": {"Bearer client-key"}},

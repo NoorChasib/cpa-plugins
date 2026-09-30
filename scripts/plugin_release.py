@@ -39,7 +39,7 @@ FIRST_RELEASE = {
     },
     'codex-catalog-filter': {
         'name': 'Codex Catalog Filter',
-        'description': "Serves a filtered copy of CPA's Codex model catalog at its own URL for Codex's model_catalog_url, so Codex shows only the models you choose. CPA's own model lists are unchanged. Linux amd64 only.",
+        'description': "Choose model by model what Codex shows: a Codex Models console page with a switch per model, and a filtered catalog URL for Codex's model_catalog_url. CPA's own model lists are unchanged. Linux amd64 only.",
         'author': 'NoorChasib',
         'license': 'MIT',
         'tags': ['Codex', 'Models', 'Catalog'],

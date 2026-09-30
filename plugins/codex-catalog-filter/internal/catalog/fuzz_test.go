@@ -81,8 +81,9 @@ func FuzzRewrite(f *testing.F) {
 		f.Add([]byte(seed), false)
 		f.Add([]byte(seed), true)
 	}
-	remove, _ := NewRules([]string{"gpt-*"}, []string{"*-mini"}, Remove)
-	hide, _ := NewRules([]string{"gpt-*"}, []string{"*-mini"}, Hide)
+	// Some slugs switched off with new models enabled, and the reverse.
+	remove, _ := NewRules(map[string]bool{"other": false, "b": false, "gpt-6-mini": false}, true, Remove)
+	hide, _ := NewRules(map[string]bool{"gpt-6": true, "gpt-x": true, "gpt-1": true, "gpt-\u00e9": true}, false, Hide)
 	f.Fuzz(func(t *testing.T, body []byte, useHide bool) {
 		if useHide {
 			checkRewrite(t, hide, body)
@@ -91,20 +92,3 @@ func FuzzRewrite(f *testing.F) {
 		}
 	})
 }
-
-func FuzzGlob(f *testing.F) {
-	for _, seed := range []string{"gpt-*", "[a-z]?", `\*x`, "[!]a]*", `[a-\]]`, "**?*[^x-y]"} {
-		f.Add(seed, "gpt-6")
-	}
-	f.Fuzz(func(t *testing.T, pattern, slug string) {
-		if len(pattern) > maxFuzzPattern {
-			return
-		}
-		if re, err := compileGlob(pattern); err == nil {
-			_ = re.MatchString(slug)
-		}
-	})
-}
-
-// maxFuzzPattern mirrors the configuration's per-pattern bound.
-const maxFuzzPattern = 256

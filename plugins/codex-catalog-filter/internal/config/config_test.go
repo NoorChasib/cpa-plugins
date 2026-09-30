@@ -8,55 +8,52 @@ import (
 
 const catalogBody = `{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"list"},{"slug":"codex-auto-review","visibility":"hide"}]}`
 
-func TestParseDefaultsToRemove(t *testing.T) {
-	settings, err := Parse([]byte("enabled: true\npriority: 3\ninclude: [\"gpt-[0-9]*\", \"codex-*\"]\n"))
+func TestParseDefaults(t *testing.T) {
+	settings, err := Parse([]byte("enabled: true\npriority: 3\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := settings.Rules
+	if !r.Idle() || !r.EnableNew() || r.Action() != "remove" || settings.CPAURL != DefaultCPAURL || settings.DataDir != "" {
+		t.Fatalf("defaults = %+v", settings)
+	}
+	if r.Rewrite([]byte(catalogBody)) != nil {
+		t.Fatal("no switches must leave the catalog unchanged")
+	}
+}
+
+func TestParseSwitches(t *testing.T) {
+	settings, err := Parse([]byte("models:\n  claude-x: false\n  gpt-5.5: true\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(settings.Rules.Rewrite([]byte(catalogBody)))
 	if got != `{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"codex-auto-review","visibility":"hide"}]}` {
-		t.Fatalf("default action did not remove: %s", got)
+		t.Fatalf("switch not applied: %s", got)
+	}
+	if enabled, ok := settings.Rules.Switched("gpt-5.5"); !ok || !enabled {
+		t.Fatal("explicit on switch lost")
 	}
 }
 
-func TestParseHide(t *testing.T) {
-	settings, err := Parse([]byte("include:\n  - gpt-[0-9]*\n  - codex-*\naction: hide\n"))
+func TestParseNewModelsAndAction(t *testing.T) {
+	settings, err := Parse([]byte("new-models: disabled\naction: hide\nmodels:\n  gpt-6-sol: true\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(settings.Rules.Rewrite([]byte(catalogBody)))
-	if !strings.Contains(got, `{"slug":"claude-x","visibility":"hide"}`) {
-		t.Fatalf("hide action not applied: %s", got)
-	}
-}
-
-func TestParseExclude(t *testing.T) {
-	settings, err := Parse([]byte("include: ['*']\nexclude: ['claude-*']\naction: remove\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settings.Rules.Allows("claude-x") || !settings.Rules.Allows("gpt-6-sol") {
-		t.Fatal("exclude not applied")
-	}
-}
-
-func TestParseWithoutIncludeIsIdle(t *testing.T) {
-	for _, doc := range []string{"enabled: true\n", "enabled: true\ninclude: []\n", "exclude: ['claude-*']\n"} {
-		settings, err := Parse([]byte(doc))
-		if err != nil {
-			t.Fatalf("%q: %v", doc, err)
-		}
-		if !settings.Rules.Idle() || settings.Rules.Rewrite([]byte(catalogBody)) != nil {
-			t.Fatalf("%q should leave catalogs unchanged", doc)
-		}
+	if got != `{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"hide"},{"slug":"codex-auto-review","visibility":"hide"}]}` {
+		t.Fatalf("new-models/action not applied: %s", got)
 	}
 }
 
 func TestParseCPAURL(t *testing.T) {
 	for doc, want := range map[string]string{
-		"include: ['gpt-*']\n":                                      DefaultCPAURL,
-		"include: ['gpt-*']\ncpa-url: http://127.0.0.1:9000\n":      "http://127.0.0.1:9000",
-		"include: ['gpt-*']\ncpa-url: https://cpa.internal:8317/\n": "https://cpa.internal:8317",
+		"enabled: true\n":                            DefaultCPAURL,
+		"cpa-url: http://127.0.0.1:9000\n":           "http://127.0.0.1:9000",
+		"cpa-url: https://cpa.internal:8317/\n":      "https://cpa.internal:8317",
+		"cpa-url: ''\nmodels: {claude-x: false}\n":   DefaultCPAURL,
+		"models: {claude-x: false}\ncpa-url: null\n": DefaultCPAURL,
 	} {
 		settings, err := Parse([]byte(doc))
 		if err != nil || settings.CPAURL != want {
@@ -64,8 +61,20 @@ func TestParseCPAURL(t *testing.T) {
 		}
 	}
 	for _, value := range []string{"127.0.0.1:8317", "ftp://127.0.0.1", "http://", "http://127.0.0.1:8317/v1", "http://127.0.0.1:8317?x=1", "http://user:pass@127.0.0.1:8317", "http://127.0.0.1:8317#f"} {
-		if _, err := Parse([]byte("include: ['gpt-*']\ncpa-url: '" + value + "'\n")); err == nil {
+		if _, err := Parse([]byte("cpa-url: '" + value + "'\n")); err == nil {
 			t.Errorf("cpa-url %q accepted", value)
+		}
+	}
+}
+
+func TestParseDataDir(t *testing.T) {
+	settings, err := Parse([]byte("data-dir: /CLIProxyAPI/plugins/data/codex-catalog-filter\n"))
+	if err != nil || settings.DataDir != "/CLIProxyAPI/plugins/data/codex-catalog-filter" {
+		t.Fatalf("data-dir = %+v, %v", settings, err)
+	}
+	for _, value := range []string{"relative/dir", "/tmp/../etc", "/tmp/x/", "/"} {
+		if _, err := Parse([]byte("data-dir: '" + value + "'\n")); err == nil {
+			t.Errorf("data-dir %q accepted", value)
 		}
 	}
 }
@@ -73,7 +82,8 @@ func TestParseCPAURL(t *testing.T) {
 func TestParseToleratesHostStoreMetadata(t *testing.T) {
 	doc := `enabled: true
 priority: 0
-include: ["gpt-*"]
+models:
+  claude-x: false
 store:
   schema-version: 2
   id: codex-catalog-filter
@@ -91,25 +101,28 @@ store:
 }
 
 func TestParseRejectsInvalidConfiguration(t *testing.T) {
-	many := make([]string, maxPatterns+1)
-	for i := range many {
-		many[i] = fmt.Sprintf("'m-%d'", i)
+	var many strings.Builder
+	many.WriteString("models:\n")
+	for i := range maxSwitches + 1 {
+		fmt.Fprintf(&many, "  m-%d: false\n", i)
 	}
 	cases := map[string]string{
-		"empty":              "",
-		"misspelled key":     "inlcude: ['gpt-*']\n",
-		"unknown action":     "include: ['gpt-*']\naction: drop\n",
-		"scalar include":     "include: gpt-*\n",
-		"malformed glob":     "include: ['gpt-[0-9']\n",
-		"malformed exclude":  "include: ['gpt-*']\nexclude: ['[']\n",
-		"empty pattern":      "include: ['']\n",
-		"padded pattern":     "include: [' gpt-*']\n",
-		"long pattern":       "include: ['" + strings.Repeat("a", maxPatternBytes+1) + "']\n",
-		"too many patterns":  "include: [" + strings.Join(many, ",") + "]\n",
-		"store not mapping":  "include: ['gpt-*']\nstore: yes\n",
-		"two documents":      "include: ['gpt-*']\n---\ninclude: ['x']\n",
-		"not a mapping":      "- gpt-*\n",
-		"oversized document": "include: ['gpt-*']\n#" + strings.Repeat("x", maxDocumentBytes) + "\n",
+		"empty":               "",
+		"unknown key":         "modles:\n  claude-x: false\n",
+		"retired include key": "include: ['gpt-*']\n",
+		"unknown action":      "action: drop\n",
+		"unknown new-models":  "new-models: maybe\n",
+		"non-boolean switch":  "models:\n  claude-x: maybe\n",
+		"string switch":       "models:\n  claude-x: 'false'\n",
+		"models not a map":    "models: [claude-x]\n",
+		"empty slug":          "models:\n  '': false\n",
+		"padded slug":         "models:\n  ' claude-x': false\n",
+		"long slug":           "models:\n  '" + strings.Repeat("a", maxSlugBytes+1) + "': false\n",
+		"too many switches":   many.String(),
+		"store not mapping":   "store: yes\n",
+		"two documents":       "models: {a: false}\n---\nmodels: {b: false}\n",
+		"not a mapping":       "- claude-x\n",
+		"oversized document":  "enabled: true\n#" + strings.Repeat("x", maxDocumentBytes) + "\n",
 	}
 	for name, doc := range cases {
 		if _, err := Parse([]byte(doc)); err == nil {

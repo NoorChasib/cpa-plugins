@@ -30,6 +30,13 @@ var fixture = []struct{ slug, raw string }{
 
 var targetSet = []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
+// offOthers switches off everything but the GPT target set and auto review,
+// leaving new models enabled: the setup the settings page produces.
+var offOthers = map[string]bool{
+	"claude-fable-5-1": false, "gpt-reserve": false, "grok-4.7": false, "or-kimi-k2": false,
+	"cpa-sonnet": false, "gpt-image-2": false, "claude-opus-5-5": false,
+}
+
 func fixtureBody(keep func(slug string) (raw string, ok bool)) string {
 	var parts []string
 	for _, e := range fixture {
@@ -40,16 +47,27 @@ func fixtureBody(keep func(slug string) (raw string, ok bool)) string {
 	return `{"models":[` + strings.Join(parts, ",") + `]}`
 }
 
-func mustRules(t *testing.T, include, exclude []string, action Action) *Rules {
+func fullBody() []byte {
+	return []byte(fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true }))
+}
+
+func rawOf(slug string) string {
+	for _, e := range fixture {
+		if e.slug == slug {
+			return e.raw
+		}
+	}
+	panic(slug)
+}
+
+func mustRules(t *testing.T, models map[string]bool, enableNew bool, action Action) *Rules {
 	t.Helper()
-	r, err := NewRules(include, exclude, action)
+	r, err := NewRules(models, enableNew, action)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
-
-var codexOnly = []string{"gpt-[0-9]*", "codex-*"}
 
 type decoded struct {
 	Models []struct {
@@ -77,10 +95,9 @@ func (d decoded) slugs(visibility string) []string {
 	return out
 }
 
-func TestRemoveKeepsOnlyMatchingEntriesVerbatim(t *testing.T) {
-	r := mustRules(t, codexOnly, nil, Remove)
-	input := fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true })
-	got := r.Rewrite([]byte(input))
+func TestRemoveDropsSwitchedOffEntriesAndKeepsTheRestVerbatim(t *testing.T) {
+	r := mustRules(t, offOthers, true, Remove)
+	got := r.Rewrite(fullBody())
 	want := fixtureBody(func(slug string) (string, bool) { return rawOf(slug), r.Allows(slug) })
 	if string(got) != want {
 		t.Fatalf("remove output differs\n got: %s\nwant: %s", got, want)
@@ -94,10 +111,9 @@ func TestRemoveKeepsOnlyMatchingEntriesVerbatim(t *testing.T) {
 	}
 }
 
-func TestHideRewritesOnlyVisibilityOfOtherEntries(t *testing.T) {
-	r := mustRules(t, codexOnly, nil, Hide)
-	input := fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true })
-	got := r.Rewrite([]byte(input))
+func TestHideRewritesOnlyVisibilityOfSwitchedOffEntries(t *testing.T) {
+	r := mustRules(t, offOthers, true, Hide)
+	got := r.Rewrite(fullBody())
 	want := fixtureBody(func(slug string) (string, bool) {
 		raw := rawOf(slug)
 		if !r.Allows(slug) {
@@ -117,17 +133,8 @@ func TestHideRewritesOnlyVisibilityOfOtherEntries(t *testing.T) {
 	}
 }
 
-func rawOf(slug string) string {
-	for _, e := range fixture {
-		if e.slug == slug {
-			return e.raw
-		}
-	}
-	panic(slug)
-}
-
 func TestHideAddsMissingVisibility(t *testing.T) {
-	r := mustRules(t, []string{"gpt-*"}, nil, Hide)
+	r := mustRules(t, map[string]bool{"claude-x": false}, true, Hide)
 	got := r.Rewrite([]byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x" ,"n":1 }]}`))
 	want := `{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x" ,"n":1 ,"visibility":"hide"}]}`
 	if string(got) != want {
@@ -135,41 +142,36 @@ func TestHideAddsMissingVisibility(t *testing.T) {
 	}
 }
 
-func TestIncludeExcludeActionCombinations(t *testing.T) {
-	input := []byte(fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true }))
+func TestSwitchesOverrideTheNewModelSetting(t *testing.T) {
 	cases := []struct {
-		name             string
-		include, exclude []string
-		action           Action
-		listed, all      []string
+		name        string
+		models      map[string]bool
+		enableNew   bool
+		listed, all []string
 	}{
 		{
-			name: "exclude narrows include", include: codexOnly, exclude: []string{"gpt-5.5", "gpt-6-luna"}, action: Remove,
-			listed: []string{"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
-			all:    []string{"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "codex-auto-review"},
+			name: "new models enabled, some switched off", models: map[string]bool{"claude-fable-5-1": false, "grok-4.7": false, "gpt-5.5": false}, enableNew: true,
+			listed: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "or-kimi-k2", "gpt-5.6-luna", "cpa-sonnet", "claude-opus-5-5"},
+			all:    []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-reserve", "gpt-5.6-sol", "gpt-5.6-terra", "or-kimi-k2", "gpt-5.6-luna", "cpa-sonnet", "gpt-image-2", "codex-auto-review", "claude-opus-5-5"},
 		},
 		{
-			name: "exclude wins over an exact include", include: []string{"gpt-5.5", "gpt-6-sol"}, exclude: []string{"gpt-5.*"}, action: Remove,
+			name: "new models disabled, some switched on", models: map[string]bool{"gpt-6-sol": true, "gpt-5.5": true, "codex-auto-review": true}, enableNew: false,
+			listed: []string{"gpt-6-sol", "gpt-5.5"},
+			all:    []string{"gpt-6-sol", "gpt-5.5", "codex-auto-review"},
+		},
+		{
+			name: "an explicit on is kept even when it matches the default", models: map[string]bool{"gpt-6-sol": true, "claude-fable-5-1": false}, enableNew: true,
+			listed: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "grok-4.7", "gpt-5.6-terra", "or-kimi-k2", "gpt-5.6-luna", "cpa-sonnet", "gpt-5.5", "claude-opus-5-5"},
+			all:    []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-reserve", "gpt-5.6-sol", "grok-4.7", "gpt-5.6-terra", "or-kimi-k2", "gpt-5.6-luna", "cpa-sonnet", "gpt-5.5", "gpt-image-2", "codex-auto-review", "claude-opus-5-5"},
+		},
+		{
+			name: "new models disabled drops auto review unless switched on", models: map[string]bool{"gpt-6-sol": true}, enableNew: false,
 			listed: []string{"gpt-6-sol"}, all: []string{"gpt-6-sol"},
-		},
-		{
-			name: "exclude glob with hide", include: []string{"*"}, exclude: []string{"claude-*", "grok-*", "or-*", "cpa-*"}, action: Hide,
-			listed: targetSet,
-			all:    fixtureSlugs(),
-		},
-		{
-			name: "include without codex-* drops auto review", include: []string{"gpt-[0-9]*"}, action: Remove,
-			listed: targetSet, all: targetSet,
-		},
-		{
-			name: "several include patterns", include: []string{"gpt-6-*", "claude-*"}, action: Remove,
-			listed: []string{"gpt-6-astra", "gpt-6-sol", "claude-fable-5-1", "gpt-6-luna", "claude-opus-5-5"},
-			all:    []string{"gpt-6-astra", "gpt-6-sol", "claude-fable-5-1", "gpt-6-luna", "claude-opus-5-5"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mustRules(t, tc.include, tc.exclude, tc.action).Rewrite(input)
+			got := mustRules(t, tc.models, tc.enableNew, Remove).Rewrite(fullBody())
 			if got == nil {
 				t.Fatal("expected a rewrite")
 			}
@@ -184,41 +186,41 @@ func TestIncludeExcludeActionCombinations(t *testing.T) {
 	}
 }
 
-func fixtureSlugs() []string {
-	var out []string
-	for _, e := range fixture {
-		out = append(out, e.slug)
+func TestSwitchesForModelsNotInTheCatalogAreHarmless(t *testing.T) {
+	r := mustRules(t, map[string]bool{"retired-model": false, "claude-fable-5-1": false}, true, Remove)
+	d := decode(t, r.Rewrite(fullBody()))
+	if slices.Contains(d.slugs(""), "claude-fable-5-1") || len(d.slugs("")) != len(fixture)-1 {
+		t.Fatalf("entries = %v", d.slugs(""))
 	}
-	return out
 }
 
 func TestPreservesFormattingAndOtherTopLevelMembers(t *testing.T) {
 	input := "\n{ \"etag\": \"abc\",\n  \"models\" : [\n    {\"slug\": \"claude-x\", \"visibility\": \"list\"},\n    {\"slug\": \"gpt-6-sol\", \"visibility\": \"list\"} ,\n    {\"slug\": \"gpt-5.5\",\n     \"visibility\": \"list\"}\n  ],\n  \"z\": [1, 2]\n}\n"
+	off := map[string]bool{"claude-x": false}
 	removeWant := "\n{ \"etag\": \"abc\",\n  \"models\" : [\n    {\"slug\": \"gpt-6-sol\", \"visibility\": \"list\"} ,\n    {\"slug\": \"gpt-5.5\",\n     \"visibility\": \"list\"}\n  ],\n  \"z\": [1, 2]\n}\n"
-	if got := mustRules(t, codexOnly, nil, Remove).Rewrite([]byte(input)); string(got) != removeWant {
+	if got := mustRules(t, off, true, Remove).Rewrite([]byte(input)); string(got) != removeWant {
 		t.Fatalf("remove:\n%q\nwant\n%q", got, removeWant)
 	}
 	hideWant := strings.Replace(input, `{"slug": "claude-x", "visibility": "list"}`, `{"slug": "claude-x", "visibility": "hide"}`, 1)
-	if got := mustRules(t, codexOnly, nil, Hide).Rewrite([]byte(input)); string(got) != hideWant {
+	if got := mustRules(t, off, true, Hide).Rewrite([]byte(input)); string(got) != hideWant {
 		t.Fatalf("hide:\n%q\nwant\n%q", got, hideWant)
 	}
 }
 
 func TestRemovingTheLastEntryKeepsValidSeparators(t *testing.T) {
-	got := mustRules(t, []string{"gpt-*"}, nil, Remove).Rewrite([]byte(`{"models":[{"slug":"gpt-a","visibility":"list"}, {"slug":"x","visibility":"list"}]}`))
+	got := mustRules(t, map[string]bool{"x": false}, true, Remove).Rewrite([]byte(`{"models":[{"slug":"gpt-a","visibility":"list"}, {"slug":"x","visibility":"list"}]}`))
 	if string(got) != `{"models":[{"slug":"gpt-a","visibility":"list"}]}` {
 		t.Fatalf("got %s", got)
 	}
 }
 
 func TestPassesThroughAnythingElse(t *testing.T) {
-	r := mustRules(t, codexOnly, nil, Remove)
-	full := fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true })
+	r := mustRules(t, map[string]bool{"claude-x": false, "grok-4.7": false, "claude-fable-5-1": false}, true, Remove)
+	full := string(fullBody())
 	cases := map[string]string{
 		"openai list":             `{"object":"list","data":[{"id":"gpt-6-sol","object":"model"},{"id":"claude-fable-5-1","object":"model"}]}`,
 		"claude list":             `{"data":[{"id":"claude-fable-5-1","type":"model","display_name":"Claude"}],"has_more":false,"first_id":"claude-fable-5-1","last_id":"claude-fable-5-1"}`,
 		"gemini list":             `{"models":[{"name":"models/gemini-3-pro","displayName":"Gemini 3 Pro"},{"name":"models/claude-x"}]}`,
-		"grok list":               `{"object":"list","data":[{"id":"grok-4.7","model":"grok-4.7","name":"Grok"}]}`,
 		"malformed":               `{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x"`,
 		"trailing garbage":        full + `x`,
 		"two documents":           full + ` {}`,
@@ -242,33 +244,65 @@ func TestPassesThroughAnythingElse(t *testing.T) {
 			t.Errorf("%s: rewrote to %s", name, got)
 		}
 	}
-	if got := mustRules(t, codexOnly, nil, Hide).Rewrite([]byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"hide"}]}`)); got != nil {
+	if got := mustRules(t, map[string]bool{"claude-x": false}, true, Hide).Rewrite([]byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"hide"}]}`)); got != nil {
 		t.Errorf("hide of an already hidden entry rewrote to %s", got)
 	}
-	if got := mustRules(t, nil, nil, Remove).Rewrite([]byte(full)); got != nil {
-		t.Errorf("idle rules rewrote to %s", got)
+	for name, idle := range map[string]*Rules{
+		"no switches":        mustRules(t, nil, true, Remove),
+		"only switches on":   mustRules(t, map[string]bool{"gpt-6-sol": true}, true, Remove),
+		"nil rules (unused)": nil,
+	} {
+		if got := idle.Rewrite([]byte(full)); got != nil || !idle.Idle() {
+			t.Errorf("%s rewrote to %s", name, got)
+		}
 	}
-	var nilRules *Rules
-	if got := nilRules.Rewrite([]byte(full)); got != nil || !nilRules.Idle() {
-		t.Errorf("nil rules rewrote to %s", got)
+	if mustRules(t, nil, false, Remove).Idle() {
+		t.Error("rules disabling every new model reported idle")
 	}
 }
 
-func TestNewRulesRejectsBadInput(t *testing.T) {
-	if _, err := NewRules([]string{"gpt-*"}, nil, "drop"); err == nil {
+func TestNewRulesRejectsAnUnknownAction(t *testing.T) {
+	if _, err := NewRules(nil, true, "drop"); err == nil {
 		t.Error("unknown action accepted")
 	}
-	if _, err := NewRules([]string{"gpt-[0-9"}, nil, Remove); err == nil {
-		t.Error("malformed include accepted")
+}
+
+func TestRulesExposeTheirSettings(t *testing.T) {
+	r := mustRules(t, map[string]bool{"a": false, "b": true}, false, Hide)
+	switches := r.Switches()
+	switches["a"] = true // a copy: the rules must not change
+	if enabled, ok := r.Switched("a"); !ok || enabled || r.EnableNew() || r.Action() != Hide {
+		t.Fatalf("settings = %v %v %v %v", enabled, ok, r.EnableNew(), r.Action())
 	}
-	if _, err := NewRules([]string{"gpt-*"}, []string{"["}, Remove); err == nil {
-		t.Error("malformed exclude accepted")
+	if _, ok := r.Switched("c"); ok {
+		t.Fatal("unswitched slug reported as switched")
+	}
+}
+
+func TestSummarizeListsEntriesInOrder(t *testing.T) {
+	entries, ok := Summarize(fullBody())
+	if !ok || len(entries) != len(fixture) {
+		t.Fatalf("summary = %v, %v", entries, ok)
+	}
+	if entries[0] != (Entry{Slug: "gpt-6-astra", DisplayName: "GPT-6 Astra", Visibility: "list"}) ||
+		entries[3] != (Entry{Slug: "gpt-6-luna", Visibility: "list"}) ||
+		entries[13] != (Entry{Slug: "codex-auto-review", DisplayName: "Codex Auto Review", Visibility: "hide"}) {
+		t.Fatalf("summary = %+v", entries)
+	}
+	for _, body := range []string{`{"object":"list","data":[]}`, `{"models":[{"name":"models/x"}]}`, `{"models":[`, ``} {
+		if _, ok := Summarize([]byte(body)); ok {
+			t.Errorf("summarized %q", body)
+		}
+	}
+	odd, ok := Summarize([]byte(`{"models":[{"slug":"x","display_name":7,"visibility":null}]}`))
+	if !ok || odd[0] != (Entry{Slug: "x"}) {
+		t.Fatalf("odd field types = %+v, %v", odd, ok)
 	}
 }
 
 func BenchmarkRewriteRemove(b *testing.B) {
-	r, _ := NewRules(codexOnly, nil, Remove)
-	body := []byte(fixtureBody(func(slug string) (string, bool) { return rawOf(slug), true }))
+	r, _ := NewRules(offOthers, true, Remove)
+	body := fullBody()
 	for b.Loop() {
 		if r.Rewrite(body) == nil {
 			b.Fatal("no rewrite")

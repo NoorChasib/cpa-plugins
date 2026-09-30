@@ -1,20 +1,22 @@
-# Merge into the existing plugins mapping of CPA's config.yaml.
+# Merge into the existing plugins mapping of CPA's config.yaml. The Codex Models
+# page in CPA's console writes the models map for you.
 plugins:
   enabled: true
   configs:
     codex-catalog-filter:
       enabled: true
-      # Slugs Codex keeps. Without at least one pattern, the catalog is served unfiltered.
-      include:
-        - "gpt-[0-9]*"
-        - "codex-*" # keeps codex-auto-review for approvals_reviewer = "auto_review"
-      # Slugs dropped even when include matches them.
-      # exclude:
-      #   - "gpt-6.1-*"
-      # remove (default) deletes other entries; hide keeps them selectable by name.
+      # Per-model switches: true = in Codex, false = not.
+      # models:
+      #   claude-fable-5-1: false
+      #   grok-4.7: false
+      # Models without a switch: enabled (default) or disabled.
+      # new-models: enabled
+      # Switched-off models: remove (default) or hide, which keeps them selectable by name.
       # action: remove
       # Where the plugin reads CPA's own catalog, from inside CPA's container.
       # cpa-url: "http://127.0.0.1:8317"
+      # Where the last model list is kept (absolute path).
+      # data-dir: "/CLIProxyAPI/plugins/data/codex-catalog-filter"
 
 # Then, in Codex's config.toml, on the provider that already uses CPA:
 #   model_catalog_url = "http://your-cpa-host:8317/v0/resource/plugins/codex-catalog-filter/models"

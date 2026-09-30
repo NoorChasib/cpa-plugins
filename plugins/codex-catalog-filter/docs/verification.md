@@ -1,62 +1,96 @@
 # Verification record: Codex Catalog Filter 0.1.0
 
-Local results from 2026-09-29 on Linux amd64 with Go 1.27.1 and GCC 15.2.0, before the first release. Hosted CI reruns the same `make ci` and `make smoke` gates on each pull request and release. No real provider credentials or production configuration were used, and no production state was changed.
+Local results from 2026-09-30 on Linux amd64 with Go 1.27.1 and GCC 15.2.0, before the first release. Hosted CI reruns the same `make ci` and `make smoke` gates on each pull request and release. No real provider credentials or production configuration were used, and no production state was changed.
 
 ## Unit, race, and static checks
 
-`make ci` passed: gofmt, `go vet`, `go test`, `go test -race`, and the Linux amd64 `c-shared` build.
+`make ci` passed: gofmt, `go vet`, `go test`, `go test -race`, and the Linux amd64 `c-shared` build. `node --check` accepts the page script.
 
 | Area | Covered |
 | --- | --- |
 | Catalog rewrite | Remove and hide produce byte-exact expected output; kept entries, separators, other top-level members, and pretty-printed formatting are preserved; a missing `visibility` is added; order is preserved |
+| Switches | A switch overrides `new-models` both ways; `new-models: disabled` keeps only models switched on; switches for models not in the catalog are harmless; no switch off with new models enabled is idle |
 | Fail-open | Malformed or truncated JSON, trailing data, a second document, non-object bodies, empty or non-array `models`, entries without a string slug, duplicate members, nothing to change, and nothing left listed all return CPA's body unchanged |
-| Rules | Include/exclude/action combinations; exclude beats an exact include; `codex-auto-review` is kept by `codex-*` and dropped without it |
-| Globs | `*` across `/` and newlines, `?`, classes, ranges, negation, literal `]` and `-`, escapes, Unicode; malformed patterns rejected |
-| Configuration | Default `remove`; `hide`; idle without `include`; `cpa-url` defaults to `http://127.0.0.1:8317` and accepts only an http(s) origin; host `enabled`, `priority`, and `store` keys tolerated; unknown keys, bad actions, bad globs, bad patterns, extra documents, and oversized documents rejected |
-| Catalog URL | Registration advertises only `management_api` and one menu-less `/models` resource. Serving filters CPA's catalog read with the caller's key: path, `client_version` (always sent), and `Authorization` forwarded, and nothing else, including `Anthropic-Version` and unrelated headers. CPA's 401 is passed through. An unreachable, 5xx, redirecting, slow, or oversized CPA gives `502`. Other paths and methods give `404` without contacting CPA; before configuration and after shutdown, `503`. Rejected reconfiguration keeps the previous rules; concurrent serving and reconfiguration pass under `-race` |
+| Summary | The page's list keeps catalog order, display names, and CPA's visibility; non-catalog bodies are refused |
+| Configuration | Defaults; `models` map with `true`/`false` (YAML `on`/`off` too); `new-models`; `action`; `cpa-url` accepts only an http(s) origin; `data-dir` accepts only a clean absolute path; host `enabled`, `priority`, and `store` keys tolerated; unknown and retired keys (`include`), non-boolean switches, bad slugs, too many switches, extra documents, and oversized documents rejected |
+| Catalog URL | Filters CPA's catalog read with the caller's key: path, `client_version` (always sent), and `Authorization` forwarded, and nothing else. CPA's 401 is passed through. An unreachable, 5xx, redirecting, slow, or oversized CPA gives `502` |
+| Routes | Registration advertises only `management_api`: one menu-less private `GET /state` route, the menu-less catalog resource, and the `Codex Models` page resource. Only exact GETs are answered; everything else is `404` without contacting CPA; before configuration and after shutdown, `503` |
+| State | Empty before Codex's first fetch; afterwards, every model in order with its effective state and whether it was switched; all saved switches; a rejected fetch is not remembered |
+| Saved list | Written with mode 0600 and only slugs, names, and visibility; reloaded after a restart without contacting CPA; rewritten on change or hourly, not on every fetch; a corrupt file is ignored; an unwritable directory still serves and reports `saved: false` |
+| Page | Fixed bytes whatever the request; hash-pinned script and style in the CSP, `connect-src 'self'`, `frame-ancestors 'self'` |
 | ABI | Envelope shapes; a full native round trip through the real plugin; errors and panics never echo payloads; shutdown drains an admitted call |
 
-Seven targeted mutations of the key forwarding, filtering, error passthrough, `client_version`, header forwarding, route matching, and size-limit logic were each caught.
+Targeted mutations were each caught:
 
-`FuzzRewrite` checks every rewrite against an independent decode: valid JSON, other top-level members unchanged, exactly the allowed entries in order (others hidden under `hide`), and at least one listed entry. It ran about 9.9 million inputs over 60 seconds with no failure; `FuzzGlob` ran 20 seconds without a panic. Their seeds run with every `go test`.
+- key forwarding, header forwarding, `client_version`, and route matching;
+- filtering, error passthrough, and the size limit;
+- switch precedence and the `new-models` setting;
+- the state's `switched` flag;
+- remembering, reloading, and the hourly rewrite limit of the saved list.
+
+`FuzzRewrite` checks every rewrite against an independent decode: valid JSON, other top-level members unchanged, exactly the enabled entries in order (others hidden under `hide`), and at least one listed entry. It ran about 5.2 million inputs in 45 seconds with no failure, after about 9.9 million in 60 seconds on the earlier rules. Its seeds run with every `go test`.
 
 ## Official CPA v8.0.4 image
 
-`make smoke` passed five consecutive times. It runs the built library in `eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d`, whose log reports `CLIProxyAPI Version: v8.0.4, Commit: d33f63f`. The library is installed under the Plugin Store's name and layout, `plugins/linux/amd64/codex-catalog-filter-v0.1.0.so`. Models come from synthetic static Codex, Claude, xAI, and OpenAI-compatible API-key groups.
+`make smoke` passed three consecutive times. It runs the built library in `eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d`, whose log reports `CLIProxyAPI Version: v8.0.4, Commit: d33f63f`, with a v8-layout configuration.
+
+- The library is installed under the Plugin Store's name and layout, `plugins/linux/amd64/codex-catalog-filter-v0.1.0.so`.
+- Models come from synthetic static Codex, Claude, xAI, and OpenAI-compatible API-key groups.
+- Switches are saved through CPA's own `PATCH /v0/management/plugins/codex-catalog-filter/config`, exactly as the page does.
 
 | Step | Result |
 | --- | --- |
-| Load | CPA loads and registers the plugin at version 0.1.0, enabled, with no sidebar entry |
-| Idle (no `include`) | The plugin URL serves CPA's 18-entry catalog (590,828 bytes) byte for byte, as `application/json; charset=utf-8` |
-| `include: [gpt-[0-9]*, codex-*]` (default `remove`) | 9 entries (568,006 bytes), byte-identical to CPA's catalog with non-matching entries removed. Listed: `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`. `codex-auto-review` kept as `hide` |
+| Load | CPA loads and registers the plugin, enabled, with one sidebar entry: `Codex Models` at `/v0/resource/plugins/codex-catalog-filter/settings` |
+| Before Codex fetches | The state route reports no list, no switches, `new-models: enabled`, `action: remove` |
+| No switches | The catalog URL serves CPA's 18-entry catalog (590,828 bytes) byte for byte; the state route then lists all 18, all on and unswitched |
+| Four non-GPT models switched off | 14 entries (580,660 bytes), byte-identical to CPA's catalog without them. Listed: the eight GPT models; `codex-auto-review` and the image models kept as `hide`. The state route marks the four as switched off |
 | CPA's own lists | `GET /v1/models`, with and without `client_version`, still list every model |
-| `action: hide` | All 18 entries kept, byte-identical except the changed `visibility` values |
-| `exclude: [gpt-5.5]` | Removed, byte-exact |
+| `action: hide` | All 18 entries kept, same listed set |
+| `new-models: disabled`, two switched on | Only `gpt-6-sol` listed and `codex-auto-review` hidden |
 | No key, six times, then a wrong key | Each gets CPA's `401`; the management API still answers afterwards |
-| Other paths, `POST` | `404` |
-| `action: drop` | CPA deactivates the plugin and the URL returns `404`; fixing the value brings it back without a restart |
-| Restart | The persisted configuration serves the filtered catalog from startup |
+| Other paths, `POST`, the state path as a resource | `404` |
+| Page | `200 text/html` with the locked-down CSP and no model data |
+| A non-boolean switch | CPA deactivates the plugin and the URL returns `404`; fixing it brings it back without a restart |
+| Saved list | `plugins/data/codex-catalog-filter/catalog.json` exists and holds no instructions |
+| Restart | Before any new Codex fetch, the state route lists the saved models; the switches apply from startup |
 
-Each comparison reads CPA's own catalog in the same attempt as the plugin URL. CPA can refresh model metadata in the background after startup, and an early run that compared against a catalog captured at startup failed once for that reason. Five further runs of that earlier version did not reproduce it.
+Each comparison reads CPA's own catalog in the same attempt as the plugin URL, because CPA can refresh model metadata in the background after startup.
 
-CPA v8.0.4's built-in Codex model list includes `gpt-6.1-sol`, which `gpt-[0-9]*` keeps. That is intended: new GPT models appear without a configuration change.
+## The Codex Models page in a real browser
+
+The page ran in Chromium through agent-browser, against a throwaway CPA v8.0.4 container with the plugin and `grok-4.7` switched off in config. One simulated Codex fetch through the catalog URL filled the list.
+
+- **No console session:** the page showed the sign-in guidance, and CPA's log showed no request to the state route.
+- **With a remembered console session** (the Management Center's `cli-proxy-auth` record, set in local storage):
+  - All 18 models were listed with their switches, display names, and notes. `grok-4.7` showed "Set by you"; CPA-hidden models and `codex-auto-review` were marked.
+  - The counter read "17 of 18 on · 11 in the picker", and the exact `model_catalog_url` line was shown.
+- **Group switch:**
+  - Filtering on "claude" matched `claude-fable-5-1` and `cpa-sonnet`, whose display name is `claude-sonnet-5-5`.
+  - **Disable shown** and **Save** wrote both switches to `config.yaml` beside the existing `grok-4.7: false`.
+  - The catalog URL immediately listed only the GPT models plus `or-kimi-k2`.
+- **Single switch:** switching `or-kimi-k2` off and saving left exactly the eight GPT models listed. The whole session made two `PATCH` and three state requests, all `200`.
+- **After a CPA restart:** the page still listed every model with no new Codex fetch.
+- **Discard:** it restored a pending switch and disabled **Save**.
+- **Stale switch:** a switch for a model not in the list appeared under "Switches for models Codex was not offered". **Forget** and **Save** removed it from `config.yaml`.
+
+Not covered by an automated browser test in CI. The console's obfuscated (`enc::v1::`) storage and legacy fallback use Token Usage's audited reader unchanged, but were not exercised here.
 
 ## Codex CLI
 
-Codex CLI 0.159.1 ran against a throwaway CPA container with the plugin configured. It used an isolated temporary `CODEX_HOME` with `model_catalog_url` set to the plugin URL and command-based provider auth, like a Keychain-backed setup. It never touched a real Codex configuration.
+Codex CLI 0.159.1 ran against a throwaway CPA container with `model_catalog_url` set to the plugin URL. It used an isolated temporary `CODEX_HOME` with command-based provider auth, like a Keychain-backed setup.
 
-- `codex debug models` listed `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-5.5`. Hidden entries were `codex-auto-review` and the bundled `gpt-daybreak-blue-latest` and `gpt-daybreak-red-latest`, which shows Codex merged the catalog into its bundled one.
-- CPA's log showed Codex requesting `/v0/resource/plugins/codex-catalog-filter/models?client_version=0.159.1`, and the plugin requesting `/v1/models?client_version=0.159.1` from `127.0.0.1`.
-- With `model_catalog_url` pointed at a missing path and no cache, Codex got a `404` and showed its bundled catalog. `codex debug models --bundled` confirms that list is OpenAI models only, and includes `gpt-6.1-sol` in 0.159.1.
+- **`codex debug models`** listed only the models the configuration kept. The hidden entries included `codex-auto-review` and the bundled `gpt-daybreak-*`, which shows Codex merged the catalog into its bundled one.
+- **CPA's log** showed Codex requesting the plugin URL with `client_version=0.159.1`, and the plugin requesting `/v1/models` from `127.0.0.1`.
+- **With `model_catalog_url` at a missing path and no cache,** Codex got a `404` and showed its bundled, OpenAI-only catalog.
 
-Earlier, while the plugin rewrote CPA's own response instead of serving a URL, Codex 0.159.0 against the same synthetic models showed that excluding a model Codex also bundles (`gpt-5.5`) under `remove` leaves Codex's bundled copy listed, while `hide` hides it. That behavior belongs to Codex's merge, not to where the catalog comes from.
+Separately, excluding a model Codex also bundles (`gpt-5.5`) under `remove` left Codex's bundled copy listed, while `hide` hid it. That comes from Codex's merge, not from the plugin.
 
 ## Suite coexistence in CPA v7.2.155
 
-`python3 scripts/quota-cache-smoke.py --candidate codex-catalog-filter` passed: the candidate loaded and registered alongside the six published peers in the suite's pinned v7.2.155 image, with status routes, persistence, restart, and both optional-cache modes checked. A run with `--candidate token-usage` also passed and skipped the unreleased plugin, as the release tooling now does for any peer without a catalog entry. The full no-candidate suite, as `quota-cache` CI runs it, passed with all seven local libraries. `python3 -m unittest discover -s scripts/tests` (10 tests) and `python3 scripts/check-catalog.py` passed.
+`python3 scripts/quota-cache-smoke.py --candidate codex-catalog-filter` and the full no-candidate suite, as `quota-cache` CI runs it, both passed. The plugin loaded and registered alongside the six other plugins, with status routes, persistence, restart, and both optional-cache modes checked. A run with another plugin as the candidate skips the unreleased plugin, as the release tooling now does for any peer without a catalog entry. `python3 -m unittest discover -s scripts/tests` (10 tests) and `python3 scripts/check-catalog.py` passed.
 
 ## Not verified here
 
 - The production CPA instance and your real Codex configuration.
-- Serving the catalog on CPA releases other than v8.0.4.
+- Serving the catalog or the page on CPA releases other than v8.0.4.
 - Platforms other than Linux amd64.

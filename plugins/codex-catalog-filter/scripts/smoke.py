@@ -4,14 +4,14 @@
 The unit tests call Handle() in process against a stand-in for CPA. Only this
 proves that the official image loads the library, registers its resource
 route, lets the plugin fetch CPA's own Codex catalog over loopback with the
-caller's key, and serves the filtered result at the URL Codex is pointed at,
-while CPA's own model lists stay byte-identical.
+caller's key, and serves the filtered result at the URL Codex is pointed at;
+that the Codex Models page and its private state route work; and that
+switches saved through CPA's own config API apply without a restart.
 
 No real accounts or provider requests: models come from synthetic static
 config. Both keys are synthetic keys for this throwaway container only.
 """
 import argparse
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -28,8 +28,11 @@ PLUGIN = 'codex-catalog-filter'
 CLIENT_KEY = 'synthetic-local-client-key'
 MANAGEMENT_KEY = 'synthetic-local-smoke-key'
 CATALOG = '/v0/resource/plugins/codex-catalog-filter/models?client_version=0.159.0'
+SETTINGS = '/v0/resource/plugins/codex-catalog-filter/settings'
+STATE = '/plugins/codex-catalog-filter/state'
 CODEX_QUERY = '/v1/models?client_version=0.159.0'
-INCLUDE = ['gpt-[0-9]*', 'codex-*']
+# What the Codex Models page saves to leave only GPT models listed.
+OFF = {'claude-fable-5-1': False, 'cpa-sonnet': False, 'or-kimi-k2': False, 'grok-4.7': False}
 # Codex's current picker set, which CPA v8.0.4 registers for a Codex API key.
 TARGET = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']
 FIXTURE = TARGET + ['codex-auto-review', 'claude-fable-5-1', 'cpa-sonnet', 'or-kimi-k2', 'grok-4.7']
@@ -106,14 +109,10 @@ def split_entries(body):
     return entries
 
 
-def allowed(slug, include, exclude):
-    return any(fnmatch.fnmatchcase(slug, p) for p in include) and not any(fnmatch.fnmatchcase(slug, p) for p in exclude)
-
-
-def expected(baseline, include, exclude, action):
+def expected(baseline, switches, enable_new=True, action='remove'):
     kept = []
     for slug, _, raw in split_entries(baseline):
-        if allowed(slug, include, exclude):
+        if switches.get(slug, enable_new):
             kept.append(raw)
         elif action == 'hide':
             assert raw.count(b'"visibility":') == 1, slug + ': visibility is not a single member'
@@ -214,30 +213,47 @@ def main():
             record = {p['id']: p for p in management('/plugins')['plugins']}[PLUGIN]
             assert record['registered'] and record['effective_enabled'], 'plugin inactive'
             assert record['metadata']['version'] == args.version, 'unexpected plugin version'
-            assert not record.get('menus'), 'the catalog endpoint must not add a sidebar entry'
+            assert record.get('menus') == [{'path': SETTINGS, 'menu': 'Codex Models', 'description': 'Choose which models Codex shows.'}], record.get('menus')
 
-            # Idle (no include): the URL serves CPA's catalog byte for byte.
+            # Before Codex has fetched, the page has no list to show.
+            state = management(STATE)
+            assert state['seen_at'] is None and state['models'] == [] and state['switches'] == {}, state
+            assert (state['new_models'], state['action']) == ('enabled', 'remove'), state
+
+            # No switches: the URL serves CPA's catalog byte for byte.
             codex, (_, headers, _) = await_served(lambda direct: direct, 'idle catalog')
             assert headers.get('Content-Type') == 'application/json; charset=utf-8'
             print(f'Idle: the plugin URL serves CPA\'s {len(split_entries(codex))}-entry catalog unchanged ({len(codex)} bytes)')
 
-            codex, (_, _, body) = reconfigure({'include': INCLUDE}, lambda d: expected(d, INCLUDE, [], 'remove'), 'remove')
+            # The page's private route now lists what Codex was just offered.
+            state = management(STATE)
+            assert [m['slug'] for m in state['models']] == [s for s, _, _ in split_entries(codex)], 'state list differs from the catalog'
+            assert all(m['enabled'] and not m['switched'] for m in state['models']) and state['seen_at'], state
+            print(f'State: the Codex Models list shows all {len(state["models"])} models, every one on by default')
+
+            codex, (_, _, body) = reconfigure({'models': OFF}, lambda d: expected(d, OFF), 'switches')
             entries = split_entries(body)
             listed = [s for s, v, _ in entries if v == 'list']
             assert set(TARGET) <= set(listed) and not any(s.startswith(UNWANTED) for s in listed)
             assert ('codex-auto-review', 'hide') in [(s, v) for s, v, _ in entries], 'codex-auto-review must stay hidden'
+            state = {m['slug']: m for m in management(STATE)['models']}
+            assert all(not state[s]['enabled'] and state[s]['switched'] for s in OFF) and state['gpt-6-sol']['enabled'] and not state['gpt-6-sol']['switched']
             # No interceptor: CPA's own lists still carry every model.
             assert complete(codex), 'CPA\'s own Codex catalog was filtered'
             plain = {m['id'] for m in json.loads(request('/v1/models')[2])['data']}
             assert set(FIXTURE) <= plain, 'CPA\'s own model list was filtered'
-            print(f'Remove (default): {len(entries)} entries ({len(body)} bytes), byte-exact; listed {listed}')
+            print(f'Switches off {sorted(OFF)}: {len(entries)} entries ({len(body)} bytes), byte-exact; listed {listed}')
             print('Unchanged: CPA\'s own /v1/models, with and without client_version, still lists every model')
 
-            _, (_, _, body) = reconfigure({'action': 'hide'}, lambda d: expected(d, INCLUDE, [], 'hide'), 'hide')
+            _, (_, _, body) = reconfigure({'action': 'hide'}, lambda d: expected(d, OFF, action='hide'), 'hide')
             assert {s for s, v, _ in split_entries(body) if v == 'list'} == set(listed)
             print(f'Hide: all {len(split_entries(body))} entries kept, same listed set')
-            reconfigure({'action': 'remove', 'exclude': ['gpt-5.5']}, lambda d: expected(d, INCLUDE, ['gpt-5.5'], 'remove'), 'exclude')
-            print('Exclude: gpt-5.5 removed as configured')
+            only = {'gpt-6-sol': True, 'codex-auto-review': True}
+            _, (_, _, body) = reconfigure({'action': 'remove', 'new-models': 'disabled', 'models': only},
+                                          lambda d: expected(d, only, enable_new=False), 'new models disabled')
+            assert [(s, v) for s, v, _ in split_entries(body)] == [('gpt-6-sol', 'list'), ('codex-auto-review', 'hide')], body[:200]
+            print('New models disabled: only the models switched on remain')
+            reconfigure({'new-models': 'enabled', 'models': OFF}, lambda d: expected(d, OFF), 'restore')
 
             # The URL needs no key of its own, but CPA still checks the forwarded
             # one. Failed client keys never count toward the management-key ban.
@@ -246,22 +262,41 @@ def main():
                 assert status == 401, f'key {key!r}: HTTP {status} {body[:80]!r}'
             management('/plugins')
             print('Keyless and wrong-key requests get CPA\'s 401; the management API still answers afterwards')
-            for path, method in [(CATALOG.split('?')[0] + '/extra', 'GET'), (CATALOG, 'POST'), ('/v0/resource/plugins/codex-catalog-filter/status', 'GET')]:
+            for path, method in [(CATALOG.split('?')[0] + '/extra', 'GET'), (CATALOG, 'POST'), ('/v0/resource/plugins/codex-catalog-filter/state', 'GET')]:
                 status = request(path, method=method, data=b'' if method == 'POST' else None)[0]
                 assert status in (404, 405), f'{method} {path}: HTTP {status}'
 
+            # The page is fixed bytes behind a hash-pinned CSP; its data comes
+            # only from the management-key route above.
+            status, headers, page = request(SETTINGS, None)
+            csp = headers.get('Content-Security-Policy', '')
+            assert status == 200 and headers.get('Content-Type') == 'text/html; charset=utf-8' and b'<title>Codex Models</title>' in page
+            assert "default-src 'none'" in csp and "frame-ancestors 'self'" in csp and "connect-src 'self'" in csp, csp
+            assert b'gpt-6-sol' not in page, 'the public page must not carry model data'
+            print('Page: the Codex Models sidebar page is served with its locked-down CSP and no data')
+
             # A rejected configuration deactivates the plugin, so the URL is gone
             # and Codex keeps its cached catalog; fixing it brings the URL back.
-            management(f'/plugins/{PLUGIN}/config', 'PATCH', {'action': 'drop'})
+            management(f'/plugins/{PLUGIN}/config', 'PATCH', {'models': {'gpt-6-sol': 'maybe'}})
             wait_until(catalog, lambda r: r[0] == 404, 'route removal')
-            reconfigure({'action': 'remove', 'exclude': []}, lambda d: expected(d, INCLUDE, [], 'remove'), 'recovery')
-            print('Invalid action: the URL returns 404 until the configuration is fixed, then serves again without a restart')
+            reconfigure({'models': OFF}, lambda d: expected(d, OFF), 'recovery')
+            print('Invalid switch: the URL returns 404 until the configuration is fixed, then serves again without a restart')
+            saved = work / 'plugins' / 'data' / PLUGIN / 'catalog.json'
+            assert saved.is_file() and b'base_instructions' not in saved.read_bytes(), 'model list not saved as expected'
 
             run('docker', 'restart', container)
             origin = 'http://' + run('docker', 'port', container, '8317/tcp').splitlines()[0]
-            await_served(lambda d: expected(d, INCLUDE, [], 'remove'), 'restart')
-            print('Restart: the persisted configuration serves the filtered catalog from startup')
-            print('PASS: pinned CPA v8.0.4 serves the filtered Codex catalog at the plugin URL; CPA\'s own lists are unchanged')
+            # The page's list survives the restart before Codex fetches again.
+            def state_after_restart():
+                result = request('/v0/management' + STATE, MANAGEMENT_KEY)
+                # Never retry a rejected management key.
+                assert result[0] not in (401, 403), f'management key rejected: HTTP {result[0]}'
+                return result
+            state = wait_until(state_after_restart, lambda r: r[0] == 200, 'state after restart')
+            assert [m['slug'] for m in json.loads(state[2])['models']] == [s for s, _, _ in split_entries(codex)], 'saved list lost'
+            await_served(lambda d: expected(d, OFF), 'restart')
+            print('Restart: the saved list and the switches apply from startup')
+            print('PASS: pinned CPA v8.0.4 serves the switched Codex catalog at the plugin URL and the Codex Models page; CPA\'s own lists are unchanged')
         except Exception:
             # Synthetic configuration only; logs hold no real credentials.
             logs = subprocess.run(['docker', 'logs', container], capture_output=True, text=True)

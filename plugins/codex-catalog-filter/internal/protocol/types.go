@@ -61,18 +61,31 @@ type ConfigField struct {
 	Description string
 }
 
-// The management API is the only capability: it carries the one resource
-// route. No interceptor is declared, so CPA's own responses never reach here.
+// The management API is the only capability: it carries the catalog URL, the
+// settings page, and the page's private data route. No interceptor is
+// declared, so CPA's own responses never reach here.
 type RegistrationCapabilities struct {
 	ManagementAPI bool `json:"management_api"`
 }
 
 type ManagementRegistration struct {
-	Resources []ResourceRoute `json:"resources,omitempty"`
+	Routes    []ManagementRoute `json:"routes,omitempty"`
+	Resources []ResourceRoute   `json:"resources,omitempty"`
+}
+
+// Management routes live under /v0/management and CPA authenticates them with
+// the management key before dispatch. Menu must stay empty: CPA converts a GET
+// with a Menu into a public resource.
+type ManagementRoute struct {
+	Method      string
+	Path        string
+	Menu        string
+	Description string
 }
 
 // Resources are public GET routes under /v0/resource/plugins/<pluginID>/.
-// CPA does not authenticate them. An empty Menu keeps them out of the sidebar.
+// CPA does not authenticate them. A Menu adds a sidebar entry; an empty one
+// keeps the route out of the sidebar.
 type ResourceRoute struct {
 	Path        string
 	Menu        string

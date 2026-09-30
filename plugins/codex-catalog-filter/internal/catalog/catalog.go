@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 )
 
 // Action selects what happens to an entry the rules do not allow.
@@ -29,48 +28,95 @@ const (
 
 // Rules decides which catalog entries stay as CPA sent them. Immutable once built.
 type Rules struct {
-	include []*regexp.Regexp
-	exclude []*regexp.Regexp
-	action  Action
+	models map[string]bool
+	// enableNew decides every slug without a switch in models.
+	enableNew bool
+	action    Action
+	idle      bool
 }
 
-// NewRules compiles include/exclude globs. An empty include list yields idle
-// rules that never rewrite a catalog.
-func NewRules(include, exclude []string, action Action) (*Rules, error) {
+// NewRules builds rules from per-model switches: true keeps a slug, false
+// disables it, and a slug without a switch follows enableNew.
+func NewRules(models map[string]bool, enableNew bool, action Action) (*Rules, error) {
 	if action != Remove && action != Hide {
 		return nil, fmt.Errorf("unsupported action %q", action)
 	}
-	r := &Rules{action: action}
-	for _, list := range []struct {
-		patterns []string
-		into     *[]*regexp.Regexp
-	}{{include, &r.include}, {exclude, &r.exclude}} {
-		for _, pattern := range list.patterns {
-			re, err := compileGlob(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("pattern %q: %w", pattern, err)
-			}
-			*list.into = append(*list.into, re)
+	r := &Rules{models: make(map[string]bool, len(models)), enableNew: enableNew, action: action, idle: enableNew}
+	for slug, enabled := range models {
+		r.models[slug] = enabled
+		if !enabled {
+			r.idle = false
 		}
 	}
 	return r, nil
 }
 
-// Idle reports whether these rules can never change a catalog.
-func (r *Rules) Idle() bool { return r == nil || len(r.include) == 0 }
+// Idle reports whether these rules can never change a catalog: every model is
+// enabled unless switched off, and none is.
+func (r *Rules) Idle() bool { return r == nil || r.idle }
 
-// Allows reports whether slug matches an include pattern and no exclude pattern.
+// Allows reports whether slug stays in Codex's catalog as CPA listed it.
 func (r *Rules) Allows(slug string) bool {
-	return matchAny(r.include, slug) && !matchAny(r.exclude, slug)
+	if enabled, ok := r.models[slug]; ok {
+		return enabled
+	}
+	return r.enableNew
 }
 
-func matchAny(patterns []*regexp.Regexp, s string) bool {
-	for _, re := range patterns {
-		if re.MatchString(s) {
-			return true
-		}
+// Switched reports whether slug has an explicit switch, and its value.
+func (r *Rules) Switched(slug string) (enabled, ok bool) {
+	enabled, ok = r.models[slug]
+	return enabled, ok
+}
+
+// Switches returns a copy of the explicit per-model switches.
+func (r *Rules) Switches() map[string]bool {
+	out := make(map[string]bool, len(r.models))
+	for slug, enabled := range r.models {
+		out[slug] = enabled
 	}
-	return false
+	return out
+}
+
+// EnableNew reports what happens to a slug without a switch.
+func (r *Rules) EnableNew() bool { return r.enableNew }
+
+// Action reports what happens to a disabled entry.
+func (r *Rules) Action() Action { return r.action }
+
+// Entry summarizes one catalog entry for the settings page.
+type Entry struct {
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Visibility is CPA's own value, before any switch is applied.
+	Visibility string `json:"visibility,omitempty"`
+}
+
+// maxEntries bounds a summary; CPA's catalog has tens of entries.
+const maxEntries = 5000
+
+// Summarize lists a well-formed Codex catalog's entries in order. It accepts
+// exactly what Rewrite would, and reports false for anything else.
+func Summarize(body []byte) ([]Entry, bool) {
+	doc, err := parse(body)
+	if err != nil || len(doc.entries) > maxEntries {
+		return nil, false
+	}
+	out := make([]Entry, 0, len(doc.entries))
+	for _, e := range doc.entries {
+		var fields struct {
+			DisplayName json.RawMessage `json:"display_name"`
+			Visibility  json.RawMessage `json:"visibility"`
+		}
+		if json.Unmarshal(body[e.start:e.end], &fields) != nil {
+			return nil, false
+		}
+		entry := Entry{Slug: e.slug}
+		_ = json.Unmarshal(fields.DisplayName, &entry.DisplayName)
+		_ = json.Unmarshal(fields.Visibility, &entry.Visibility)
+		out = append(out, entry)
+	}
+	return out, true
 }
 
 // Rewrite returns the filtered catalog, or nil when body must pass through
