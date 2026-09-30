@@ -29,7 +29,7 @@ import production
 import spike
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b"
+IMAGE = "eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d"
 PYTHON_IMAGE = "python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285"
 VERSION = "0.1.3"
 PUBLIC = "/v0/resource/plugins/token-usage/status"

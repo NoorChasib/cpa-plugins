@@ -2,7 +2,9 @@
 // naming rules so they can be validated in CI before release workflows
 // exist. Rules audited against CLIProxyAPI commit
 // 81e1b5374f99c212f196f34956eeed964a46b8fa and the official
-// CLIProxyAPI-Plugins-Store registry (schema_version 1).
+// CLIProxyAPI-Plugins-Store registry (schema_version 1), and re-checked
+// against v8.0.4 (d33f63f), whose store changes since then only add GitHub
+// rate-limit handling.
 package packaging
 
 import (

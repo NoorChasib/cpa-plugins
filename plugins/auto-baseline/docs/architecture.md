@@ -2,17 +2,25 @@
 
 This document records the feasibility findings, the design decision, the safety
 rules and how each one is enforced, the failure analysis, and the known
-limitations of the `auto-baseline` plugin. All CLIProxyAPI (CPA) references are
-to commit `81e1b5374f99c212f196f34956eeed964a46b8fa` (`v7.2.146-3-g81e1b53`).
+limitations of the `auto-baseline` plugin. Unless marked otherwise, CLIProxyAPI
+(CPA) file:line references are to commit
+`81e1b5374f99c212f196f34956eeed964a46b8fa` (`v7.2.146-3-g81e1b53`), where the
+design was first audited. The compiled defaults (section 1), the config layouts
+and loop guard (section 2.4), and effective-value discovery (section 4, step 6)
+were re-audited against **v8.0.4**
+(`d33f63f8e3d98428440ebca5a5b6a981a61ff71e`); those references say so.
 Revalidate every file:line after a CPA upgrade.
 
 ## 1. The problem in CPA terms
 
 CPA normalizes the outbound Claude fingerprint to a "measured baseline":
 
-- Compiled defaults: `claude-cli/2.1.220 (external, cli)`, package `0.94.0`,
-  runtime `v26.3.0`, OS `MacOS`, arch `arm64`
-  (`internal/runtime/executor/helps/claude_device_profile.go:22-27`).
+- Compiled defaults (v8.0.4): `claude-cli/2.1.280 (external, cli)`, package
+  `0.112.1`, runtime `v26.3.0`, OS `MacOS`, arch `arm64`
+  (`internal/runtime/executor/helps/claude_device_profile.go:23-27`); Codex
+  `codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)`
+  (`codex_executor_request.go:27`). v7.2.146 compiled `2.1.220` / `0.94.0` and
+  `codex-tui/0.146.0`.
 - `defaultClaudeDeviceProfile(cfg)` overrides each field with the corresponding
   `claude-header-defaults.*` YAML key when it is non-blank
   (`claude_device_profile.go:129-151`; struct at
@@ -38,8 +46,8 @@ CPA normalizes the outbound Claude fingerprint to a "measured baseline":
   the billing header version.
 
 Anthropic gates new models server-side on the Claude Code version. When the
-proxy stamps 2.1.220 on a request for a gated model the API refuses it even
-though the real client is 2.1.258.
+proxy stamps its compiled version (2.1.220 in v7.2.146) on a request for a
+gated model the API refuses it even though the real client is newer.
 
 ## 2. Feasibility: what the plugin API can and cannot hook
 
@@ -124,6 +132,100 @@ Conclusion: **the plugin observes fingerprints through the request interceptor
 and promotes them by editing `config.yaml`; CPA's hot reload applies the new
 baseline.** No CPA change is required.
 
+### 2.4 The v8 config layout and the loop guard (re-audited against v8.0.4)
+
+CPA v8 reads two layouts of `config.yaml`. The legacy layout has flat root keys;
+the v8 layout (`config-version: 8`) nests them. `buildV8Paths`
+(`internal/config/config_v8.go:31-103`) maps them leaf by leaf; the ones this
+plugin touches are:
+
+| Legacy leaf | v8 leaf |
+| --- | --- |
+| `claude-header-defaults.<field>` | `oauth.providers.claude.header-defaults.<field>` |
+| `codex-header-defaults.<field>` | `oauth.providers.codex.header-defaults.<field>` |
+| `codex.disable-codex-cloaking` | `oauth.providers.codex.disable-codex-cloaking` |
+
+`plugins.configs.<id>` stays at the root in both layouts (`v8AllowedRoots`,
+`config_v8.go:419-426`).
+
+What CPA does:
+
+- **Load.** `Config.UnmarshalYAML` calls `flattenV8` (`config_v8.go:154-231`).
+  It rejects duplicate keys anywhere, expands aliases and merge keys
+  (`expandConfigAliases`, `:662-695`), fails the whole load when an existing
+  ancestor of any v8 path is not a mapping (`:191-206`) or `config-version` is
+  anything but the integer 8 (`:208-210`), and then, for every v8 leaf that is
+  *present*, overwrites its legacy leaf (`:215-220`). Presence decides, not the
+  value: a v8 leaf that is `false`, `0`, blank, or null wins, and a blank string
+  then falls back to the compiled default in `hdrDefault`
+  (`claude_device_profile.go:129-134`). A legacy leaf with no v8 counterpart
+  still applies.
+- **Loading never migrates.** `LoadConfigOptional` runs
+  `NormalizeConfigLayout(data, false)` (`config_load.go:209-222`), which only
+  deletes legacy leaves that conflict with a present v8 leaf (and empty legacy
+  blocks beside a v8 block), and rewrites the whole file when it did, with
+  `yaml.Marshal`: 4-space indentation, anchors and merge keys expanded.
+  `config-version: 8` on its own migrates nothing.
+- **Only `/v8/management` writes migrate.** `SaveConfigPreserveComments(...,
+  migrateV8=true)` (`config_yaml.go:15-110`) ends in
+  `NormalizeConfigLayout(data, true)` (`config_v8.go:324-417`), which moves every
+  legacy leaf to its v8 path and sets `config-version: 8`. The Management Center
+  panel only uses `/v8/management`, so any panel save, including a Plugin Store
+  install or update, migrates the file. `/v0/management` saves keep the layout
+  (`restoreV8Layout`, `config_v8.go:586-640`; `docs/management-api-v8.md`).
+- **Scope.** `UnmarshalYAML` records every present `oauth.providers.*` leaf in
+  `OAuthOnlyFields` (`config_v8.go:164-173`), and `Config.ForAPIKey`
+  (`internal/config/oauth_scope.go:12-34`) zeroes those fields for API-key
+  credentials. In the v8 layout the header defaults and
+  `disable-codex-cloaking` therefore reach OAuth credentials only. The plugin
+  documents this and does not work around it.
+
+What the plugin does (`internal/configfile`):
+
+- **Read.** Each managed leaf resolves as v8 leaf, then legacy leaf, then the
+  compiled default, with the alias/merge semantics above; the same order
+  applies to `disable-codex-cloaking`. An existing non-mapping ancestor on the
+  plugin's own v8 paths marks the provider `unsupported_config_shape`, and a
+  non-8 `config-version` fails the read (`unsupported_config_version`). Status
+  reports the source of every value (`v8`, `legacy`, `default`) and the file
+  layout.
+- **Write target**, per provider: the existing v8 block, else the existing
+  legacy block, else the v8 path in a `config-version: 8` file, else the legacy
+  path. The legacy path is chosen only when no v8 block exists, so the plugin
+  never creates a legacy leaf beside its v8 counterpart. Writing a v8 block also
+  removes the legacy leaves it superseded (and an emptied, un-anchored legacy
+  block): exactly what `NormalizeConfigLayout(false)` would delete, so CPA has
+  nothing to clean up and never rewrites the file after a promotion.
+- **Loop guard before the write.** The rendered bytes are parsed again with
+  these rules; unless they yield exactly the candidate for its provider, and
+  unchanged values for everything else the plugin reads, nothing is written
+  (`promotion_not_effective`) and the provider pauses until the file hash
+  changes. `dry-run` runs the same read, check, render and guard (`Preview`).
+- **Loop guard after the write.** The promotion awaits reload as before. Every
+  config read first captures a write epoch, so only a read that began after the
+  write was recorded can judge it. Such a read showing a different tuple means
+  the file was rewritten without the promotion; it is marked
+  `not_effective_at`, the provider is paused (persisted in `state.json`, so a
+  restart does not restart the loop), `last_error` and a status warning explain
+  it, and nothing is retried. The operator resumes it with `POST .../reset`, a
+  write-affecting plugin setting change, or by restoring the tuple. A newer
+  value or an unreadable block on disk ends the wait without a pause.
+
+The 2026-09-29 incident this closes: 0.1.4 knew only the legacy keys. After a
+`/v8/management` write migrated production's file, it found no root
+`claude-header-defaults`, assumed its compiled 2.1.220, and wrote a root block
+every `promotion-cooldown`; CPA deleted it on every load because the v8 block
+wins, so the promotion never took effect. `scripts/smoke-test.sh` reproduces
+that layout (`CPA_SMOKE_LAYOUT=v8`) and asserts exactly one effective promotion.
+
+Verification against CPA's real loader: the fixtures in
+`internal/configfile/layout_test.go` can be exported
+(`AUTO_BASELINE_V8AUDIT_DIR=<dir> go test ./internal/configfile/`) as pairs of
+a fixture and a legacy-only "twin" carrying the plugin's reading of it. Loading
+each pair with v8.0.4's loader gave identical header defaults and cloaking in
+every read case; CPA refused the non-mapping-parent case exactly as the plugin
+does; and none of the files the plugin writes is rewritten on load.
+
 ## 3. Version-source options
 
 | Option | How | Pros | Cons | Decision |
@@ -181,11 +283,14 @@ baseline.** No CPA change is required.
    (not replaced) with live evidence.
 4. **Promotion** (`internal/engine`, background worker): after
    `promotion-cooldown`, re-read `config.yaml`, re-check "strictly newer than
-   what is on disk now", edit only the baseline keys with the yaml.v3 Node API,
-   back up, re-hash, write in place, and record the promotion as
-   `awaiting_reload` until the next `plugin.reconfigure` (CPA reconfigures
-   plugins on every reload) or a fresh read shows the value. `dry-run`
-   computes and logs but never writes. The worker is single-flight with a
+   what is on disk now", edit only the baseline keys of the write target
+   (section 2.4) with the yaml.v3 Node API, run the loop guard, back up,
+   re-hash, write in place, and record the promotion as `awaiting_reload`
+   until the next `plugin.reconfigure` (CPA reconfigures plugins on every
+   reload: `ApplyConfig` calls `callRegister` for every loaded plugin,
+   `internal/pluginhost/host.go:366,1035-1046` in v8.0.4) or a fresh read
+   shows the value. A fresh read showing something else pauses the provider
+   (section 2.4). `dry-run` runs everything but the write and logs the target. The worker is single-flight with a
    rescan flag and a bounded forced-promotion queue, so work that becomes
    ready while it runs is never lost; `Stop` waits for it (write barrier).
 5. **Persistence** (`internal/statefile`): `state-dir/state.json`, atomic
@@ -193,13 +298,14 @@ baseline.** No CPA change is required.
    5 minutes when dirty, and on quiesce/shutdown. Corrupt or missing state
    starts fresh with a warning.
 6. **Effective baseline discovery** (`internal/configfile`): at
-   register/reconfigure and before every promotion the plugin parses
-   `claude-header-defaults` / `codex-header-defaults` / `codex.disable-codex-cloaking`.
-   Blank values are treated as absent, exactly like CPA's `hdrDefault`
-   (`claude_device_profile.go:133-139`). An absent field means the compiled
-   default of the audited build (constants in
-   `internal/fingerprint/fingerprint.go`); this is an explicit assumption
-   surfaced in status as `assumed_cpa_version`.
+   register/reconfigure and before every promotion the plugin resolves the
+   Claude and Codex header defaults and `disable-codex-cloaking` leaf by leaf
+   in both layouts (section 2.4). Blank values are treated as absent, exactly
+   like CPA's `hdrDefault` (v8.0.4 `claude_device_profile.go:129-134`). An
+   absent field means the compiled default of the audited build, v8.0.4
+   (constants in `internal/fingerprint/fingerprint.go`); this is an explicit
+   assumption surfaced in status as `assumed_cpa_version`, and every value's
+   source is reported.
 
 ## 5. Safety rules and enforcement
 
@@ -211,8 +317,9 @@ baseline.** No CPA change is required.
 | Internally consistent tuples only | A candidate is built from one request; the key includes package-version and runtime-version; the learner never merges keys. Claude UA is canonicalized so `sdk-ts, agent-sdk/...` never reaches the baseline. |
 | Only valid fingerprints | Regex-validated versions, bounded UA length (512), no control characters, safe OS/Arch charset; values are written as double-quoted YAML scalars so `0.94.0`-like values can never be re-read as floats. |
 | Anti-poisoning | Quorum across distinct sessions within a window; `force` is only available through the authenticated management API with a CSRF header. |
-| Touch nothing else in `config.yaml` | yaml.v3 Node edits of exactly `claude-header-defaults.{user-agent,package-version,runtime-version}` or `codex-header-defaults.user-agent`; missing mapping nodes are created; a null placeholder is converted in place; comments, order, `os`/`arch`/`timeout`/`timezone`/`stabilize-device-profile`, and `beta-features` are untouched (tested in `configfile_test.go`). |
+| Touch nothing else in `config.yaml` | yaml.v3 Node edits of exactly the Claude header-defaults `user-agent`, `package-version`, `runtime-version`, or the Codex header-defaults `user-agent`, in the write target of section 2.4, plus removal of the legacy leaves a v8 write supersedes (which CPA would delete anyway); missing mapping nodes are created; a null placeholder is converted in place; comments, order, `os`/`arch`/`timeout`/`timezone`/`stabilize-device-profile`, and `beta-features` are untouched (tested in `configfile_test.go`). |
 | Never destroy operator content, never crash the host | A duplicate mapping key anywhere the plugin traverses is refused (`duplicate_key`): CPA's yaml.v3 struct decode rejects such a file ("mapping key ... already defined"), so it could never reload. Reads resolve aliases and `<<` merge keys (identified by the `!!merge` tag, never by scalar text) so a shared-defaults config yields the real effective values; resolution carries a visited set and a depth bound of 32, so an alias or merge cycle yields `unsupported_config_shape` instead of the stack overflow that would kill CPA. Writes refuse (`unsupported_config_shape`) when the target is a non-empty scalar, a sequence, an alias, or reachable only through a merge key, and refuse multi-document streams (`multi_document_config`). A problem confined to one provider's block only blocks that provider. |
+| Never write what CPA would not load | The loop guard of section 2.4: the rendered file is parsed again with CPA's layout rules before the write, and a read after the write that shows a different tuple pauses the provider instead of retrying every cooldown (`promotion_not_effective`). |
 | Concurrent editors | sha256 at read, after the backup, and immediately before the write; `ErrChanged` triggers up to 3 retries of the full read-modify-write; the write is skipped when the rendered bytes are identical. Other writers do not take a lock, so this narrows the race without eliminating it. |
 | Write in place, never empty | `writeInPlace` opens the existing inode `O_RDWR`, writes the new bytes from offset 0, truncates to the new length, fsyncs, closes. Unlike CPA's own `WriteConfig` (`config_basic.go:101-118`, which truncates first) the file is never empty between steps, so a crash or ENOSPC cannot hand CPA's watcher an empty file. On any failure after open the previous bytes are written back best-effort. No rename, so a Docker single-file bind mount works; crash atomicity still cannot be guaranteed on such a mount. |
 | Backup | Previous bytes are copied to `<backup-dir>/config.yaml.auto-baseline.bak` (mode 0600; `backup-dir` defaults to `state-dir`) before each write; an unwritable backup dir blocks promotion. |
@@ -227,10 +334,10 @@ baseline.** No CPA change is required.
 
 | | Claude | Codex |
 | --- | --- | --- |
-| Keys written | `claude-header-defaults.user-agent`, `.package-version`, `.runtime-version` | `codex-header-defaults.user-agent` only (never `beta-features`) |
+| Keys written | `user-agent`, `package-version`, `runtime-version` of `oauth.providers.claude.header-defaults` (legacy `claude-header-defaults`) | `user-agent` of `oauth.providers.codex.header-defaults` (legacy `codex-header-defaults`) only, never `beta-features` |
 | UA written | Canonical `claude-cli/<v> (external, cli)` (CPA compares the version only, `claudeCLIVersionPattern` prefix match `claude_device_profile.go:33`; the `cli` entrypoint is what cloaked requests announce) | The full observed UA verbatim; it carries OS/terminal details (`codex-tui/0.152.1 (Ubuntu 24.4.0; x86_64) WezTerm/...`) and CPA injects it as-is |
 | Authenticity signals | x-app, anthropic-version, stainless lang/runtime/package/runtime-version/os/arch, claude-code beta | `Originator` header (`codex_cli_rs`, `codex-tui`, `Codex Desktop`, ...) |
-| Effect once written | Immediate after hot reload | **Only when `codex.disable-codex-cloaking: true`.** `ensureHeaderWithConfigPrecedence` gives `codex-header-defaults.user-agent` precedence over the client UA (`codex_websockets_request.go:309-329`, used at `codex_executor_request.go:342`), but `applyCodexCloakingHeaders` (`codex_executor_request.go:372-378`) then forces the compiled `codexUserAgent` (`:26`) and `Originator` unless `cfg.Codex.DisableCodexCloaking` is set (`config_types.go:147-150`). The plugin reads that flag and shows a status warning when it is not set. |
+| Effect once written | Immediate after hot reload (in the v8 layout, for OAuth credentials only) | **Only when `oauth.providers.codex.disable-codex-cloaking` (legacy `codex.disable-codex-cloaking`) is `true`.** The references in this cell are to v7.2.146; in v8.0.4 the flag is still read from `cfg.Codex.DisableCodexCloaking` (`codex_executor_request.go:303-306`). `ensureHeaderWithConfigPrecedence` gives `codex-header-defaults.user-agent` precedence over the client UA (`codex_websockets_request.go:309-329`, used at `codex_executor_request.go:342`), but `applyCodexCloakingHeaders` (`codex_executor_request.go:372-378`) then forces the compiled `codexUserAgent` (`:26`) and `Originator` unless `cfg.Codex.DisableCodexCloaking` is set (`config_types.go:147-150`). The plugin reads that flag and shows a status warning when it is not set. |
 
 ## 7. Fail-safe analysis
 
@@ -252,6 +359,9 @@ baseline.** No CPA change is required.
   reconfigure; CPA is unaffected.
 - **Write not reloaded**: the promotion stays `awaiting_reload`; after two
   minutes status warns to check the watcher / config path / home mode.
+- **Write discarded or reverted**: a read after the write that no longer shows
+  the promoted tuple marks it not effective and pauses the provider (section
+  2.4); nothing is rewritten until the operator resumes it.
 - **Bad write / concurrent edit**: sha256 check plus bounded retries; on
   persistent failure the candidate stays pending and `last_error` is set. If a
   written file failed to parse, CPA's reload logs the error and keeps the old
@@ -300,7 +410,7 @@ baseline.** No CPA change is required.
 ## 9. Known limitations
 
 1. **Compiled-default assumption.** When `config.yaml` omits a field the
-   plugin assumes the defaults of `v7.2.146-3-g81e1b53` (shown in status as
+   plugin assumes the defaults of v8.0.4 (`d33f63f`; shown in status as
    the assumed CPA build, next to the floors). The assumption is live only
    until the first promotion: from then on the block exists, CPA reads it in
    preference to its compiled constant, and the plugin compares against the
@@ -315,9 +425,9 @@ baseline.** No CPA change is required.
    that exact version pass through with their own measured shape, which is the
    intent. CPA's *helper-profile* allowlists
    (`matchesMeasuredClaudeCodeHelperProfile`, `claude_client_detection.go:148`
-   and the beta/shape tables around `:154+`) were measured against 2.1.220 and
-   are not updated by this plugin; helper-request confirmation may therefore be
-   less complete for newer versions than for 2.1.220. Cloaked `sdk-ts`/`sdk-py`
+   and the beta/shape tables around `:154+`) were measured against that build's
+   compiled version and are not updated by this plugin; helper-request
+   confirmation may therefore be less complete for newer versions. Cloaked `sdk-ts`/`sdk-py`
    requests are unaffected: they go out with the baseline UA either way.
 3. **Home / store modes.** File writes do not change a Home-, Postgres-,
    object-store-, or git-store-managed configuration; the plugin detects these
@@ -332,3 +442,11 @@ baseline.** No CPA change is required.
    not redundant identical writes.
 7. **Platform.** `/proc/self/cmdline` discovery of `-config` is Linux-only;
    elsewhere set `config-path` or rely on `<cwd>/config.yaml`.
+8. **v8 scope.** In the v8 layout CPA applies the header defaults to OAuth
+   credentials only (section 2.4); API-key credentials keep their own headers.
+   The plugin cannot change that.
+9. **Panel saves rewrite the file.** Any `/v8/management` write migrates the
+   whole file and expands anchors and merge keys. The plugin follows the new
+   keys, but a panel save made from a stale in-memory config can restore an
+   older baseline over a fresh promotion; the loop guard then pauses the
+   provider instead of fighting it.

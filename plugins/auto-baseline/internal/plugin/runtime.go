@@ -22,7 +22,7 @@ import (
 const (
 	PluginID      = "auto-baseline"
 	PluginName    = "Auto Baseline"
-	PluginVersion = "0.1.4"
+	PluginVersion = "0.1.5"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
@@ -307,7 +307,7 @@ func managementRegistration() hostapi.ManagementRegistration {
 			{Method: "GET", Path: managementStatusPath, Description: "Auto-baseline status snapshot (JSON)"},
 			{Method: "GET", Path: managementStatusPagePath, Description: "Auto-baseline status page (browser HTML)"},
 			{Method: "POST", Path: managementObservePath, Description: "Report a client fingerprint observation (host reporting)"},
-			{Method: "POST", Path: managementResetPath, Description: "Clear pending baseline candidates"},
+			{Method: "POST", Path: managementResetPath, Description: "Clear pending baseline candidates and resume paused providers"},
 			{Method: "POST", Path: managementDryRunPath, Description: "Set plugins.configs.auto-baseline.dry-run in CPA's config.yaml"},
 		},
 		Resources: []hostapi.ResourceRoute{
@@ -378,7 +378,7 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 			return okEnvelope(forbiddenResponse())
 		}
 		eng.Reset()
-		return okEnvelope(jsonResponse(200, map[string]string{"status": "ok", "detail": "pending candidates cleared"}))
+		return okEnvelope(jsonResponse(200, map[string]string{"status": "ok", "detail": "pending candidates cleared; paused providers resumed"}))
 
 	case method == "POST" && strings.HasSuffix(path, managementDryRunPath) && !isResourcePath(path):
 		if !mutationRequestAllowed(req.Headers) {
@@ -516,16 +516,16 @@ func configFields() []hostapi.ConfigField {
 		{Name: "config-path", Type: "string", Description: "Path of CPA's config.yaml. Default: the running process's -config flag, else <cwd>/config.yaml."},
 		{Name: "state-dir", Type: "string", Description: "Directory for state.json (default plugins/auto-baseline, relative to the CPA working directory)."},
 		{Name: "backup-dir", Type: "string", Description: "Directory that receives config.yaml.auto-baseline.bak before each write (default: state-dir)."},
-		{Name: "manage-claude", Type: "boolean", Description: "Learn and promote claude-header-defaults (default true)."},
-		{Name: "manage-codex", Type: "boolean", Description: "Learn and promote codex-header-defaults.user-agent (default true; requires codex.disable-codex-cloaking: true to take effect)."},
+		{Name: "manage-claude", Type: "boolean", Description: "Learn and promote the Claude header defaults: oauth.providers.claude.header-defaults (legacy name claude-header-defaults) (default true)."},
+		{Name: "manage-codex", Type: "boolean", Description: "Learn and promote the Codex header-defaults user-agent: oauth.providers.codex.header-defaults (legacy name codex-header-defaults) (default true; requires oauth.providers.codex.disable-codex-cloaking, legacy codex.disable-codex-cloaking, set to true to take effect)."},
 		{Name: "claude-entrypoints", Type: "array", Description: "Claude Code entrypoints whose fingerprints may be learned (default cli, sdk-cli, claude-vscode, sdk-ts, sdk-py)."},
 		{Name: "require-claude-code-beta", Type: "boolean", Description: "Require the claude-code-20250219 beta in anthropic-beta before a Claude request counts (default true)."},
 		{Name: "min-observations", Type: "integer", Description: "Observations of one identical fingerprint tuple required inside observation-window (default 3)."},
 		{Name: "min-distinct-sessions", Type: "integer", Description: "Distinct client session IDs those observations must span (default 1; anonymous requests never count as a session). Set 2 when clients send X-Claude-Code-Session-Id."},
 		{Name: "observation-window", Type: "string", Description: "How long an observation counts toward quorum (default 24h)."},
 		{Name: "promotion-cooldown", Type: "string", Description: "Minimum spacing between config.yaml writes (default 60s)."},
-		{Name: "claude-min-version", Type: "string", Description: "Never write a Claude baseline below this version (default 2.1.220, the compiled default of the audited CPA build)."},
-		{Name: "codex-min-version", Type: "string", Description: "Never write a Codex baseline below this version (default 0.146.0, the compiled default of the audited CPA build)."},
+		{Name: "claude-min-version", Type: "string", Description: "Never write a Claude baseline below this version (default 2.1.280, the compiled default of the audited CPA build v8.0.4)."},
+		{Name: "codex-min-version", Type: "string", Description: "Never write a Codex baseline below this version (default 0.154.0, the compiled default of the audited CPA build v8.0.4)."},
 		{Name: "require-explicit-baseline", Type: "boolean", Description: "Never promote a provider whose config.yaml baseline is implicit (compiled default assumed). Safe choice after a CPA upgrade (default false)."},
 		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" (default UTC). Presentation only."},
 	}

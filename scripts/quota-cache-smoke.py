@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load the suite in a disposable pinned CPA v7.2.155 container with no real accounts."""
+"""Load the suite in a disposable pinned CPA v8.0.4 container with no real accounts."""
 import json
 import hashlib
 import os
@@ -13,7 +13,7 @@ import argparse
 from plugin_release import load_catalog, released_library
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
+IMAGE = 'eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d'
 PLUGINS = {
     'quota-cache': 'dist/quota-cache.so',
     'account-health-pushover': 'dist/account-health-pushover.so',
@@ -181,7 +181,7 @@ plugins:
         for plugin in ('account-health-pushover','reset-priority','auto-baseline','token-usage'):
             get('plugins/'+plugin+'/status')
         logs=run('docker','logs',container)
-        assert '7.2.155' in logs, 'unexpected CPA runtime version'
+        assert '8.0.4' in logs, 'unexpected CPA runtime version'
         evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in LOADED}}
         # Prove the other four register without the cache library or snapshot.
         # Test both opted-in waiting and explicitly standalone configuration.
@@ -210,7 +210,7 @@ plugins:
             evidence['candidate'] = args.candidate
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-        print('PASS: pinned CPA v7.2.155 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
+        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.
         print(run('docker','logs',container)[-6000:])

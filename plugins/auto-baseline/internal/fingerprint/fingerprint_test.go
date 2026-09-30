@@ -337,7 +337,7 @@ func TestCompiledDefaultsParse(t *testing.T) {
 }
 
 func TestParseBaselineUserAgentVersions(t *testing.T) {
-	if v, ok := ParseClaudeUserAgentVersion(CompiledClaudeUserAgent); !ok || v.String() != "2.1.220" {
+	if v, ok := ParseClaudeUserAgentVersion(CompiledClaudeUserAgent); !ok || v.String() != "2.1.280" {
 		t.Errorf("claude compiled = %s %v", v, ok)
 	}
 	if v, ok := ParseClaudeUserAgentVersion("claude-cli/2.1.258"); !ok || v.String() != "2.1.258" {
@@ -346,7 +346,7 @@ func TestParseBaselineUserAgentVersions(t *testing.T) {
 	if _, ok := ParseClaudeUserAgentVersion("my-proxy/1.0"); ok {
 		t.Error("non-claude UA parsed")
 	}
-	if v, ok := ParseCodexUserAgentVersion(CompiledCodexUserAgent); !ok || v.String() != "0.146.0" {
+	if v, ok := ParseCodexUserAgentVersion(CompiledCodexUserAgent); !ok || v.String() != "0.154.0" {
 		t.Errorf("codex compiled = %s %v", v, ok)
 	}
 	if v, ok := ParseCodexUserAgentVersion("codex_cli_rs/0.114.0"); !ok || v.String() != "0.114.0" {

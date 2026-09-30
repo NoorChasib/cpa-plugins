@@ -2,9 +2,11 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${CPA_SMOKE_IMAGE:-eceasy/cli-proxy-api:latest}"
+IMAGE="${CPA_SMOKE_IMAGE:-eceasy/cli-proxy-api:v8.0.4@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d}"
 PLUGIN_INPUT="${1:-${ROOT_DIR}/reset-priority.so}"
 TIMEOUT_SECONDS="${CPA_SMOKE_TIMEOUT_SECONDS:-90}"
+# CPA v8 reads both config layouts; run each with CPA_SMOKE_LAYOUT=legacy|v8.
+LAYOUT="${CPA_SMOKE_LAYOUT:-v8}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 CONTAINER_NAME="cpa-reset-priority-smoke-${RUN_ID}"
 PLUGIN_VOLUME=""
@@ -19,6 +21,10 @@ done
 
 if ! [[ "${TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'CPA_SMOKE_TIMEOUT_SECONDS must be a positive integer, got %s\n' "${TIMEOUT_SECONDS}" >&2
+  exit 2
+fi
+if [[ "${LAYOUT}" != legacy && "${LAYOUT}" != v8 ]]; then
+  printf 'CPA_SMOKE_LAYOUT must be legacy or v8, got %s\n' "${LAYOUT}" >&2
   exit 2
 fi
 if [[ ! -f "${PLUGIN_INPUT}" ]]; then
@@ -126,12 +132,29 @@ if command -v file >/dev/null 2>&1; then
   esac
 fi
 
-cat >"${TMP_DIR}/config.yaml" <<'YAML'
+if [[ "${LAYOUT}" == legacy ]]; then
+  cat >"${TMP_DIR}/config.yaml" <<'YAML'
 host: "0.0.0.0"
 port: 8317
 auth-dir: "/root/.cli-proxy-api"
 debug: true
 logging-to-file: false
+YAML
+else
+  cat >"${TMP_DIR}/config.yaml" <<'YAML'
+config-version: 8
+server:
+  host: "0.0.0.0"
+  port: 8317
+oauth:
+  auth-dir: "/root/.cli-proxy-api"
+observability:
+  logs:
+    debug: true
+    logging-to-file: false
+YAML
+fi
+cat >>"${TMP_DIR}/config.yaml" <<'YAML'
 plugins:
   enabled: true
   dir: "plugins"
@@ -195,7 +218,7 @@ while (( SECONDS < DEADLINE )); do
       grep -Fq '<title>Reset Priority</title>' "${RESPONSE_FILE}" &&
       grep -Fq 'Dry-run configuration recommended' "${RESPONSE_FILE}"; then
       docker logs "${CONTAINER_ID}" >"${LOG_FILE}" 2>&1 || true
-      printf 'plugin load verified by HTTP 200 from %s\n' \
+      printf 'plugin load verified (%s config layout) by HTTP 200 from %s\n' "${LAYOUT}" \
         "http://127.0.0.1:${HOST_PORT}/v0/resource/plugins/reset-priority/status"
       exit 0
     fi

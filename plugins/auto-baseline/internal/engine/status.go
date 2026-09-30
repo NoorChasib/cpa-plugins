@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/configfile"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/fingerprint"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/learner"
 	"github.com/NoorChasib/cpa-plugins/plugins/auto-baseline/internal/statefile"
@@ -62,6 +63,9 @@ type ConfigStatus struct {
 	// ModeUnsupported is set when Mode is non-empty and config-path was not
 	// set explicitly; automatic writes are disabled.
 	ModeUnsupported bool `json:"mode_unsupported"`
+	// Layout is "v8" when the file declares config-version: 8 and "legacy"
+	// otherwise. It only decides where a missing block is created.
+	Layout string `json:"layout,omitempty"`
 }
 
 // BackupStatus describes the backup directory.
@@ -104,8 +108,21 @@ type ProviderStatus struct {
 	LastPromotion  *statefile.Promotion `json:"last_promotion,omitempty"`
 	NextWriteAfter time.Time            `json:"next_write_allowed_at,omitempty"`
 	// AwaitingReload is set after a write until CPA's hot reload is observed.
-	AwaitingReload bool     `json:"awaiting_reload"`
-	Warnings       []string `json:"warnings,omitempty"`
+	AwaitingReload bool `json:"awaiting_reload"`
+	// Paused is set while automatic promotion for the provider is suspended
+	// because a promotion did not take effect (decision
+	// promotion_not_effective).
+	Paused *statefile.Pause `json:"paused,omitempty"`
+	// DisableCodexCloaking is reported for Codex only.
+	DisableCodexCloaking *CloakingStatus `json:"disable_codex_cloaking,omitempty"`
+	Warnings             []string        `json:"warnings,omitempty"`
+}
+
+// CloakingStatus is the effective codex.disable-codex-cloaking and where it
+// comes from.
+type CloakingStatus struct {
+	Value  bool              `json:"value"`
+	Source configfile.Source `json:"source"`
 }
 
 // EffectiveStatus is the on-disk/compiled baseline.
@@ -119,6 +136,11 @@ type EffectiveStatus struct {
 	// Unsupported names a structural problem in the provider block
 	// (duplicate_key, unsupported_config_shape) that blocks promotion.
 	Unsupported string `json:"unsupported,omitempty"`
+	// Sources says where CPA takes each value from: "v8", "legacy", or
+	// "default" (key absent or blank, so CPA's compiled default applies).
+	Sources map[string]configfile.Source `json:"sources,omitempty"`
+	// WriteTarget is the config.yaml block a promotion writes to.
+	WriteTarget string `json:"write_target,omitempty"`
 }
 
 // Status publishes the current snapshot.
@@ -154,6 +176,7 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 			Mode:            e.mode.Name,
 			ModeReason:      e.mode.Reason,
 			ModeUnsupported: e.modeUnsupported,
+			Layout:          string(e.configLayout),
 		},
 		Backup: BackupStatus{
 			Dir:      e.backupDir,
@@ -209,6 +232,8 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 				Explicit:       eff.Explicit,
 				Malformed:      eff.Malformed,
 				Unsupported:    eff.Unsupported,
+				Sources:        effectiveSources(eff),
+				WriteTarget:    eff.TargetPath,
 			}
 			if eff.Unsupported != "" {
 				ps.Warnings = append(ps.Warnings, "the "+string(p)+" block in config.yaml has a structure the plugin will not edit ("+eff.Unsupported+"); evidence is retained and promotion resumes once it is fixed")
@@ -224,6 +249,15 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 			cp := *lp
 			ps.LastPromotion = &cp
 		}
+		if pause := e.state.Paused[p]; pause != nil {
+			cp := *pause
+			ps.Paused = &cp
+			if pause.ConfigSHA256 != "" {
+				ps.Warnings = append(ps.Warnings, "promotion is paused (decision: "+pause.Reason+"): "+pause.Detail)
+			} else {
+				ps.Warnings = append(ps.Warnings, "promotion is paused (decision: "+pause.Reason+"): "+pause.Detail+". Check the sources and write_target above against config.yaml, then use Clear pending (POST /reset) or change a plugin setting to resume.")
+			}
+		}
 		if since, waiting := e.awaitingReload[p]; waiting {
 			ps.AwaitingReload = true
 			if now.Sub(since) > reloadGracePeriod {
@@ -235,8 +269,19 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 				ps.NextWriteAfter = until
 			}
 		}
-		if p == fingerprint.ProviderCodex && ps.Managed && !e.disableCodex {
-			ps.Warnings = append(ps.Warnings, "codex.disable-codex-cloaking is not true: CPA forces its compiled Codex User-Agent on outbound requests, so a learned codex-header-defaults.user-agent has no effect until the operator sets codex.disable-codex-cloaking: true")
+		if p == fingerprint.ProviderCodex {
+			source := e.disableCodexSource
+			if source == "" {
+				source = configfile.SourceDefault
+			}
+			ps.DisableCodexCloaking = &CloakingStatus{Value: e.disableCodex, Source: source}
+			if ps.Managed && !e.disableCodex {
+				key, uaKey := "codex.disable-codex-cloaking", "codex-header-defaults.user-agent"
+				if e.configLayout == configfile.LayoutV8 {
+					key, uaKey = "oauth.providers.codex.disable-codex-cloaking", "oauth.providers.codex.header-defaults.user-agent"
+				}
+				ps.Warnings = append(ps.Warnings, key+" (legacy name codex.disable-codex-cloaking) is not true: CPA forces its compiled Codex User-Agent on outbound requests, so a learned "+uaKey+" has no effect until the operator sets it to true")
+			}
 		}
 		snap.Baselines = append(snap.Baselines, ps)
 	}
@@ -244,6 +289,24 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 	sort.Slice(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
 	snap.History = history
 	return snap
+}
+
+// effectiveSources maps each managed leaf to its source.
+func effectiveSources(eff configfile.Effective) map[string]configfile.Source {
+	out := make(map[string]configfile.Source, 3)
+	for key, source := range map[string]configfile.Source{
+		"user-agent":      eff.UserAgentSource,
+		"package-version": eff.PackageVersionSource,
+		"runtime-version": eff.RuntimeVersionSource,
+	} {
+		if source != "" {
+			out[key] = source
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func compiledEffective(p fingerprint.Provider) EffectiveStatus {

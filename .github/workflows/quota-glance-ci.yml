@@ -54,7 +54,7 @@ jobs:
       # unloads without wedging the proxy.
       - name: Native load, serve, reload, restart and unload inside real CPA
         run: |
-          docker pull eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b
+          docker pull eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
           make -C plugins/quota-glance smoke
       # quota-glance imports the quota-cache client directly from the monorepo,
       # so a change to that client has to keep both consumers building.

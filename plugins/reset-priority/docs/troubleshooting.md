@@ -267,6 +267,6 @@ make build
 ./scripts/smoke-test.sh ./reset-priority.so
 ```
 
-The script pulls `eceasy/cli-proxy-api:latest`, verifies plugin architecture, uses a disposable named plugin volume and dry-run config, and retains evidence under `dist/smoke/<run-id>/`. Success requires HTTP 200 plus the static page title and the non-sensitive marker `Dry-run configuration recommended`; it does not depend on dynamic account or runtime status text.
+The script pulls the digest-pinned CPA v8.0.4 image (override with `CPA_SMOKE_IMAGE`), writes a v8-layout config (`CPA_SMOKE_LAYOUT=legacy` for the legacy layout), verifies plugin architecture, uses a disposable named plugin volume and dry-run config, and retains evidence under `dist/smoke/<run-id>/`. Success requires HTTP 200 plus the static page title and the non-sensitive marker `Dry-run configuration recommended`; it does not depend on dynamic account or runtime status text.
 
 Real OAuth accounts are not required and must not be injected into the smoke environment.

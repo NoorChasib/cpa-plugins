@@ -3,8 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
-IMAGE="${CPA_SMOKE_IMAGE:-eceasy/cli-proxy-api:latest}"
+IMAGE="${CPA_SMOKE_IMAGE:-eceasy/cli-proxy-api:v8.0.4@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d}"
 MOCK_IMAGE="${CPA_SMOKE_MOCK_IMAGE:-python:3-alpine}"
+# CPA v8 reads both config layouts; `make smoke` runs each with the same checks.
+LAYOUT="${CPA_SMOKE_LAYOUT:-v8}"
+if [[ "$LAYOUT" != legacy && "$LAYOUT" != v8 ]]; then
+  echo "CPA_SMOKE_LAYOUT must be legacy or v8, got: $LAYOUT" >&2
+  exit 2
+fi
 TMP_DIR="$(mktemp -d)"
 SUFFIX="$RANDOM-$RANDOM"
 CONTAINER="cpa-account-health-smoke-$SUFFIX"
@@ -74,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
 ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 PY
 
-cat >"$TMP_DIR/config.yaml" <<'YAML'
+if [[ "$LAYOUT" == legacy ]]; then
+  cat >"$TMP_DIR/config.yaml" <<'YAML'
 host: "0.0.0.0"
 port: 8317
 remote-management:
@@ -84,6 +91,27 @@ auth-dir: "/tmp/cpa-smoke-auth"
 api-keys:
   - "smoke-api-key-not-used"
 debug: true
+YAML
+else
+  cat >"$TMP_DIR/config.yaml" <<'YAML'
+config-version: 8
+server:
+  host: "0.0.0.0"
+  port: 8317
+management:
+  allow-remote: true
+  secret-key: "smoke-management-key"
+oauth:
+  auth-dir: "/tmp/cpa-smoke-auth"
+access:
+  api-keys:
+    - "smoke-api-key-not-used"
+observability:
+  logs:
+    debug: true
+YAML
+fi
+cat >>"$TMP_DIR/config.yaml" <<'YAML'
 plugins:
   enabled: true
   dir: "/CLIProxyAPI/plugins"
@@ -180,7 +208,7 @@ PY
 
 for _ in $(seq 1 20); do
   if [[ -f "$TMP_DIR/mock.log" ]] && grep -q "CLIProxyAPI+Pushover+test+successful" "$TMP_DIR/mock.log"; then
-    echo "Docker smoke test passed: plugin loaded, status/check routes worked, and mock Pushover accepted the test notification."
+    echo "Docker smoke test passed ($LAYOUT config layout): plugin loaded, status/check routes worked, and mock Pushover accepted the test notification."
     exit 0
   fi
   sleep 0.25
