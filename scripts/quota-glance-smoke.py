@@ -85,6 +85,16 @@ def snapshot(now, indices, nudge=0):
                 window('weekly_fable', 'Weekly (Fable)', fable, weekly_reset - 60, now),
             ],
         }
+    # The OpenRouter account quota-cache polls with its own management key. It
+    # is in no roster, so it is keyed the way quota-cache keys it: by a
+    # fingerprint of the key.
+    entries['openrouter:key-5m0ke5m0ke5m'] = {
+        'provider': 'openrouter', 'auth_index': 'key-5m0ke5m0ke5m',
+        'used_percent': 0, 'reset_at': '0001-01-01T00:00:00Z', 'observed_at': '0001-01-01T00:00:00Z',
+        'last_attempt': stamp(now - 60), 'next_attempt': stamp(now + 600), 'failures': 0,
+        'quota': {'schema': 1, 'observed_at': stamp(now - 60),
+                  'balances': {'credits': {'unit': 'usd', 'limit': '100.5', 'used': '25.75'}}},
+    }
     return {'schema': 1, 'written_at': stamp(now - 60), 'next_request': stamp(now + 600),
             'provider_cooldown': {}, 'entries': entries}
 
@@ -140,6 +150,7 @@ plugins:
       data-dir: /work/data/{PLUGIN}
       web-token: {WEB_TOKEN}
       stale-after: 45m
+      openrouter-warn-below: 80
 ''')
 
         container = run('docker', 'create', '--pull=never', '-p', '127.0.0.1::8317',
@@ -379,6 +390,41 @@ def checks(container, cache_path, now):
         token_door = f'not dispatched by CPA ({status}); console session required'
     print(f'  redeem        management POST dispatched, confirmation enforced; '
           f'token door {token_door}')
+
+    # 6c. The OpenRouter balance, and its threshold changed the way CPA's
+    #     panel changes it: a JSON number sent to CPA's own plugin-config
+    #     route, which CPA writes into its config file and hands back to the
+    #     plugin on reload. The unit tests decode YAML they wrote themselves;
+    #     only this shows what CPA actually delivers.
+    fields = {f['name']: f['type'] for f in registered.get('config_fields') or []}
+    assert fields.get('openrouter-warn-below') == 'number', fields
+
+    def summary_document():
+        status, raw, headers = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
+        if status != 200:
+            return None
+        if (headers.get('Content-Encoding') or '').lower() == 'gzip':
+            raw = gzip.decompress(raw)
+        return json.loads(raw)
+
+    balances = summary_document()['balances']
+    assert len(balances) == 1, balances
+    balance = balances[0]
+    assert (balance['remainingText'], balance['warnBelow'], balance['level']) == ('$74.75', 80, 'low'), balance
+    status, body, _ = request(f'/v0/management/plugins/{PLUGIN}/config', management=True, method='PATCH',
+                              body=json.dumps({'openrouter-warn-below': 2.5}).encode(),
+                              headers={'Content-Type': 'application/json'})
+    assert status == 200, f'plugin config PATCH: {status} {body[:200]!r}'
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        document = summary_document()
+        if document and document['balances'] and document['balances'][0]['warnBelow'] == 2.5:
+            balance = document['balances'][0]
+            break
+        time.sleep(0.25)
+    assert (balance['warnBelow'], balance['level']) == (2.5, 'ok'), balance
+    print(f'  balance       {balance["remainingText"]} left · low below $80; ok after the panel\'s '
+          f'config route set 2.5, applied live')
 
     # 7. The update path, through whatever filesystem the deployment actually
     #    uses. A bind mount is exactly where inotify delivery gets unreliable,

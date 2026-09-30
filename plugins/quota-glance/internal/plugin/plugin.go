@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,12 +41,15 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 const (
 	defaultStaleAfter = 45 * time.Minute
 	defaultDataDir    = "plugins/data/quota-glance"
 	tokenFile         = "web-token"
+	// defaultWarnBelow is the OpenRouter balance, in dollars, below which its
+	// card turns amber.
+	defaultWarnBelow = 5.0
 )
 
 type Host interface {
@@ -65,6 +70,34 @@ type settings struct {
 	// allowRedeem gates the whole redeem path. When false the redeemer is never
 	// built and the route 404s, so the plugin cannot reach a provider at all.
 	allowRedeem bool
+	warnBelow   float64
+}
+
+// dollars is a money amount from configuration. The configuration panel saves
+// a number field as a YAML int or float depending on what was typed, and a
+// hand-edited file may quote it or keep the dollar sign, so all of those
+// decode. Anything else is recorded as invalid rather than failing the decode,
+// so configure can name the field instead of rejecting the whole block.
+type dollars struct {
+	value   float64
+	set     bool
+	invalid bool
+}
+
+func (d *dollars) UnmarshalYAML(node *yaml.Node) error {
+	// A key saved with no value is the panel clearing the field.
+	if node.Kind == yaml.ScalarNode && (node.Tag == "!!null" || strings.TrimSpace(node.Value) == "") {
+		return nil
+	}
+	d.set = true
+	text := strings.TrimPrefix(strings.TrimSpace(node.Value), "$")
+	value, err := strconv.ParseFloat(text, 64)
+	if node.Kind != yaml.ScalarNode || err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		d.invalid = true
+		return nil
+	}
+	d.value = value
+	return nil
 }
 
 type Plugin struct {
@@ -162,6 +195,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		StaleAfter  string            `yaml:"stale-after"`
 		PlanLabels  map[string]string `yaml:"plan-labels"`
 		AllowRedeem *bool             `yaml:"allow-redeem"`
+		WarnBelow   dollars           `yaml:"openrouter-warn-below"`
 		Priority    *int              `yaml:"priority"`
 		Store       map[string]any    `yaml:"store"`
 	}{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
@@ -170,6 +204,15 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		if decoder.Decode(&cfg) != nil {
 			return protocol.Registration{}, errors.New("invalid quota-glance configuration")
 		}
+	}
+	if cfg.WarnBelow.invalid {
+		return protocol.Registration{}, errors.New("openrouter-warn-below must be a dollar amount of 0 or more")
+	}
+	// Absent, or saved empty by the panel, means the default rather than zero:
+	// zero is a real choice — warn only once the balance has run out.
+	warnBelow := defaultWarnBelow
+	if cfg.WarnBelow.set {
+		warnBelow = cfg.WarnBelow.value
 	}
 	staleAfter, err := time.ParseDuration(cfg.StaleAfter)
 	if err != nil || staleAfter < time.Minute || staleAfter > 24*time.Hour {
@@ -229,6 +272,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.settings = settings{
 		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
 		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels), allowRedeem: allowRedeem,
+		warnBelow: warnBelow,
 	}
 	served := p.api
 	p.configMu.Unlock()
@@ -290,6 +334,7 @@ func registration() protocol.Registration {
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
 				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex rate-limit reset from the dashboard; default true. Set false to show the count without a button"},
+				{Name: "openrouter-warn-below", Type: "number", Description: "OpenRouter balance in dollars below which its card turns amber; default 5. It turns red at $0. Needs an OpenRouter management key in Quota Cache"},
 			},
 		},
 		Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true},
@@ -331,6 +376,9 @@ func (p *Plugin) Rebuild() {
 			StaleAfter:   settings.staleAfter,
 			PlanLabels:   settings.planLabels,
 			Redeemable:   settings.allowRedeem,
+			// Read on every rebuild, so a threshold changed in the panel
+			// applies at the next one rather than at the next snapshot write.
+			BalanceWarnBelow: settings.warnBelow,
 		}, now)
 		if result.Reason == "" {
 			good := doc

@@ -890,5 +890,29 @@
       "credentialCount": 1,
       "rows": []
     }
+  ],
+  "balances": [
+    {
+      "id": "key-8d41e07a2b9c",
+      "provider": "openrouter",
+      "title": "OpenRouter",
+      "order": 10,
+      "currency": "USD",
+      "hasReading": true,
+      "remaining": 3.2,
+      "remainingText": "$3.20",
+      "purchased": 40,
+      "used": 36.8,
+      "warnBelow": 5,
+      "level": "low",
+      "subtext": "Below your $5.00 warning · $36.80 spent of $40.00 purchased",
+      "observedAtEpoch": 1789002000,
+      "nextAttemptEpoch": 1789013400,
+      "dataIssues": [
+        "observeError",
+        "stale"
+      ],
+      "state": "error"
+    }
   ]
 }

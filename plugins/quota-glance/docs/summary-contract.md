@@ -11,8 +11,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials. The layout the design was drawn against. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all. |
+| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -361,3 +361,36 @@ to `credentialCount`, which is also `entries.length`. Neither is ever negative.
 `projectedGainPercent` is the capacity the row regains when it fires, summed
 over every member resetting in that same minute. `subtext` is that sentence
 already written out — it is empty when no member has a future reset.
+
+## Balances — prepaid accounts
+
+`balances[]` holds money left on prepaid accounts that belong to no CPA
+credential. Today that means the OpenRouter account, which quota-cache 0.1.9
+and newer reads with a management key from its own configuration. It is always
+an array, and is empty when no key is configured. It is sorted by `order`, then
+`id`.
+
+A balance is not a credential and takes part in nothing above: it is not in
+`credentials[]` or `providers[]`, it is not counted in `counters`, and it does
+not move `observedAtEpoch`, `nextAttemptEpoch`, or `staleReason`, all of which
+describe the roster. Each balance carries its own instants and state instead.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | quota-cache's name for the account, `key-<fingerprint>`. It changes when the key is rotated. |
+| `provider`, `title`, `order` | `openrouter`, `OpenRouter`, and the sort key. |
+| `currency` | ISO 4217; `USD`. Every amount below is in it. |
+| `hasReading` | `false` until a poll has succeeded. Every amount is then `0` and means nothing, `remainingText` is `""`, and `level` is `""`: render a dash, never `$0.00`. |
+| `remaining` | `purchased` minus `used`, computed exactly from the provider's decimal strings. Negative on an overdrawn account. |
+| `remainingText` | `remaining` as the dashboard prints it: `$74.75`, `$1,234.50`, `-$1.20`. Rounded to the cent, half away from zero; an amount that rounds to nothing is `$0.00`. |
+| `purchased`, `used` | OpenRouter's all-time totals, `total_credits` and `total_usage`. |
+| `warnBelow` | The configured `openrouter-warn-below`, default `5`. |
+| `level` | `critical` once `remaining` is zero or below, whatever the threshold; `low` below `warnBelow`; otherwise `ok`. |
+| `subtext` | The line under the amount, already written: `$25.75 spent of $100.50 purchased · warns below $5.00`, `Below your $5.00 warning · …`, `Out of credit · …`, or, with no reading, why there is none. It never says anything relative to now. |
+| `observedAtEpoch` | When the reading was taken. `0` with no reading. |
+| `nextAttemptEpoch` | quota-cache's next scheduled poll of this account. |
+| `state`, `dataIssues` | The same vocabulary as a row entry: `ok`, `stale`, `error`, `pending`; `observeError`, `refreshPending`, `stale`. A failed poll keeps the last reading with `state: "error"`. |
+
+**It is never a bar.** OpenRouter reports lifetime totals, so a fraction would
+be a share of everything ever bought, which says nothing about whether the next
+request will be paid for. The amount is the headline, coloured by `level`.

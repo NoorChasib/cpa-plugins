@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
+import { BalanceSections } from "./components/BalanceSections"
 import { Banners } from "./components/Banner"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
@@ -43,13 +44,25 @@ function Body({
   // every card repeats it, so the top row is always the credential that
   // recovers next.
   const providers = [...summary.providers].sort((a, b) => a.order - b.order)
+  // Below the quota providers, and whether or not there are any: a prepaid
+  // balance belongs to no CPA credential, so an install with none still has
+  // one to show.
+  const held = summary.balances ?? []
+  const balances = <BalanceSections balances={held} />
   if (providers.length === 0) {
     // Not an error, and not a blank page. A pool with no pollable provider in
     // it is an ordinary state on a fresh install.
     return (
-      <p className="rounded-[12px] border border-line bg-card px-4 py-[15px] text-[12.5px] leading-[1.6] text-ink-2">
-        No credentials with a quota provider yet. Once quota-cache polls one, its windows appear here.
-      </p>
+      <>
+        <p
+          className={`rounded-[12px] border border-line bg-card px-4 py-[15px] text-[12.5px] leading-[1.6] text-ink-2 ${
+            held.length > 0 ? "mb-[30px]" : ""
+          }`}
+        >
+          No credentials with a quota provider yet. Once quota-cache polls one, its windows appear here.
+        </p>
+        {balances}
+      </>
     )
   }
 
@@ -64,6 +77,7 @@ function Body({
           onRedeemed={onRedeemed}
         />
       ))}
+      {balances}
     </>
   )
 }

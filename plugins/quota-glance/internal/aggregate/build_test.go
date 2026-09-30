@@ -95,6 +95,8 @@ func buildFixture(t *testing.T) Document {
 		// is built the way a default install runs: redemption allowed, and the
 		// per-credential judgement left to the builder.
 		Redeemable: true,
+		// And with the threshold a default install ships with.
+		BalanceWarnBelow: 5,
 	}, at(t, 0))
 }
 
@@ -794,11 +796,12 @@ func degradedSamples(t *testing.T) []Sample {
 func buildDegraded(t *testing.T) Document {
 	t.Helper()
 	return Build(Input{
-		Snapshot:   loadSnapshot(t, "degraded-states.json"),
-		Identities: degradedRoster(),
-		Samples:    degradedSamples(t),
-		StaleAfter: 45 * time.Minute,
-		Redeemable: true,
+		Snapshot:         loadSnapshot(t, "degraded-states.json"),
+		Identities:       degradedRoster(),
+		Samples:          degradedSamples(t),
+		StaleAfter:       45 * time.Minute,
+		Redeemable:       true,
+		BalanceWarnBelow: 5,
 	}, at(t, 0))
 }
 

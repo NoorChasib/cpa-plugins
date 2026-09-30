@@ -2,8 +2,8 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const auth = window.quotaCacheAuth;
-  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok'};
-  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits'};
+  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter'};
+  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits'};
   let snapshot = null;
   let busy = false;
   const date = value => { const t = Date.parse(value); return Number.isFinite(t) && t > 0 ? t : 0; };
@@ -43,6 +43,12 @@
     const observed = date(e.observed_at);
     const reset = date(e.reset_at);
     return observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error && (!reset || reset > now) && Number.isFinite(e.used_percent) && e.used_percent >= 0 && e.used_percent <= 100;
+  }
+  // OpenRouter reports a balance and no weekly window, so its freshness is the
+  // nested observation's rather than the weekly observed_at, which stays empty.
+  function freshBalance(e, now) {
+    const observed = date(e.quota && e.quota.observed_at);
+    return e.provider === 'openrouter' && observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error;
   }
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
@@ -96,7 +102,7 @@
     const selected = $('provider').value;
     const entries = all.filter(e => selected === 'all' || e.provider === selected).sort((a,b) => (a.provider + a.auth_index).localeCompare(b.provider + b.auth_index));
     const cooldowns = Object.entries(s.provider_cooldown || {}).filter(([,until]) => date(until) > now);
-    const usable = all.filter(e => fresh(e, now)).length;
+    const usable = all.filter(e => fresh(e, now) || freshBalance(e, now)).length;
     $('health').textContent = cooldowns.length ? 'Provider cooldown' : s.activity?.error ? 'Needs attention' : all.length ? 'Running' : 'Waiting for accounts';
     $('health').className = 'pill ' + (cooldowns.length || s.activity?.error ? 'warn' : all.length ? 'ok' : '');
     $('fresh').textContent = usable + ' / ' + all.length;
@@ -136,13 +142,13 @@
       addCell(row, time(e.last_attempt, now));
       addCell(row, time(new Date(next(e,s,now)).toISOString(), now));
       const cooling = date((s.provider_cooldown || {})[e.provider]) > now;
-      const label = cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) ? 'Fresh' : known ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
+      const label = cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (e.provider === 'openrouter' && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
       const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' ? 'ok' : label === 'Failed' ? 'error' : 'warn')));
       if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
       $('accounts').append(row);
     }
     $('accounts-empty').hidden = entries.length > 0;
-    $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA; the next scheduled scan will discover it.';
+    $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration; the next scheduled scan will discover it.';
     const history = (s.history || []).filter(p => selected === 'all' || p.provider === selected).slice().reverse();
     $('history').replaceChildren();
     $('history-count').textContent = history.length + ' recorded';
