@@ -208,7 +208,7 @@ make check-release
 bash -n scripts/smoke-test.sh
 ```
 
-On Linux, `make build` creates `reset-priority.so`. The smoke test uses a disposable `eceasy/cli-proxy-api:latest` container, a temporary config, and a disposable named plugin volume:
+On Linux, `make build` creates `reset-priority.so`. The smoke test uses a disposable container from the digest-pinned CPA v8.0.4 image (override with `CPA_SMOKE_IMAGE`), a temporary config in the v8 layout (`CPA_SMOKE_LAYOUT=legacy` uses the legacy layout), and a disposable named plugin volume:
 
 ```bash
 ./scripts/smoke-test.sh ./reset-priority.so

@@ -38,7 +38,7 @@ jobs:
         run: make checksums
       - name: Verify packaged archive and checksums (partial bundle)
         run: make verify-release
-      # Note: make smoke pulls the unpinned eceasy/cli-proxy-api:latest image.
+      # Note: make smoke runs the pinned CPA v8.0.4 image in legacy and v8 config layouts.
       # CPA_SMOKE_REQUIRE_DOCKER=1 forbids the local no-Docker skip path so the
       # integration test can never be skipped silently in CI.
       - name: Run Docker integration smoke test

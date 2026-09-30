@@ -37,7 +37,7 @@ def publish_assets(bundle, tag):
     existing = subprocess.run(args, text=True, capture_output=True)
     if existing.returncode:
         run('gh', 'release', 'create', tag, '--repo', REPO, '--verify-tag', '--draft', '--latest=false',
-            '--title', tag, '--notes', 'Independent Linux amd64 release. Native bytes verified in pinned CPA v7.2.155; see verification.json and checksums.txt.')
+            '--title', tag, '--notes', 'Independent Linux amd64 release. Native bytes verified in pinned CPA v8.0.4; see verification.json and checksums.txt.')
         existing = subprocess.run(args, text=True, capture_output=True, check=True)
     release = json.loads(existing.stdout)
     names = {p.name for p in bundle.iterdir()}

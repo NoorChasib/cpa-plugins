@@ -2,7 +2,7 @@
 
 ## Compatibility baseline
 
-The plugin was audited against CLIProxyAPI commit `81e1b5374f99c212f196f34956eeed964a46b8fa` (`v7.2.146-3-g81e1b53`). The compiled fingerprint defaults it assumes when `config.yaml` omits a field are those of that build: `claude-cli/2.1.220 (external, cli)` / `0.94.0` / `v26.3.0` and `codex-tui/0.146.0 (...)`. The status route reports this as `assumed_cpa_version` and the HTML view shows it next to the floors.
+The plugin was verified on CLIProxyAPI **v8.0.4** (commit `d33f63f8e3d98428440ebca5a5b6a981a61ff71e`, image `eceasy/cli-proxy-api:v8.0.4@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d`) in both config layouts. The compiled fingerprint defaults it assumes when `config.yaml` omits a field are those of that build: `claude-cli/2.1.280 (external, cli)` / `0.112.1` / `v26.3.0` and `codex-tui/0.154.0 (...)` (0.1.4 and earlier assumed v7.2.146's `2.1.220` / `0.94.0` and `0.146.0`). The status route reports this as `assumed_cpa_version` and the HTML view shows it next to the floors.
 
 **CPA upgrades need no action.** The assumed default matters only while `config.yaml` has no baseline block. Once the plugin has promoted once, CPA reads the block instead of its compiled constant, so a newer image neither resets nor lowers the baseline and the plugin keeps comparing against the on-disk value. If a newer build compiles in a default above your client's version while the block is still absent, the plugin writes your client's real tuple, which corrects the outbound fingerprint to what you actually run. After a CPA upgrade, revalidate the `docs/architecture.md` file:line references if you maintain the plugin.
 
@@ -29,11 +29,13 @@ The plugin was audited against CLIProxyAPI commit `81e1b5374f99c212f196f34956eee
 
 ## The explicit baseline in config.yaml is malformed
 
-If `claude-header-defaults.user-agent` (or the Codex one) is set but does not parse as `claude-cli/M.m.p ...` (or `codex_cli_rs|codex-tui/M.m.p`), status shows `malformed_user_agent: true`, every observation for that provider is counted under `decisions.baseline_malformed`, and nothing is written. CPA itself falls back to its compiled version in this case, but the plugin refuses to guess what you meant. Evidence keeps accumulating; fix or remove the value and promotion resumes on the retained evidence at the next reload.
+If the Claude header-defaults `user-agent` (or the Codex one), in whichever layout CPA reads it from, is set but does not parse as `claude-cli/M.m.p ...` (or `codex_cli_rs|codex-tui/M.m.p`), status shows `malformed_user_agent: true`, every observation for that provider is counted under `decisions.baseline_malformed`, and nothing is written. CPA itself falls back to its compiled version in this case, but the plugin refuses to guess what you meant. Evidence keeps accumulating; fix or remove the value and promotion resumes on the retained evidence at the next reload.
 
 ## config.yaml has a shape the plugin refuses to edit
 
-`unsupported` in the provider's `effective_baseline` (and `last_error`) says `duplicate_key` when the file defines the same mapping key twice (CPA's own decoder rejects such a file with "mapping key ... already defined", so it would never hot-reload anyway) or `unsupported_config_shape` when the baseline key is a non-empty scalar, a sequence, an alias (`*name`), lives only inside a `<<: *defaults` merge, or is part of an alias/merge cycle; `multi_document_config` means the file contains more than one YAML document. The plugin reads well-formed alias/merge files correctly but will not rewrite them, because a yaml.v3 re-encode would destroy the shared structure, and it never follows a cycle (which would crash CPA). Put an explicit `claude-header-defaults:` mapping in the file; evidence is retained meanwhile.
+`unsupported` in the provider's `effective_baseline` (and `last_error`) says `duplicate_key` when the file defines the same mapping key twice (CPA's own decoder rejects such a file with "mapping key ... already defined", so it would never hot-reload anyway) or `unsupported_config_shape` when the baseline key is a non-empty scalar, a sequence, an alias (`*name`), lives only inside a `<<: *defaults` merge, or is part of an alias/merge cycle; `multi_document_config` means the file contains more than one YAML document. In the v8 layout the same rules apply to every level of `oauth.providers.<provider>.header-defaults`, and an existing `oauth`, `oauth.providers`, `oauth.providers.<provider>`, or `header-defaults` that is not a mapping (for example `claude: ~`) is `unsupported_config_shape` because CPA itself refuses to load such a file ("... must be a mapping"). The plugin reads well-formed alias/merge files correctly but will not rewrite them, because a yaml.v3 re-encode would destroy the shared structure, and it never follows a cycle (which would crash CPA). Put an explicit mapping in the file (`oauth.providers.claude.header-defaults:` or `claude-header-defaults:`); evidence is retained meanwhile.
+
+`unsupported_config_version` in `config_file.error` means `config-version` is present but is not the integer `8`. CPA refuses to load such a file, so the plugin does not touch it either.
 
 ## The plugin was disabled in config.yaml but status still shows it learning
 
@@ -51,7 +53,7 @@ With `require-explicit-baseline: true` a provider whose `config.yaml` carries no
   - `claude_entrypoint_not_allowed`: add the entrypoint to `claude-entrypoints`.
   - `claude_code_beta_missing`: the *inbound* request lacked `claude-code-20250219` in `anthropic-beta` and was rejected. Inbound count_tokens and helper requests often omit it (CPA adds it on the way out, which the plugin never sees) and then simply do not count; requests that carry it count normally. If your host never sends it on `/v1/messages`, set `require-claude-code-beta: false`.
   - `claude_package_version_malformed` / `claude_runtime_version_malformed`: the client does not send Stainless headers in the expected shape; the plugin refuses to guess.
-- `decisions.not_newer_than_baseline` means the observed version is already the baseline (or older). `decisions.below_min_version` means it is below `claude-min-version` / `codex-min-version`. `decisions.baseline_malformed`, `duplicate_key`, and `unsupported_config_shape` mean the provider block on disk cannot be compared against (see below); `plugin_disabled_on_disk` means the fresh read showed the plugin disabled in `config.yaml`; `baseline_implicit` means `require-explicit-baseline` is set and no explicit baseline exists. In all of these the evidence is retained.
+- `decisions.not_newer_than_baseline` means the observed version is already the baseline (or older). `decisions.below_min_version` means it is below `claude-min-version` / `codex-min-version`. `decisions.baseline_malformed`, `duplicate_key`, and `unsupported_config_shape` mean the provider block on disk cannot be compared against (see below); `plugin_disabled_on_disk` means the fresh read showed the plugin disabled in `config.yaml`; `baseline_implicit` means `require-explicit-baseline` is set and no explicit baseline exists; `promotion_not_effective` means the provider is paused (see below). In all of these the evidence is retained.
 - Unknown or misspelled plugin config keys (`dry_run`, `min_observations`) are rejected at registration with `field ... not found`; CPA then refuses the plugin, so check the CPA log if the status route 404s after a config edit.
 
 ## A candidate is pending but never promoted
@@ -67,8 +69,29 @@ With `require-explicit-baseline: true` a provider whose `config.yaml` carries no
 - The provider shows `awaiting_reload: true` until CPA reloads (any `plugin.reconfigure`, or a fresh read of the file by the plugin, confirms it). After two minutes without confirmation status warns.
 - CPA must log `config file changed, reloading`. If it does not, the watcher is not watching that path (an unsupported deployment mode, or CPA started with a different `-config` than the plugin edited).
 - **Home / store modes**: see the section above; the plugin should already have refused to write.
-- **Codex**: the learned UA takes effect only with `codex.disable-codex-cloaking: true` (the status page warns while it is off).
+- **Codex**: the learned UA takes effect only with `oauth.providers.codex.disable-codex-cloaking: true` (legacy `codex.disable-codex-cloaking`); the status page warns while it is off and shows where it read the flag.
+- **The value in the file is not the one CPA uses**: check `effective_baseline.sources`. A present v8 key wins over its legacy name even when it is blank, so an empty `oauth.providers.claude.header-defaults.user-agent` means CPA's compiled default, not your legacy value.
+- **API-key credentials**: in the v8 layout the header defaults apply to OAuth credentials only (see above).
 - A native `cli` request whose version equals the new baseline now passes through with its own shape; an `sdk-ts`/`sdk-py` request is cloaked to the baseline UA. Both carry the promoted version.
+
+## Status shows `promotion_not_effective` and the provider is `paused`
+
+The loop guard stopped the plugin from rewriting a file CPA would not honor. Two cases:
+
+- **Before a write** (`paused.config_sha256` is set): re-reading the rendered file with CPA's layout rules did not yield exactly the candidate, or the edit would also have changed something else the plugin reads (for example a Codex block that aliases the anchored Claude block). Nothing was written. The pause lifts by itself as soon as `config.yaml` changes; fix the shape the warning describes.
+- **After a write** (`last_promotion.not_effective_at` is set): the promotion was written to `last_promotion.target`, but a later read showed a different tuple. The file was rewritten without it, for example by a panel save that restored an older value, or by a CPA load that discarded the key. The plugin does not write again. Compare `effective_baseline.sources` and `write_target` with the file, fix whatever removed the value, then use **Clear pending** (`POST .../reset`) or change a plugin setting such as `dry-run` to resume. Putting the promoted tuple back by hand also lifts the pause.
+
+## The same promotion is logged every minute and never takes effect
+
+`auto-baseline: promoted claude baseline 2.1.220 -> ...` repeating every `promotion-cooldown`, with CPA rewriting `config.yaml` each time, is auto-baseline 0.1.4 on a file that a `/v8/management` save (the panel, or a plugin install from it) migrated to the v8 layout. 0.1.4 finds no root `claude-header-defaults`, assumes its compiled 2.1.220, and writes the root key; CPA deletes it on reload because `oauth.providers.claude.header-defaults` wins. Set `dry-run: true` with the plugin's own switch (not a panel save) and upgrade to 0.1.5, which reads and writes the v8 block: see [upgrading from 0.1.4](install-docker-compose.md#upgrading-from-014-to-015-cpa-v8).
+
+## config.yaml changed layout after a panel save or plugin install
+
+CPA's Management Center panel writes through `/v8/management`, and every such write rewrites the whole file in the v8 layout (`config-version: 8`, `claude-header-defaults` moved to `oauth.providers.claude.header-defaults`, and so on) with anchors and merge keys expanded. That is CPA's behavior, not the plugin's. auto-baseline 0.1.5 follows the new keys: status then shows `config_file.layout: v8`, `sources` of `v8`, and a `write_target` under `oauth.providers`. Saves through `/v0/management` and the plugin's own writes keep the file's current layout.
+
+## Claude API-key credentials stopped getting the header defaults
+
+In the v8 layout CPA applies `oauth.providers.*` values, including the header defaults and `disable-codex-cloaking`, to OAuth credentials only; API-key credentials (`api-keys.claude`, legacy `claude-api-key`) no longer receive them. The legacy root keys applied to both. This scope is CPA's behavior and the plugin does not work around it; give the API-key credential its own headers if it needs them.
 
 ## The baseline was promoted to a version I do not run
 
@@ -108,4 +131,4 @@ Once the resident process has run the plugin's terminal native shutdown, `clipro
 
 ## Smoke test
 
-`scripts/smoke-test.sh <CPA binary> [auto-baseline.so]` runs the full flow locally and keeps evidence (CPA log, before/after config, backup, state.json, status JSON/HTML) under `dist/smoke/<run-id>/`. It needs `curl`, `python3` and a CPA binary built with `CGO_ENABLED=1 go build ./cmd/server`. Requests fail with `auth_unavailable` / connection refused by design: the placeholder Claude credential points at a closed local port.
+`scripts/smoke-test.sh [auto-baseline.so]` runs the full flow in the pinned CPA v8.0.4 image once per layout (`CPA_SMOKE_LAYOUT`, default `legacy v8`; `interim` is also available) and keeps evidence (CPA log, before/after config, backup, state.json, status JSON/HTML, CPA's runtime header defaults) under `dist/smoke/<run-id>/<layout>/`. It needs `docker`, `curl`, and `python3`; `--cpa-bin <binary>` runs a local CPA binary instead. Requests fail with HTTP 500 / connection refused by design: the placeholder Claude credential points at a closed port on CPA's own loopback. The script never retries a management request that answered 401 or 403.

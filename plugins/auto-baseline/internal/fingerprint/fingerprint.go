@@ -7,24 +7,25 @@ import (
 	"strings"
 )
 
-// Compiled-in baseline defaults of the audited CPA build
-// (v7.2.146-3-g81e1b53). When config.yaml omits a field, CPA falls back to
-// these values (internal/runtime/executor/helps/claude_device_profile.go:22-27,
-// internal/runtime/executor/codex_executor_request.go:26). They are the
+// Compiled-in baseline defaults of the audited CPA build (v8.0.4, commit
+// d33f63f8e3d98428440ebca5a5b6a981a61ff71e). When config.yaml omits a field,
+// CPA falls back to these values
+// (internal/runtime/executor/helps/claude_device_profile.go:23-27,
+// internal/runtime/executor/codex_executor_request.go:27). They are the
 // plugin's assumption about the "effective" baseline for an unconfigured
 // file; a newer CPA release may raise them, which only makes the plugin's
 // floor conservative, never harmful.
 const (
-	compiledClaudeVersion = "2.1.220"
-	compiledCodexVersion  = "0.146.0"
+	compiledClaudeVersion = "2.1.280"
+	compiledCodexVersion  = "0.154.0"
 
 	CompiledClaudeUserAgent      = "claude-cli/" + compiledClaudeVersion + " (external, cli)"
-	CompiledClaudePackageVersion = "0.94.0"
+	CompiledClaudePackageVersion = "0.112.1"
 	CompiledClaudeRuntimeVersion = "v26.3.0"
 	CompiledClaudeOS             = "MacOS"
 	CompiledClaudeArch           = "arm64"
-	CompiledCodexUserAgent       = "codex-tui/" + compiledCodexVersion + " (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; " + compiledCodexVersion + ")"
-	CompiledCPAVersion           = "v7.2.146-3-g81e1b53"
+	CompiledCodexUserAgent       = "codex-tui/" + compiledCodexVersion + " (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; " + compiledCodexVersion + ")"
+	CompiledCPAVersion           = "v8.0.4 (d33f63f)"
 )
 
 // Compiled baseline versions parsed from the constants above.

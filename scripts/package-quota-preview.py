@@ -15,7 +15,7 @@ def digest(raw): return hashlib.sha256(raw).hexdigest()
 
 def main():
     evidence = json.loads((ROOT/'dist/quota-preview-evidence.json').read_text())
-    assert evidence['image'] == 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
+    assert evidence['image'] == 'eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d'
     out = ROOT/'dist'/TAG
     out.mkdir(parents=True,exist_ok=True)
     registry = json.loads((ROOT/'registry.json').read_text())

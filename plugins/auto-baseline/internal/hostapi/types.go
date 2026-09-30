@@ -23,6 +23,13 @@
 //     untagged `pluginapi.RequestInterceptResponse`; an empty object means
 //     "no changes" (internal/pluginhost/adapters_interceptors.go:109-140).
 //
+// Re-checked against v8.0.4 (d33f63f8e3d98428440ebca5a5b6a981a61ff71e): the
+// native ABI is still 1 and the host now speaks schema 6. The changes since
+// the audit are additive (quota provider methods, scheduler options) or gated
+// on the plugin's declared schema_version (payload stream chunks omit history
+// from 5, raw management JSON from 6); this plugin declares 4, and every
+// shape listed above is unchanged.
+//
 // These types are written independently against that wire contract; no
 // upstream implementation code is copied.
 package hostapi

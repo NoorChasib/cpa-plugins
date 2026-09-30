@@ -315,6 +315,8 @@ Run the disposable Docker integration test:
 make smoke
 ```
 
+It runs the digest-pinned CPA v8.0.4 image twice, once with a legacy-layout config and once with a v8-layout config. `CPA_SMOKE_IMAGE` overrides the image; `CPA_SMOKE_LAYOUT=legacy|v8` selects one layout when running `scripts/smoke-test.sh` directly.
+
 Without a working Docker daemon the smoke test prints `SKIP: Docker unavailable` and exits 0. CI sets `CPA_SMOKE_REQUIRE_DOCKER=1`, which turns that skip into a hard failure so the integration test can never be silently skipped in CI.
 
 The smoke build enables a compile-time-only local/mock endpoint seam. Release builds ignore `CPA_PUSHOVER_TEST_ENDPOINT` and always use Pushover's fixed HTTPS endpoint.

@@ -69,7 +69,8 @@ verify-release-full:
 	./scripts/verify-release.sh dist
 
 smoke:
-	./scripts/smoke-test.sh
+	CPA_SMOKE_LAYOUT=legacy ./scripts/smoke-test.sh
+	CPA_SMOKE_LAYOUT=v8 ./scripts/smoke-test.sh
 
 clean:
 	rm -rf dist

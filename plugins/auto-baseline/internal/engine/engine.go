@@ -58,14 +58,20 @@ type ReadFunc func(path string) (configfile.Snapshot, error)
 // whether the file was rewritten.
 type DryRunApplyFunc func(path, backupDir string, enabled bool, check func(configfile.Snapshot) error) (configfile.Snapshot, bool, error)
 
+// PreviewFunc is the dry-run promotion seam: everything Apply does except
+// the write.
+type PreviewFunc func(path string, candidate fingerprint.Candidate, check func(configfile.Snapshot) error) (configfile.Snapshot, error)
+
 // Deps are the engine's injected collaborators.
 type Deps struct {
 	Clock    clock.Clock
 	Log      func(level, message string)
 	RunAsync func(func())
-	// Apply / ApplyDryRun / Read / DetectMode default to the configfile package.
+	// Apply / ApplyDryRun / Preview / Read / DetectMode default to the
+	// configfile package.
 	Apply       ApplyFunc
 	ApplyDryRun DryRunApplyFunc
+	Preview     PreviewFunc
 	Read        ReadFunc
 	DetectMode  func() configfile.DeploymentMode
 }
@@ -118,11 +124,25 @@ type Engine struct {
 	mode            configfile.DeploymentMode
 	modeUnsupported bool
 	modeLogged      bool
+	configLayout    configfile.Layout
 	effective       map[fingerprint.Provider]configfile.Effective
 	disableCodex    bool
+	// disableCodexSource is where disableCodex came from (v8, legacy, default).
+	disableCodexSource configfile.Source
 	// awaitingReload records, per provider, when a written promotion is
 	// still waiting for CPA's hot reload to be observed.
 	awaitingReload map[fingerprint.Provider]time.Time
+	// writeEpoch counts recorded promotion writes. Every config read takes
+	// the current value before it opens the file, and awaitingEpoch holds
+	// the epoch of each awaiting write, so a read that started before a
+	// write was recorded is never mistaken for proof that the write was
+	// lost.
+	writeEpoch    uint64
+	awaitingEpoch map[fingerprint.Provider]uint64
+	// deferredLogs collects messages produced under mu; flushLogs emits
+	// them after the lock is released so the host is never called with mu
+	// held.
+	deferredLogs []string
 	// dryRunPending is set after the dry-run toggle wrote config.yaml and
 	// until a reconfigure delivers the new value (or reverts it).
 	dryRunPending   bool
@@ -130,6 +150,8 @@ type Engine struct {
 	dryRunWrittenAt time.Time
 	// applyDryRun is the config.yaml dry-run edit seam (tests inject fakes).
 	applyDryRun DryRunApplyFunc
+	// preview is the dry-run promotion seam.
+	preview PreviewFunc
 
 	stateLoaded     bool
 	stateError      string
@@ -173,6 +195,9 @@ func New(cfg config.Config, deps Deps) *Engine {
 	if deps.ApplyDryRun == nil {
 		deps.ApplyDryRun = configfile.ApplyDryRun
 	}
+	if deps.Preview == nil {
+		deps.Preview = configfile.Preview
+	}
 	if deps.DetectMode == nil {
 		deps.DetectMode = configfile.DetectDeploymentMode
 	}
@@ -184,11 +209,13 @@ func New(cfg config.Config, deps Deps) *Engine {
 		runAsync:       deps.RunAsync,
 		apply:          deps.Apply,
 		applyDryRun:    deps.ApplyDryRun,
+		preview:        deps.Preview,
 		read:           deps.Read,
 		detect:         deps.DetectMode,
 		state:          statefile.New(),
 		effective:      make(map[fingerprint.Provider]configfile.Effective),
 		awaitingReload: make(map[fingerprint.Provider]time.Time),
+		awaitingEpoch:  make(map[fingerprint.Provider]uint64),
 		forcedQueue:    make(map[fingerprint.Provider]fingerprint.Candidate),
 	}
 	e.learner = learner.New(settingsFor(cfg), managedFor(cfg), e.clk.Now)
@@ -260,6 +287,9 @@ func (e *Engine) loadState(dir string) {
 	}
 	e.savedGen = e.mutations
 	e.awaitingReload = make(map[fingerprint.Provider]time.Time)
+	// A restored marker belongs to a write made before this process read
+	// anything, so epoch 0 lets the first read settle it.
+	e.awaitingEpoch = make(map[fingerprint.Provider]uint64)
 	for p, lp := range e.state.LastPromotion {
 		if lp != nil && lp.AwaitingReload {
 			e.awaitingReload[p] = lp.At
@@ -316,12 +346,20 @@ func (e *Engine) Reconfigure(cfg config.Config) {
 		// matches the requested value.
 		e.dryRunPending = false
 	}
+	// An operator change to a write-affecting setting (config-path,
+	// dry-run, floors, ...) is the explicit action that resumes providers
+	// paused after an ineffective promotion. CPA reconfigures the plugin on
+	// every config reload, but only a real settings change gets here.
+	resumed := writeChanged && e.clearPausesLocked()
 	e.mu.Unlock()
 	wasFaulted, _ := e.isFaulted()
 	e.setFaulted(false, "")
 
 	if rulesChanged {
 		e.log("info", "auto-baseline: classifier rules changed; pending evidence cleared")
+	}
+	if resumed {
+		e.log("info", "auto-baseline: plugin settings changed; paused promotions resumed")
 	}
 	if wasFaulted {
 		e.log("info", "auto-baseline: fault cleared by reconfigure")
@@ -471,9 +509,11 @@ func (e *Engine) recoverWorker(name string) {
 // refreshConfig resolves the config path, probes it and the backup dir,
 // detects unsupported deployment modes, and reads effective baselines.
 func (e *Engine) refreshConfig() {
+	defer e.flushLogs()
 	e.mu.Lock()
 	override := e.cfg.ConfigPath
 	backupDir := e.cfg.EffectiveBackupDir()
+	epoch := e.writeEpoch
 	e.mu.Unlock()
 
 	path, source := configfile.ResolvePath(override)
@@ -519,7 +559,7 @@ func (e *Engine) refreshConfig() {
 		e.configError = ""
 	}
 	if exists && probeErr == nil && readErr == nil {
-		e.applySnapshotLocked(snap)
+		e.applySnapshotLocked(snap, epoch)
 	}
 	e.mu.Unlock()
 	if logMode {
@@ -528,16 +568,29 @@ func (e *Engine) refreshConfig() {
 }
 
 // applySnapshotLocked records a freshly read config snapshot as the effective
-// baseline, informs the learner, and confirms awaiting promotions whose value
-// is now visible on disk.
-func (e *Engine) applySnapshotLocked(snap configfile.Snapshot) {
+// baseline, settles awaiting promotions against it, and informs the learner.
+// readEpoch is the writeEpoch taken before the file was read.
+func (e *Engine) applySnapshotLocked(snap configfile.Snapshot, readEpoch uint64) {
 	e.configHash = snap.SHA256
+	e.configLayout = snap.Layout
 	e.disableCodex = snap.DisableCodexCloaking
+	e.disableCodexSource = snap.DisableCodexCloakingSource
 	now := e.clk.Now()
 	for _, eff := range []configfile.Effective{snap.Claude, snap.Codex} {
-		e.effective[eff.Provider] = eff
-		e.learner.SetBaseline(eff.Provider, eff.Version, eff.Blocked())
-		e.state.Baselines[eff.Provider] = statefile.Baseline{
+		p := eff.Provider
+		e.effective[p] = eff
+		if pause := e.state.Paused[p]; pause != nil {
+			switch {
+			case pause.ConfigSHA256 != "" && pause.ConfigSHA256 != snap.SHA256:
+				// A loop-guard refusal is re-evaluated once the file changes.
+				delete(e.state.Paused, p)
+			case configfile.CarriesCandidate(eff, pause.Candidate):
+				// The paused tuple is in effect after all (restored by hand,
+				// say); there is nothing left to hold back.
+				delete(e.state.Paused, p)
+			}
+		}
+		e.state.Baselines[p] = statefile.Baseline{
 			Version:        eff.Version,
 			UserAgent:      eff.UserAgent,
 			PackageVersion: eff.PackageVersion,
@@ -545,42 +598,106 @@ func (e *Engine) applySnapshotLocked(snap configfile.Snapshot) {
 			Explicit:       eff.Explicit,
 			ObservedAt:     now,
 		}
-		// Reload confirmation is value-correlated: the on-disk tuple must
-		// equal the promoted tuple exactly.
-		if _, waiting := e.awaitingReload[eff.Provider]; waiting {
-			if lp := e.state.LastPromotion[eff.Provider]; lp != nil && effectiveMatches(eff, lp.Candidate) {
-				e.confirmProviderLocked(eff.Provider, now)
-			}
+		if _, waiting := e.awaitingReload[p]; waiting {
+			e.settleAwaitingLocked(p, eff, readEpoch, now)
 		}
+		e.learner.SetBaseline(p, eff.Version, e.blockedLocked(p, eff))
 	}
 	e.mutations++
 }
 
-// effectiveMatches reports whether the on-disk baseline equals a promoted
-// candidate tuple.
-func effectiveMatches(eff configfile.Effective, c fingerprint.Candidate) bool {
-	if eff.Blocked() != "" || !eff.Explicit || eff.UserAgent != c.UserAgent {
-		return false
+// blockedLocked is the reason the learner withholds readiness for a
+// provider: an unreadable block, or a pause.
+func (e *Engine) blockedLocked(p fingerprint.Provider, eff configfile.Effective) string {
+	if b := eff.Blocked(); b != "" {
+		return b
 	}
-	if c.Provider == fingerprint.ProviderClaude {
-		return eff.PackageVersion == c.PackageVersion && eff.RuntimeVersion == c.RuntimeVersion
+	if pause := e.state.Paused[p]; pause != nil {
+		return pause.Reason
 	}
-	return true
+	return ""
 }
 
-func (e *Engine) confirmProviderLocked(p fingerprint.Provider, now time.Time) {
+// settleAwaitingLocked resolves a written promotion that is waiting for CPA's
+// reload against a fresh read. Confirmation is value-correlated: the
+// on-disk tuple must equal the promoted tuple exactly. A read that started
+// after the write was recorded and shows anything else means config.yaml was
+// rewritten without the promotion (CPA discarding a key on reload, a panel
+// save restoring an older value): the write did not take effect, so the
+// provider is paused rather than rewritten every cooldown. A newer value or
+// an unreadable block on disk ends the wait without a pause, since those
+// have their own handling.
+func (e *Engine) settleAwaitingLocked(p fingerprint.Provider, eff configfile.Effective, readEpoch uint64, now time.Time) {
+	lp := e.state.LastPromotion[p]
+	switch {
+	case lp == nil || lp.DryRun || !lp.AwaitingReload:
+		delete(e.awaitingReload, p)
+		delete(e.awaitingEpoch, p)
+	case configfile.CarriesCandidate(eff, lp.Candidate):
+		e.settlePromotionLocked(p, func(pr *statefile.Promotion) { pr.ConfirmedAt = now })
+	case readEpoch < e.awaitingEpoch[p]:
+		// The read began before this write was recorded; it proves nothing.
+	case eff.Blocked() != "" || eff.Version.Newer(lp.Candidate.Version):
+		e.settlePromotionLocked(p, func(*statefile.Promotion) {})
+	default:
+		cand := lp.Candidate
+		e.settlePromotionLocked(p, func(pr *statefile.Promotion) { pr.NotEffectiveAt = now })
+		detail := fmt.Sprintf("config.yaml was rewritten after the %s %s write to %s and no longer carries it (CPA resolves the baseline to %s from %s); automatic promotion for %s is paused so the file is not rewritten every cooldown", p, cand.Version, lp.Target, eff.Version, eff.UserAgentSource, p)
+		e.state.Paused[p] = &statefile.Pause{At: now, Candidate: cand, Reason: DecisionPromotionNotEffective, Detail: detail}
+		e.state.Counters.Decisions[DecisionPromotionNotEffective]++
+		e.setErrorLocked(fmt.Errorf("%s: %s", DecisionPromotionNotEffective, detail))
+		e.deferredLogs = append(e.deferredLogs, "auto-baseline: "+DecisionPromotionNotEffective+": "+detail+". Check the sources in status, then clear pending (POST /reset) to resume.")
+	}
+}
+
+// settlePromotionLocked ends the wait for p's last promotion and applies
+// outcome to it and to its history entry.
+func (e *Engine) settlePromotionLocked(p fingerprint.Provider, outcome func(*statefile.Promotion)) {
 	delete(e.awaitingReload, p)
+	delete(e.awaitingEpoch, p)
 	if lp := e.state.LastPromotion[p]; lp != nil && lp.AwaitingReload {
 		lp.AwaitingReload = false
-		lp.ConfirmedAt = now
+		outcome(lp)
 		for i := range e.state.History {
 			h := &e.state.History[i]
 			if h.Provider == p && h.At.Equal(lp.At) && h.AwaitingReload {
 				h.AwaitingReload = false
-				h.ConfirmedAt = now
+				outcome(h)
 			}
 		}
 		e.mutations++
+	}
+}
+
+// clearPausesLocked lifts every pause and re-derives the learner's block
+// reasons. It reports whether anything was paused.
+func (e *Engine) clearPausesLocked() bool {
+	if len(e.state.Paused) == 0 {
+		return false
+	}
+	for p := range e.state.Paused {
+		delete(e.state.Paused, p)
+		if eff, ok := e.effective[p]; ok {
+			e.learner.SetBaseline(p, eff.Version, eff.Blocked())
+		}
+	}
+	e.mutations++
+	return true
+}
+
+// flushLogs emits messages deferred while mu was held. Every deferred message
+// reports a new pause, so state is saved right away: a restart must not
+// forget the pause and start rewriting again. Callers must not hold mu.
+func (e *Engine) flushLogs() {
+	e.mu.Lock()
+	lines := e.deferredLogs
+	e.deferredLogs = nil
+	e.mu.Unlock()
+	for _, line := range lines {
+		e.log("warn", line)
+	}
+	if len(lines) > 0 {
+		e.saveState(false)
 	}
 }
 
@@ -725,6 +842,12 @@ func (e *Engine) kickPromotion() {
 const (
 	DecisionPluginDisabledOnDisk = "plugin_disabled_on_disk"
 	DecisionBaselineImplicit     = "baseline_implicit"
+	// DecisionPromotionNotEffective is the loop guard: before a write, the
+	// rendered file would not make CPA load the candidate (the provider
+	// pauses until config.yaml changes); after a write, CPA's reload or
+	// another writer dropped the promoted value (the provider pauses until
+	// the operator resumes it).
+	DecisionPromotionNotEffective = "promotion_not_effective"
 )
 
 // checkError carries a decision bucket for a refused pre-write check.
@@ -799,6 +922,9 @@ func (e *Engine) promoteProvider(provider fingerprint.Provider, forced *fingerpr
 	dryRun := e.effectiveDryRunLocked()
 	requireExplicit := e.cfg.RequireExplicitBaseline
 	path, backupDir := e.configPath, e.backupDir
+	// The worker is single-flight, so no other write can be recorded between
+	// this point and this attempt's own read.
+	epoch := e.writeEpoch
 	floor := e.cfg.MinVersion(provider)
 	obs, sessions := e.evidenceLocked(provider, cand.Key())
 	if !dryRun {
@@ -843,28 +969,33 @@ func (e *Engine) promoteProvider(provider fingerprint.Provider, forced *fingerpr
 	}
 
 	if dryRun {
-		snap, err := e.read(path)
+		// Preview runs the same read, check, render, and loop guard as a
+		// live write, without touching the file.
+		snap, err := e.preview(path, cand, check)
 		if err != nil {
-			e.recordFailure(err)
-			return
-		}
-		if err := check(snap); err != nil {
-			e.handleCheckFailure(provider, cand, snap, err)
+			if isCheckFailure(err) {
+				e.handleCheckFailure(provider, cand, snap, epoch, err)
+				return
+			}
+			e.recordFailure(fmt.Errorf("dry-run %s %s: %w", provider, cand.Version, err))
 			return
 		}
 		record.From = effectiveFor(snap, provider).Version
+		record.Target = effectiveFor(snap, provider).TargetPath
 		e.mu.Lock()
-		e.applySnapshotLocked(snap)
+		e.applySnapshotLocked(snap, epoch)
 		e.dequeueForcedLocked(cand)
 		already := e.state.LastPromotion[provider]
-		if already != nil && already.DryRun && already.Candidate.Key() == cand.Key() {
+		if already != nil && already.DryRun && already.Candidate.Key() == cand.Key() && already.Target == record.Target {
 			e.mu.Unlock()
+			e.flushLogs()
 			return
 		}
 		e.state.RecordPromotion(record)
 		e.mutations++
 		e.mu.Unlock()
-		e.log("info", fmt.Sprintf("auto-baseline: dry-run would promote %s baseline %s -> %s (%s)", provider, record.From, cand.Version, describe(cand)))
+		e.flushLogs()
+		e.log("info", fmt.Sprintf("auto-baseline: dry-run would promote %s baseline %s -> %s (%s) at %s", provider, record.From, cand.Version, describe(cand), record.Target))
 		e.saveState(false)
 		return
 	}
@@ -893,20 +1024,29 @@ func (e *Engine) promoteProvider(provider fingerprint.Provider, forced *fingerpr
 		}
 	}
 	if err != nil {
-		var ce *checkError
-		if errors.Is(err, errNotNewer) || errors.Is(err, errBelowFloor) || errors.As(err, &ce) {
-			e.handleCheckFailure(provider, cand, snap, err)
+		if isCheckFailure(err) {
+			e.handleCheckFailure(provider, cand, snap, epoch, err)
 			return
 		}
 		e.recordFailure(fmt.Errorf("promote %s %s: %w", provider, cand.Version, err))
 		return
 	}
-	record.From = effectiveFor(snap, provider).Version
+	before := effectiveFor(snap, provider)
+	record.From = before.Version
+	record.Target = before.TargetPath
 	record.AwaitingReload = true
 
-	e.recordSuccessfulWrite(provider, cand, record, now)
-	e.log("info", fmt.Sprintf("auto-baseline: promoted %s baseline %s -> %s (%s); CPA will hot-reload config.yaml", provider, record.From, cand.Version, describe(cand)))
+	e.recordSuccessfulWrite(provider, cand, record, before.Target, now)
+	e.log("info", fmt.Sprintf("auto-baseline: promoted %s baseline %s -> %s (%s) at %s; CPA will hot-reload config.yaml", provider, record.From, cand.Version, describe(cand), record.Target))
 	e.saveState(false)
+}
+
+// isCheckFailure reports whether a promotion attempt was refused by the state
+// of config.yaml (as opposed to an I/O or shape error), including the
+// pre-write loop guard.
+func isCheckFailure(err error) bool {
+	var ce *checkError
+	return errors.Is(err, errNotNewer) || errors.Is(err, errBelowFloor) || errors.As(err, &ce) || errors.Is(err, configfile.ErrNotEffective)
 }
 
 // preWriteAbort is the last check before a destructive apply. It runs under
@@ -930,24 +1070,38 @@ func (e *Engine) preWriteAbort(gen uint64, provider fingerprint.Provider, cand f
 // and the new effective baseline in ONE critical section, so a reload that
 // lands during marker installation cannot observe a half-installed state.
 // The section uses defer Unlock so a panic (see postWriteHook) releases mu.
-func (e *Engine) recordSuccessfulWrite(provider fingerprint.Provider, cand fingerprint.Candidate, record statefile.Promotion, now time.Time) {
+func (e *Engine) recordSuccessfulWrite(provider fingerprint.Provider, cand fingerprint.Candidate, record statefile.Promotion, target configfile.Layout, now time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.state.RecordPromotion(record)
 	e.state.LastError = ""
 	e.state.LastErrorAt = time.Time{}
+	e.writeEpoch++
 	e.awaitingReload[provider] = now
+	e.awaitingEpoch[provider] = e.writeEpoch
+	// A write that went through (a forced promotion while paused) is tracked
+	// afresh; its own reload check decides whether to pause again.
+	delete(e.state.Paused, provider)
 	e.dequeueForcedLocked(cand)
 	e.learner.Forget(provider, cand.Key())
 	e.learner.SetBaseline(provider, cand.Version, "")
-	e.effective[provider] = configfile.Effective{
-		Provider:       provider,
-		Version:        cand.Version,
-		UserAgent:      cand.UserAgent,
-		PackageVersion: cand.PackageVersion,
-		RuntimeVersion: cand.RuntimeVersion,
-		Explicit:       true,
+	// The loop guard verified that the written block supplies every value.
+	written := configfile.Source(target)
+	eff := configfile.Effective{
+		Provider:        provider,
+		Version:         cand.Version,
+		UserAgent:       cand.UserAgent,
+		PackageVersion:  cand.PackageVersion,
+		RuntimeVersion:  cand.RuntimeVersion,
+		Explicit:        true,
+		UserAgentSource: written,
+		Target:          target,
+		TargetPath:      record.Target,
 	}
+	if provider == fingerprint.ProviderClaude {
+		eff.PackageVersionSource, eff.RuntimeVersionSource = written, written
+	}
+	e.effective[provider] = eff
 	e.state.Baselines[provider] = statefile.Baseline{
 		Version:        cand.Version,
 		UserAgent:      cand.UserAgent,
@@ -964,25 +1118,46 @@ func (e *Engine) recordSuccessfulWrite(provider fingerprint.Provider, cand finge
 
 // handleCheckFailure runs when the on-disk baseline turned out to be at least
 // as new as the candidate (someone else raised it), the candidate is below
-// the floor, or the on-disk baseline is malformed: adopt the on-disk state,
-// drop the candidate, record the decision, no error unless malformed.
-func (e *Engine) handleCheckFailure(provider fingerprint.Provider, cand fingerprint.Candidate, snap configfile.Snapshot, err error) {
+// the floor, the on-disk baseline is malformed, or the loop guard refused
+// the rendered file: adopt the on-disk state, drop the candidate, record the
+// decision, no error unless the refusal came from file state.
+func (e *Engine) handleCheckFailure(provider fingerprint.Provider, cand fingerprint.Candidate, snap configfile.Snapshot, readEpoch uint64, err error) {
 	e.mu.Lock()
 	if snap.Path != "" {
-		e.applySnapshotLocked(snap)
+		e.applySnapshotLocked(snap, readEpoch)
 	}
 	e.dequeueForcedLocked(cand)
 	var ce *checkError
-	if errors.As(err, &ce) {
+	switch {
+	case errors.As(err, &ce):
 		// A refusal decided by file state (blocked block, plugin disabled on
 		// disk, implicit baseline): keep the evidence so the candidate is
 		// re-evaluated once the file changes; surface the reason.
 		e.state.Counters.Decisions[ce.reason]++
 		e.setErrorLocked(fmt.Errorf("cannot promote %s %s: %w", provider, cand.Version, err))
-	} else {
+	case errors.Is(err, configfile.ErrNotEffective):
+		// Nothing was written. Keep the evidence but pause the provider
+		// until config.yaml changes, so every further observation does not
+		// re-render and re-refuse the same file.
+		e.state.Counters.Decisions[DecisionPromotionNotEffective]++
+		e.setErrorLocked(fmt.Errorf("cannot promote %s %s: %w", provider, cand.Version, err))
+		if snap.SHA256 != "" {
+			e.state.Paused[provider] = &statefile.Pause{
+				At:           e.clk.Now(),
+				Candidate:    cand,
+				Reason:       DecisionPromotionNotEffective,
+				Detail:       "the rendered config.yaml would not make CPA load the promoted baseline; nothing was written and promotion resumes when the file changes",
+				ConfigSHA256: snap.SHA256,
+			}
+			if eff, ok := e.effective[provider]; ok {
+				e.learner.SetBaseline(provider, eff.Version, e.blockedLocked(provider, eff))
+			}
+		}
+	default:
 		e.learner.Forget(provider, cand.Key())
 	}
 	e.mu.Unlock()
+	e.flushLogs()
 	e.log("info", fmt.Sprintf("auto-baseline: skipped %s candidate %s: %s", provider, cand.Version, sanitize.Error(err)))
 }
 
@@ -1118,6 +1293,8 @@ func (e *Engine) SetDryRun(enabled bool) DryRunOutcome {
 	if early != nil {
 		return *early
 	}
+	// Registered first so it runs last, after every unlock below.
+	defer e.flushLogs()
 	defer e.workers.Done()
 	defer func() {
 		// Release the slot and honour any work that arrived while it was
@@ -1163,7 +1340,9 @@ func (e *Engine) SetDryRun(enabled bool) DryRunOutcome {
 		// the warning clock of one that is already pending).
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		e.applySnapshotLocked(snap)
+		// The toggle holds the promotion slot, so no write can be recorded
+		// while it runs and the current epoch predates its read.
+		e.applySnapshotLocked(snap, e.writeEpoch)
 		return DryRunOutcome{Status: 200, Result: "unchanged", Detail: fmt.Sprintf("config.yaml already carries dry-run: %t", enabled), DryRun: e.effectiveDryRunLocked(), AwaitingReload: e.dryRunPending}
 	}
 	now := e.clk.Now()
@@ -1229,18 +1408,25 @@ func (e *Engine) recordDryRunFailure(snap configfile.Snapshot, enabled bool, err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if snap.Path != "" {
-		e.applySnapshotLocked(snap)
+		// See SetDryRun: the promotion slot is held for the whole toggle.
+		e.applySnapshotLocked(snap, e.writeEpoch)
 	}
 	e.setErrorLocked(fmt.Errorf("set dry-run=%t: %w", enabled, err))
 }
 
-// Reset discards pending candidates (baselines and history are kept).
+// Reset discards pending candidates and resumes paused providers (baselines
+// and history are kept).
 func (e *Engine) Reset() {
 	e.mu.Lock()
 	e.learner.Reset()
+	resumed := e.clearPausesLocked()
 	e.mutations++
 	e.mu.Unlock()
 	e.saveState(false)
+	if resumed {
+		e.log("info", "auto-baseline: pending candidates cleared and paused promotions resumed by operator")
+		return
+	}
 	e.log("info", "auto-baseline: pending candidates cleared by operator")
 }
 

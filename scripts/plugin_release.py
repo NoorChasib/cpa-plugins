@@ -15,7 +15,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 REPO = 'NoorChasib/cpa-plugins'
 URL = 'https://github.com/' + REPO
-IMAGE = 'eceasy/cli-proxy-api@sha256:3990e4de484ac5caac80164ee3a60d0ba521320dcda193a2ef71a5ad2e2c768b'
+IMAGE = 'eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d'
 LIBRARIES = {
     'quota-cache': 'dist/quota-cache.so',
     'account-health-pushover': 'dist/account-health-pushover.so',
@@ -173,7 +173,7 @@ def package(tag, output):
     (output / 'verification.json').write_text(json.dumps(evidence, indent=2) + '\n')
     names = [name, 'catalog-entry.json', 'verification.json']
     (output / 'checksums.txt').write_text(''.join(f'{digest((output / n).read_bytes())}  {n}\n' for n in sorted(names)))
-    print(f'Packaged {tag}; verified exact native bytes in CPA v7.2.155')
+    print(f'Packaged {tag}; verified exact native bytes in CPA v8.0.4')
 
 
 def main():
