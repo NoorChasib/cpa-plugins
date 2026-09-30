@@ -188,7 +188,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	}
 	active := map[string]Account{}
 	for _, a := range accounts {
-		if a.AuthIndex != "" && (a.Provider == "claude" || a.Provider == "codex" || a.Provider == "xai") {
+		if a.AuthIndex != "" && (a.Provider == "claude" || a.Provider == "codex" || a.Provider == "xai" || a.Provider == "openrouter") {
 			active[client.Key(a.Provider, a.AuthIndex)] = a
 		}
 	}

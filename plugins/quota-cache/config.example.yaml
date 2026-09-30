@@ -7,6 +7,11 @@ plugins:
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       poll-interval: 15m
       request-spacing: 10s
+      # Optional. An OpenRouter management key, for reading your account
+      # balance (Quota Glance shows it). Create it at
+      # https://openrouter.ai/settings/management-keys and give it an expiry:
+      # it can also create and delete your API keys. Empty disables it.
+      # openrouter-management-key: sk-or-v1-...
     account-health-pushover:
       # Requires the updated consumer binary; old published releases do not use this option.
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json

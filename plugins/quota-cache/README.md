@@ -1,6 +1,6 @@
 # Quota Cache
 
-One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, banked Codex rate-limit resets, and availability flags. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
+One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, banked Codex rate-limit resets, and availability flags, and optionally your OpenRouter account balance. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
 **Linux amd64:** Quota Cache 0.1.5 normalizes every provider's quota windows into one canonical vocabulary and records the subscription plan beside each credential, so a consumer never pattern-matches a provider string. 0.1.4's extended fields are still there — expand **All cached quota fields** in the sidebar to inspect them. Everything is additive and the snapshot stays on schema 1: Account Health and Reset Priority keep their regular weekly/pool behavior and need no rebuild. See the [cache format and reader API](docs/cache-format.md) for building another consumer.
 
@@ -54,6 +54,22 @@ Open **Quota Cache** in the CPA sidebar. It shows fresh versus stale observation
 The sidebar resource is a static public shell; operational information comes only from authenticated `GET /v0/management/plugins/quota-cache/status` using your same-origin CPA session. No new login, key, or port is needed.
 
 If version 0.1.0 becomes unregistered after changing the relative default to its equivalent absolute path, restore `cache-path: plugins/data/quota-cache/snapshot.json` until you update. Version 0.1.1 normalizes these paths before comparing configuration, so an unchanged location does not require a restart. Actual schedule or location changes still require a native restart; safe failure reasons now appear in CPA logs.
+
+## OpenRouter balance (optional)
+
+Quota Cache 0.1.9 can also read how much money is left on your OpenRouter account, which [Quota Glance](../quota-glance/README.md#openrouter-balance) shows as a card of its own. OpenRouter reports the account balance only to a **management key**. The inference keys CPA routes with are refused, so this needs a key of its own:
+
+1. Create one on OpenRouter's [Management API Keys page](https://openrouter.ai/settings/management-keys). **Give it an expiry.** A management key cannot make model requests, but it can create, edit, and delete your API keys, OpenRouter offers no read-only scope, and the expiry is fixed when the key is created.
+2. Add it to Quota Cache's settings in the CPA plugin panel, or to the config file:
+
+   ```yaml
+   quota-cache:
+     openrouter-management-key: sk-or-v1-...
+   ```
+
+It takes effect at the next scan, with no restart. Quota Cache then makes one `GET https://openrouter.ai/api/v1/credits` per `poll-interval`, with the same spacing, failure backoff, and 429 cooldown as every other account. Clear the setting and the account is dropped at the next scan.
+
+The snapshot keeps OpenRouter's purchased and spent totals and never the key. The account is recorded as `openrouter:key-<fingerprint>`, a hash of the key, so a rotated or corrected key starts fresh rather than waiting out the previous key's failure backoff. Like every plugin setting, the key is stored in plain text in CPA's configuration file and is readable by anyone who holds the CPA management key.
 
 ## Polling behavior
 
