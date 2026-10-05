@@ -20,26 +20,49 @@ type Quota struct {
 	Truncated          bool               `json:"truncated,omitempty"`
 }
 
-// ResetCredits is Codex's inventory of banked rate-limit resets: entitlements
-// already granted to the account, which clear its current windows when spent.
+// ResetCredits is an account's inventory of banked rate-limit resets:
+// entitlements already granted to the account, which clear its current windows
+// when spent. Codex calls them rate-limit reset credits; Claude calls them reset
+// grants.
 //
-// A banked reset is not extra allowance. Spending one restores the 5-hour and
-// weekly Codex windows and moves the weekly reset date, so it is a thing the
-// account holds rather than a thing it has used, and it belongs here beside the
-// balances rather than among the windows.
+// A banked reset is not extra allowance. Spending one restores the account's
+// session and weekly windows, so it is a thing the account holds rather than a
+// thing it has used, and it belongs here beside the balances rather than among
+// the windows.
 //
-// Nil for every provider that has no such concept, and nil for a Codex account
-// that has none banked, so a reader may treat presence as "there is at least
-// one to spend".
+// Nil for every provider that has no such concept, and nil for an account that
+// has none banked, so a reader may treat presence as "there is at least one to
+// spend".
 type ResetCredits struct {
 	AvailableCount int `json:"available_count"`
 	// SoonestExpiry is the earliest expiry among the available credits. A
-	// banked reset lapses thirty days after it is granted and the count alone
-	// cannot say that one is about to, which is the documented way operators
-	// lose them. Nil when the inventory endpoint was not read or did not date
-	// its entries; the count above is still authoritative.
+	// banked reset lapses — a Codex credit thirty days after it is granted, a
+	// Claude grant at its own end date — and the count alone cannot say that
+	// one is about to, which is the documented way operators lose them. Nil
+	// when it could not be dated: Codex's inventory endpoint was not read or
+	// did not date its entries, or no live Claude grant carried an end date.
+	// The count above is still authoritative.
 	SoonestExpiry *time.Time `json:"soonest_expiry,omitempty"`
+	// Hold is the provider's own reason that none can be spent right now, as of
+	// this observation: "not_limited" (the provider only allows a reset once the
+	// account is at a limit), "cooldown" (one was spent recently), "paused", or
+	// "ineligible". Empty when one can be spent now or the provider does not
+	// say, which is always the case for Codex. It is a reading, not a verdict:
+	// a reset is only ever attempted after a fresh check at the provider.
+	Hold string `json:"hold,omitempty"`
+	// HoldUntil is when a "cooldown" hold lifts, when the provider says.
+	HoldUntil *time.Time `json:"hold_until,omitempty"`
 }
+
+// The values ResetCredits.Hold takes. Readers must treat any other value as
+// "the provider gave a reason this reader does not know", never as spendable.
+const (
+	HoldNotLimited = "not_limited"
+	HoldCooldown   = "cooldown"
+	HoldPaused     = "paused"
+	HoldIneligible = "ineligible"
+)
+
 type Window struct {
 	UsedPercent     *float64   `json:"used_percent,omitempty"`
 	DurationSeconds *int64     `json:"duration_seconds,omitempty"`

@@ -21,8 +21,11 @@ class API(c.Structure):
     _fields_ = [('abi', c.c_uint32), ('call', Call), ('free', Free), ('shutdown', Shutdown)]
 
 buffers = {}
-counts = {'http': 0}
+# http counts every provider request; usage and profile split it, so the probe
+# can tell a poll from the account-detail read that rides on its first success.
+counts = {'http': 0, 'usage': 0, 'profile': 0}
 mode = {'status': 200}
+PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 @HostCall
 def host_call(ctx, method, request, length, response):
     try:
@@ -33,9 +36,16 @@ def host_call(ctx, method, request, length, response):
             result = {'json': {'access_token': 'synthetic-not-a-real-token'}}
         elif method == 'host.http.do':
             counts['http'] += 1
-            body = {'seven_day': {'utilization': 42, 'resets_at': (datetime.now(timezone.utc)+timedelta(days=3)).isoformat()}}
-            body['five_hour'] = {'utilization': 18, 'resets_at': (datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()}
-            body['extra_usage'] = {'is_enabled': False, 'monthly_limit': 0}
+            url = json.loads(c.string_at(request, length))['url']
+            if url == PROFILE_URL:
+                counts['profile'] += 1
+                body = {'organization': {'organization_type': 'claude_max', 'rate_limit_tier': 'default_claude_max_20x'}}
+            else:
+                assert url.startswith('https://api.anthropic.com/api/oauth/usage'), url
+                counts['usage'] += 1
+                body = {'seven_day': {'utilization': 42, 'resets_at': (datetime.now(timezone.utc)+timedelta(days=3)).isoformat()}}
+                body['five_hour'] = {'utilization': 18, 'resets_at': (datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()}
+                body['extra_usage'] = {'is_enabled': False, 'monthly_limit': 0}
             result = {'StatusCode': mode['status'], 'Headers': {'Retry-After': ['3600']}, 'Body': base64.b64encode(json.dumps(body).encode()).decode()}
         elif method == 'host.log':
             result = {}
@@ -94,6 +104,9 @@ def start(path):
     shell_bytes = base64.b64decode(shell['Body'])
     assert b'synthetic-one' not in shell_bytes and b'synthetic-not-a-real-token' not in shell_bytes
     assert 'Content-Security-Policy' in shell['Headers']
+    # The library serves the page that remembers a refused console key rather
+    # than presenting it to CPA again; sidebar-smoke.py exercises it.
+    assert b"'quota-cache.console-refused'" in shell_bytes and b'state.rememberPassword !== true' in shell_bytes
     return api
 
 def snapshot(api):
@@ -122,7 +135,9 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
         assert details['balances']['extra_usage']['limit'] == '0'
         assert data['poll_interval'] == '5m0s' and data['request_spacing'] == '2s'
         for _ in range(100): assert snapshot(api)[0] == 200
-        assert counts['http'] == 1
+        assert counts['usage'] == 1 and counts['profile'] == 1 and counts['http'] == 2
+        entry = data['entries']['claude:synthetic-one']
+        assert entry['plan'] == 'max_20x' and entry['account_details']['plan'] == 'max_20x'
         assert data['totals']['requests'] == 1 and data['totals']['successes'] == 1
         assert data['history'][0]['http_status'] == 200
         serialized = path.read_text()
@@ -134,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
     try:
         await_result(api, '')
         time.sleep(1.1)
-        assert counts['http'] == 1, 'restart bypassed persisted interval'
+        assert counts['http'] == 2, 'restart bypassed persisted interval or re-read account details'
     finally:
         api.shutdown()
     path = Path(tmp)/'limited'/'snapshot.json'
@@ -149,8 +164,9 @@ with tempfile.TemporaryDirectory(prefix='quota-cache-native-') as tmp:
     api = start(path)
     try:
         time.sleep(1.1)
-        assert counts['http'] == 2, 'restart bypassed persisted Retry-After'
+        assert counts['http'] == 3, 'restart bypassed persisted Retry-After'
+        assert counts['profile'] == 1, 'a rate-limited poll read account details'
     finally:
         api.shutdown()
 assert not buffers, 'host buffers leaked'
-print('PASS: native registration, 100 cache-only reads, restart TTL, persisted 429 cooldown, buffer release; 2 synthetic provider calls total')
+print('PASS: native registration, 100 cache-only reads, restart TTL, persisted account details, persisted 429 cooldown, buffer release; 3 synthetic provider calls total')

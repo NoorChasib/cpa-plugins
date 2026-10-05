@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -33,7 +34,7 @@ shell = native['call'](api, 'management.handle', {'Method':'GET','Path':'/v0/res
 html = base64.b64decode(shell['Body'])
 now = datetime.now(timezone.utc)
 iso = lambda d: d.isoformat().replace('+00:00','Z')
-state = {'mode':'populated', 'reads':0}
+state = {'mode':'populated', 'reads':0, 'keyless':0}
 fixture = copy.deepcopy(base)
 fixture['provider_cooldown'] = {'claude':iso(now+timedelta(minutes=12))}
 fixture['entries'] = {}
@@ -57,15 +58,43 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == '/v0/resource/plugins/quota-cache/status':
+        # /a and /b stand for two CPAs behind this one origin under different
+        # prefixes; both answer exactly as the unprefixed one does.
+        path = self.path
+        for prefix in ('/a/', '/b/'):
+            if path.startswith(prefix + 'v0/'):
+                path = path[len(prefix)-1:]
+        if path == '/v0/resource/plugins/quota-cache/status':
             self.send_response(200)
             for name,values in shell['Headers'].items():
                 for value in values: self.send_header(name,value)
             self.end_headers(); self.wfile.write(html)
-        elif self.path == '/v0/management/plugins/quota-cache/status':
+        elif path == '/v0/management/plugins/quota-cache/status':
+            # Refusals carry CPA's own messages (AuthenticateManagementKey),
+            # which the page uses to explain why it stopped asking.
             state['reads'] += 1
-            if self.headers.get('Authorization') != 'Bearer synthetic-sidebar-key' or state['mode']=='unauthorized':
-                code,data = 401,{'error':'unauthorized'}
+            if state['mode'] == 'drop':
+                # The link drops after the request went out: no status at all.
+                self.close_connection = True
+                return
+            if state['mode'] == 'hang':
+                # CPA refuses at once, but its answer arrives only after the
+                # page has given up waiting.
+                time.sleep(11)
+                try:
+                    raw = json.dumps({'error':'invalid management key'}).encode()
+                    self.send_response(401); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(raw)
+                except OSError:
+                    pass
+                return
+            key = self.headers.get('Authorization')
+            if key is None:
+                state['keyless'] += 1
+                code,data = 401,{'error':'missing management key'}
+            elif key != 'Bearer synthetic-sidebar-key' or state['mode']=='unauthorized':
+                code,data = 401,{'error':'invalid management key'}
+            elif state['mode']=='banned':
+                code,data = 403,{'error':'IP banned due to too many failed attempts. Try again in 29m40s'}
             elif state['mode']=='unavailable':
                 code,data = 503,{'error':'cache_unavailable'}
             else:
@@ -86,6 +115,19 @@ origin = f'http://127.0.0.1:{server.server_port}'
 session = 'quota-sidebar-' + str(os.getpid())
 binary = os.environ.get('QUOTA_CACHE_AGENT_BROWSER','agent-browser')
 
+# Holds the page's 30-second timer so the test can fire its ticks on demand
+# instead of waiting for them. Other timers run as normal.
+hook = Path(tmp.name) / 'ticks.js'
+hook.write_text('''
+window.__quotaCacheTicks = [];
+const setIntervalNative = window.setInterval;
+window.setInterval = function (callback, delay, ...rest) {
+  if (delay === 30000) { window.__quotaCacheTicks.push(callback); return 0; }
+  return setIntervalNative.call(this, callback, delay, ...rest);
+};
+''')
+REFUSED = 'quota-cache.console-refused'
+
 def browser(*command):
     result = subprocess.run([binary,'--session',session,'--json',*command],text=True,capture_output=True,timeout=45)
     if result.returncode:
@@ -97,15 +139,110 @@ def browser(*command):
 def check(expression):
     browser('wait','--fn',expression)
 
+def until(predicate, message):
+    deadline = time.monotonic() + 10
+    while not predicate():
+        if time.monotonic() > deadline: raise AssertionError(message)
+        time.sleep(.05)
+
+def ticks(count):
+    # Fire the page's automatic update count times, then give anything it
+    # sent time to arrive.
+    browser('eval', 'for (let i = 0; i < %d; i++) window.__quotaCacheTicks.forEach(tick => tick())' % count)
+    time.sleep(.5)
+
+def stored(value, name='cli-proxy-auth'):
+    return "localStorage.setItem('%s', JSON.stringify(%s))" % (name, value)
+
+def remembered(key, base='location.origin', extra=''):
+    return stored("{version:0, state:{managementKey:'%s', rememberPassword:true, apiBase:%s%s}}" % (key, base, extra))
+
+# The console's obfuscated form of a remembered session, as it stores it.
+OBFUSCATED = '''(() => {
+  const plain = new TextEncoder().encode(JSON.stringify({version:0, state:{managementKey:'synthetic-sidebar-key', rememberPassword:true, apiBase:location.origin + '/v8/management'}}));
+  const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+  let raw = '';
+  plain.forEach((byte, i) => { raw += String.fromCharCode(byte ^ salt[i % salt.length]); });
+  localStorage.setItem('cli-proxy-auth', 'enc::v1::' + btoa(raw));
+})()'''
+
+def load(*seeds):
+    browser('eval', 'localStorage.removeItem("cli-proxy-auth"); localStorage.removeItem("managementKey"); localStorage.removeItem("apiBase"); localStorage.removeItem("isLoggedIn");' + ';'.join(seeds))
+    browser('reload')
+
 try:
     if args.serve_only:
         print('Synthetic sidebar preview: '+origin+'/v0/resource/plugins/quota-cache/status',flush=True)
+        print("Sign it in from the browser console: localStorage.setItem('cli-proxy-auth', JSON.stringify({version:0, state:{managementKey:'synthetic-sidebar-key', rememberPassword:true, apiBase:location.origin}}))",flush=True)
         threading.Event().wait()
-    browser('open',origin+'/v0/resource/plugins/quota-cache/status')
-    check("document.querySelector('#error').textContent.includes('Sign in to CPA')")
-    browser('eval',"localStorage.setItem('cli-proxy-auth',JSON.stringify({state:{managementKey:'synthetic-sidebar-key'}}))")
+    browser('--init-script',str(hook),'open',origin+'/v0/resource/plugins/quota-cache/status')
+    signed_out = "document.querySelector('#error').textContent.includes('Sign in to CPA') && document.querySelector('#content').hidden"
+    check(signed_out)
+    ticks(3)
+    assert state['reads'] == 0, 'the page asked CPA without a remembered session'
+    # None of these is a session the console remembered for this address.
+    # 0.1.9 presented most of them, and sent no key at all for the rest, on
+    # every 30-second update; CPA counts each refusal toward its lockout.
+    for seeds in (
+        [stored("{state:{managementKey:'synthetic-sidebar-key'}}")],
+        [remembered('synthetic-sidebar-key', extra=', isAuthenticated:false')],
+        [stored("{version:0, state:{managementKey:'synthetic-sidebar-key', rememberPassword:false, apiBase:location.origin}}")],
+        [remembered('synthetic-sidebar-key', base="'http://elsewhere.invalid:8317'")],
+        [remembered('')],
+        ["localStorage.setItem('cli-proxy-auth', 'enc::v1::' + btoa('not the console'))"],
+        [stored("'synthetic-sidebar-key'", 'managementKey'), stored('location.origin', 'apiBase')],
+    ):
+        load(*seeds)
+        check(signed_out)
+        ticks(2)
+        assert state['reads'] == 0, 'the page presented a key the console did not remember: %s' % seeds
+    # A stale remembered key is presented once. After CPA refuses it, neither
+    # the timer nor a reload presents it again; Refresh view presents it once.
+    load(remembered('stale-sidebar-key'))
+    refused = "document.querySelector('#error').textContent.includes('CPA refused the console session') && document.querySelector('#content').hidden"
+    check(refused)
+    assert state['reads'] == 1
+    ticks(5)
     browser('reload')
+    check(refused)
+    ticks(5)
+    assert state['reads'] == 1, 'a refused key was presented again without Refresh view'
+    check("JSON.parse(localStorage.getItem('%s')).reason === 'refused'" % REFUSED)
+    browser('click','#refresh')
+    until(lambda: state['reads'] == 2, 'Refresh view did not try the refused key once')
+    check(refused)
+    ticks(3)
+    assert state['reads'] == 2
+    # After a refusal the timer stays stopped even when the console saves a
+    # different key; only Refresh view or a reload uses it.
+    browser('eval', remembered('synthetic-sidebar-key'))
+    ticks(3)
+    assert state['reads'] == 2, 'the automatic update resumed after a refusal'
+    # A different key replaces the refused one. During a lockout Refresh view is
+    # disabled and nothing is sent until it ends.
+    state['mode'] = 'banned'
+    load(OBFUSCATED)
+    locked = "document.querySelector('#error').textContent.includes('until about') && document.querySelector('#refresh').disabled"
+    check(locked)
+    assert state['reads'] == 3
+    browser('eval', "document.querySelector('#refresh').click()")
+    ticks(3)
+    browser('reload')
+    check(locked)
+    ticks(3)
+    assert state['reads'] == 3, 'the page asked CPA during its lockout'
+    browser('eval', "const r = JSON.parse(localStorage.getItem('%s')); r.until = Math.floor(Date.now() / 1000) - 1; localStorage.setItem('%s', JSON.stringify(r))" % (REFUSED, REFUSED))
+    state['mode'] = 'populated'
+    browser('reload')
+    check("document.querySelector('#error').textContent.includes('should be over') && !document.querySelector('#refresh').disabled")
+    ticks(3)
+    assert state['reads'] == 3
+    browser('click','#refresh')
     check("document.querySelectorAll('#accounts tr').length === 3 && document.querySelectorAll('#history tr').length === 3")
+    check("localStorage.getItem('%s') === null" % REFUSED)
+    before = state['reads']
+    ticks(1)
+    assert state['reads'] == before+1, 'the automatic update did not run with an accepted session'
     browser('snapshot','-i')
     browser('set','viewport','1280','900')
     browser('screenshot',str(args.artifacts/'light.png'),'--full')
@@ -140,10 +277,70 @@ try:
     state['mode']='unavailable';browser('click','#refresh')
     check("document.querySelector('#content').hidden && document.querySelector('#error').textContent.includes('503')")
     state['mode']='unauthorized';browser('click','#refresh')
-    check("document.querySelector('#content').hidden && document.querySelector('#error').textContent.includes('Sign in to CPA')")
-    state['mode']='populated';browser('click','#refresh')
+    check(refused)
+    state['mode']='populated'
+    before = state['reads']
+    ticks(3)
+    assert state['reads'] == before, 'the automatic update resumed after a refusal'
+    browser('click','#refresh')
     check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
-    print('PASS: native sidebar, session handling, provider filters, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh')
+    # A request that gets no status back may still have been refused and
+    # counted by CPA, so the timer stops as it does after a refusal. Nothing is
+    # remembered, since the key may be fine, and Refresh view asks once more.
+    no_answer = "document.querySelector('#error').textContent.includes('stopped updating on its own') && document.querySelector('#content').hidden"
+    for mode in ('drop', 'hang'):
+        state['mode'] = mode
+        before = state['reads']
+        ticks(1)
+        # The request has ended once the button is back and the view is down.
+        check("document.querySelector('#content').hidden && !document.querySelector('#refresh').disabled")
+        ticks(5)
+        assert state['reads'] == before+1, 'the automatic update presented the key again after a request got no answer (%s)' % mode
+        check(no_answer)
+        check("localStorage.getItem('%s') === null && sessionStorage.getItem('%s') === null" % (REFUSED, REFUSED))
+        state['mode'] = 'populated'
+        browser('click','#refresh')
+        check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
+        ticks(1)
+        assert state['reads'] == before+3, 'the automatic update did not resume after Refresh view (%s)' % mode
+    # Two CPAs behind one origin under different prefixes share this storage.
+    # The page for one finds no session of its own while the console is signed
+    # in to the other, and must leave that one's refusal record alone.
+    page = lambda prefix: origin + prefix + '/v0/resource/plugins/quota-cache/status'
+    before = state['reads']
+    browser('eval', 'localStorage.removeItem("cli-proxy-auth");' + remembered('stale-prefix-key', base="location.origin + '/a'"))
+    browser('open', page('/a'))
+    check(refused)
+    assert state['reads'] == before+1
+    browser('open', page('/b'))
+    check(signed_out)
+    ticks(3)
+    browser('open', page('/a'))
+    check(refused)
+    ticks(3)
+    assert state['reads'] == before+1, "a page for another prefix dropped this one's refusal, and its refused key was presented again"
+    check("JSON.parse(localStorage.getItem('%s')).root === location.origin + '/a'" % REFUSED)
+    browser('eval', "localStorage.removeItem('%s')" % REFUSED)
+    browser('open', page(''))
+    # The origin's storage is shared with the console and every other plugin
+    # page, so it can be full. A refusal it cannot take is kept in this tab's
+    # storage, and a reload still finds it.
+    FILL = "(() => { let i = 0; for (const size of [1 << 20, 1 << 10, 1]) { try { for (;;) localStorage.setItem('quota-cache-smoke.filler.' + i++, 'x'.repeat(size)); } catch {} } })()"
+    EMPTY = "Object.keys(localStorage).filter(k => k.startsWith('quota-cache-smoke.filler.')).forEach(k => localStorage.removeItem(k))"
+    before = state['reads']
+    load(remembered('stale-full-key'), FILL)
+    check(refused)
+    assert state['reads'] == before+1
+    browser('reload')
+    check(refused)
+    ticks(3)
+    assert state['reads'] == before+1, 'a reload presented a refused key the page could not remember in localStorage'
+    check("localStorage.getItem('%s') === null && JSON.parse(sessionStorage.getItem('%s')).reason === 'refused'" % (REFUSED, REFUSED))
+    browser('eval', EMPTY + "; sessionStorage.removeItem('%s')" % REFUSED)
+    load(OBFUSCATED)
+    check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
+    assert state['keyless'] == 0, 'the page sent a management request without a key'
+    print('PASS: native sidebar, strict session reading, no keyless requests, refusal and lockout stop with a persistent record (kept per CPA prefix, and in the tab when the origin storage is full), no automatic retry after a request gets no answer, provider filters, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh')
 finally:
     if not args.serve_only:
         subprocess.run([binary,'--session',session,'close'],stdout=subprocess.DEVNULL,check=False,timeout=30)

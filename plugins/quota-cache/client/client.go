@@ -81,6 +81,39 @@ type Entry struct {
 	// Pointer because omitempty does not apply to time.Time: a value field
 	// would write "0001-01-01T00:00:00Z" into every entry of every provider
 	// that has no renewal concept. Nil means unknown.
+	//
+	// For Codex this is when the subscription is paid up to: the account
+	// endpoint's figure when one has been read, else the id_token claim the
+	// credential carries, else the spend-control limit's reset. The first two
+	// are used only while they are still ahead of the poll.
+	RenewalAt *time.Time `json:"renewal_at,omitempty"`
+	// AccountDetails is what the slow account endpoints last said. Plan and
+	// RenewalAt above already include it; it is kept separately so the next
+	// poll, or the next process, knows when it was read and does not ask again.
+	AccountDetails *AccountDetails `json:"account_details,omitempty"`
+}
+
+// AccountDetails are the facts about an account that rarely change and cost a
+// request of their own to learn: Claude's plan, Codex's subscription renewal,
+// Grok's plan name. The usage response either lacks them or carries a weaker
+// spelling, and asking on every poll would multiply the requests made against
+// each credential for an answer that changes once a month at most.
+//
+// They are read at most once per credential every six hours. A read that fails
+// leaves the last good value in place, so a value here may be older than
+// CheckedAt; a read that answers without the value clears it.
+type AccountDetails struct {
+	// CheckedAt is when the account endpoints were last asked, whether or not
+	// they answered. It is what spaces the reads.
+	CheckedAt time.Time `json:"checked_at"`
+	// Plan is the plan as the account endpoint names it: a Claude token
+	// ("team", "enterprise", "max_20x", "max_5x", "max", "pro", "free") or
+	// Grok's display name ("SuperGrok Heavy"). Empty until a read supplies one,
+	// and empty again once a read answers without one.
+	Plan string `json:"plan,omitempty"`
+	// RenewalAt is when a Codex subscription is paid up to, as its
+	// subscription endpoint reports. Nil until a read supplies one still ahead,
+	// and nil again once a read answers without one.
 	RenewalAt *time.Time `json:"renewal_at,omitempty"`
 }
 

@@ -1,8 +1,8 @@
 # Quota Cache
 
-One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, banked Codex rate-limit resets, and availability flags, and optionally your OpenRouter account balance. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
+One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, banked Codex and Claude rate-limit resets, plans and renewal dates, and availability flags, and optionally your OpenRouter account balance. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Linux amd64:** Quota Cache 0.1.5 normalizes every provider's quota windows into one canonical vocabulary and records the subscription plan beside each credential, so a consumer never pattern-matches a provider string. 0.1.4's extended fields are still there — expand **All cached quota fields** in the sidebar to inspect them. Everything is additive and the snapshot stays on schema 1: Account Health and Reset Priority keep their regular weekly/pool behavior and need no rebuild. See the [cache format and reader API](docs/cache-format.md) for building another consumer.
+**Linux amd64:** Quota Cache 0.1.5 normalizes every provider's quota windows into one canonical vocabulary and records the subscription plan beside each credential, so a consumer never pattern-matches a provider string. 0.1.4's extended fields are still there — expand **All cached quota fields** in the sidebar to inspect them. Quota Cache 0.1.10 adds Claude's banked rate-limit resets, each account's plan from Claude's and Grok's account endpoints, and Codex's subscription renewal date ([account details](docs/cache-format.md#account-details)). Everything is additive and the snapshot stays on schema 1: Account Health and Reset Priority keep their regular weekly/pool behavior and need no rebuild. See the [cache format and reader API](docs/cache-format.md) for building another consumer.
 
 ## Install and start
 
@@ -53,6 +53,8 @@ Open **Quota Cache** in the CPA sidebar. It shows fresh versus stale observation
 
 The sidebar resource is a static public shell; operational information comes only from authenticated `GET /v0/management/plugins/quota-cache/status` using your same-origin CPA session. No new login, key, or port is needed.
 
+The page uses that session only if you signed in to the CPA console on the same address with **Remember password** ticked; without one it says so and sends nothing. CPA locks an address out of its management API for 30 minutes after five failed sign-ins, so since 0.1.10, when CPA refuses the session the page stops asking: automatic updates pause, and it does not present that key again, even after a reload, until you select **Refresh view**. Automatic updates also pause when a status request gets no answer at all, since CPA may have refused and counted it; select **Refresh view** to resume.
+
 If version 0.1.0 becomes unregistered after changing the relative default to its equivalent absolute path, restore `cache-path: plugins/data/quota-cache/snapshot.json` until you update. Version 0.1.1 normalizes these paths before comparing configuration, so an unchanged location does not require a restart. Actual schedule or location changes still require a native restart; safe failure reasons now appear in CPA logs.
 
 ## OpenRouter balance (optional)
@@ -73,8 +75,9 @@ The snapshot keeps OpenRouter's purchased and spent totals and never the key. Th
 
 ## Polling behavior
 
-- At most one provider request runs at a time in the cache plugin, spaced at least 10 seconds apart by default.
+- At most one provider request runs at a time in the cache plugin. Polls are spaced at least 10 seconds apart by default; the follow-up requests a poll can make (Codex's reset inventory, account details) run straight after it.
 - Each credential is polled at most once per 15-minute interval by default. The initial accounts are staggered by request spacing.
+- Plans and subscription renewal dates are read from separate account endpoints at most once per credential every six hours, and a failure there never fails the poll, backs it off, or pauses the provider. See [account details and requests per credential](docs/cache-format.md#account-details).
 - On 429, all accounts for that provider pause. Respect `Retry-After`, retain the previous observation, and back off repeated failures up to six hours (a longer server `Retry-After` is still honored).
 - Schedules and cooldowns persist before calls; restarts retain them. A second writer for the same cache path is rejected.
 - Consumers perform file reads only in cache mode. Missing, failed, stale (>30 minutes), future-dated, or expired-window data does not cause direct provider fallback.

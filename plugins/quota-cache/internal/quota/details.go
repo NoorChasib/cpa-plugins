@@ -218,6 +218,7 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 		}
 		extra := object(root, "extra_usage")
 		addBalance(q, "extra_usage", client.Balance{Unit: "provider_units", Used: decimal(extra, "used_credits"), Limit: decimal(extra, "monthly_limit"), UsedPercent: percent(extra, "utilization"), Enabled: boolean(extra, "is_enabled")})
+		q.ResetCredits = claudeResetGrants(q, object(root, "cedar_ember"), now)
 	case "codex":
 		q.Plan = name(root, "plan_type", "planType")
 		q.ActiveLimit = name(root, "metered_limit_name", "meteredLimitName", "limit_name", "limitName")
@@ -338,6 +339,164 @@ func resetCredits(root map[string]any) *client.ResetCredits {
 		return nil
 	}
 	return &client.ResetCredits{AvailableCount: int(n)}
+}
+
+// resetGrantID is the id shape Claude Code accepts. Ids are read only to tell
+// grants apart and to honour next_grant_id; they never leave this function's
+// callers, because they identify the account and have no display use.
+var resetGrantID = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
+
+// resetGrant is one well-formed entry of the cedar_ember block, reduced to what
+// counting and the hold need. The label is not read at all.
+type resetGrant struct {
+	id                               string
+	left                             int64
+	startsAt, endsAt                 time.Time // zero when not given
+	paused, usableNow, requiresLimit bool
+}
+
+// flag reads an optional boolean with the default Claude Code falls back to
+// when the key is missing or not a boolean.
+func flag(m map[string]any, key string, fallback bool) bool {
+	if v := boolean(m, key); v != nil {
+		return *v
+	}
+	return fallback
+}
+
+// parseResetGrant applies Claude Code's own grant schema: an id and a
+// resets_left are required, and every other field falls back to its default
+// when it is missing or malformed. A grant failing the schema is ignored on its
+// own, as Claude Code ignores it, rather than costing the rest of the block. A
+// count above maxDetails is not one this code understands, and is ignored too.
+func parseResetGrant(item any) (resetGrant, bool) {
+	o, ok := item.(map[string]any)
+	if !ok {
+		return resetGrant{}, false
+	}
+	id, _ := o["id"].(string)
+	left, ok := integerField(o, "resets_left")
+	if !resetGrantID.MatchString(id) || !ok || left < 0 || left > maxDetails {
+		return resetGrant{}, false
+	}
+	g := resetGrant{id: id, left: left, paused: flag(o, "paused", false),
+		// Missing usability flags default to the refusing side, as they do in
+		// Claude Code: a grant that does not say it is usable is not.
+		usableNow: flag(o, "usable_now", false), requiresLimit: flag(o, "use_requires_limit", true)}
+	g.startsAt, _ = rfc3339Field(o, "starts_at")
+	g.endsAt, _ = rfc3339Field(o, "ends_at")
+	return g, true
+}
+
+// claudeResetGrants reads Claude's banked rate-limit resets off the cedar_ember
+// block the usage request already asked for.
+//
+// The count is the sum of resets_left over the grants that have not expired. A
+// grant that has not started yet still counts: it is held, just not spendable,
+// and the hold below is where "not now" is said. The block is optional and its
+// shape is not a stable API, so anything wrong with it yields nil — the
+// dashboard says nothing — and never a failed poll.
+//
+// Ids and labels are read and discarded. What survives is a count, a date, and
+// the provider's reason none can be spent now, if it gives one.
+func claudeResetGrants(q *client.Quota, block map[string]any, now time.Time) *client.ResetCredits {
+	eligible := boolean(block, "eligible")
+	if eligible == nil {
+		return nil
+	}
+	items, _ := block["grants"].([]any)
+	live := make([]resetGrant, 0, len(items))
+	seen := map[string]bool{}
+	total := 0
+	for i, item := range items {
+		if i >= maxDetails {
+			q.Truncated = true
+			break
+		}
+		g, ok := parseResetGrant(item)
+		// A repeated id is one grant reported twice; counting it twice would
+		// promise a reset the account does not have.
+		if !ok || seen[g.id] {
+			continue
+		}
+		seen[g.id] = true
+		if g.left == 0 || (!g.endsAt.IsZero() && !g.endsAt.After(now)) {
+			continue
+		}
+		live = append(live, g)
+		total += int(g.left)
+	}
+	if total == 0 {
+		return nil
+	}
+	credits := &client.ResetCredits{AvailableCount: total}
+	for _, g := range live {
+		if !g.endsAt.IsZero() && (credits.SoonestExpiry == nil || g.endsAt.Before(*credits.SoonestExpiry)) {
+			at := g.endsAt
+			credits.SoonestExpiry = &at
+		}
+	}
+	next, _ := block["next_grant_id"].(string)
+	credits.Hold, credits.HoldUntil = resetGrantHold(*eligible, flag(block, "at_limit", false), block, live, next, now)
+	return credits
+}
+
+// resetGrantHold is the provider's reason none of the live grants can be spent
+// now, judged by the rules the claim endpoint applies, or "" when one can be.
+//
+// Account-wide refusals come first because no choice of grant gets past them.
+// Then, if any grant clears every blocker, there is nothing to report: a
+// redemption would select it (next_grant_id when that one is usable, otherwise
+// the soonest to expire). Only when none does is a reason worth printing, and it
+// is read off the grant a redemption would reach for first — so "paused" covers
+// both the server's preferred grant being paused and every grant being paused.
+// A grant refused for a reason outside this vocabulary, such as usable_now
+// false with no stated cause, reports "": the provider has not said why.
+func resetGrantHold(eligible, atLimit bool, block map[string]any, live []resetGrant, next string, now time.Time) (string, *time.Time) {
+	if !eligible {
+		return client.HoldIneligible, nil
+	}
+	if until, ok := rfc3339Field(block, "cooldown_until"); ok && until.After(now) {
+		return client.HoldCooldown, &until
+	}
+	for _, g := range live {
+		started := g.startsAt.IsZero() || !g.startsAt.After(now)
+		if !g.paused && g.usableNow && started && (!g.requiresLimit || atLimit) {
+			return "", nil
+		}
+	}
+	first := preferredResetGrant(live, next)
+	switch {
+	case first.paused:
+		return client.HoldPaused, nil
+	case first.requiresLimit && !atLimit:
+		return client.HoldNotLimited, nil
+	}
+	return "", nil
+}
+
+// preferredResetGrant is the grant a redemption tries first: the one the server
+// names in next_grant_id, else the soonest to expire, an undated grant last,
+// ties broken by id so the answer does not depend on response order. live is
+// never empty here; the caller has already returned for a zero count.
+func preferredResetGrant(live []resetGrant, next string) resetGrant {
+	for _, g := range live {
+		if g.id == next {
+			return g
+		}
+	}
+	ordered := append([]resetGrant(nil), live...)
+	sort.Slice(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.endsAt.IsZero() != b.endsAt.IsZero() {
+			return !a.endsAt.IsZero()
+		}
+		if !a.endsAt.Equal(b.endsAt) {
+			return a.endsAt.Before(b.endsAt)
+		}
+		return a.id < b.id
+	})
+	return ordered[0]
 }
 
 func codexGroup(q *client.Quota, id string, g map[string]any, now time.Time, feature string) {

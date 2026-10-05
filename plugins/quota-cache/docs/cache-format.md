@@ -1,6 +1,6 @@
 # Cached quota data
 
-Quota Cache 0.1.4 adds an optional `quota` object to each `entries[provider:auth_index]` record in `snapshot.json`. The same records are returned by authenticated `GET /v0/management/plugins/quota-cache/status`. No extra provider requests are made for these fields.
+Quota Cache 0.1.4 adds an optional `quota` object to each `entries[provider:auth_index]` record in `snapshot.json`. The same records are returned by authenticated `GET /v0/management/plugins/quota-cache/status`. The `quota` object is read from the usage response every poll already makes; the few fields that need a request of their own are listed under [Account details](#account-details) and [Requests per credential](#requests-per-credential).
 
 The outer snapshot stays at schema 1. The nested `quota.schema` is 1 and has its own `observed_at`. Existing `used_percent`, `reset_at`, and `observed_at` keep their regular weekly/pool meaning for Account Health and Reset Priority. An account without that regular window has an empty legacy observation timestamp, even when additional limits are present. Existing consumers wait rather than treating another window as the weekly allowance.
 
@@ -16,12 +16,28 @@ The outer snapshot stays at schema 1. The nested `quota.schema` is 1 and has its
 | `limits` | Named availability flags: optional `allowed` and `reached` booleans and Codex `metered_feature` |
 | `balances` | Named balances in explicitly stated units |
 | `unified_billing` | Grok's shared billing flag, if supplied |
-| `reset_credits` | Codex's banked rate-limit resets, when the account holds at least one |
+| `reset_credits` | Codex's or Claude's banked rate-limit resets, when the account holds at least one |
 | `truncated` | True if a provider response exceeded the bounded entry count |
 
 Every window can contain `used_percent`, `duration_seconds`, `starts_at`, `resets_at`, and `period`. Unavailable values are omitted. Unlike the compatibility percentage, extended percentages preserve reported values above 100. Absolute timestamps use UTC; relative reset times are anchored to the observation, never recalculated on reads.
 
-`reset_credits` contains `available_count` and may contain `soonest_expiry`. It is omitted entirely unless the account holds at least one spendable banked reset, so its presence is the signal that there is one to spend. A banked reset is an entitlement, not allowance: spending one clears the account's five-hour and weekly Codex windows and moves the weekly reset date. `soonest_expiry` is the earliest expiry among credits whose status is `available` and whose deadline is still ahead of the observation; it is omitted when the inventory could not be read, which never fails the observation.
+`reset_credits` contains `available_count` and may contain `soonest_expiry`, `hold`, and `hold_until`. It is omitted entirely unless the account holds at least one banked reset, so its presence is the signal that there is one to spend. A banked reset is an entitlement, not allowance: spending one clears the account's session and weekly windows (for Codex it also moves the weekly reset date).
+
+- **Codex**: `available_count` is the usage response's `rate_limit_reset_credits.available_count`. `soonest_expiry` is the earliest expiry among credits whose status is `available` and whose deadline is still ahead of the observation; it is omitted when the inventory could not be read, which never fails the observation. Codex never sets `hold`.
+- **Claude**: read from the `cedar_ember` block of the same usage request (`?cedar_ember=1`). A grant needs an `id` of 1–40 characters `[a-z0-9_-]` and a whole `resets_left` from 0 to 32; one that does not is ignored on its own, as Claude Code ignores it, and a repeated id counts once. Other grant fields fall back to Claude Code's defaults when missing or malformed (`paused` false, `usable_now` false, `use_requires_limit` true, unreadable dates as none). `available_count` is the sum of `resets_left` over grants whose `ends_at` is not past; a grant that has not started yet still counts. `soonest_expiry` is the earliest future `ends_at` among them. The whole field is omitted when the block is missing, is not an object, has no boolean `eligible`, or adds up to zero. At most 32 grants are read; more sets `truncated`. Grant ids, labels, and the rest of the block are never stored.
+
+`hold` is the provider's own reason, at this observation, that none can be spent now. It is a hint, not a verdict: anything that spends a reset must check the provider again first. Claude sets it from the claim endpoint's rules, in this order:
+
+| `hold` | When |
+| --- | --- |
+| `ineligible` | `eligible` is false |
+| `cooldown` | `cooldown_until` is in the future; `hold_until` carries that instant |
+| *(empty)* | Any live grant can be spent now: not paused, `usable_now`, started, and either `at_limit` or not `use_requires_limit` |
+| `paused` | Otherwise, the grant a redemption would try first is paused (which includes every grant being paused) |
+| `not_limited` | Otherwise, that grant needs the account to be at a limit and `at_limit` is false |
+| *(empty)* | Any other refusal, such as `usable_now` false with no stated reason |
+
+The grant a redemption tries first is `next_grant_id` when that names a live grant, otherwise the one with the soonest `ends_at` (undated last), ties broken by id.
 
 Every balance contains `unit` and may contain `used`, `limit`, `remaining`, `used_percent`, `remaining_percent`, `resets_at`, `source`, `enabled`, `has_credits`, and `unlimited`. Amounts are decimal **strings**, preserving precision and any reported negative balance. Missing values mean unknown; `"0"` and `false` are explicit values. No remaining amount is inferred from a percentage or subtraction. `usd` is US dollars and `usd_cents` is US cents. `provider_units` means the endpoint does not provide a verified currency/unit contract; do not display it as dollars.
 
@@ -29,7 +45,7 @@ Every balance contains `unit` and may contain `used`, `limit`, `remaining`, `use
 
 | Provider | Cached fields from its existing response |
 | --- | --- |
-| Claude | `windows.five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`, `seven_day_cowork`, when supplied; `balances.extra_usage` with enabled state, monthly limit, used credits, and utilization in `provider_units` |
+| Claude | `windows.five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`, `seven_day_cowork`, when supplied; `balances.extra_usage` with enabled state, monthly limit, used credits, and utilization in `provider_units`; `reset_credits` from the `cedar_ember` block |
 | Codex | `windows.regular/primary` and `regular/secondary`; corresponding `limits.regular`; `code_review/primary` and `code_review/secondary` plus `limits.code_review`; `additional/<limit-name>/primary` and `/secondary` with associated flags; `balances.credits` with remaining credits, has-credits and unlimited flags; plan type; `limits.spend_control` and `balances.spend_control` with used/limit/remaining amounts, percentages, reset, and source in `provider_units`; `reset_credits.available_count` |
 | Grok | `windows.shared` percentage and billing-period start/end/type; `product/<product>` usage; `balances.included` used/monthly limit, `prepaid` remaining, and `on_demand` used/cap/enabled; amounts in `usd_cents`; unified billing and subscription tier |
 | OpenRouter | `balances.credits` in `usd`: `limit` is `total_credits` (all-time purchases) and `used` is `total_usage` (all-time spend). The balance is their difference and is not stored |
@@ -38,7 +54,9 @@ The OpenRouter entry exists only while `openrouter-management-key` is configured
 
 Codex primary/secondary IDs describe provider slots; use `duration_seconds` to identify five-hour versus weekly windows, since the slots can change. Additional Codex limits accept array and object forms. Grok retains the response's period type rather than assuming a weekly cycle. A Grok money object `{}` means zero under its documented proto3 encoding; an absent/null object means unknown.
 
-The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. One further Codex endpoint is read, and only to date banked resets: when `rate_limit_reset_credits.available_count` in the usage response is non-zero, `GET /wham/rate-limit-reset-credits` supplies `soonest_expiry`. An account with nothing banked is still exactly one request per poll. Credit ids, titles, and statuses are read and discarded; only the one timestamp is cached. At most 32 windows, 32 limit groups, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
+The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. One further Codex endpoint is read per poll, and only to date banked resets: when `rate_limit_reset_credits.available_count` in the usage response is non-zero, `GET /wham/rate-limit-reset-credits` supplies `soonest_expiry`. Credit ids, titles, and statuses are read and discarded; only the one timestamp is cached. At most 32 windows, 32 limit groups, 32 reset grants, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
+
+Claude's usage request is `GET /api/oauth/usage?cedar_ember=1`, which adds the reset-grant block to the same response. Claude Code also sends `skip_spend=1` on that path; Quota Cache does not, because it skips the spend-store read that fills `extra_usage`, which is collected from this response. Every other field read from the response is unchanged by the query.
 
 ## Canonical windows and subscription identity
 
@@ -68,7 +86,41 @@ Two upstream windows can reduce to one canonical identity — Codex declares a d
 
 Current mappings: Claude `five_hour`, `seven_day`, `seven_day_opus`, and `seven_day_sonnet` map to `session`, `weekly`, `weekly_fable`, and `model_weekly`; other Claude windows are `raw:`. Codex maps by the window's declared duration, never by its primary/secondary slot, because the slots are not stable: the `regular` group becomes `session`/`weekly` and every other group becomes `model_session`/`model_weekly` carrying its limit name as `model`. Grok's `shared` pool is `credits`, since it is a consumable balance rather than a rate window, and `product/<id>` is `raw:`.
 
-`plan` and `tier_name` come from Claude's `subscription.plan`/`subscription.tierName`, Codex's `plan_type`, and Grok's `subscriptionTier`, validated by the same bounded label rules as every other name. `renewal_at` is set for Codex only: its usage payload has no renewal field, so the value is the spend-control limit's reset instant, which is already collected. No additional provider request is made for any of these fields.
+`plan` and `tier_name` come from Claude's `subscription.plan`/`subscription.tierName`, Codex's `plan_type`, and Grok's `subscriptionTier`, validated by the same bounded label rules as every other name. Where the account endpoints below have supplied a plan, it takes precedence: Claude's profile token and Grok's subscription display name. When nothing else names a plan, the tier recorded in the stored credential is used. `renewal_at` is set for Codex only, and is when the subscription is paid up to: the subscription endpoint's `active_until` when one has been read, else the id_token's `chatgpt_subscription_active_until` claim, which costs nothing because the credential is already read, else the spend-control limit's reset instant from the usage response. The first two are used only while they are still ahead of the poll.
+
+## Account details
+
+Some facts about an account change about once a month and are not in the usage response, or not reliably: Claude's plan, Codex's subscription renewal, and Grok's plan name. Quota Cache reads them from the endpoints the CPA management centre uses for its own cards, on a schedule of their own:
+
+| Provider | Request | Read |
+| --- | --- | --- |
+| Claude | `GET https://api.anthropic.com/api/oauth/profile` | `plan` as a token: `team`, `enterprise`, `max_20x`, `max_5x`, `max`, `pro`, or `free` |
+| Codex | `GET https://chatgpt.com/backend-api/subscriptions?account_id=<id>` | `renewal_at` from `active_until` (unix seconds as a number or string; RFC 3339 and milliseconds are also accepted) |
+| Grok | `GET https://cli-chat-proxy.grok.com/v1/settings`, and `GET /v1/user?include=subscription` only when settings names no plan | `plan` from `subscription_tier_display` (for example `SuperGrok Heavy`), else `subscriptionTier` |
+
+Claude's token follows Claude Code: `organization.organization_type` `claude_team` or `claude_enterprise` names the seat while `subscription_status` is `active` or absent; `claude_max`, `account.has_claude_max`, or a `rate_limit_tier` naming `claude_max` is Max, with `max_20x` or `max_5x` taken from the rate-limit tier and `max` when it does not say; `claude_pro` or `account.has_claude_pro` is Pro; both account flags explicitly false is `free`. A lapsed Team or Enterprise falls through to the account flags, as in the CPA management centre, because its member can still hold a personal plan.
+
+The rules:
+
+- Each credential's account endpoints are asked at most once every six hours, and only after a successful usage poll. A failed or rate-limited poll asks nothing further.
+- They run after the usage response has been parsed, and their failures are discarded. A refused, failed, or rate-limited account request never fails the poll, never sets `last_error`, never backs the credential off, and never pauses the provider; the poll's `http_status` is never an account request's.
+- A read that fails — a transport error, a non-2xx status, an unreadable body — keeps the last good value. A read that answers but no longer names the value (no plan, no `active_until` still ahead) clears it, so the weaker sources apply again rather than a lapsed plan or a passed date standing indefinitely. Grok's plan is cleared only when both of its endpoints answered without one. The six-hour clock restarts either way, so a failing endpoint is not asked on every poll.
+- A Codex renewal outranks the next source only while it is still ahead: an `active_until` or id_token claim already behind the poll — a token minted before the last renewal, a stored date that has since passed — gives way to the next source down rather than replacing a date that is still to come.
+- What was read is persisted on the entry as `account_details`: `checked_at` (when the endpoints were last asked), `plan`, and `renewal_at`. A restart therefore does not re-read every credential. `plan` and `renewal_at` on the entry already include these values; `account_details` exists so the schedule survives, and consumers do not need to read it.
+- Every stored label passes the same bounded validation as every other name, both when read and when applied from the snapshot.
+
+## Requests per credential
+
+At the default 15-minute `poll-interval`, one credential costs at most:
+
+| Provider | Usage polls per day | Other per-poll requests | Account details per day | Total per day |
+| --- | --- | --- | --- | --- |
+| Claude | 96 | none (reset grants ride on the usage request) | 4 profile | 100 |
+| Codex | 96 | up to 96 inventory reads, only while resets are banked | 4 subscription | 100, or up to 196 while resets are banked |
+| Grok | 96 | none | 4 settings, plus up to 4 user reads when settings names no plan | 100 to 104 |
+| OpenRouter | 96 | none | none | 96 |
+
+Before account details were read, the same credentials cost 96 (Claude), 96 to 192 (Codex), and 96 (Grok) per day. The first poll after upgrading reads each credential's account details once; after that, restarts add nothing. A longer `poll-interval` lowers the usage figures; account details stay at no more than four reads a day, and fall below that once the interval exceeds six hours, since they are only read after a poll.
 
 
 ## Reading from a new plugin

@@ -87,7 +87,7 @@ func TestOpenRouterFetchSendsTheConfiguredKey(t *testing.T) {
 	host := &openRouterHost{}
 	f := fetcherWith(host, "sk-or-v1-secret")
 	accounts, _ := f.List(context.Background())
-	observation, err := f.Fetch(context.Background(), accounts[0])
+	observation, err := f.Fetch(context.Background(), accounts[0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestOpenRouterFetchRefusesAnAccountFromARetiredKey(t *testing.T) {
 	accounts, _ := f.List(context.Background())
 	for _, replacement := range []string{"new-key", ""} {
 		f.openRouterKey.Store(&replacement)
-		if _, err := f.Fetch(context.Background(), accounts[0]); err == nil {
+		if _, err := f.Fetch(context.Background(), accounts[0], nil); err == nil {
 			t.Fatalf("key %q: fetched an account listed under a retired key", replacement)
 		}
 	}
