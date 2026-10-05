@@ -1,39 +1,41 @@
 import { useNowSeconds } from "../lib/now"
-import { formatAgo, formatDuration, formatReset } from "../lib/time"
-import type { Activity, Credential, RowEntry } from "../lib/types"
+import { formatAgo, formatDate, formatDuration, formatReset } from "../lib/time"
+import type { Activity, Credential, Credits, RowEntry } from "../lib/types"
 
 /**
  * The address, with the domain in muted ink so the distinguishing word reads
  * first. Never initials: at 390px the full address still fits, and a column of
  * initials is unreadable when four of them begin with the same letter.
  *
- * min-w-0 because this sits in a flex row beside the routing marker, and a flex
- * item defaults to min-width:auto — which refuses to shrink below its content
- * and would push the marker off the card at 390px rather than truncate.
+ * min-w-0 because this sits in a flex row beside the plan and routing chips,
+ * and a flex item defaults to min-width:auto — which refuses to shrink below
+ * its content and would push the chips off the card at 390px rather than
+ * truncate the address.
  */
 function Email({ address }: { address: string }) {
   const at = address.indexOf("@")
   const [local, domain] = at > 0 ? [address.slice(0, at), address.slice(at)] : [address, ""]
   return (
-    <div className="min-w-0 truncate text-[12.5px] text-ink">
+    <span className="qg-email" title={address}>
       {local}
       {domain && <span className="text-ink-3">{domain}</span>}
-    </div>
+    </span>
   )
 }
 
-function Bar({ fraction, critical }: { fraction: number; critical: boolean }) {
-  // Sized from the fraction and labelled from the integer percent, both of
-  // which the server sends, so the bar and the number beside it cannot
-  // disagree. Red is the one exception to the single accent colour, and it
-  // follows the server's level rather than a threshold repeated here.
+/**
+ * The account's own bar, in the colour of its own level: the accent while it
+ * has room, amber when it runs low, red when it is critical — the same three
+ * the pool bar uses, so a red row is what makes a pool turn.
+ *
+ * Sized from the fraction and labelled from the integer percent, both of which
+ * the server sends, so the bar and the number beside it cannot disagree.
+ */
+function Bar({ fraction, percent, level }: { fraction: number; percent: number; level: string }) {
   const width = Math.max(0, Math.min(1, fraction)) * 100
   return (
-    <span className="relative block h-[6px] overflow-hidden rounded-[3px] bg-track">
-      <span
-        className={`absolute inset-y-0 left-0 rounded-[3px] ${critical ? "bg-crit" : "bg-accent"}`}
-        style={{ width: `${width}%` }}
-      />
+    <span className={`qg-abar qg-lvl-${level}`} role="img" aria-label={`${percent}% left`}>
+      <i style={{ width: `${width}%` }} />
     </span>
   )
 }
@@ -103,7 +105,7 @@ function Traffic({ activity }: { activity: Activity }) {
   const idle = activity.success === 0 && activity.failed === 0
 
   return (
-    <div className="mt-[5px] flex items-center gap-[9px]">
+    <span className="qg-traffic">
       <TrafficStrip activity={activity} span={span} />
       <span
         className={`num min-w-0 truncate text-[10px] ${
@@ -115,9 +117,9 @@ function Traffic({ activity }: { activity: Activity }) {
           "idle"
         ) : (
           <>
-            {/* The count goes first and goes first at 390px, where the column
+            {/* The count goes first, and goes first at 390px, where the line
               * is half as wide: the strip beside it already shows how much,
-              * roughly, and only this line can say when. */}
+              * roughly, and only this can say when. */}
             <span className="max-[640px]:hidden">
               <TrafficCount activity={activity} />
               {" · "}
@@ -130,9 +132,67 @@ function Traffic({ activity }: { activity: Activity }) {
           </>
         )}
       </span>
-    </div>
+    </span>
   )
 }
+
+/**
+ * A credit balance as the account line prints it. The figure is the server's,
+ * already formatted; this only names what it is a figure of. "Unlimited" is a
+ * word, not a figure, so it is not set in the figures' monospace.
+ */
+function creditsText(credits: Credits): { figure: string; unit: string; numeric: boolean } {
+  switch (credits.unit) {
+    case "credits":
+      if (credits.unlimited) return { figure: "unlimited", unit: "credits", numeric: false }
+      return { figure: credits.display, unit: credits.display === "1" ? "credit" : "credits", numeric: true }
+    case "usd":
+      return credits.unlimited
+        ? { figure: "unlimited", unit: "credit", numeric: false }
+        : { figure: credits.display, unit: "prepaid", numeric: true }
+    default:
+      // A unit this bundle does not know yet. The server's figure and its unit
+      // are still the truth, so they are printed as sent.
+      return { figure: credits.display, unit: credits.unit, numeric: !credits.unlimited }
+  }
+}
+
+function CreditsFigure({ credits }: { credits: { figure: string; unit: string; numeric: boolean } }) {
+  return (
+    <span className="shrink-0">
+      <b className={credits.numeric ? "num" : ""}>{credits.figure}</b> {credits.unit}
+    </span>
+  )
+}
+
+const DAY_SECONDS = 86400
+
+/**
+ * When the subscription renews: the date, so it can be checked against a
+ * receipt, and the distance, ticking like every other countdown here.
+ *
+ * An estimate says so twice in the line itself — "~" on the date, "(est.)"
+ * after it — because it is read at a glance and the tooltip is not. Its
+ * distance is whole days: a date that can be days out, if the billing day has
+ * moved, has no business being counted down to the hour. One that comes round
+ * while the page is open is due rather than passed, since the next document
+ * will already carry the anniversary after it.
+ */
+function renewalText(renewalAtEpoch: number, now: number, estimated: boolean): string {
+  const remaining = renewalAtEpoch - now
+  if (!estimated) {
+    return remaining > 0
+      ? `renews ${formatDate(renewalAtEpoch)} · in ${formatDuration(remaining)}`
+      : "renewal date passed"
+  }
+  if (remaining <= 0) return "renewal due (est.)"
+  const distance = remaining >= DAY_SECONDS ? `${Math.floor(remaining / DAY_SECONDS)}d` : formatDuration(remaining)
+  return `renews ~${formatDate(renewalAtEpoch)} (est.) · in ${distance}`
+}
+
+/** What an estimated renewal is, for the reader who wonders. */
+const ESTIMATED_RENEWAL_TITLE =
+  "Estimated from when the subscription started. Anthropic does not report the renewal date, so this can be off if the billing date has moved."
 
 /** Why a row is dimmed, in the words the contract uses. */
 const STATE_LABELS: Record<string, string> = {
@@ -159,62 +219,148 @@ const ROUTING_LABELS: Record<string, string> = {
   disabled: "off",
 }
 
-export function CredentialRow({ entry, credential }: { entry: RowEntry; credential: Credential | undefined }) {
+/** The row's figure ink, from the level the server computed for this entry. */
+const LEVEL_INK: Record<string, string> = {
+  low: "text-warn",
+  critical: "text-crit",
+}
+
+/**
+ * One account inside a window card: the pool's surround, in miniature.
+ *
+ * Who it is and its plan on the first line, its own bar under that, then the
+ * two figures a reader came for — what is left, bold under-left, and when it
+ * resets, bold under-right — with the traffic strip between them. What the
+ * provider says about the account rather than the window (renewal, credit)
+ * runs muted beneath, the way the reference puts the secondary figures under
+ * the primary ones.
+ */
+export function CredentialRow({
+  entry,
+  credential,
+  solo,
+}: {
+  entry: RowEntry
+  credential: Credential | undefined
+  /** The only account on the card, whose bar and figure the pool already shows. */
+  solo: boolean
+}) {
   const now = useNowSeconds()
   const reset = formatReset(entry.resetDisplayHint, entry.resetAtEpoch, now)
-  // An unknown state is still a state: dim the row and print it rather than
-  // drawing a confident bar over a reading the server would not vouch for.
+  // An unknown state is still a state: print it in the bar's place rather
+  // than drawing a confident bar over a reading the server would not vouch for.
   const degraded = entry.state !== "ok"
   const parked = credential ? ROUTING_LABELS[credential.status] : undefined
+  // The pool bar is this account's bar when it is the only one, unless the
+  // reading needs saying again with its caveat beside it.
+  const compact = solo && !degraded
+
+  // Checked by type rather than against null: a document from a plugin that
+  // predates these fields has neither, and must render as it always did.
+  const estimated = credential?.renewalEstimated === true
+  const renewal =
+    credential && typeof credential.renewalAtEpoch === "number"
+      ? renewalText(credential.renewalAtEpoch, now, estimated)
+      : null
+  const credits = credential?.credits ? creditsText(credential.credits) : null
+
+  // What the figure line carries, piece by piece, so a line with nothing to
+  // say is left out rather than drawn as a dash at each end.
+  //
+  // The percentage: not on a solo card, whose pool figure is this account's,
+  // and not on a degraded row with no reading, where the state word above
+  // already says there is none. Anywhere else an absent reading is a dash,
+  // never 0% — an absent reading and an exhausted credential are the same
+  // zero in the document and opposite facts on a capacity dashboard.
+  const percent = !compact && (entry.hasReading || !degraded)
+  // The reset: nothing at all when there is no reset instant. "resets —"
+  // told the reader only that this space had been reserved.
+  const resets = entry.resetAtEpoch !== null
+  // A solo card with no reset to count down to has the line's right end free,
+  // and the credit balance takes it — beside the traffic strip, the way the
+  // account reads on one line — rather than a line of its own under an
+  // empty one.
+  const creditsInline = compact && !resets && credits !== null
+  const figureLine = percent || resets || credential?.activity || creditsInline
 
   return (
-    <div className={`cred ${degraded ? "opacity-60" : ""}`}>
-      <div className="cred-mail min-w-0">
-        <div className="flex min-w-0 items-baseline gap-[6px]">
-          <Email address={credential?.email ?? entry.credentialId} />
-          {parked && (
-            <span className="shrink-0 text-[10.5px] text-ink-3">{parked}</span>
-          )}
-        </div>
-        {/* Routing, not quota: the same strip on every card the credential
-          * appears in, because a request is made against a credential and not
-          * against one of its windows. Absent entirely when the host reports no
-          * counter, which leaves the row exactly as it was. */}
-        {credential?.activity && <Traffic activity={credential.activity} />}
+    <div className={`qg-acct ${degraded ? "is-degraded" : ""}`}>
+      <div className="qg-aline">
+        <span className="qg-addr">
+          <Email address={credential?.email || entry.credentialId} />
+        </span>
+        {/* Full names, never truncated: "SuperGrok Heavy" and "Enterprise"
+          * are what the account is sold as, and the address beside them is
+          * the part that gives way when the line runs short. A plan the
+          * provider did not report is left out rather than shown as an empty
+          * pill, which read as a placeholder never filled in. */}
+        {(credential?.plan || parked) && (
+          <span className="qg-achips">
+            {credential?.plan && <span className="qg-chip">{credential.plan}</span>}
+            {parked && <span className="qg-chip qg-chip-route">{parked}</span>}
+          </span>
+        )}
       </div>
 
-      {/* Fixed column, so the bars line up down the card whatever the plans are
-        * called. A long tier name — "SuperGrok Heavy" is a real one — truncates
-        * rather than growing the column or spilling over the bar beside it; the
-        * full string stays available on hover and to a screen reader. */}
-      <span
-        className="cred-plan max-w-full justify-self-start truncate rounded-[5px] border border-line
-          bg-card-2 px-[7px] py-[2px] text-[10.5px] text-ink-2"
-        title={credential?.plan || undefined}
-      >
-        {credential?.plan || "—"}
-      </span>
-
-      <span className="cred-bar">
-        {degraded ? (
-          // The figures stay: they were true when they were taken. What goes is
-          // the bar, because its whole job is to be read at a glance and this
-          // reading has not earned that.
-          <span className="num text-[10.5px] text-ink-3">{STATE_LABELS[entry.state] ?? entry.state}</span>
+      {!compact &&
+        (degraded ? (
+          // The figures stay: they were true when they were taken. What goes
+          // is the bar, because its whole job is to be read at a glance and
+          // this reading has not earned that.
+          <span className="qg-astate">{STATE_LABELS[entry.state] ?? entry.state}</span>
         ) : (
-          <Bar fraction={entry.remainingFraction} critical={entry.level === "critical"} />
-        )}
-      </span>
+          <Bar fraction={entry.remainingFraction} percent={entry.remainingPercent} level={entry.level} />
+        ))}
 
-      {/* A dash, never 0%. An absent reading and an exhausted credential are the
-        * same zero in the document and opposite facts on a capacity dashboard. */}
-      <span className="cred-pct num text-right text-[12px] text-ink-2">
-        {entry.hasReading ? `${entry.remainingPercent}%` : "—"}
-      </span>
+      {figureLine && (
+        <div className="qg-afig">
+          {percent && (
+            <span className="qg-ap">
+              <b className={`num ${LEVEL_INK[entry.level] ?? ""}`}>
+                {entry.hasReading ? `${entry.remainingPercent}%` : "—"}
+              </b>
+              {entry.hasReading && " left"}
+            </span>
+          )}
+          {/* Routing, not quota: the same strip on every card the credential
+            * appears in, because a request is made against a credential and
+            * not against one of its windows. Absent entirely when the host
+            * reports no counter. */}
+          {credential?.activity && <Traffic activity={credential.activity} />}
+          {resets && (
+            <span className="qg-ar">
+              {reset.resetting ? (
+                <b className="num">{reset.text}</b>
+              ) : (
+                <>
+                  resets <b className="num">{reset.text}</b>
+                </>
+              )}
+            </span>
+          )}
+          {/* At the line's right end beside a strip; at its start when it is
+            * the line's only content, where it reads straight on from the
+            * address above instead of hanging alone at the far edge. */}
+          {creditsInline && (
+            <span className={credential?.activity ? "qg-ar" : "qg-ap"}>
+              <CreditsFigure credits={credits} />
+            </span>
+          )}
+        </div>
+      )}
 
-      <span className={`cred-eta num text-right text-[11px] ${reset.resetting ? "text-ink-2" : "text-ink-3"}`}>
-        {reset.text}
-      </span>
+      {/* The account line, absent entirely when the provider reports neither
+        * renewal nor credit. It repeats on every card the credential appears
+        * in for the same reason the traffic strip does: it belongs to the
+        * credential. */}
+      {(renewal || (credits && !creditsInline)) && (
+        <div className="qg-amuted">
+          <span className="truncate" title={renewal && estimated ? ESTIMATED_RENEWAL_TITLE : undefined}>
+            {renewal}
+          </span>
+          {credits && !creditsInline && <CreditsFigure credits={credits} />}
+        </div>
+      )}
     </div>
   )
 }

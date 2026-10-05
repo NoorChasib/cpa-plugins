@@ -1,0 +1,76 @@
+// Naming the accounts around a pooled bar.
+//
+// Nothing here takes a share of anything. Every width the bar draws is a
+// field the server wrote — the aggregate's fractions — and this module only
+// decides what to call each account in a sentence or on a tile.
+
+import type { Credential } from "./types"
+
+/** The part of an address before the "@", which is how a sentence names an account. */
+export function shortName(credential: Credential | undefined, fallback: string): string {
+  const address = credential?.email || fallback
+  const at = address.indexOf("@")
+  return at > 0 ? address.slice(0, at) : address
+}
+
+/**
+ * An account's name in two parts: the local part, and what tells it apart
+ * from another account with the same one — "" when nothing has to.
+ *
+ * Two parts rather than one string so a tile too narrow for both can shorten
+ * the local part and keep the qualifier, which is the half that differs.
+ */
+export type AccountName = { local: string; qualifier: string }
+
+/** The name as one string, for a legend or a sentence. */
+export const nameText = (name: AccountName): string => name.local + name.qualifier
+
+/**
+ * What each of a provider's accounts is called on its tiles, in its legends
+ * and in its recovery lines: the local part, unless another account of the
+ * same provider shares it. Then the domain's first label is added —
+ * "noor@gmail", "noor@agency" — or the whole domain where even that is shared.
+ *
+ * Per provider, because that is the set a reader has to tell apart: a tile is
+ * the way into an irreversible spend, and "noor · 1 reset" beside another
+ * "noor · 1 reset" leaves the choice to a hover the menu bar's popover and a
+ * phone do not have. Computed over every credential of the provider, not one
+ * card's entries, so an account is called the same thing everywhere it shows.
+ */
+export function accountNames(credentials: Credential[]): Map<string, AccountName> {
+  const split = credentials.map((credential) => {
+    const address = credential.email || credential.id
+    const at = address.indexOf("@")
+    const local = at > 0 ? address.slice(0, at) : address
+    const domain = at > 0 ? address.slice(at + 1) : ""
+    return { id: credential.id, local, domain, label: domain.split(".")[0] ?? "" }
+  })
+  const count = (values: string[]) => {
+    const seen = new Map<string, number>()
+    for (const value of values) seen.set(value, (seen.get(value) ?? 0) + 1)
+    return seen
+  }
+  const locals = count(split.map((item) => item.local))
+  const labelled = count(split.map((item) => `${item.local}@${item.label}`))
+  return new Map(
+    split.map((item) => {
+      if ((locals.get(item.local) ?? 0) < 2 || item.domain === "") {
+        return [item.id, { local: item.local, qualifier: "" }]
+      }
+      const short = (labelled.get(`${item.local}@${item.label}`) ?? 0) < 2
+      return [item.id, { local: item.local, qualifier: `@${short ? item.label : item.domain}` }]
+    }),
+  )
+}
+
+/**
+ * Who the next recovery is, as a sentence names them: one account by name, two
+ * joined, more by count. From `resetsNext`, never from the server's subtext,
+ * which is a sentence for printing whole.
+ */
+export function recoveryNames(names: string[]): { who: string; plural: boolean } | null {
+  if (names.length === 0) return null
+  if (names.length === 1) return { who: names[0]!, plural: false }
+  if (names.length === 2) return { who: `${names[0]} and ${names[1]}`, plural: true }
+  return { who: `${names.length} accounts`, plural: true }
+}

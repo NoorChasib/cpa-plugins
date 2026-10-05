@@ -284,8 +284,10 @@ func canonicalWindows(provider string, q *client.Quota, primary Observation) []c
 // credential. Nothing here costs a request: every value comes from the response
 // already fetched for quota.
 //
-// Codex has no renewal field in its usage payload; the renewal instant the CLI
-// displays is the spend-control limit's reset, which is already collected.
+// Codex has no renewal field in its usage payload; the spend-control limit's
+// reset, which is already collected, is the nearest it has. It is the last
+// resort: Fetch lays the id_token's subscription claim over it, and
+// ApplyDetails the subscription endpoint's own date over that.
 func identity(provider string, q *client.Quota) (plan, tier string, renewal time.Time) {
 	plan, tier = q.Plan, q.TierName
 	if provider == "codex" {

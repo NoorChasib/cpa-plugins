@@ -1,8 +1,19 @@
 @import "tailwindcss";
 
+/* Tailwind generates a utility for every class-like word it finds under web/,
+ * and two directories there are not the app. dist/ is the previous build: read
+ * back in, it keeps every utility the last bundle had alive in the next one, so
+ * a deleted class never leaves and `make web` takes two runs to settle. design/
+ * holds the mockups, which are reference rather than source: a checkout with or
+ * without them, or a mockup edited later, must build the same bytes, because
+ * web-verify compares this build with the committed bundle. */
+@source not "../dist";
+@source not "../design";
+
 /* The approved design's tokens, taken verbatim from web/design/mockup.html —
  * and, for the activity strip and the ink below --color-ink-3 that it needed,
- * from the option chosen in web/design/activity-options.html.
+ * from the option chosen in web/design/activity-options.html. The layout below
+ * is option D, "Pool hero", from web/design/redesign/option-d.html.
  *
  * Fonts are system stacks and nothing here loads a file. The bundle makes no
  * external request of any kind, and the reason is sharper than page weight:
@@ -15,6 +26,9 @@
   --color-card-2: #1e2126;
   --color-line: #262a30;
   --color-rule: #1f2227;
+  /* A provider's band: a step darker than a card, so it reads as the heading
+   * the cards hang from rather than as one more card. */
+  --color-band: #141619;
 
   --color-ink: #eef0f3;
   --color-ink-2: #9aa1ab;
@@ -55,49 +69,994 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* One credential inside a window card.
+  /* ---------- the page ---------- */
+
+  .qg-page {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 30px 22px 56px;
+  }
+
+  .qg-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 14px;
+    margin-bottom: 22px;
+  }
+
+  .qg-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .qg-brand h1 {
+    font-size: 19px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    white-space: nowrap;
+  }
+
+  .qg-mark {
+    flex: none;
+    width: 19px;
+    height: 19px;
+    color: var(--color-accent);
+  }
+
+  /* The right end of the header: the freshness line, then the control slot.
+   * The slot sits last so a control added later lands at the edge, where the
+   * hand goes for one, without moving the line beside it. */
+  .qg-top-end {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  .qg-meta {
+    font-size: 11px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-live {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 50%;
+    vertical-align: 1px;
+    background: var(--color-good);
+  }
+
+  .qg-live.is-stale {
+    background: var(--color-warn);
+  }
+
+  .qg-live.is-off {
+    background: var(--color-crit);
+  }
+
+  .qg-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  /* The Access control: a key, and the header's one button. A 28px square so
+   * it is a target on a phone, in the dialog buttons' quiet ink so it does not
+   * compete with the freshness line beside it. */
+  .qg-key {
+    position: relative;
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: var(--color-card);
+    color: var(--color-ink-3);
+    cursor: pointer;
+    transition: border-color 120ms ease, color 120ms ease;
+  }
+
+  .qg-key svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .qg-key:hover {
+    border-color: var(--color-ink-4);
+    color: var(--color-ink);
+  }
+
+  .qg-key:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Something this browser signs in with was refused, and nothing else is
+   * standing in for it. The dialog says what; this only says to look. */
+  .qg-key.is-attention::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--color-bg);
+    border-radius: 50%;
+    background: var(--color-crit);
+  }
+
+  .qg-empty {
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-card);
+    padding: 14px 16px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--color-ink-2);
+  }
+
+  /* ---------- a provider's band ---------- */
+
+  .qg-prov {
+    margin-bottom: 30px;
+  }
+
+  /* A rounded band holding the provider's name and its banked-reset tiles, so
+   * a reset reads as belonging to the provider's accounts and not to any one
+   * window. It wraps rather than truncates: three accounts holding resets do
+   * not fit beside the name at 820px, and a tile cut off is a button hidden. */
+  .qg-pbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    min-height: 46px;
+    padding: 6px 6px 6px 18px;
+    margin-bottom: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 24px;
+    background: var(--color-band);
+  }
+
+  .qg-pbar.is-bare {
+    padding: 10px 18px;
+    min-height: 0;
+  }
+
+  /* The name soaks up the line's slack, so a tile beside it keeps its own
+   * width and the label stays against the tiles. */
+  .qg-pname {
+    display: flex;
+    flex: 1 0 auto;
+    align-items: baseline;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .qg-pname h2 {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .qg-pcount {
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  /* The label and the tiles are items of the band itself, so when the tiles
+   * do not fit beside the name they drop to a line of their own and the label
+   * stays up beside the name, rather than the pair wrapping as one block and
+   * leaving the label stranded on a line of its own. */
+  .qg-resets {
+    display: contents;
+  }
+
+  /* "Banked resets", and under it what spending one does on this provider —
+   * which differs between Codex and Claude, and is the line that makes a
+   * refusal afterwards unsurprising. */
+  .qg-blabel {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 1px;
+    max-width: 270px;
+    padding-right: 4px;
+    text-wrap: balance;
+    font-size: 11px;
+    font-weight: 550;
+    line-height: 1.3;
+    color: var(--color-ink-2);
+    text-align: right;
+  }
+
+  .qg-blabel-sub {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--color-ink-3);
+  }
+
+  /* One tile: beside the name when it fits, under the label when not. */
+  .qg-pills {
+    display: flex;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  /* Two or more: a row of the band's own, as an even grid from the left. The
+   * column floor is the widest tile's natural width — a held Claude reset
+   * with its deadline beside the hold — so a column never clips one.
    *
-   * Named areas rather than utilities because the mobile reflow moves cells
-   * between rows: address and plan on the first line, then bar, percent and
-   * countdown on the second. Written here, next to the columns it rearranges,
-   * it stays legible as one layout with two shapes. */
-  .cred {
+   * The row sits as far from the band's left edge as from its right: the
+   * name's deeper inset is a heading's, and tiles held to it read as shifted
+   * right inside the band. */
+  .qg-pills.is-grid {
     display: grid;
-    /* The mockup's columns, with the countdown widened from 60px to fit
-     * "resetting…" — the one string the design mandates that the original
-     * measurement did not have to hold. The 8px comes out of the address
-     * column, which has hundreds to spare at every width. */
-    grid-template-columns: 1fr 62px 104px 44px 68px;
+    flex: 1 1 100%;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    margin-left: -12px;
+  }
+
+  /* Why the tiles above are not buttons in this browser, once for the band. */
+  .qg-pnote {
+    flex: 1 1 100%;
+    margin: -2px 0 2px 2px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  /* One account's banked resets, as a tile. A button when this page can spend
+   * one, and a plain tile — dashed, no arrow, no hover — when it cannot. */
+  .qg-pill {
+    display: flex;
     align-items: center;
-    gap: 11px;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--color-rule);
+    gap: 9px;
+    min-width: 0;
+    min-height: 42px;
+    padding: 5px 12px 5px 7px;
+    border: 1px solid var(--color-line);
+    border-radius: 21px;
+    background: var(--color-card-2);
+    text-align: left;
+    transition: background 120ms ease, border-color 120ms ease;
   }
 
-  .cred:last-child {
-    border-bottom: 0;
+  button.qg-pill {
+    cursor: pointer;
   }
 
-  /* One credential inside the banked-resets block: address and count on the
-   * left, the action on the right, and a full-width line under both for the
-   * outcome. Its own grid rather than .cred, because it carries neither a bar
-   * nor a countdown and would leave three of that layout's five columns
-   * empty. */
-  .cred-credit {
+  button.qg-pill:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 22%, var(--color-card-2));
+  }
+
+  button.qg-pill:active:not(:disabled) {
+    transform: translateY(0.5px);
+  }
+
+  button.qg-pill:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  button.qg-pill:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .qg-pico {
     display: grid;
-    grid-template-columns: 1fr auto;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+    color: #80b1ef;
+  }
+
+  .qg-pico svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  button.qg-pill:hover:not(:disabled) .qg-pico {
+    background: color-mix(in srgb, var(--color-accent) 38%, transparent);
+    color: #e1ecfc;
+  }
+
+  /* Held back by the provider: still a button, quieter until hovered. */
+  .qg-pill.is-held .qg-pico,
+  .qg-pill.is-static .qg-pico {
+    background: #262a31;
+    color: #8b929c;
+  }
+
+  .qg-pill.is-static {
+    border-style: dashed;
+    background: transparent;
+  }
+
+  .qg-ptxt {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  /* Who and how many. The count never gives way; a long address does, with
+   * the whole of it in the tile's hover and its accessible name. */
+  .qg-pt {
+    display: flex;
+    gap: 0.3em;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--color-ink);
+    white-space: nowrap;
+  }
+
+  .qg-pwho {
+    display: flex;
+    min-width: 0;
+  }
+
+  .qg-plocal {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .qg-pqual {
+    flex: none;
+  }
+
+  .qg-pn {
+    flex: none;
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  /* Each line of a tile stays whole: the grid's column floor is set so it
+   * fits. The ellipsis is a backstop for an address or a phrase longer than
+   * any this was measured against, not a layout. */
+  .qg-ps {
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    line-height: 1.25;
+    color: var(--color-ink-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The compact tile's single status line, shown only in the popover. */
+  .qg-ps-short {
+    display: none;
+  }
+
+  button.qg-pill:hover:not(:disabled) .qg-ps {
+    color: #aebfd6;
+  }
+
+  /* The provider's hold is a hint, so it is brighter than the line it sits
+   * on but not amber: amber on this tile already means the reset lapses
+   * within a week, which is the one thing here asking to be acted on. */
+  .qg-hold {
+    color: var(--color-ink-2);
+  }
+
+  .qg-puse {
+    flex: none;
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 550;
+    color: var(--color-accent);
+    white-space: nowrap;
+  }
+
+  /* Held: the verb waits in quieter ink until the tile is pointed at, so a
+   * row of tiles shows at a glance which the provider would refuse today. */
+  .qg-pill.is-held .qg-puse {
+    color: var(--color-ink-3);
+  }
+
+  button.qg-pill:hover:not(:disabled) .qg-puse {
+    color: #cfe1fa;
+  }
+
+  .qg-pgo {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    margin-left: -3px;
+    color: var(--color-accent);
+  }
+
+  .qg-pill.is-held .qg-pgo {
+    color: var(--color-ink-4);
+  }
+
+  button.qg-pill:hover:not(:disabled) .qg-pgo {
+    color: #a9cbf6;
+  }
+
+  /* What a press came to, under the band. Kept until dismissed, so the outcome
+   * of an irreversible action cannot scroll past unread or time out. */
+  .qg-notices {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: -2px 0 10px;
+  }
+
+  /* Present and empty is the region waiting for its first announcement. It
+   * takes no room until it has something to say. */
+  .qg-notices:empty {
+    margin: 0;
+  }
+
+  .qg-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 8px 9px 13px;
+    border: 1px solid var(--color-line);
+    border-left-width: 3px;
+    border-radius: 10px;
+    background: var(--color-card);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  /* The tone is the edge; the words are always readable ink. Red text at
+   * this size sits under 4:1 on the card, and these are sentences that have
+   * to be read, not glanced at. */
+  .qg-notice.is-ok {
+    border-left-color: var(--color-good);
+    color: var(--color-ink-2);
+  }
+
+  /* The failure edge, on refusals too: nothing was lost, but the reader's
+   * windows are exactly where they were, which is the fact they pressed to
+   * change. */
+  .qg-notice.is-bad {
+    border-left-color: var(--color-crit);
+    color: var(--color-ink-2);
+  }
+
+  /* The answer was lost, and the reset may be gone. Not the refusal's red,
+   * which on this line means "nothing was spent": a different edge, a mark,
+   * and the brightest ink, because this is the one message that has to be
+   * read before the button is pressed again. */
+  .qg-notice.is-unknown {
+    border-left-color: var(--color-warn);
+    color: var(--color-ink);
+  }
+
+  .qg-notice-mark {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    margin: 2px -3px 0 0;
+    color: #f5c862;
+  }
+
+  .qg-notice-who {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  .qg-notice-x {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    margin-left: auto;
+    border-radius: 6px;
+    color: var(--color-ink-3);
+    cursor: pointer;
+  }
+
+  .qg-notice-x svg {
+    width: 9px;
+    height: 9px;
+  }
+
+  .qg-notice-x:hover {
+    background: var(--color-card-2);
+    color: var(--color-ink);
+  }
+
+  .qg-notice-x:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  /* ---------- a window card ---------- */
+
+  .qg-win {
+    margin-bottom: 10px;
+    padding: 16px 18px 6px;
+    border: 1px solid var(--color-line);
+    border-radius: 14px;
+    background: var(--color-card);
+  }
+
+  /* Folded, the card ends at its fold row, which needs a little room under
+   * it rather than the rows' padding. */
+  .qg-win:has(> .qg-fold[aria-expanded="false"]) {
+    padding-bottom: 9px;
+  }
+
+  .qg-whead {
+    display: flex;
     align-items: center;
-    gap: 7px 11px;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--color-rule);
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 22px;
   }
 
-  .cred-credit:last-child {
-    border-bottom: 0;
+  .qg-wtitle {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  /* Buttons. The only controls on this page, so they are defined once here
-   * rather than as a utility pile repeated at each call site. */
+  .qg-chips {
+    display: flex;
+    flex: none;
+    gap: 5px;
+  }
+
+  .qg-chip {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 5px;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: #23262c;
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--color-ink-2);
+    white-space: nowrap;
+  }
+
+  .qg-chip svg {
+    flex: none;
+    width: 8px;
+    height: 8px;
+  }
+
+  .qg-chip-up svg {
+    color: var(--color-good);
+  }
+
+  .qg-chip-down svg {
+    color: var(--color-ink-3);
+  }
+
+  .qg-chip-low {
+    background: color-mix(in srgb, var(--color-warn) 15%, transparent);
+    color: #f5c862;
+  }
+
+  .qg-chip-critical {
+    background: color-mix(in srgb, var(--color-crit) 20%, transparent);
+    color: #f29393;
+  }
+
+  /* CPA's routing state: an outline, because it is a fact about where
+   * requests go and not a property of the account like its plan. */
+  .qg-chip-route {
+    border: 1px solid #2e3239;
+    background: transparent;
+    color: var(--color-ink-3);
+  }
+
+  /* Bar colours, from the level the server computed: the accent while there
+   * is room, amber when it runs low, red when it is critical. The pool and
+   * every account bar use the same three, so a bar's colour always means how
+   * much is left and never which account it is. */
+  .qg-lvl-ok {
+    --lvl: var(--color-accent);
+  }
+
+  .qg-lvl-low {
+    --lvl: var(--color-warn);
+  }
+
+  .qg-lvl-critical {
+    --lvl: var(--color-crit);
+  }
+
+  /* A critical pool, said once at the card's edge as well as in its figures. */
+  .qg-win.is-crit {
+    border-color: color-mix(in srgb, var(--color-crit) 38%, var(--color-line));
+  }
+
+  /* The pool: one fill for what is left, then the hatched stretch the next
+   * reset gives back, then the empty track. The fill keeps a few pixels even
+   * at its last percent, so a pool that is nearly out still shows as a pool
+   * and not as an empty track. */
+  .qg-bar {
+    display: flex;
+    height: 12px;
+    margin-top: 13px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: var(--color-track);
+  }
+
+  .qg-bar > i {
+    display: block;
+    flex: 0 1 auto;
+    min-width: 6px;
+    height: 100%;
+  }
+
+  .qg-fill {
+    background: var(--lvl);
+  }
+
+  /* What the next reset gives back: the same colour, hatched, so it reads as
+   * capacity on its way rather than capacity held. */
+  .qg-ghost {
+    --ink: color-mix(in srgb, var(--lvl) 62%, transparent);
+    background: repeating-linear-gradient(135deg, var(--ink) 0 1.5px, transparent 1.5px 5px);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lvl) 45%, transparent);
+  }
+
+  /* The figures around the bar, the way the reference's disk block has them:
+   * the amount bold under-left, when it changes bold under-right.
+   *
+   * The pair never splits. At 390px the recovery sentence is wider than the
+   * room beside the number, and wrapping the row would strand the number on
+   * a line of its own with the sentence right-aligned under it; instead the
+   * sentence wraps within its own column, beside the number it explains. */
+  .qg-hfig {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 14px;
+    margin-top: 11px;
+  }
+
+  .qg-big {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  .qg-big .num {
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 0.9;
+    letter-spacing: -0.04em;
+  }
+
+  .qg-unit {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-ink-3);
+  }
+
+  .qg-big.is-ok .num {
+    color: var(--color-good);
+  }
+
+  .qg-big.is-low .num {
+    color: var(--color-warn);
+  }
+
+  .qg-big.is-crit .num {
+    color: var(--color-crit);
+  }
+
+  .qg-rec {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--color-ink-2);
+    text-align: right;
+    text-wrap: balance;
+  }
+
+  /* The figures stay whole; a name may break, since an address's local part
+   * can be longer than the column. */
+  .qg-rec b {
+    font-weight: 650;
+    color: var(--color-ink);
+    white-space: nowrap;
+  }
+
+  .qg-rec b.qg-who {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .qg-rec .num {
+    font-size: 13px;
+  }
+
+  .qg-rec .qg-gain {
+    font-size: 15px;
+    letter-spacing: -0.02em;
+  }
+
+  .qg-rec-quiet {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--color-ink-3);
+  }
+
+  /* The muted line under the figures: who the pool is made of, and when it is
+   * whole again. */
+  .qg-hsub {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 5px 12px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  /* The legend's entries are the line's own items, so "full again" can sit at
+   * the end of whichever line the legend finishes on rather than claiming a
+   * line to itself once the legend wraps. */
+  .qg-full {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .qg-full b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  /* The fold: the label between the pool and its accounts, and the control
+   * that hides them. A full-width button, because at 390px a chevron alone is
+   * not a target. */
+  .qg-fold {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    margin-top: 14px;
+    padding: 10px 0 5px;
+    border-top: 1px solid var(--color-line);
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--color-ink-3);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .qg-fold:hover {
+    color: var(--color-ink-2);
+  }
+
+  .qg-fold:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .qg-chev {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    transition: transform 150ms;
+  }
+
+  .qg-fold[aria-expanded="false"] .qg-chev {
+    transform: rotate(-90deg);
+  }
+
+  .qg-fold-note {
+    font-weight: 400;
+  }
+
+  /* ---------- one account inside a card ---------- */
+
+  .qg-acct {
+    padding: 11px 0 12px;
+  }
+
+  .qg-acct + .qg-acct {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  /* A reading the server will not vouch for steps back by ink, not opacity.
+   * Fading the whole row took the word that explains it down with the rest,
+   * to below 3.5:1; here that word keeps its ink and the dashed rule, and only
+   * the figures that would otherwise read as firmly as a healthy row's give
+   * way — bright ink becomes the line's secondary ink. A level colour stays,
+   * because a stale 30% is still low. */
+  .qg-acct.is-degraded .qg-email {
+    color: var(--color-ink-2);
+  }
+
+  .qg-acct.is-degraded .qg-afig b:not(.text-warn, .text-crit) {
+    color: var(--color-ink-2);
+  }
+
+  /* A countdown on a failed reading is the last one the server saw, not a
+   * live one: regular weight, so it does not read as the row's headline. */
+  .qg-acct.is-degraded .qg-ar b {
+    font-weight: 500;
+  }
+
+  .qg-aline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .qg-addr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .qg-email {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .qg-achips {
+    display: flex;
+    flex: none;
+    gap: 5px;
+  }
+
+  /* A real bar, not a hairline: an account is read on its own as often as in
+   * the pool, and a 2px line at 400px is a line, not a quantity. */
+  .qg-abar {
+    position: relative;
+    display: block;
+    height: 6px;
+    margin-top: 9px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--color-track);
+  }
+
+  .qg-abar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 3px;
+    background: var(--lvl);
+  }
+
+  /* In the bar's place on a reading the server will not vouch for: the word
+   * for why, then a dashed rule holding the bar's line. */
+  .qg-astate {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 6px;
+    margin-top: 9px;
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--color-ink-2);
+  }
+
+  .qg-astate::after {
+    flex: 1;
+    border-top: 1px dashed #343941;
+    content: "";
+  }
+
+  .qg-afig {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 17px;
+    margin-top: 8px;
+  }
+
+  .qg-ap {
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ap b {
+    font-size: 14px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--color-ink);
+  }
+
+  .qg-traffic {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .qg-ar {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ar b {
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--color-ink);
+  }
+
+  .qg-amuted {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 5px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-amuted b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  /* ---------- a prepaid balance ---------- */
+
+  .qg-balance {
+    padding-bottom: 15px;
+  }
+
+  /* The server's sentence, set as a sentence: in the page's text face, with
+   * its figures kept to tabular widths, and balanced so a narrow card does not
+   * leave its last amount alone on a line. */
+  .qg-bsub {
+    margin-top: 10px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-ink-3);
+    text-wrap: pretty;
+  }
+
+  /* ---------- controls ---------- */
+
+  /* The dialog's buttons, defined once here rather than as a utility pile
+   * repeated at each call site. */
   .qg-btn {
     flex: none;
     border: 1px solid var(--color-line);
@@ -140,35 +1099,6 @@
     outline-offset: 2px;
   }
 
-  /* A card header that folds its card.
-   *
-   * The whole header is the control, not a small chevron beside it: it is the
-   * obvious thing to click, and at 390px a 9px hit target is not a target.
-   * Tailwind's preflight already clears the button chrome, so this only has to
-   * restore the pointer and give the focus ring something to trace that is not
-   * the card's own rounded corner.
-   */
-  .qg-head {
-    cursor: pointer;
-    border-radius: 8px;
-  }
-
-  .qg-head:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 3px;
-  }
-
-  /* The title lifts on hover so the header reads as something that does
-   * something. Only the title: the percentage is the card's headline and
-   * changing its colour on hover would suggest the level had changed. */
-  .qg-head:hover .qg-title {
-    color: var(--color-ink);
-  }
-
-  .qg-head:hover svg {
-    color: var(--color-ink-2);
-  }
-
   /* The confirmation. A native <dialog>, so the focus trap, the inert
    * background and the Escape key come from the platform rather than from this
    * page approximating them. */
@@ -180,22 +1110,21 @@
     background: var(--color-card);
     padding: 18px;
     color: var(--color-ink);
+    box-shadow: 0 24px 60px rgb(0 0 0 / 55%);
   }
 
   .qg-dialog::backdrop {
     background: rgb(0 0 0 / 62%);
   }
 
-  /* The traffic strip under an address: one block per bucket of the host's
-   * request ring, oldest at the left.
+  /* The traffic strip on an account's figure line: one block per bucket of the
+   * host's request ring, oldest at the left.
    *
    * Fixed-size blocks rather than a bar that fills its column, because the
    * blocks are a count of buckets and not a proportion of anything — twenty of
-   * them is the shape of the data, and stretching them to the column width
-   * would make an idle credential's strip as wide as a busy one's while
-   * changing what a single block means at every breakpoint. At 5px plus gaps
-   * the whole ring is about 128px, which fits the address column down to
-   * 390px. */
+   * them is the shape of the data, and stretching them to the line would make
+   * an idle credential's strip as wide as a busy one's while changing what a
+   * single block means at every breakpoint. */
   .act {
     display: flex;
     flex: none;
@@ -234,11 +1163,107 @@
     background: var(--color-crit);
   }
 
-  /* At 390px the address column is about 198px and the ring would leave the
-   * line beside it too narrow to finish "1h 54m ago" — the half of that line
-   * the strip cannot say for itself. A pixel off each block and its gap buys
-   * the 30px that fixes it, and twenty blocks are still twenty blocks. */
+  /* ---------- 640px and under: a phone, and the menu bar's 400px popover ---------- */
+
   @media (max-width: 640px) {
+    .qg-page {
+      padding: 16px 12px 40px;
+    }
+
+    .qg-top {
+      margin-bottom: 14px;
+    }
+
+    .qg-brand h1 {
+      font-size: 16px;
+    }
+
+    .qg-mark {
+      width: 17px;
+      height: 17px;
+    }
+
+    .qg-prov {
+      margin-bottom: 22px;
+    }
+
+    /* The tiles take a line of their own under the name, two to a line, and
+     * the label above them reads across rather than stacking. */
+    .qg-pbar {
+      gap: 8px;
+      padding: 9px 7px 7px 14px;
+      border-radius: 18px;
+    }
+
+    .qg-pbar.is-bare {
+      padding: 10px 14px;
+    }
+
+    .qg-blabel {
+      max-width: 170px;
+      padding-right: 7px;
+    }
+
+    .qg-pills,
+    .qg-pills.is-grid {
+      flex: 1 1 100%;
+      justify-content: flex-start;
+      gap: 5px;
+      margin-left: -7px;
+    }
+
+    .qg-pill {
+      flex: 1 1 160px;
+      gap: 7px;
+      padding: 5px 8px 5px 6px;
+    }
+
+    .qg-pnote {
+      margin-top: -1px;
+    }
+
+    .qg-pico {
+      width: 26px;
+      height: 26px;
+    }
+
+    .qg-puse {
+      margin-left: auto;
+    }
+
+    .qg-win {
+      padding: 14px 14px 4px;
+      border-radius: 13px;
+    }
+
+    .qg-big .num {
+      font-size: 30px;
+    }
+
+    .qg-rec {
+      font-size: 11.5px;
+    }
+
+    .qg-rec .num {
+      font-size: 12px;
+    }
+
+    .qg-rec .qg-gain {
+      font-size: 14px;
+    }
+
+    .qg-hsub {
+      font-size: 10.5px;
+    }
+
+    .qg-afig {
+      gap: 11px;
+    }
+
+    /* Under 640px the figure line is about 340px and the ring would leave the
+     * age beside it too narrow to finish "1h 54m ago" — the half of that line
+     * the strip cannot say for itself. A pixel off each block and its gap
+     * buys the room, and twenty blocks are still twenty blocks. */
     .act {
       gap: 1px;
     }
@@ -248,35 +1273,66 @@
     }
   }
 
-  @media (max-width: 640px) {
-    .cred {
-      grid-template-columns: 1fr 46px 68px;
+  /* ---------- 480px and under: the menu bar's popover, and a phone ---------- */
+
+  /* The banked-reset band is the first thing in the popover, and at full size
+   * three accounts holding resets took a third of its 620px before any quota
+   * showed. Here a tile is two lines, two to a row, as the D mockup draws it:
+   * who and how many, then one status and the verb. The icon goes — the verb's
+   * ink already says held or ready — and the band's explanation goes too,
+   * because the dialog that asks before anything is spent says it in full.
+   * "Use one" stays: it is the word the page tells the reader to press. */
+  @media (max-width: 480px) {
+    .qg-blabel-sub {
+      display: none;
+    }
+
+    .qg-pills,
+    .qg-pills.is-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .qg-pill {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       grid-template-areas:
-        "mail plan plan"
-        "bar pct eta";
-      gap: 5px 9px;
-      padding: 10px 0;
+        "who who who"
+        "status verb go";
+      align-items: center;
+      gap: 3px 4px;
+      min-height: 0;
+      padding: 7px 10px 7px 11px;
+      border-radius: 13px;
     }
 
-    .cred-mail {
-      grid-area: mail;
+    .qg-pico,
+    .qg-ps-full {
+      display: none;
     }
 
-    .cred-plan {
-      grid-area: plan;
-      justify-self: end;
+    .qg-ptxt {
+      display: contents;
     }
 
-    .cred-bar {
-      grid-area: bar;
+    .qg-pt {
+      grid-area: who;
     }
 
-    .cred-pct {
-      grid-area: pct;
+    .qg-ps-short {
+      display: block;
+      grid-area: status;
     }
 
-    .cred-eta {
-      grid-area: eta;
+    .qg-puse {
+      grid-area: verb;
+      margin-left: 0;
+      font-size: 10.5px;
+    }
+
+    .qg-pgo {
+      grid-area: go;
+      margin-left: 0;
     }
   }
 }

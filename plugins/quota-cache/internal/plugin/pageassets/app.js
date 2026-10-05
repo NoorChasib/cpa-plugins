@@ -1,11 +1,187 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const auth = window.quotaCacheAuth;
   const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter'};
   const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits'};
+
+  // Status is read with the management key the CPA console remembers, and CPA
+  // locks an address out of its management API for 30 minutes after five failed
+  // sign-ins, counting a missing key as one. So this page sends nothing without
+  // a remembered session, never presents a refused key again on its timer or
+  // after a reload, stops its timer when a request gets no answer at all, and
+  // resumes after either only on Refresh view.
+  //
+  // Session reading is ported from Codex Catalog Filter's page, itself adapted
+  // from Token Usage's audit of the Management Center storage format. Only a
+  // remembered console session on this exact origin and API base is used.
+  const RESOURCE_SUFFIX = '/v0/resource/plugins/quota-cache/status';
+  const STATUS_PATH = '/v0/management/plugins/quota-cache/status';
+  const AUTH_NAME = 'cli-proxy-auth';
+  const REFUSED_NAME = 'quota-cache.console-refused';
+  const REASONS = ['refused', 'banned', 'remote', 'off', 'other'];
+  const BAN_SECONDS = 1800;
+  const COUNTED = ' Each refused try counts toward CPA’s limit of five failed sign-ins, after which it locks this address out of management for 30 minutes.';
+  const SIGN_IN = 'Sign in to CPA’s management console on this same address with “Remember password” ticked, then select Refresh view. This page sends nothing until a remembered session is available.';
+
+  const text = (value, max) => typeof value === 'string' && value.length <= max;
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+  function apiRoot() {
+    const path = location.pathname.replace(/\/+$/, '');
+    if (!['http:', 'https:'].includes(location.protocol) || !path.endsWith(RESOURCE_SUFFIX)) return null;
+    return location.origin + path.slice(0, -RESOURCE_SUFFIX.length);
+  }
+  const root = apiRoot();
+  function matchesRoot(value) {
+    if (!root || !text(value, 2048) || !/^https?:\/\//i.test(value.trim()) || /[?#]/.test(value) || /^https?:\/\/[^/]*@/i.test(value)) return false;
+    try {
+      const url = new URL(value.trim());
+      if (url.username || url.password || url.search || url.hash) return false;
+      // The console saves its API base without /v8/management; older builds kept /v0/management.
+      url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v[08]\/management$/i, '').replace(/\/+$/, '') || '/';
+      const expected = new URL(root);
+      return url.origin === expected.origin && url.pathname === expected.pathname;
+    } catch { return false; }
+  }
+  function stored(name) {
+    const value = localStorage.getItem(name);
+    if (value !== null && value.length > 32768) throw new Error('storage value too large');
+    return value;
+  }
+  // The console's optional XOR/Base64 codec is reversible obfuscation, NOT
+  // encryption or a security boundary.
+  function decode(raw, legacy = false) {
+    if (raw === null) return null;
+    let value = raw;
+    if (value.startsWith('enc::v1::')) {
+      const bytes = Uint8Array.from(atob(value.slice(9)), c => c.charCodeAt(0));
+      const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+      for (let i = 0; i < bytes.length; i++) bytes[i] ^= salt[i % salt.length];
+      value = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    }
+    try { return JSON.parse(value); } catch (error) { if (legacy) return value; throw error; }
+  }
+  function validKey(value) {
+    if (!text(value, 4096) || !value || value.trim() !== value || /[\x00-\x08\x0a-\x1f\x7f]/.test(value)) return false;
+    try {
+      const authorization = ['Bearer', value].join(' ');
+      return new Headers({Authorization: authorization}).get('Authorization') === authorization;
+    } catch { return false; }
+  }
+  function readSession() {
+    try {
+      const modern = stored(AUTH_NAME);
+      if (modern !== null) {
+        // Presence is authoritative even after logout, malformed storage, or
+        // remember-off. NEVER revive legacy credentials in those cases.
+        const record = decode(modern);
+        const state = object(record) && record.state;
+        if (!object(state) || record.version !== 0 || state.rememberPassword !== true || state.isAuthenticated === false || !matchesRoot(state.apiBase) || !validKey(state.managementKey)) return null;
+        return {key: state.managementKey, base: state.apiBase};
+      }
+      if (stored('isLoggedIn') !== 'true') return null;
+      const base = decode(stored('apiBase'), true) || decode(stored('apiUrl'), true);
+      const key = decode(stored('managementKey'), true);
+      return matchesRoot(base) && validKey(key) ? {key, base} : null;
+    } catch { return null; }
+  }
+  const sameSession = (a, b) => a && b && a.key === b.key && a.base === b.base;
+
+  // FNV-1a, because crypto.subtle is missing on plain-HTTP origins. The
+  // fingerprint only recognises a refused key beside the console's own copy of
+  // it; it is not meant to hide the key.
+  function fingerprint(key) {
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of new TextEncoder().encode(root + '\n' + key)) hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+    return hash.toString(16).padStart(16, '0');
+  }
+  // A refusal is remembered against the key that was refused, so neither a
+  // reload nor another open copy of this page presents it again. The record is
+  // dropped once the console holds a different key or none, and otherwise only
+  // by Refresh view.
+  //
+  // The record names the CPA it belongs to. Two CPAs behind one origin under
+  // different prefixes share this storage, and the page for one finds no
+  // session of its own while the console is signed in to the other. It must
+  // leave the other's record alone, or that page would present its refused key
+  // again.
+  //
+  // The record goes to this origin's storage or, when that cannot take it, to
+  // this tab's. The origin's quota is shared with the console and every other
+  // plugin page, so it can be full; a refusal only this page remembered would
+  // be presented again by a reload.
+  function stores() {
+    const found = [];
+    try { found.push(localStorage); } catch {}
+    try { found.push(sessionStorage); } catch {}
+    return found;
+  }
+  // The record in one store: undefined when there is none or it is another
+  // CPA's, null when it cannot be read.
+  function recordIn(store) {
+    let record;
+    try {
+      const raw = store.getItem(REFUSED_NAME);
+      if (raw === null) return undefined;
+      record = raw.length > 32768 ? null : JSON.parse(raw);
+    } catch { return null; }
+    if (object(record) && typeof record.root === 'string' && record.root !== root) return undefined;
+    return record;
+  }
+  function drop(store) { try { store.removeItem(REFUSED_NAME); } catch {} }
+  function refusal(session) {
+    let found = null;
+    for (const store of stores()) {
+      const record = recordIn(store);
+      if (record === undefined) continue;
+      if (session && object(record) && record.v === 1 && record.root === root && record.fp === fingerprint(session.key) && REASONS.includes(record.reason) &&
+        Number.isInteger(record.status) && Number.isFinite(record.at) && (record.until === null || Number.isFinite(record.until))) {
+        if (!found || record.at > found.at) found = record;
+      } else drop(store);
+    }
+    return found;
+  }
+  function forget() { for (const store of stores()) if (recordIn(store) !== undefined) drop(store); }
+  function remember(session, status, error) {
+    const at = Math.floor(Date.now() / 1000);
+    const reason = classify(status, error);
+    const record = {v: 1, root, fp: fingerprint(session.key), reason, status, at, until: reason === 'banned' ? at + banSeconds(error) : null};
+    for (const store of stores()) {
+      try { store.setItem(REFUSED_NAME, JSON.stringify(record)); break; } catch {}
+    }
+    return record;
+  }
+  // CPA's own refusal messages, from AuthenticateManagementKey in
+  // internal/api/handlers/management/handler.go. Anything else came from
+  // something in front of CPA.
+  function classify(status, error) {
+    if (status === 401 && (error === 'missing management key' || error === 'invalid management key')) return 'refused';
+    if (status === 403 && typeof error === 'string' && error.startsWith('IP banned')) return 'banned';
+    if (status === 403 && error === 'remote management disabled') return 'remote';
+    if (status === 403 && error === 'remote management key not set') return 'off';
+    return 'other';
+  }
+  // "Try again in 29m59s" is a Go duration rounded to the second.
+  function banSeconds(error) {
+    const match = /Try again in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(typeof error === 'string' ? error : '');
+    if (!match || match[0] === 'Try again in ') return BAN_SECONDS;
+    return Math.min(86400, Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0));
+  }
+  const banned = record => !!record && record.reason === 'banned' && record.until !== null && record.until * 1000 > Date.now();
+  function refusalMessage(record) {
+    if (record.reason === 'banned') return banned(record)
+      ? 'CPA is refusing management requests from this address until about ' + new Date(record.until * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) + ' after repeated failed sign-ins. This page will not ask again before then.'
+      : 'CPA’s lockout of this address after repeated failed sign-ins should be over. Select Refresh view to try once more.' + COUNTED;
+    if (record.reason === 'remote') return 'CPA accepts management sign-ins only on the machine it runs on, so this page stopped asking. Open Quota Cache on that machine instead.';
+    if (record.reason === 'off') return 'CPA’s management API is switched off on this server, so this page stopped asking.';
+    if (record.reason === 'refused') return 'CPA refused the console session saved in this browser, so this page stopped asking. Sign in to CPA’s management console again with “Remember password” ticked, then select Refresh view.' + COUNTED;
+    return 'Something in front of CPA refused the status request (HTTP ' + record.status + '), so this page stopped asking. Select Refresh view to try once more.' + COUNTED;
+  }
+
   let snapshot = null;
   let busy = false;
+  let stopped = false; // set after a refusal; only Refresh view resumes
+  let release = 0; // re-enables Refresh view when a lockout ends; sends nothing
   const date = value => { const t = Date.parse(value); return Number.isFinite(t) && t > 0 ? t : 0; };
   function node(tag, text, className) {
     const e = document.createElement(tag);
@@ -176,26 +352,68 @@
     $('details').replaceChildren();
     for (const [label,value] of details) { const item = node('div'); const dd = node('dd'); dd.append(value instanceof Node ? value : document.createTextNode(value || '—')); item.append(node('dt',label),dd); $('details').append(item); }
   }
-  async function refresh() {
-    if (busy) return;
-    busy = true; $('refresh').disabled = true;
+  function syncButton(record) {
+    clearTimeout(release);
+    const wait = banned(record) ? record.until * 1000 - Date.now() : 0;
+    $('refresh').disabled = busy || wait > 0;
+    if (wait > 0) release = setTimeout(() => syncButton(refusal(readSession())), wait + 1000);
+  }
+  function unavailable(message, health, view) {
+    // Hide prior account data on loss of authorization; never leave it looking live.
+    $('content').hidden = true;
+    $('error').textContent = message;
+    $('error').hidden = false; $('health').textContent = health; $('health').className = 'pill warn'; $('view-status').textContent = view;
+  }
+  // manual is true only for Refresh view: the one action that resumes after a
+  // refusal and the only way to present a refused key again.
+  async function refresh(manual) {
+    if (busy || (stopped && !manual)) return;
+    if (!root) { unavailable('Open Quota Cache from CPA’s sidebar to load its status.', 'Status unavailable', 'View could not be updated'); return; }
+    const session = readSession();
+    let refused = refusal(session);
+    if (!session) { syncButton(null); unavailable(SIGN_IN, 'Sign-in needed', 'No remembered console session'); return; }
+    if (refused && manual && !banned(refused)) { forget(); refused = null; }
+    if (refused) { stopped = true; syncButton(refused); unavailable(refusalMessage(refused), 'Session refused', 'Updates paused after CPA refused the session'); return; }
+    stopped = false;
+    busy = true; syncButton(null);
+    let answered = false;
     try {
-      const response = await fetch(auth.managementPath('/status'), {credentials:'same-origin',cache:'no-store',headers:auth.authHeaders({}),signal:AbortSignal.timeout(10000)});
-      if (response.status === 401 || response.status === 403) throw new Error('Sign in to CPA on this same address, remember your management session, then refresh this view.');
+      const response = await fetch(root + STATUS_PATH, {headers: {Authorization: ['Bearer', session.key].join(' '), Accept: 'application/json'}, mode: 'same-origin', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10000)});
+      answered = true;
+      if (response.status === 401 || response.status === 403) {
+        // Stop and remember the refusal before anything else runs, then
+        // refine its reason from CPA's message.
+        stopped = true;
+        refused = remember(session, response.status, null);
+        let error = null;
+        try { const body = await response.json(); if (object(body) && text(body.error, 512)) error = body.error; } catch {}
+        refused = remember(session, response.status, error);
+        return;
+      }
+      if (!sameSession(session, readSession())) throw new Error('The console session changed while the view was updating, so its result was discarded. The next update uses the current session.');
       if (!response.ok) throw new Error('Quota Cache status is unavailable (HTTP ' + response.status + '). Check that the plugin is enabled and registered in CPA, and inspect its logs.');
       const data = await response.json();
       if (data.schema !== 1 || !data.entries || !data.running) throw new Error('The cache has not supplied a running status. Check the plugin version and CPA logs.');
       snapshot = data; render(data); $('content').hidden = false; $('error').hidden = true;
       $('view-status').textContent = 'View updated ' + new Date().toLocaleTimeString();
     } catch (error) {
-      // Hide prior account data on loss of authorization; never leave it looking live.
-      $('content').hidden = true;
-      $('error').textContent = error.name === 'TimeoutError' ? 'The status request timed out. Check CPA connectivity, then refresh this view.' : error.message;
-      $('error').hidden = false; $('health').textContent = 'Status unavailable'; $('health').className = 'pill warn'; $('view-status').textContent = 'View could not be updated';
-    } finally { busy = false; $('refresh').disabled = false; }
+      if (!answered) {
+        // No status came back, so CPA may have refused the key and counted it
+        // without this page ever learning so. The timer stops as it does after
+        // a refusal. Nothing is remembered, because the key may be fine, so a
+        // reload or Refresh view asks once more.
+        stopped = true;
+        unavailable('The status request ' + (error.name === 'TimeoutError' ? 'got no answer within 10 seconds' : 'failed before an answer arrived') + ', so this page stopped updating on its own: if CPA refused the session, asking again would count toward its lockout. Check CPA connectivity, then select Refresh view.', 'Status unavailable', 'Updates paused until Refresh view');
+      } else {
+        unavailable(error.name === 'TimeoutError' ? 'The status request timed out. Check CPA connectivity, then refresh this view.' : error.message, 'Status unavailable', 'View could not be updated');
+      }
+    } finally {
+      busy = false; syncButton(refused);
+      if (refused) unavailable(refusalMessage(refused), 'Session refused', 'Updates paused after CPA refused the session');
+    }
   }
-  $('refresh').addEventListener('click',refresh);
-  $('provider').addEventListener('change',()=>{if(snapshot)render(snapshot);});
-  setInterval(()=>{if($('auto').checked && !document.hidden)refresh();},30000);
-  refresh();
+  $('refresh').addEventListener('click', () => refresh(true));
+  $('provider').addEventListener('change', () => { if (snapshot) render(snapshot); });
+  setInterval(() => { if ($('auto').checked && !document.hidden) refresh(false); }, 30000);
+  refresh(false);
 })();

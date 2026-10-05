@@ -18,7 +18,8 @@
 //	        weekly_all / weekly_scoped), percent, resets_at, and for a scoped
 //	        entry scope.model.display_name. Both shapes are read, and the
 //	        request must carry a claude-code User-Agent or the endpoint
-//	        rate-limits it hard.
+//	        rate-limits it hard. The cedar_ember=1 query adds the banked
+//	        reset grants as a cedar_ember block beside everything else.
 //	Codex:  GET https://chatgpt.com/backend-api/wham/usage
 //	        -> rate_limit.<window with limit_window_seconds=604800>.used_percent,
 //	           reset_at (unix seconds) or reset_after_seconds
@@ -44,7 +45,12 @@ import (
 )
 
 const (
-	claudeUsageURL  = "https://api.anthropic.com/api/oauth/usage"
+	// claudeUsageURL asks for the reset-grant block with the usage it always
+	// read, so knowing an account's banked resets costs no request of its own.
+	// Claude Code sends skip_spend=1 beside cedar_ember=1 on this path; it is
+	// deliberately left off here, because it skips the spend-store read that
+	// fills extra_usage, and extra_usage is collected from this same response.
+	claudeUsageURL  = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 	claudeOAuthBeta = "oauth-2025-04-20"
 
 	codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
@@ -64,7 +70,14 @@ const (
 	// identify as Claude Code lands in a far tighter bucket and starts
 	// collecting 429s after a handful of polls. Sending it is the difference
 	// between a credential that reports and one that sits in backoff.
-	claudeUserAgent = "claude-code/2.1.0 (cpa-plugins/quota-cache)"
+	//
+	// It is Claude Code's own form, verbatim, with no caller segment, because
+	// the reset-grant program also judges eligibility by client: its
+	// ineligible_reason vocabulary includes "surface" and "cli_version". This is
+	// the exact string CPA's management UI sends on the same three endpoints
+	// (Cli-Proxy-API-Management-Center d554bb0, the commit that added reset
+	// grants), which is the only form observed to return grants.
+	claudeUserAgent = "claude-cli/2.1.280 (external, cli)"
 
 	xaiBillingURL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 	// xaiTokenAuthHeader mirrors the open-source Grok Build CLI, which sends
@@ -118,6 +131,10 @@ type Observation struct {
 	Plan      string
 	TierName  string
 	RenewalAt time.Time
+
+	// AccountDetails is set by ApplyDetails, never by Fetch: the slow account
+	// endpoints are read on their own schedule, not on every poll.
+	AccountDetails *client.AccountDetails
 }
 
 // Supported reports whether the provider has a usage endpoint this package
@@ -225,6 +242,16 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 	if observation.Plan == "" {
 		observation.Plan = planName(creds.plan)
 	}
+	// The subscription's own paid-up date outranks the spend-control reset,
+	// which is a renewal only by inference — but only while it is ahead. The
+	// claim is as old as the id_token, which CPA refreshes about a day before
+	// it expires, so it can still name the period before the last renewal; a
+	// date behind us must not replace a fallback that is still in front. The
+	// account endpoint's figure outranks both, on the same terms, and is laid
+	// over this by ApplyDetails.
+	if futureInstant(creds.subscriptionEnd, now) {
+		observation.RenewalAt = creds.subscriptionEnd
+	}
 	return observation, nil
 }
 
@@ -236,6 +263,10 @@ type credentials struct {
 	// the fallback for a usage response that no longer carries one, and costs
 	// nothing: the credential has already been read.
 	plan string
+	// subscriptionEnd is the Codex id_token's chatgpt_subscription_active_until
+	// claim, unchecked against the clock. Free for the same reason as plan, and
+	// as old as the token, which is why the subscription endpoint outranks it.
+	subscriptionEnd time.Time
 }
 
 // extractCredentials decodes the minimum fields for one usage request.
@@ -284,29 +315,38 @@ func extractCredentials(provider string, rawAuth []byte) (credentials, error) {
 	}
 	switch provider {
 	case "codex":
-		if account == "" && idToken != "" {
-			account = accountIDFromIDToken(idToken)
+		claims := idTokenClaims(idToken)
+		if account == "" {
+			account = accountIDFromClaims(claims)
 		}
 		creds.accountID = account
+		creds.subscriptionEnd = subscriptionEndFromClaims(claims)
 	case "xai":
 		creds.userID = stringField(root, "sub")
 	}
 	return creds, nil
 }
 
-func accountIDFromIDToken(idToken string) string {
+// idTokenClaims decodes the unverified id_token payload, or returns nil. Its
+// claims are used only as routing hints and display values, never to decide
+// anything about authority.
+func idTokenClaims(idToken string) map[string]any {
 	parts := strings.Split(idToken, ".")
 	if len(parts) < 2 {
-		return ""
+		return nil
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
 	if err != nil {
-		return ""
+		return nil
 	}
 	var claims map[string]any
 	if json.Unmarshal(payload, &claims) != nil {
-		return ""
+		return nil
 	}
+	return claims
+}
+
+func accountIDFromClaims(claims map[string]any) string {
 	if id := stringField(claims, "https://api.openai.com/auth.chatgpt_account_id"); id != "" {
 		return id
 	}
@@ -316,6 +356,19 @@ func accountIDFromIDToken(idToken string) string {
 		}
 	}
 	return stringField(claims, "chatgpt_account_id")
+}
+
+// subscriptionEndFromClaims reads chatgpt_subscription_active_until, which
+// OpenAI nests under its auth namespace claim like the account id beside it.
+func subscriptionEndFromClaims(claims map[string]any) time.Time {
+	for _, scope := range []map[string]any{object(claims, "https://api.openai.com/auth"), claims} {
+		for _, key := range []string{"chatgpt_subscription_active_until", "chatgptSubscriptionActiveUntil"} {
+			if at, ok := instant(scope[key]); ok {
+				return at
+			}
+		}
+	}
+	return time.Time{}
 }
 
 // codexResetCreditExpiry returns the soonest expiry among the credits that are

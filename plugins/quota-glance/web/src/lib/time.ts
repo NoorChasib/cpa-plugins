@@ -58,3 +58,25 @@ export function formatReset(
   if (hint !== "countdown" || remaining <= 0) return { text: "resetting…", resetting: true }
   return { text: formatDuration(remaining), resetting: false }
 }
+
+/**
+ * An instant as a time of day in the reader's own zone: "14:32", or "2:32 PM"
+ * where that is the local habit.
+ *
+ * For a deadline the reader has to act before, where a countdown would be
+ * wrong the moment the sentence stopped being re-rendered. Minutes only, and
+ * a time of day drops its seconds rather than rounding them, so the time
+ * printed is never later than the instant itself.
+ */
+export function formatClock(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+/**
+ * An instant as a calendar day in the reader's own zone and habit: "Oct 29",
+ * or "29 Oct". For a date the reader checks against something outside this
+ * page — a renewal against a receipt — where a countdown alone cannot be.
+ */
+export function formatDate(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric" })
+}

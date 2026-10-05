@@ -154,3 +154,25 @@ func TestNewFieldsAreAdditiveForConsumersBuiltBeforeThem(t *testing.T) {
 		t.Fatalf("empty optional fields serialized: %s", bare)
 	}
 }
+
+// The subscription start and the billing period are what a consumer estimates
+// a Claude renewal from. Their wire names are the contract quota-glance reads,
+// and an entry without them must not gain an empty key.
+func TestTheRenewalEstimateInputsAreAdditive(t *testing.T) {
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	raw, err := json.Marshal(Entry{Provider: "claude", AuthIndex: "one",
+		Quota:          &Quota{Schema: 1, BillingPeriod: BillingAnnual},
+		AccountDetails: &AccountDetails{CheckedAt: started, SubscriptionStartedAt: &started}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"subscription_started_at":"2025-01-31T09:15:00Z"`, `"billing_period":"annual"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("entry is missing %s: %s", want, raw)
+		}
+	}
+	bare, _ := json.Marshal(Entry{Provider: "claude", AuthIndex: "one", Quota: &Quota{Schema: 1}, AccountDetails: &AccountDetails{}})
+	if strings.Contains(string(bare), "subscription_started_at") || strings.Contains(string(bare), "billing_period") {
+		t.Fatalf("empty estimate inputs serialized: %s", bare)
+	}
+}

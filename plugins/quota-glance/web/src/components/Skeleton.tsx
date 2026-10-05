@@ -7,19 +7,28 @@
  */
 function SkeletonCard({ rows }: { rows: number }) {
   return (
-    <div className="mb-[10px] rounded-[12px] border border-line bg-card px-4 pb-[6px] pt-[15px]">
-      <div className="mb-[4px] grid grid-cols-[1fr_auto] items-baseline gap-x-3 border-b border-line pb-3">
-        <span className="h-[13px] w-[84px] rounded bg-card-2" />
-        <span className="h-[22px] w-[64px] justify-self-end rounded bg-card-2" />
-        <span className="col-span-full mt-[9px] h-[9px] w-[58%] rounded bg-card-2" />
+    <div className="qg-win">
+      <span className="block h-[13px] w-[84px] rounded bg-card-2" />
+      <span className="qg-bar mt-[13px]" />
+      <div className="qg-hfig">
+        <span className="h-[28px] w-[86px] rounded bg-card-2" />
+        <span className="h-[12px] w-[42%] rounded bg-card-2" />
+      </div>
+      <span className="mt-[10px] block h-[9px] w-[58%] rounded bg-card-2" />
+      <div className="qg-fold" aria-hidden="true">
+        <span className="h-[10px] w-[70px] rounded bg-card-2" />
       </div>
       {Array.from({ length: rows }, (_, index) => (
-        <div key={index} className="cred">
-          <span className="cred-mail h-[11px] w-[70%] rounded bg-card-2" />
-          <span className="cred-plan h-[15px] w-[42px] rounded-[5px] bg-card-2" />
-          <span className="cred-bar h-[6px] w-full rounded-[3px] bg-track" />
-          <span className="cred-pct h-[10px] w-full rounded bg-card-2" />
-          <span className="cred-eta h-[10px] w-full rounded bg-card-2" />
+        <div key={index} className="qg-acct">
+          <div className="qg-aline">
+            <span className="h-[11px] w-[52%] rounded bg-card-2" />
+            <span className="h-[18px] w-[54px] rounded-full bg-card-2" />
+          </div>
+          <span className="qg-abar" />
+          <div className="qg-afig">
+            <span className="h-[11px] w-[54px] rounded bg-card-2" />
+            <span className="ml-auto h-[11px] w-[74px] rounded bg-card-2" />
+          </div>
         </div>
       ))}
     </div>
@@ -29,11 +38,11 @@ function SkeletonCard({ rows }: { rows: number }) {
 export function Skeleton() {
   return (
     <div aria-busy="true" aria-label="Loading capacity" className="animate-pulse">
-      <div className="mb-[11px] flex items-baseline gap-[9px] pl-[2px]">
+      <div className="qg-pbar is-bare">
         <span className="h-[13px] w-[58px] rounded bg-card-2" />
       </div>
-      <SkeletonCard rows={5} />
-      <SkeletonCard rows={5} />
+      <SkeletonCard rows={3} />
+      <SkeletonCard rows={3} />
     </div>
   )
 }

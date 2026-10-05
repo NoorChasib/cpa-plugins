@@ -9,7 +9,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | A Codex Models page to switch each model on or off for Codex, served to Codex at its own catalog URL |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
-| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, which credential is taking the requests, and optionally your OpenRouter balance |
+| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, which credential is taking the requests, banked Codex and Claude resets you can spend from the sidebar, a browser or the menu bar, and optionally your OpenRouter balance |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
 For macOS, [Quota Glance Menu Bar](plugins/quota-glance-menubar/README.md) embeds
@@ -30,7 +30,7 @@ https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 
 All catalog entries, download assets, and current native repository links use **NoorChasib/cpa-plugins**. Current packages target Linux amd64/glibc and include the optional [quota-cache preview](docs/quota-cache-preview.md). `preview/registry.json` is a compatibility alias with the same entries; if you already added that URL, keep it to avoid changing CPA's installed source identity.
 
-Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no provider requests of its own; the routing activity it shows comes from CPA's own request counter, in-process.
+Each plugin works independently. Account Health and Reset Priority use Quota Cache only when you opt in with `use-quota-cache: true`; unavailable cache data waits without direct-provider fallback. Auto Baseline and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no scheduled provider requests of its own; it contacts Codex or Claude only to spend a banked reset you confirm, and the routing activity it shows comes from CPA's own request counter, in-process.
 
 
 Publish updates independently with a tag such as `quota-cache/v0.1.1`. The root workflow verifies that plugin, publishes its Linux amd64 package, and updates only its catalog entry in both source aliases. CPA then offers that plugin's update; installation/restarts remain under your control. See [release commands and recovery](docs/releases.md).

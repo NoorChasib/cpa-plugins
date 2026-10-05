@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,21 +20,28 @@ const (
 	redeemPath      = "/v0/management/plugins/quota-glance/redeem"
 	redeemTokenPath = "/v0/resource/plugins/quota-glance/redeem"
 	codexID         = "codex-noor@example.com.json"
+	claudeID        = "claude-northwind@example.com.json"
 )
 
 // fakeRedeemer records whether it was asked to spend anything. For a route that
 // cannot be undone, "was it called at all" is the assertion that matters most.
 type fakeRedeemer struct {
-	mu     sync.Mutex
-	calls  int
-	result redeem.Result
-	err    error
+	mu       sync.Mutex
+	calls    int
+	provider string
+	deadline time.Duration
+	result   redeem.Result
+	err      error
 }
 
-func (f *fakeRedeemer) Redeem(_ context.Context, _, _ string) (redeem.Result, error) {
+func (f *fakeRedeemer) Redeem(ctx context.Context, provider, _ string) (redeem.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.provider = provider
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(deadline)
+	}
 	return f.result, f.err
 }
 
@@ -44,8 +52,8 @@ func (f *fakeRedeemer) called() int {
 }
 
 // redeemableAPI serves a document with one spendable Codex credential, one
-// Codex credential whose credit the document says is not redeemable, and one
-// Claude credential with nothing banked at all.
+// spendable Claude credential, one Codex credential whose credit the document
+// says is not redeemable, and one Claude credential with nothing banked at all.
 func redeemableAPI(t *testing.T) (*API, *fakeRedeemer) {
 	t.Helper()
 	a := New("quota-glance", testToken)
@@ -53,6 +61,7 @@ func redeemableAPI(t *testing.T) (*API, *fakeRedeemer) {
 		SchemaVersion: 1, GeneratedAtEpoch: 1789012800,
 		Credentials: []aggregate.Credential{
 			{ID: codexID, Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 2, Redeemable: true}},
+			{ID: claudeID, Provider: "claude", ResetCredits: &aggregate.ResetCredits{AvailableCount: 3, Redeemable: true, Hold: "cooldown"}},
 			{ID: "codex-parked@example.com.json", Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 1}},
 			{ID: "claude-a@example.com.json", Provider: "claude"},
 		},
@@ -92,6 +101,11 @@ func TestRedeemSpendsOneCreditAndReportsIt(t *testing.T) {
 	body := decodeBody(t, res)
 	if body["outcome"] != redeem.OutcomeReset || body["windowsReset"] != 2.0 || body["remainingCount"] != 1.0 {
 		t.Fatalf("body = %v", body)
+	}
+	// Which provider answered, so the client can word it in that provider's
+	// terms.
+	if body["provider"] != "codex" {
+		t.Fatalf("provider = %v", body["provider"])
 	}
 	// The count on the card comes from quota-cache and will not move until its
 	// next poll. Saying so is the difference between a dashboard that looks
@@ -225,9 +239,14 @@ func TestRedeemForwardsNoProviderText(t *testing.T) {
 		redeem.ErrRefused,
 		redeem.ErrUnavailable,
 		redeem.ErrInFlight,
-		redeem.ErrNotCodex,
+		redeem.ErrUnsupportedProvider,
 		redeem.ErrNoAccessToken,
 		redeem.ErrNoAccountID,
+		redeem.ErrOutcomeUnknown,
+		redeem.ErrRateLimited,
+		redeem.ErrIdentityChanged,
+		redeem.ErrRetryWindowClosed,
+		&redeem.OutcomeUnknownError{RetryUntil: time.Unix(1789013400, 0)},
 	} {
 		a, redeemer := redeemableAPI(t)
 		redeemer.err = err
@@ -240,8 +259,40 @@ func TestRedeemForwardsNoProviderText(t *testing.T) {
 		if code == "" || strings.Contains(string(res.Body), "sk-synthetic") || strings.Contains(string(res.Body), "12345") {
 			t.Fatalf("%v: body = %s", err, res.Body)
 		}
-		if len(body) != 1 {
-			t.Fatalf("%v: the failure carried more than a code: %v", err, body)
+		// A code, and beside outcome_unknown the deadline the plugin computed
+		// itself. Nothing else.
+		for key, value := range body {
+			switch {
+			case key == "error":
+			case key == "retryUntilEpoch" && code == "outcome_unknown":
+				if _, number := value.(float64); value != nil && !number {
+					t.Fatalf("%v: retryUntilEpoch = %v", err, value)
+				}
+			default:
+				t.Fatalf("%v: the failure carried more than a code: %v", err, body)
+			}
+		}
+	}
+}
+
+// outcome_unknown names the instant the claim stops being repeated, as the
+// redeemer reports it; without one it is null, never a guessed window.
+func TestOutcomeUnknownNamesTheClaimsDeadline(t *testing.T) {
+	deadline := time.Date(2026, 10, 5, 12, 10, 0, 0, time.UTC)
+	for name, one := range map[string]struct {
+		err  error
+		want any
+	}{
+		"with a deadline": {&redeem.OutcomeUnknownError{RetryUntil: deadline}, float64(deadline.Unix())},
+		"wrapped":         {fmt.Errorf("claim: %w", &redeem.OutcomeUnknownError{RetryUntil: deadline}), float64(deadline.Unix())},
+		"bare sentinel":   {redeem.ErrOutcomeUnknown, nil},
+	} {
+		a, redeemer := redeemableAPI(t)
+		redeemer.err = one.err
+		body := decodeBody(t, post(a, redeemPath, nil, map[string]any{"credentialId": codexID, "confirmed": true}))
+		got, present := body["retryUntilEpoch"]
+		if body["error"] != "outcome_unknown" || !present || got != one.want {
+			t.Fatalf("%s: body = %v, want retryUntilEpoch %v", name, body, one.want)
 		}
 	}
 }
@@ -253,11 +304,21 @@ func TestRedeemMapsFailuresToStatuses(t *testing.T) {
 		code   string
 	}{
 		{redeem.ErrInFlight, http.StatusConflict, "already_in_flight"},
-		{redeem.ErrNotCodex, http.StatusConflict, "not_redeemable"},
+		{redeem.ErrUnsupportedProvider, http.StatusConflict, "not_redeemable"},
 		{redeem.ErrNoAccessToken, http.StatusConflict, "credential_unusable"},
 		{redeem.ErrNoAccountID, http.StatusConflict, "credential_unusable"},
+		{redeem.ErrIdentityChanged, http.StatusConflict, "credential_unusable"},
 		{redeem.ErrRefused, http.StatusBadGateway, "provider_refused"},
 		{redeem.ErrUnavailable, http.StatusBadGateway, "provider_unavailable"},
+		// The two the client has to tell apart from a plain failure: one
+		// spent nothing and says why, the other may have spent a reset.
+		{redeem.ErrRateLimited, http.StatusBadGateway, "provider_rate_limited"},
+		{redeem.ErrOutcomeUnknown, http.StatusBadGateway, "outcome_unknown"},
+		// Wrapped, as a future caller might return it.
+		{fmt.Errorf("claim: %w", redeem.ErrOutcomeUnknown), http.StatusBadGateway, "outcome_unknown"},
+		// Still unknown, but no longer repeatable: a 5xx, so a client that does
+		// not know the code still reads it as "may have been spent".
+		{redeem.ErrRetryWindowClosed, http.StatusBadGateway, "retry_window_closed"},
 	} {
 		a, redeemer := redeemableAPI(t)
 		redeemer.err = one.err
@@ -272,7 +333,7 @@ func TestRedeemMapsFailuresToStatuses(t *testing.T) {
 }
 
 // A disabled plugin must not spend anything. It is off, and off has to mean off
-// for the one route that changes the world.
+// for the routes that change the world.
 func TestRedeemIsClosedWhileThePluginIsDisabled(t *testing.T) {
 	a, redeemer := redeemableAPI(t)
 	a.Disable()
@@ -349,5 +410,139 @@ func TestRedeemThrottlesFailedTokenAttempts(t *testing.T) {
 	}
 	if redeemer.called() != 1 {
 		t.Fatalf("redeemer called %d times", redeemer.called())
+	}
+}
+
+// A Claude credential the document offers is redeemed exactly as a Codex one
+// is, and the answer names the provider.
+func TestRedeemSpendsAClaudeReset(t *testing.T) {
+	a, redeemer := redeemableAPI(t)
+	redeemer.result = redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 2}
+	res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.StatusCode, res.Body)
+	}
+	body := decodeBody(t, res)
+	if body["provider"] != "claude" || body["outcome"] != redeem.OutcomeReset || body["remainingCount"] != 2.0 {
+		t.Fatalf("body = %v", body)
+	}
+	if redeemer.provider != "claude" {
+		t.Fatalf("redeemer was asked for %q", redeemer.provider)
+	}
+}
+
+// A hold on the card is a hint, never a gate: the provider is asked afresh, so
+// a credential the last poll saw in cooldown still reaches the redeemer.
+func TestAHoldDoesNotStopAPress(t *testing.T) {
+	a, redeemer := redeemableAPI(t)
+	if res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}); res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if redeemer.called() != 1 {
+		t.Fatal("a credential holding a reset was refused on the strength of a hint")
+	}
+}
+
+// Every outcome that is an answer — spent or not — is a 200 carrying the
+// outcome. Only the failures to answer are errors.
+func TestRedeemPassesEveryOutcomeThrough(t *testing.T) {
+	for _, outcome := range []string{
+		redeem.OutcomeReset, redeem.OutcomeNothingToReset, redeem.OutcomeNoCredit, redeem.OutcomeFailed,
+		redeem.OutcomeNotLimited, redeem.OutcomeCooldown, redeem.OutcomePaused, redeem.OutcomeIneligible,
+		redeem.OutcomeAlreadyUsed,
+	} {
+		a, redeemer := redeemableAPI(t)
+		redeemer.result = redeem.Result{Outcome: outcome, RemainingCount: 3}
+		res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d", outcome, res.StatusCode)
+		}
+		body := decodeBody(t, res)
+		if body["outcome"] != outcome || body["snapshotPending"] != true || body["provider"] != "claude" {
+			t.Fatalf("%s: body = %v", outcome, body)
+		}
+	}
+}
+
+// The press is bounded by the redeemer's own bound, which sits under the
+// browser's 65 seconds.
+func TestRedeemGivesThePressItsWholeBound(t *testing.T) {
+	a, redeemer := redeemableAPI(t)
+	post(a, redeemPath, nil, map[string]any{"credentialId": codexID, "confirmed": true})
+	if redeemer.deadline <= redeem.Timeout-5*time.Second || redeemer.deadline > redeem.Timeout {
+		t.Fatalf("the press had %v, want about %v", redeemer.deadline, redeem.Timeout)
+	}
+	if redeem.Timeout >= 65*time.Second {
+		t.Fatalf("redeem.Timeout = %v outlasts the browser's wait", redeem.Timeout)
+	}
+}
+
+// A press id on the POST door is optional. With one, a second copy of the same
+// press is answered from the ledger instead of being spent again.
+func TestRedeemPressIDMakesARepeatedPOSTHarmless(t *testing.T) {
+	a, redeemer := redeemableAPI(t)
+	body := map[string]any{"credentialId": codexID, "confirmed": true, "pressId": pressID(1)}
+	first := post(a, redeemPath, nil, body)
+	second := post(a, redeemPath, nil, body)
+	if redeemer.called() != 1 {
+		t.Fatalf("one press spent %d times", redeemer.called())
+	}
+	if first.StatusCode != http.StatusOK || second.StatusCode != first.StatusCode || string(second.Body) != string(first.Body) {
+		t.Fatalf("first %d %s, second %d %s", first.StatusCode, first.Body, second.StatusCode, second.Body)
+	}
+	if first.Headers.Get(replayedHeader) != "" || second.Headers.Get(replayedHeader) != "1" {
+		t.Fatalf("replay marks: first %q, second %q", first.Headers.Get(replayedHeader), second.Headers.Get(replayedHeader))
+	}
+	// The token door's POST keeps the same ledger.
+	headers := http.Header{"Authorization": {"Bearer " + testToken}}
+	if res := post(a, redeemTokenPath, headers, body); res.Headers.Get(replayedHeader) != "1" || redeemer.called() != 1 {
+		t.Fatalf("token door: replayed=%q calls=%d", res.Headers.Get(replayedHeader), redeemer.called())
+	}
+}
+
+// A press id that is present must be well formed, on this door as on /spend.
+func TestRedeemRefusesAnInvalidPressID(t *testing.T) {
+	for name, id := range map[string]any{
+		"empty":        "",
+		"too short":    strings.Repeat("a", 15),
+		"too long":     strings.Repeat("a", 65),
+		"bad chars":    "press id with spaces",
+		"not a string": 1234567890123456,
+	} {
+		a, redeemer := redeemableAPI(t)
+		res := post(a, redeemPath, nil, map[string]any{"credentialId": codexID, "confirmed": true, "pressId": id})
+		if res.StatusCode != http.StatusBadRequest || decodeBody(t, res)["error"] != "invalid_request" {
+			t.Fatalf("%s: %d %s, want 400 invalid_request", name, res.StatusCode, res.Body)
+		}
+		if redeemer.called() != 0 || len(a.ledger.entries) != 0 {
+			t.Fatalf("%s: reached the redeemer or the ledger", name)
+		}
+	}
+	// Confirmation is still checked first.
+	a, _ := redeemableAPI(t)
+	res := post(a, redeemPath, nil, map[string]any{"credentialId": codexID, "confirmed": false, "pressId": "bad"})
+	if decodeBody(t, res)["error"] != "confirmation_required" {
+		t.Fatalf("unconfirmed with a bad press id: %s", res.Body)
+	}
+}
+
+// Without a press id the POST behaves exactly as it did before press ids
+// existed, so a page cached from an older release keeps working: every press
+// is its own, and nothing is remembered.
+func TestRedeemWithoutAPressIDBehavesAsBefore(t *testing.T) {
+	a, redeemer := redeemableAPI(t)
+	for range 2 {
+		for _, body := range []map[string]any{
+			{"credentialId": codexID, "confirmed": true},
+			{"credentialId": codexID, "confirmed": true, "pressId": nil},
+		} {
+			res := post(a, redeemPath, nil, body)
+			if res.StatusCode != http.StatusOK || res.Headers.Get(replayedHeader) != "" {
+				t.Fatalf("status = %d, replayed = %q", res.StatusCode, res.Headers.Get(replayedHeader))
+			}
+		}
+	}
+	if redeemer.called() != 4 || len(a.ledger.entries) != 0 {
+		t.Fatalf("calls = %d, ledger entries = %d", redeemer.called(), len(a.ledger.entries))
 	}
 }

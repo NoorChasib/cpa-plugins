@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quota Glance · Option C · Account picker</title>
+<style>
+/* Option C, "Account picker": a literal adaptation of the Stats Disks panel.
+   Each provider is one panel of stacked blocks separated by hairlines, each
+   block under a quiet label: All accounts (pooled bars), Select account (tile
+   buttons), Account usage (full-width bars with figures around them), Banked
+   reset (an action tile), Billing (big figures, like Stats' Live activity).
+
+   The same markup is rendered twice: the page at its 820 px max width, and
+   inside a 400 px popover. A container query, standing in for the app's
+   media query, turns the narrow one into the menu bar layout: providers
+   become Stats-style tabs and the account tiles go two across.
+
+   Palette, fonts and the activity ramp are the app's existing tokens
+   (web/src/index.css). Fictional data only. No network, no fonts loaded. */
+:root{
+  --bg:#101114;--card:#181a1e;--card-2:#1e2126;--line:#262a30;--rule:#1f2227;
+  --ink:#eef0f3;--ink-2:#9aa1ab;--ink-3:#6b7280;--ink-4:#4a5059;
+  --accent:#3987e5;--track:#2a2e35;--warn:#fab219;--crit:#d03b3b;
+  --sel:#1e324d;--sel-line:#2f5e98;--sel-ink:#a9c3e6;--sel-ink-2:#7f9cc4;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  --num:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--sans);-webkit-font-smoothing:antialiased;color:var(--ink);background:#232529;font-synthesis:none}
+h1,h2,h3,h4,p{margin:0}
+button{font:inherit;color:inherit}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums}
+.tab-n{font-variant-numeric:tabular-nums}
+.lv-low{color:var(--warn)}.lv-crit{color:var(--crit)}
+
+/* ---------- Comparison chrome (not part of the app) ---------- */
+.caption{max-width:1492px;margin:0 auto;padding:28px 20px 22px;display:flex;gap:18px;align-items:flex-start}
+.caption .letter{flex:none;font:600 12px/1 var(--num);color:#c9d6ea;border:1px solid #4a5568;border-radius:6px;padding:5px 7px;margin-top:2px}
+.caption h1{font-size:20px;font-weight:650;letter-spacing:-.015em}
+.caption p{font-size:13px;line-height:1.6;color:#aab1bc;margin-top:6px;max-width:860px}
+.caption nav{margin-top:10px;font-size:12px;color:#8a92a0}
+.caption nav a{color:#9cc3f5;text-decoration:none;margin-right:14px}
+.both{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;justify-content:center;padding:0 20px 40px}
+.stage-page{padding:40px 0 56px;display:flex;justify-content:center}
+.sheet{width:868px;flex:none;border-radius:14px;overflow:hidden;border:1px solid #33363c;box-shadow:0 20px 50px #0007}
+.both .desk{border-radius:12px;border:1px solid #414b5b;position:sticky;top:20px}
+
+/* ---------- App ---------- */
+.qg{container:qg/inline-size;background:var(--bg);color:var(--ink)}
+.qg-b{padding:28px 24px 34px}
+
+.hd{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}
+.hd-t{display:flex;align-items:center;gap:9px;min-width:0}
+.hd-t svg{width:20px;height:20px;color:var(--accent);flex:none}
+.hd h1{font-size:19px;font-weight:650;letter-spacing:-.015em;white-space:nowrap}
+.hd-m{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.hd-m .fresh{color:var(--ink-2)}
+
+.tabs{display:none}
+
+.prov{margin-bottom:30px}
+.prov:last-child{margin-bottom:0}
+.prov-h{display:flex;align-items:baseline;justify-content:space-between;padding:0 4px 9px}
+.prov-h h2{font-size:12px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2);display:flex;align-items:center;gap:8px}
+.prov-h h2 svg{width:14px;height:14px;color:var(--ink-3);position:relative;top:2px}
+.prov-h span{font-size:11.5px;color:var(--ink-3)}
+
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:0 18px}
+.blk{padding:14px 0 17px;border-bottom:1px solid var(--line)}
+.blk:last-child{border-bottom:0}
+.lbl{font-size:12px;color:var(--ink-3);margin-bottom:11px;display:flex;justify-content:space-between;gap:10px}
+.lbl em{font-style:normal;color:var(--ink-4)}
+
+/* Bars: full width of their block, always. */
+.bar{position:relative;height:6px;border-radius:3px;background:var(--track);overflow:hidden}
+.bar i{position:absolute;top:0;bottom:0;left:0;border-radius:3px;background:var(--accent)}
+.bar.lv-crit i{background:var(--crit)}
+.bar.lv-low.pool-bar i{background:var(--warn)}
+.bar.thin{height:4px;border-radius:2px}
+
+/* All accounts: one thin full-width bar per window. */
+.pool{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:12px 30px}
+.pw-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px}
+.pw-t{font-size:12.5px;font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pw-v{display:flex;align-items:baseline;gap:4px;white-space:nowrap}
+.pw-v b{font-size:16px;font-weight:650;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.pw-v small{font-size:11px;color:var(--ink-3)}
+.trend{width:8px;height:8px;color:var(--ink-3);align-self:center}
+.pw-s{font-size:10.5px;color:var(--ink-3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Select account: tile buttons, like "Select disk". */
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.tile{appearance:none;border:1px solid var(--line);background:var(--card-2);border-radius:11px;padding:10px 12px;display:flex;align-items:center;gap:11px;min-width:0;text-align:left;cursor:pointer;transition:background .12s,border-color .12s}
+.tile:hover{background:#23272d;border-color:#363c45}
+.tile[aria-checked=true]{background:var(--sel);border-color:var(--sel-line)}
+.tile:focus-visible,.rtile:focus-visible,.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.av{position:relative;flex:none;width:30px;height:30px;border-radius:8px;background:#2a2e35;color:var(--ink-2);display:grid;place-items:center;font-size:13px;font-weight:650}
+.tile[aria-checked=true] .av{background:#2c4e7c;color:#fff}
+.av .dot{position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border-radius:50%;border:2px solid var(--card-2)}
+.tile[aria-checked=true] .av .dot{border-color:var(--sel)}
+.dot.live{background:var(--accent)}.dot.cool{background:var(--warn)}.dot.off{background:var(--ink-4)}
+.tt{min-width:0;flex:1}
+.tt-a{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.tt-a span{color:var(--ink-3);font-weight:400}
+.tile[aria-checked=true] .tt-a span{color:var(--sel-ink-2)}
+.tt-s{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:3px;font-size:11.5px;color:var(--ink-2);white-space:nowrap}
+.tt-s>span:first-child{overflow:hidden;text-overflow:ellipsis}
+.tile[aria-checked=true] .tt-s{color:var(--sel-ink)}
+.bdg{flex:none;display:inline-flex;align-items:center;gap:3px;padding:1px 6px 1px 4px;border-radius:999px;font:500 10.5px/16px var(--num);background:#20365a;color:#86b6f0}
+.bdg svg{width:10px;height:10px}
+.bdg.held{background:#2a2e35;color:var(--ink-3)}
+.tile[aria-checked=true] .bdg{background:#2c4e7c;color:#cfe0f7}
+
+/* Account usage: the reference's block, per window. */
+.acct{display:flex;align-items:center;gap:10px}
+.acct .av{width:24px;height:24px;border-radius:7px;font-size:11.5px;background:#2c4e7c;color:#fff}
+.acct-a{flex:1;min-width:0;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct-a span{color:var(--ink-3);font-weight:450}
+.chips{display:flex;gap:6px;flex:none}
+.chip{font-size:11.5px;font-weight:600;color:var(--ink-2);background:#262a30;border-radius:999px;padding:3px 10px;white-space:nowrap}
+.chip.cool{color:#e7b44a;background:#2d2717}
+.chip.off{color:var(--ink-3)}
+.actl{display:flex;align-items:center;gap:9px;margin:7px 0 0 34px}
+.act{display:flex;flex:none;align-items:center;gap:1.5px}
+.act i{display:block;width:5px;height:5px;border-radius:1.5px;background:#242830}
+.act .a1{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+.act .a2{background:color-mix(in srgb,var(--accent) 66%,transparent)}
+.act .a3{background:var(--accent)}
+.act .af{background:var(--crit)}
+.act-l{font-size:10.5px;color:var(--ink-3)}
+.act-l.now{color:var(--accent)}.act-l.idle{color:var(--ink-4)}
+.wins{display:flex;flex-direction:column;gap:17px;margin-top:16px}
+.win-t{font-size:12px;font-weight:500;color:var(--ink-2);margin-bottom:7px}
+.fig{display:flex;justify-content:space-between;gap:12px;margin-top:8px;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.fig .dim{color:var(--ink-2)}
+.det{display:flex;justify-content:space-between;gap:12px;margin-top:3px;font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+
+/* Banked reset: one action tile, styled like the selected "Select disk" tile on hover. */
+.rgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}
+.rwrap{position:relative}
+.rtile{appearance:none;width:100%;display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;text-align:left;background:var(--card-2);border:1px solid #2a3e5a;cursor:pointer;transition:background .12s,border-color .12s}
+.rt-ico{flex:none;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:#1d2f49;color:#6fa9f0}
+.rt-ico svg{width:17px;height:17px}
+.rt-x{flex:1;min-width:0}
+.rt-t{font-size:13.5px;font-weight:650;color:#6fa9f0;white-space:nowrap}
+.rt-s{font-size:11.5px;color:var(--ink-2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rt-s .ok{color:#7fb2f0}
+.rt-c{flex:none;text-align:right;line-height:1}
+.rt-c b{display:block;font:600 19px/1 var(--num);color:var(--ink)}
+.rt-c small{display:block;font-size:10.5px;color:var(--ink-3);margin-top:4px}
+.rtile:hover,.rtile.is-hover{background:var(--sel);border-color:#3f78c0}
+.rtile:hover .rt-t,.rtile.is-hover .rt-t{color:#fff}
+.rtile:hover .rt-ico,.rtile.is-hover .rt-ico{background:#2c4e7c;color:#fff}
+.rtile:hover .rt-s,.rtile.is-hover .rt-s{color:var(--sel-ink)}
+.rtile:active{background:#1a2b43}
+.rtile.held{border:1px dashed #3a3f48;cursor:default;background:transparent}
+.rtile.held .rt-ico{background:#24272d;color:var(--ink-3)}
+.rtile.held .rt-t{color:var(--ink-2)}
+.rtile.held .rt-c b{color:var(--ink-2)}
+.hint{display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:11px;color:#e7b44a}
+.hint svg{width:11px;height:11px}
+.cursor{position:absolute;right:92px;top:27px;width:17px;height:23px;pointer-events:none;filter:drop-shadow(0 1px 1.5px #0009)}
+.rnote{font-size:11px;color:var(--ink-3);margin-top:9px;line-height:1.55}
+.rnote b{font-weight:500;color:var(--ink-2)}
+.rnote .ok{color:#7fb2f0}
+.n-only{display:none}
+
+/* The confirm dialog a click opens. Shown as an inset in the page view only. */
+.inset-l{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);margin:-2px 0 7px}
+.dlg{border:1px solid #33373e;border-radius:13px;background:#1b1d22;padding:15px 16px 14px;box-shadow:0 14px 34px #0008,0 2px 6px #0006}
+.dlg h4{font-size:13.5px;font-weight:650}
+.dlg p{font-size:11.5px;line-height:1.6;color:var(--ink-2);margin-top:7px}
+.dlg-b{display:flex;justify-content:flex-end;gap:8px;margin-top:13px}
+.btn{border:1px solid var(--line);border-radius:7px;background:var(--card-2);padding:5px 11px;color:var(--ink-2);font-size:11.5px;line-height:1.3;cursor:pointer}
+.btn:hover{border-color:var(--ink-4);color:var(--ink)}
+.btn.go{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+.btn.go:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--card-2))}
+dialog.live-dlg{margin:auto;width:min(380px,calc(100vw - 32px));padding:0;border:0;background:transparent;color:var(--ink)}
+dialog.live-dlg::backdrop{background:rgb(0 0 0/62%)}
+
+/* Billing: big figures with labels under, divided like Stats' Live activity. */
+.bill{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.bc{display:flex;gap:11px;align-items:flex-start;padding:0 18px;min-width:0}
+.bc:first-child{padding-left:2px}
+.bc+.bc{border-left:1px solid var(--line)}
+.bc svg{flex:none;width:17px;height:17px;margin-top:2px;color:var(--accent)}
+.bc b{display:block;font-size:17px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bc small{display:block;font-size:11.5px;color:var(--ink-3);margin-top:3px;white-space:nowrap}
+.bc small .soon{color:var(--ink-2)}
+
+/* ---------- Narrow: the 400 px menu bar popover ---------- */
+@container qg (max-width:480px){
+  .qg-b{padding:12px 12px 22px}
+  .hd{margin-bottom:11px;padding:0 2px}
+  .hd-t{gap:7px}
+  .hd-t svg{width:17px;height:17px}
+  .hd h1{font-size:14px}
+  .hd-m{font-size:10.5px}
+  .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;padding:3px;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:14px}
+  .tab{appearance:none;border:0;background:transparent;display:flex;align-items:center;justify-content:center;gap:6px;height:36px;border-radius:9px;font-size:12px;font-weight:500;color:var(--ink-2);cursor:pointer;min-width:0}
+  .tab svg{width:14px;height:14px;flex:none;color:var(--ink-3)}
+  .tab .tab-n{font:500 11px var(--num)}
+  .tab:hover{background:#1f2227}
+  .tab[aria-selected=true]{background:var(--sel);color:#fff;font-weight:600}
+  .tab[aria-selected=true] svg{color:#cfe0f7}
+  .prov:not(.on){display:none}
+  .prov-h{display:none}  /* the selected tab names the provider; the count moves to Select account */
+  .panel{padding:0 12px;border-radius:12px}
+  .blk{padding:11px 0 13px}
+  .lbl{font-size:11px;margin-bottom:8px}
+  .pool{grid-template-columns:minmax(0,1fr);gap:11px}
+  .pw-h{margin-bottom:5px}
+  .pw-t{font-size:12px}
+  .pw-v b{font-size:14px}
+  .pw-v small{font-size:10.5px}
+  .pw-s{font-size:10px;margin-top:5px}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .tile{padding:8px 7px;gap:7px;border-radius:10px}
+  .av{width:22px;height:22px;font-size:11px;border-radius:6px}
+  .av .dot{width:9px;height:9px;right:-3px;bottom:-3px}
+  .tt-a{font-size:11.5px}
+  .tt-s{font-size:10.5px;margin-top:2px}
+  .bdg{font-size:10px;line-height:15px}
+  .acct .av{width:22px;height:22px;font-size:11px}
+  .acct-a{font-size:13.5px}
+  .chip{font-size:10.5px;padding:2px 8px}
+  .actl{margin:6px 0 0 32px}
+  .act{gap:1px}.act i{width:4px}
+  .wins{gap:13px;margin-top:12px}
+  .win-t{font-size:11.5px;margin-bottom:6px}
+  .fig{font-size:13px;margin-top:6px}
+  .det{font-size:10.5px;margin-top:2px}
+  .rgrid{grid-template-columns:minmax(0,1fr)}
+  .inset,.cursor,.tt-plan,.w-only{display:none}
+  .n-only{display:inline}
+  .rtile{padding:10px 11px;gap:10px}
+  .rt-ico{width:30px;height:30px}
+  .rt-t{font-size:12.5px}
+  .rt-s{font-size:10.5px}
+  .rt-c b{font-size:16px}
+  .rt-c small{font-size:10px}
+  .rnote{font-size:10.5px}
+  .bc{padding:0 12px;gap:9px}
+  .bc svg{width:15px;height:15px}
+  .bc b{font-size:15px}
+  .bc small{font-size:10.5px}
+}
+
+/* ---------- Simulated macOS desktop, menu bar, popover ---------- */
+.desk{position:relative;width:560px;height:720px;overflow:hidden;flex:none;
+  background:radial-gradient(ellipse at 12% 100%,#56708f 0,transparent 62%),radial-gradient(ellipse at 95% 10%,#5b5168 0,transparent 55%),linear-gradient(150deg,#2a3d52,#25304a 50%,#43405a)}
+.mbar{height:26px;display:flex;align-items:center;gap:13px;padding:0 10px;font-size:12.5px;color:#f3f5f8;background:rgba(18,20,26,.42);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.06)}
+.mbar .app{font-weight:700}
+.mbar .menu{color:#e4e8ee}
+.mbar .sp{flex:1}
+.mbar svg.sys{width:16px;height:16px;flex:none;color:#f3f5f8}
+.si{display:flex;align-items:center;gap:4px;height:22px;padding:0 7px;border-radius:5px;margin-right:-3px}
+.si.on{background:rgba(255,255,255,.24)}
+.si svg{width:15px;height:15px}
+.si span{font:600 12px var(--sans);font-variant-numeric:tabular-nums}
+.clock{font-weight:500;white-space:nowrap}
+.pop{position:absolute;top:35px;width:400px;height:620px;border-radius:12px;background:var(--bg);border:1px solid #474b53;box-shadow:0 22px 50px rgba(0,0,0,.5),0 4px 12px rgba(0,0,0,.4)}
+.pop-arrow{position:absolute;top:-7px;width:14px;height:14px;background:var(--bg);border-left:1px solid #474b53;border-top:1px solid #474b53;transform:rotate(45deg);border-top-left-radius:3px}
+.pop-scroll{position:absolute;inset:0;overflow-y:auto;border-radius:12px;scrollbar-width:none}
+.pop-scroll::-webkit-scrollbar{display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/* ---------- Icons (inline, monochrome) ---------- */
+const I = {
+  gauge:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M3.2 14.5a6.8 6.8 0 1 1 13.6 0"/><path d="M10 14.5l3.4-4.4"/><circle cx="10" cy="14.5" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  codex:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2.5"/><path d="M4.75 6.25 6.75 8l-2 1.75M8.75 10h2.5"/></svg>',
+  claude:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 1.75v12.5M1.75 8h12.5M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></svg>',
+  grok:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.6"/><path d="M2.5 14 13.8 2"/></svg>',
+  reset:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.1 8.6A5.1 5.1 0 1 1 11.6 4.4"/><path d="M12.6 1.9v3h-3"/></svg>',
+  clock:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.9"/><path d="M8 4.9v3.4l2.1 1.3"/></svg>',
+  cal:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2"/><path d="M2.25 6.75h11.5M5.5 1.75v3M10.5 1.75v3"/></svg>',
+  coins:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><ellipse cx="8" cy="4.25" rx="5" ry="2"/><path d="M3 4.25v7.5c0 1.1 2.24 2 5 2s5-.9 5-2v-7.5M3 8c0 1.1 2.24 2 5 2s5-.9 5-2"/></svg>',
+  down:'<svg class="trend" viewBox="0 0 10 10" role="img" aria-label="falling"><path d="M5 8.5 1 2h8z" fill="currentColor"/></svg>',
+  cursor:'<svg class="cursor" viewBox="0 0 17 23" aria-hidden="true"><path d="M1.5 1.2v17.6l4.4-4.2 2.9 6.6 2.9-1.3-2.9-6.5h6.1z" fill="#fff" stroke="#111" stroke-width="1.1" stroke-linejoin="round"/></svg>',
+};
+
+/* ---------- Fictional dataset (identical across the five options) ---------- */
+const IDLE = Array(20).fill(0);
+const DATA = [
+  { id:'codex', name:'Codex', count:2,
+    windows:[
+      {k:'w', t:'Weekly', pct:23, lv:'low', trend:'down', sub:'+50% when ada resets in 4d 15h'},
+      {k:'h', t:'5-hour', pct:64, lv:'ok', sub:'+36% when ben.k resets in 3h 2m'},
+    ],
+    accts:[
+      {id:'ada', mail:'ada@northwind.dev', plan:'Pro 100', route:'cooldown', act:{l:'idle', b:IDLE},
+       w:{w:[0,'4d 15h','Sat 10 Oct, 13:41'], h:[100,null,null]},
+       bill:[{i:'cal', v:'Oct 29', l:'Renews', s:'in 24d'}, {i:'coins', v:'0', l:'Credit balance'}],
+       bank:{n:1, exp:'24d 14h', clears:'5-hour + Weekly'}},
+      {id:'ben', mail:'ben.k@example.com', plan:'Pro 200', act:{l:'now', b:[1,2,2,3,2,1,2,3,'f',2,3,3,2,1,2,3,'f',2,3,3]},
+       w:{w:[46,'4d 15h','Sat 10 Oct, 13:41'], h:[28,'3h 2m','Tue 6 Oct, 01:43']},
+       bill:[{i:'cal', v:'Oct 17', l:'Renews', s:'in 12d'}, {i:'coins', v:'57,706.15', l:'Credit balance'}],
+       bank:{n:2, exp:'17d 15h', clears:'5-hour + Weekly'}},
+    ], sel:'ben' },
+  { id:'claude', name:'Claude', count:3,
+    windows:[
+      {k:'w', t:'Weekly', pct:29, lv:'low', trend:'down', sub:'+100% when ops resets in 19h'},
+      {k:'h', t:'5-hour', pct:6, lv:'crit', sub:'+32% when ops resets in 1h'},
+      {k:'f', t:'Weekly · Fable 5', pct:0, lv:'crit', sub:'+33% when ops resets in 19h'},
+    ],
+    accts:[
+      {id:'ops', mail:'ops@northwind.dev', plan:'Team', route:'cooldown', act:{l:'idle', b:IDLE},
+       w:{w:[100,'19h 22m','Tue 6 Oct, 18:03'], h:[5,'1h','Mon 5 Oct, 23:41'], f:[0,'19h','Tue 6 Oct, 17:41']},
+       bank:{n:1, exp:'26d', ready:true, clears:'5-hour + Weekly'}},
+      {id:'cy', mail:'cy@example.com', plan:'Max 20x', act:{l:'now', b:[0,0,0,0,0,0,1,1,2,1,0,0,1,2,2,3,2,3,3,2]},
+       w:{w:[13,'2d 4h','Thu 8 Oct, 02:41'], h:[5,'4h','Tue 6 Oct, 02:41'], f:[0,'2d 4h','Thu 8 Oct, 02:41']},
+       bank:{n:1, exp:'21d', hold:'cooling down · 5h 12m', clears:'5-hour + Weekly'}},
+      {id:'dee', mail:'dee@example.com', plan:'Max 5x', route:'cooldown', act:{l:'37m ago', b:[0,1,1,2,1,2,'f',2,1,2,2,'f',1,1,2,1,0,0,0,0]},
+       w:{w:[0,'2d 1h','Wed 7 Oct, 23:41'], h:[8,'2h 40m','Tue 6 Oct, 01:21'], f:[0,'2d 1h','Wed 7 Oct, 23:41']}},
+    ], sel:'cy' },
+  { id:'grok', name:'Grok', count:1,
+    windows:[{k:'m', t:'Monthly credits', pct:62, lv:'ok', sub:'+38% when max resets in 11d'}],
+    accts:[
+      {id:'max', mail:'max@example.com', plan:'SuperGrok Heavy', act:{l:'idle', b:IDLE},
+       w:{m:[62,'11d','Fri 16 Oct, 22:41']},
+       bill:[{i:'coins', v:'$12.40', l:'Prepaid credits'}]},
+    ], sel:'max' },
+];
+
+/* ---------- Helpers ---------- */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const lvOf = p => p <= 10 ? 'crit' : p <= 30 ? 'low' : 'ok';
+const mail = m => { const a = m.indexOf('@'); return `${esc(m.slice(0,a))}<span>${esc(m.slice(a))}</span>`; };
+const strip = b => `<span class="act" role="img" aria-label="request activity">${b.map(x => `<i class="${x==='f'?'af':x?'a'+x:''}"></i>`).join('')}</span>`;
+const actLabel = l => `<span class="act-l num ${l==='now'?'now':l==='idle'?'idle':''}">${esc(l)}</span>`;
+const dotOf = a => a.route==='cooldown' ? '<span class="dot cool" title="cooldown"></span>' : a.route==='off' ? '<span class="dot off" title="off"></span>' : a.act.l==='now' ? '<span class="dot live" title="serving now"></span>' : '';
+const tightest = p => p.windows.reduce((m, w) => w.pct < m.pct ? w : m);
+
+/* ---------- Blocks ---------- */
+function poolBlock(p){
+  if (p.accts.length < 2) return '';   // one account: its pool is its own usage, shown below
+  return `<div class="blk"><div class="lbl"><span>All accounts</span><em>pooled</em></div>
+    <div class="pool" style="--n:${p.windows.length}">${p.windows.map(w => `
+      <div class="pw">
+        <div class="pw-h"><span class="pw-t">${esc(w.t)}</span>
+          <span class="pw-v">${w.trend==='down'?I.down:''}<b class="lv-${w.lv}">${w.pct}%</b><small>left</small></span></div>
+        <div class="bar thin pool-bar lv-${w.lv}"><i style="width:${w.pct}%"></i></div>
+        <div class="pw-s num">${esc(w.sub)}</div>
+      </div>`).join('')}
+    </div></div>`;
+}
+
+function tilesBlock(p){
+  const primary = p.windows[0].k;
+  return `<div class="blk"><div class="lbl"><span>Select account</span><em class="n-only">${p.count} credential${p.count>1?'s':''}</em></div>
+    <div class="tiles" role="radiogroup" aria-label="${esc(p.name)} accounts">${p.accts.map(a => {
+      const pct = a.w[primary][0];
+      const b = a.bank;
+      const badge = b ? `<span class="bdg ${b.hold ? 'held' : ''}" title="${b.n} banked reset${b.n>1?'s':''}">${I.reset}${b.n}</span>` : '';
+      return `<button class="tile" role="radio" aria-checked="${a.id===p.sel}" data-p="${p.id}" data-a="${a.id}">
+        <span class="av">${esc(a.id[0].toUpperCase())}${dotOf(a)}</span>
+        <span class="tt"><span class="tt-a" style="display:block">${mail(a.mail)}</span>
+          <span class="tt-s"><span><span class="${pct<=10?'lv-crit':''}">${pct}% left</span><span class="tt-plan"> · ${esc(a.plan)}</span></span>${badge}</span></span>
+      </button>`;}).join('')}
+    </div></div>`;
+}
+
+function usageBlock(p, a){
+  const chips = [`<span class="chip">${esc(a.plan)}</span>`];
+  if (a.route) chips.push(`<span class="chip ${a.route==='cooldown'?'cool':'off'}">${esc(a.route)}</span>`);
+  const wins = p.windows.map(w => {
+    const [pct, eta, at] = a.w[w.k];
+    const lv = lvOf(pct);
+    return `<div class="win">
+      <div class="win-t">${esc(w.t)}</div>
+      <div class="bar lv-${lv}"><i style="width:${pct}%"></i></div>
+      <div class="fig"><span class="${lv==='crit'?'lv-crit':''}">${pct}% left</span><span class="${eta?'':'dim'}">${eta ? `resets in ${eta}` : 'no reset due'}</span></div>
+      <div class="det num"><span>${100-pct}% used</span><span>${at ? esc(at) : 'window not started'}</span></div>
+    </div>`;
+  }).join('');
+  return `<div class="blk"><div class="lbl"><span>Account usage</span></div>
+    <div class="acct"><span class="av">${esc(a.id[0].toUpperCase())}</span><span class="acct-a">${mail(a.mail)}</span><span class="chips">${chips.join('')}</span></div>
+    <div class="actl">${strip(a.act.b)}${actLabel(a.act.l)}</div>
+    <div class="wins">${wins}</div></div>`;
+}
+
+function dialogHTML(p, a){
+  const b = a.bank;
+  return `<div class="dlg" role="dialog" aria-labelledby="dt-${p.id}">
+    <h4 id="dt-${p.id}">Use a banked reset?</h4>
+    <p>This spends one of ${esc(a.mail)}’s ${b.n} banked reset${b.n>1?'s':''} straight away. It clears that account’s 5-hour and weekly ${esc(p.name)} windows and moves its weekly reset date.</p>
+    <p>It cannot be undone, and it does not add allowance — it brings your existing allowance forward.</p>
+    <div class="dlg-b"><button class="btn" data-close>Cancel</button><button class="btn go" data-close>Use one reset</button></div>
+  </div>`;
+}
+
+function resetBlock(p, a, mode){
+  const b = a.bank;
+  if (!b) return '';
+  const hover = mode === 'page' && p.id === 'codex';
+  const tile = b.hold
+    ? `<div class="rtile held" aria-disabled="true">
+        <span class="rt-ico">${I.clock}</span>
+        <span class="rt-x"><span class="rt-t" style="display:block">Use a banked reset</span>
+          <span class="rt-s" style="display:block">expires in ${esc(b.exp)}</span>
+          <span class="hint num">${I.clock}${esc(b.hold)}</span></span>
+        <span class="rt-c"><b>${b.n}</b><small>banked</small></span></div>`
+    : `<button class="rtile ${hover ? 'is-hover' : ''}" data-redeem="${p.id}:${a.id}">
+        <span class="rt-ico">${I.reset}</span>
+        <span class="rt-x"><span class="rt-t" style="display:block">Use a banked reset</span>
+          <span class="rt-s" style="display:block">${b.ready ? '<span class="ok">usable now</span> · ' : ''}expires in ${esc(b.exp)}</span></span>
+        <span class="rt-c"><b>${b.n}</b><small>banked</small></span></button>`;
+  // The other accounts in this provider that hold resets: one line, so the
+  // operator knows there is a choice before spending this one.
+  const others = p.accts.filter(x => x.id !== a.id && x.bank).map(x =>
+    `<b>${esc(x.id)}</b> · ${x.bank.n} · ${x.bank.hold ? esc(x.bank.hold) : x.bank.ready ? '<span class="ok">usable now</span>' : 'expires in ' + esc(x.bank.exp)}`);
+  const note = [
+    b.hold ? 'Held by the provider · pressable when the hold ends' : 'Asks before spending · clears 5-hour and weekly windows',
+    others.length ? `Also holding: ${others.join(', ')}` : '',
+  ].filter(Boolean).join('<br>');
+  const inset = hover ? `<div class="inset"><div class="inset-l">Opens on click</div>${dialogHTML(p, a)}</div>` : '';
+  return `<div class="blk"><div class="lbl"><span>Banked reset</span><em>${esc(a.mail)}</em></div>
+    <div class="rgrid"><div class="rwrap">${tile}${hover ? I.cursor : ''}
+      <div class="rnote">${note}</div></div>${inset}</div></div>`;
+}
+
+function billBlock(a){
+  if (!a.bill) return '';
+  return `<div class="blk"><div class="lbl"><span>Billing</span></div><div class="bill">${a.bill.map(c => `
+    <div class="bc">${I[c.i]}<div><b>${esc(c.v)}</b><small>${esc(c.l)}${c.s ? ` · <span class="soon">${esc(c.s)}</span>` : ''}</small></div></div>`).join('')}
+  </div></div>`;
+}
+
+function provider(p, mode, on){
+  const a = p.accts.find(x => x.id === p.sel);
+  return `<section class="prov ${on ? 'on' : ''}" id="${mode}-${p.id}" aria-label="${esc(p.name)}">
+    <div class="prov-h"><h2>${I[p.id]}${esc(p.name)}</h2><span>${p.count} credential${p.count>1?'s':''}</span></div>
+    <div class="panel">${poolBlock(p)}${tilesBlock(p)}${resetBlock(p, a, mode)}${usageBlock(p, a)}${billBlock(a)}</div>
+  </section>`;
+}
+
+/* ---------- App root: one renderer for both the page and the popover ---------- */
+function mountApp(el, mode){
+  const state = { tab:'codex', data: JSON.parse(JSON.stringify(DATA)) };
+  function render(){
+    el.innerHTML = `<div class="qg-b">
+      <header class="hd"><div class="hd-t">${I.gauge}<h1>Quota Glance</h1></div>
+        <div class="hd-m num"><span class="fresh">updated just now</span> · 6 credentials</div></header>
+      <nav class="tabs" role="tablist" aria-label="Providers">${state.data.map(p => { const t = tightest(p); return `
+        <button class="tab" role="tab" aria-selected="${p.id===state.tab}" data-tab="${p.id}" title="Tightest: ${esc(t.t)} ${t.pct}% left">${I[p.id]}<span>${esc(p.name)}</span><span class="tab-n lv-${t.lv}">${t.pct}%</span></button>`; }).join('')}
+      </nav>
+      ${state.data.map(p => provider(p, mode, p.id===state.tab)).join('')}
+    </div>`;
+  }
+  el.addEventListener('click', e => {
+    const tile = e.target.closest('.tile');
+    if (tile){ state.data.find(p => p.id===tile.dataset.p).sel = tile.dataset.a; render(); el.querySelector(`.tile[data-a="${tile.dataset.a}"]`).focus(); return; }
+    const tab = e.target.closest('.tab');
+    if (tab){ state.tab = tab.dataset.tab; render(); return; }
+    const r = e.target.closest('[data-redeem]');
+    if (r){
+      const [pid, aid] = r.dataset.redeem.split(':');
+      const p = state.data.find(x => x.id===pid), a = p.accts.find(x => x.id===aid);
+      const d = document.createElement('dialog');
+      d.className = 'live-dlg'; d.innerHTML = dialogHTML(p, a);
+      d.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) d.close(); });
+      d.addEventListener('close', () => d.remove());
+      document.body.appendChild(d); d.showModal();
+    }
+  });
+  render();
+}
+
+/* ---------- Views ---------- */
+const sys = {
+  wifi:'<svg class="sys" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 5.5Q10-1.5 18 5.5M5 8.6Q10 4 15 8.6M8 11.6Q10 10 12 11.6"/><circle cx="10" cy="14" r=".9" fill="currentColor" stroke="none"/></svg>',
+  batt:'<svg class="sys" viewBox="0 0 24 14" fill="none" stroke="currentColor" aria-hidden="true" style="width:22px"><rect x="1" y="2" width="18" height="10" rx="2.5" opacity=".7"/><path d="M21 5.5v3" stroke-width="2" stroke-linecap="round" opacity=".7"/><rect x="3" y="4" width="11" height="6" rx="1" fill="currentColor" stroke="none"/></svg>',
+  search:'<svg class="sys" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" style="width:14px"><circle cx="6.8" cy="6.8" r="4.6"/><path d="m10.3 10.3 3.6 3.6"/></svg>',
+  cc:'<svg class="sys" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2" width="15" height="5" rx="2.5"/><circle cx="4.5" cy="4.5" r="1.4" fill="currentColor" stroke="none"/><rect x="1.5" y="9" width="15" height="5" rx="2.5"/><circle cx="13.5" cy="11.5" r="1.4" fill="currentColor" stroke="none"/></svg>',
+};
+function deskHTML(){
+  return `<div class="desk" id="desk">
+    <div class="mbar"><span class="app">Finder</span><span class="menu">File</span><span class="menu">Edit</span><span class="menu">View</span><span class="sp"></span>
+      <span class="si on" id="si" aria-expanded="true" title="Quota Glance">${I.gauge}<span>23%</span></span>${sys.batt}${sys.wifi}${sys.search}${sys.cc}<span class="clock">Mon 5 Oct 22:41</span></div>
+    <div class="pop" id="pop"><div class="pop-arrow" id="arrow"></div><div class="pop-scroll"><div class="qg" id="app-pop"></div></div></div>
+  </div>`;
+}
+function placePopover(){
+  const desk = document.getElementById('desk'), si = document.getElementById('si'), pop = document.getElementById('pop');
+  const d = desk.getBoundingClientRect(), s = si.getBoundingClientRect();
+  const cx = s.left + s.width/2 - d.left;
+  const left = Math.max(8, Math.min(d.width - 408, cx - 200));
+  pop.style.left = left + 'px';
+  document.getElementById('arrow').style.left = (cx - left - 7) + 'px';
+}
+
+const view = new URLSearchParams(location.search).get('view');
+const root = document.getElementById('root');
+if (view === 'page'){
+  root.innerHTML = `<main class="stage-page"><div class="sheet"><div class="qg" id="app-page"></div></div></main>`;
+  mountApp(document.getElementById('app-page'), 'page');
+} else if (view === 'menubar'){
+  document.body.style.background = '#1a1c20';
+  root.innerHTML = deskHTML();
+  mountApp(document.getElementById('app-pop'), 'pop'); placePopover();
+} else {
+  root.innerHTML = `<header class="caption"><span class="letter">C</span><div>
+      <h1>Account picker</h1>
+      <p>The Stats Disks panel, taken literally: each provider gets a <em>Select account</em> row of tile buttons, and the chosen account's windows sit below as full-width bars with their figures around them, followed by its banked reset as a pressable tile and its billing figures. In the menu bar the providers become Stats-style tabs, each carrying its tightest pooled figure.</p>
+      <nav><a href="?view=page">Page only</a><a href="?view=menubar">Menu bar only</a></nav></div></header>
+    <div class="both"><div class="sheet"><div class="qg" id="app-page"></div></div>${deskHTML()}</div>`;
+  mountApp(document.getElementById('app-page'), 'page');
+  mountApp(document.getElementById('app-pop'), 'pop'); placePopover();
+}
+</script>
+</body>
+</html>

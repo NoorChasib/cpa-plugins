@@ -121,6 +121,38 @@ test('ignores unrelated origins, routes and POSTs and never refreshes without a 
   assert.equal(h.messages.at(-1).kind, 'unavailable');
 });
 
+// Quota Glance 0.5.0 spends a banked reset through a GET, because CPA
+// dispatches only GET to a resource route. It is a GET that acts, so the bridge
+// must neither project it nor keep it as the request refresh() repeats.
+test('passes a token-door spend through once and never repeats it', async () => {
+  const spend = '/proxy/v0/resource/plugins/quota-glance/spend';
+  const press = { Authorization: authorization, 'X-Quota-Glance-Spend': 'eyJjb25maXJtZWQiOnRydWV9' };
+  const h = harness();
+  h.respond(() => new Response('{"provider":"codex","outcome":"reset"}'));
+  await h.window.fetch(spend, { headers: press });
+  await h.settle();
+  assert.equal(h.messages.length, 0);
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.messages.at(-1).kind, 'unavailable');
+
+  const after = harness();
+  await after.fetchPage();
+  await after.settle();
+  const projected = after.messages.length;
+  after.respond(request => request.url.endsWith('/spend')
+    ? new Response('{"provider":"codex","outcome":"reset"}')
+    : new Response(JSON.stringify(fixture)));
+  await after.window.fetch(spend, { headers: press });
+  await after.settle();
+  assert.equal(after.messages.length, projected);
+  await after.window.__quotaGlanceReadout.refresh();
+  const sent = after.requests.map(request => new URL(request.url).pathname);
+  assert.deepEqual(sent, [route, spend, route]);
+  assert.equal(after.requests.at(-1).headers.get('X-Quota-Glance-Spend'), null);
+  assert.equal(after.messages.at(-1).kind, 'snapshot');
+});
+
 test('304 cannot reuse a snapshot from another route or credential', async () => {
   const h = harness();
   await h.fetchPage();

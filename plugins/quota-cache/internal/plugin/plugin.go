@@ -24,7 +24,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.9"
+var Version = "0.1.10"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -269,7 +269,7 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 	}
 	return accounts, nil
 }
-func (f hostFetcher) Fetch(ctx context.Context, account cache.Account) (cache.Observation, error) {
+func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *client.AccountDetails) (cache.Observation, error) {
 	if account.Provider == quota.OpenRouterProvider {
 		key := f.openRouter()
 		// Removed or rotated since the scan that listed this account. The next
@@ -287,13 +287,23 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account) (cache.Ob
 		return cache.Observation{}, errors.New("credential read failed")
 	}
 	doer := &captureDoer{host: f.host}
-	observation, err := quota.Fetch(ctx, doer, account.Provider, raw, time.Now().UTC())
+	now := time.Now().UTC()
+	observation, err := quota.Fetch(ctx, doer, account.Provider, raw, now)
+	// Account details only after a poll that will be recorded as a success: a
+	// refused or rate-limited usage request says the credential or the
+	// provider is in no state to answer more. They go to the host directly,
+	// past the capturing doer, so their statuses are never mistaken for the
+	// poll's: a 429 from a profile endpoint must not pause the provider or
+	// back off a credential whose usage was read perfectly well.
+	if err == nil && !doer.limited() {
+		observation.ApplyDetails(quota.RefreshDetails(ctx, f.host, account.Provider, raw, known, now), now)
+	}
 	return observed(doer, observation, err)
 }
 
 func observed(doer *captureDoer, observation quota.Observation, err error) (cache.Observation, error) {
 	result := cache.Observation{RequestSent: doer.sent, HTTPStatus: doer.status}
-	if doer.status == 429 {
+	if doer.limited() {
 		return result, cache.RateLimited{RetryAfter: doer.retryAfter}
 	}
 	if err != nil {
@@ -302,6 +312,7 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 	result.Percent, result.ResetAt, result.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
 	result.Quota, result.Windows = observation.Quota, observation.Windows
 	result.Plan, result.TierName, result.RenewalAt = observation.Plan, observation.TierName, observation.RenewalAt
+	result.AccountDetails = observation.AccountDetails
 	return result, nil
 }
 
@@ -311,6 +322,10 @@ type captureDoer struct {
 	retryAfter time.Time
 	sent       bool
 }
+
+// limited reports whether the last request through this doer was refused with
+// 429, which turns the whole poll into a provider-wide pause.
+func (d *captureDoer) limited() bool { return d.status == 429 }
 
 func (d *captureDoer) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
 	d.sent = true

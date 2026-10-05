@@ -206,7 +206,7 @@ func TestClaudeUsageRequestIdentifiesItself(t *testing.T) {
 	if values := d.request.Headers["User-Agent"]; len(values) > 0 {
 		agent = values[0]
 	}
-	if !strings.HasPrefix(agent, "claude-code/") {
+	if agent != "claude-cli/2.1.280 (external, cli)" {
 		t.Fatalf("User-Agent = %q; Anthropic rate-limits anything that is not Claude Code far harder", agent)
 	}
 }

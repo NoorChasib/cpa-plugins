@@ -11,6 +11,8 @@ import (
 
 // These embedded assets contain no runtime data, credentials, configuration or
 // query values. The public resource must never become an operational snapshot.
+// app.js reads the CPA console's remembered management key itself; its opening
+// comment gives the rules that keep the page from costing CPA sign-in failures.
 //
 //go:embed pageassets/index.html
 var sidebarHTML string
@@ -27,8 +29,8 @@ func sidebarHash(value string) string {
 }
 
 // Build the immutable document and asset hashes once, not on each public GET.
-var sidebarDocument = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Quota Cache</title><style>" + sidebarStyle + "</style></head><body>" + sidebarHTML + "<script>" + browserAuthScript + sidebarScript + "</script></body></html>"
-var sidebarCSP = "default-src 'none'; script-src " + sidebarHash(browserAuthScript+sidebarScript) + "; style-src " + sidebarHash(sidebarStyle) + "; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
+var sidebarDocument = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Quota Cache</title><style>" + sidebarStyle + "</style></head><body>" + sidebarHTML + "<script>" + sidebarScript + "</script></body></html>"
+var sidebarCSP = "default-src 'none'; script-src " + sidebarHash(sidebarScript) + "; style-src " + sidebarHash(sidebarStyle) + "; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
 
 // sidebarResponse is deliberately independent of Plugin and ManagementRequest.
 // Same-origin plug-ins share the console's credential trust boundary; CSP does

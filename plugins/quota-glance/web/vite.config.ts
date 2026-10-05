@@ -41,9 +41,10 @@ export default defineConfig(({ command }) => ({
   },
   server: {
     port: 5173,
-    // Point at a real CPA to develop against live data; without it the golden
-    // fixture route above answers instead, which is the default path and needs
-    // nothing running.
+    // Forwards the rest of /v0 to a CPA host when set. The golden fixture route
+    // above is registered ahead of this proxy and always answers the summary
+    // and every press path itself, so the page's own requests never reach that
+    // host and nothing here can spend a reset; it needs nothing running.
     proxy: process.env.QUOTA_GLANCE_PROXY
       ? { "/v0": { target: process.env.QUOTA_GLANCE_PROXY, changeOrigin: true } }
       : undefined,

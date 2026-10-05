@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quota Glance · Redesign option E · Provider tabs</title>
+<style>
+/* Option E — Provider tabs.
+   Static mock. No network, no fonts, no framework: one data object and a few
+   template functions render the same app twice — once as the page (left rail)
+   and once inside the 400 x 620 menu bar popover (top tab strip). In the real
+   app the switch would be a width query at ~560px; here both shapes are
+   forced by a class so they can sit side by side.
+   Tokens are the app's own (web/src/index.css). */
+:root{
+  --bg:#101114;--card:#181a1e;--card2:#1e2126;--line:#262a30;--rule:#1f2227;
+  --ink:#eef0f3;--ink2:#9aa1ab;--ink3:#6b7280;--ink4:#4a5059;
+  --accent:#3987e5;--track:#23262c;--warn:#fab219;--crit:#d03b3b;
+  --sel:color-mix(in srgb,var(--accent) 19%,var(--card2));
+  --sel-line:color-mix(in srgb,var(--accent) 48%,transparent);
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+  --num:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--sans);color:var(--ink);background:#25282e;-webkit-font-smoothing:antialiased}
+h1,h2,h3,p{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;text-align:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+svg{display:block;flex:none}
+.n{font-family:var(--num);font-variant-numeric:tabular-nums;letter-spacing:-.01em;word-spacing:-.28em}
+
+/* ---------- board (which view is showing) ---------- */
+.caption{max-width:1500px;margin:0 auto;padding:26px 28px 6px;display:flex;gap:14px;align-items:baseline}
+.caption .tag{font:600 11px/1 var(--sans);color:#c9d3e3;border:1px solid #4a5363;border-radius:5px;padding:4px 6px;flex:none}
+.caption h1{font-size:17px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
+.caption p{font-size:12.5px;line-height:1.55;color:#aab2bf;max-width:860px}
+.stage{display:flex;gap:28px;align-items:flex-start;justify-content:center;padding:18px 28px 40px}
+.v-page .caption,.v-menubar .caption{display:none}
+.v-page .mbview,.v-menubar .pageview{display:none}
+.v-page .stage{padding:28px 0 40px}
+.v-menubar .stage{padding:0}
+.label{font-size:11px;color:#9aa3b0;margin:0 0 8px 2px;letter-spacing:.02em}
+.v-page .label,.v-menubar .label{display:none}
+
+/* ---------- page frame on a neutral backdrop ---------- */
+.frame{width:868px;background:var(--bg);border:1px solid #33373e;border-radius:12px;box-shadow:0 20px 50px #0007;overflow:hidden}
+.frame-bar{height:30px;display:flex;align-items:center;gap:7px;padding:0 12px;background:#17191d;border-bottom:1px solid #24272d}
+.frame-bar i{width:10px;height:10px;border-radius:50%;background:#3a3e46}
+.frame-bar span{margin-left:12px;font:11px/1 var(--num);color:#6b7280;background:#0f1013;border:1px solid #24272d;border-radius:6px;padding:4px 10px;flex:1;max-width:380px}
+
+/* ---------- simulated macOS desktop + menu bar ---------- */
+.desk{width:560px;height:720px;position:relative;overflow:hidden;border-radius:10px;
+  background:radial-gradient(ellipse at 18% 100%,#56688a 0,transparent 62%),radial-gradient(ellipse at 95% 30%,#5b4f6d 0,transparent 55%),linear-gradient(150deg,#22324a,#2a3448 55%,#3d3a50)}
+.v-menubar .desk{border-radius:0}
+.mbar{height:26px;display:flex;align-items:center;gap:13px;padding:0 10px 0 14px;background:#1c1f27b8;backdrop-filter:blur(18px);border-bottom:1px solid #ffffff10;font-size:12.5px;color:#eef1f6;white-space:nowrap}
+.mbar b{font-weight:650}
+.mbar .muted{color:#e4e8ef}
+.mbar .sp{flex:1}
+.mbar svg{color:#eef1f6}
+.si{display:flex;align-items:center;gap:5px;height:22px;padding:0 7px;border-radius:5px;font:600 12px/1 var(--sans);color:#fff}
+.si.on{background:#ffffff33}
+.si .n{font-weight:600;letter-spacing:0}
+.pop{position:absolute;top:33px;width:400px;height:620px;border-radius:12px;background:var(--bg);
+  box-shadow:0 0 0 1px #464b55,0 22px 48px #000a,0 4px 12px #0007}
+.pop .arrow{position:absolute;top:-7px;width:14px;height:14px;background:var(--bg);transform:rotate(45deg);
+  box-shadow:-1px -1px 0 #464b55;border-radius:2px 0 0 0}
+.pop .qg{position:relative;border-radius:12px;overflow:hidden;height:100%}
+
+/* =================================================================
+   The app itself. Everything below is Quota Glance, not the board.
+   ================================================================= */
+.qg{background:var(--bg);color:var(--ink);font-size:13px}
+
+/* header */
+.hd{display:flex;align-items:center;gap:8px}
+.hd .logo{color:var(--accent)}
+.hd h1{font-size:14px;font-weight:650;letter-spacing:-.01em}
+.hd .meta{margin-left:auto;font-size:11px;color:var(--ink3);white-space:nowrap}
+.hd .meta .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px;vertical-align:1px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+
+/* --- the tab strip (popover) --- */
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px;background:var(--card);border:1px solid var(--line);border-radius:13px}
+.tab{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 0 7px;border-radius:9px;color:var(--ink3);transition:background .12s,color .12s}
+.tab:hover{background:var(--card2);color:var(--ink2)}
+.tab .tl{font-size:10.5px;font-weight:550;letter-spacing:.01em}
+.tab[aria-selected=true]{background:var(--sel);color:var(--accent);box-shadow:inset 0 0 0 1px var(--sel-line)}
+.tab[aria-selected=true] .tl{color:#cfe0f7}
+.gl{position:relative}
+.gl .lvd{position:absolute;top:-2px;right:-4px;width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 2px var(--card)}
+.tab[aria-selected=true] .gl .lvd{box-shadow:0 0 0 2px #1c2a3d}
+.lvd.low{background:var(--warn)}.lvd.crit{background:var(--crit)}
+
+/* --- the rail (page) --- */
+.rail{display:flex;flex-direction:column;gap:3px;padding:5px;background:var(--card);border:1px solid var(--line);border-radius:13px}
+.ri{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:0 10px;padding:8px 10px 8px 8px;border-radius:9px;color:var(--ink3);text-align:left;transition:background .12s}
+.ri:hover{background:var(--card2)}
+.ri .gb{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--card2);border:1px solid var(--line);grid-row:span 2}
+.ri .rn{font-size:13px;font-weight:600;color:var(--ink)}
+.ri .rs{font-size:10.5px;color:var(--ink3);grid-column:2}
+.ri .rf{grid-row:span 2;grid-column:3;font-size:13px;font-weight:600;color:var(--ink2);text-align:right}
+.ri .rf small{display:block;font:500 9.5px/1.4 var(--sans);color:var(--ink3);letter-spacing:.02em}
+.ri[aria-selected=true]{background:var(--sel);box-shadow:inset 0 0 0 1px var(--sel-line);color:var(--accent)}
+.ri[aria-selected=true] .gb{background:color-mix(in srgb,var(--accent) 22%,var(--card2));border-color:var(--sel-line)}
+.ri[aria-selected=true] .rs{color:#8fa9cc}
+
+/* --- section heading, Stats-style ("DISKS") --- */
+.sh{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 3px 9px}
+.sh h2{font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink2)}
+.sh span{font-size:11px;color:var(--ink3)}
+
+/* --- panels --- */
+.pnl{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px 14px;margin-bottom:10px}
+.pl{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12px;font-weight:500;color:var(--ink3);margin-bottom:10px}
+.pl small{font-size:11px;font-weight:400;color:var(--ink4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* chips, as in the reference ("APFS" "Internal") */
+.chips{display:flex;gap:5px;margin-left:auto;flex:none}
+.chip{font-size:10.5px;line-height:1;color:var(--ink2);background:var(--card2);border:1px solid var(--line);border-radius:7px;padding:4px 7px;white-space:nowrap}
+.chip.st{color:var(--ink2)}
+.chip.st::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;border:1px solid var(--ink3);margin-right:5px;vertical-align:1px}
+.chip.tr{color:var(--ink3)}
+.chip.plan{color:#c3cad4}
+
+/* bars: full width, figures around them */
+.bar{position:relative;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.bar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--accent)}
+.bar.low i{background:var(--warn)}
+.bar.crit i{background:var(--crit)}
+.bar.sm{height:4px;border-radius:2px}
+.bar.sm i{border-radius:2px}
+.bar.md{height:6px;border-radius:3px}
+
+.lv-low{color:var(--warn)}.lv-crit{color:var(--crit)}
+
+/* window panel */
+.wt{display:flex;align-items:center;gap:8px;min-width:0}
+.wt svg{color:var(--ink2)}
+.wt h3{font-size:14px;font-weight:650;letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .bar{margin:11px 0 9px}
+.fig{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap}
+.fig .n{font-weight:650}
+.sub{display:flex;justify-content:space-between;gap:12px;margin-top:4px;font-size:11.5px;color:var(--ink3);white-space:nowrap}
+.sub .n{letter-spacing:0}
+
+/* account sub-rows inside a window panel: the same anatomy, smaller */
+.rows{margin-top:13px;border-top:1px solid var(--line)}
+.ar{padding:10px 0 9px;border-bottom:1px solid var(--rule)}
+.ar:last-child{border-bottom:0;padding-bottom:0}
+.top{display:flex;align-items:center;gap:7px;min-width:0}
+.em{font-size:12.5px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.em i{font-style:normal;color:var(--ink3)}
+.seen{font:11px/1 var(--num);color:var(--ink3);white-space:nowrap}
+.seen.live{color:var(--accent)}
+.seen.idle{color:var(--ink4)}
+.ar .bar{margin:8px 0 6px}
+.ar .fig{font-size:12px}
+.ar .fig .r,.ar .fig .w{color:var(--ink2);font-weight:500}
+.ar .chips{align-items:center;gap:8px}
+.ar .fig .r .n{color:var(--ink);font-weight:600}
+.ar.dim .em{color:var(--ink2)}
+
+/* banked-reset tiles, styled after "Select disk" */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{display:flex;flex-direction:column;align-items:stretch;min-width:0;padding:10px 11px 9px;border-radius:10px;
+  background:var(--card2);border:1px solid var(--line);text-align:left;container-type:inline-size;transition:background .12s,border-color .12s}
+.tile .tt{display:flex;align-items:center;gap:7px;min-width:0;margin-bottom:3px}
+.tile .ti{flex:none;color:var(--ink2);display:grid;place-items:center}
+.tile .tn{font-size:12.5px;font-weight:600;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
+.tile .tn i{font-style:normal;font-weight:500;color:var(--ink3)}
+.tile .tm{display:flex;flex-wrap:wrap;font-size:11px;line-height:1.5;color:var(--ink2)}
+.tile .tm span+span{color:var(--ink3);width:100%}
+@container (min-width:200px){
+  .tile .tm span+span{width:auto}
+  .tile .tm span+span::before{content:"·";margin:0 6px;color:var(--ink4)}
+}
+.tile .th{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.5;margin-top:1px;white-space:nowrap}
+.tile .hs{display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tile .th.ok .hs{color:var(--accent)}
+.tile .th.ok .hs::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.tile .th.hold .hs{color:var(--warn)}
+.tile .go{margin-left:auto;font-size:11px;color:var(--ink);display:none}
+.tile:hover,.tile.is-hover{background:#252930;border-color:#3a3f48}
+.tile:hover .go,.tile.is-hover .go{display:inline}
+.tile:hover .ti,.tile.is-hover .ti{color:var(--ink)}
+.tile.is-pressed{background:var(--sel);border-color:var(--sel-line)}
+.tile.is-pressed .ti{color:var(--accent)}
+.tile.is-pressed .tm{color:#a9c4e8}
+.tile.is-pressed .tm span+span{color:#7e97b9}
+.tile.is-pressed .tn i{color:#8fa6c6}
+.tile.held .ti{color:var(--warn)}
+.tile.held .tn{color:var(--ink2)}
+.tile.held:hover .go{display:none}
+.none{margin-top:9px;font-size:11px;color:var(--ink4)}
+.none .em{font-size:11px;color:var(--ink3)}
+
+/* confirm dialog inset (page only) */
+.inset{margin-top:12px;border:1px dashed #353a42;border-radius:11px;padding:12px;display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:center;background:repeating-linear-gradient(135deg,#0d0e1100 0 7px,#0d0e1166 7px 14px)}
+.inset .il{font-size:11px;line-height:1.55;color:var(--ink3)}
+.inset .il b{display:block;font-weight:600;color:var(--ink2);margin-bottom:4px}
+.inset .il svg{display:inline-block;vertical-align:-2px;margin-right:4px;color:var(--accent)}
+.inset .dlg{zoom:.86}
+.dlg{max-width:400px;margin:0;border:1px solid var(--line);border-radius:13px;background:var(--card);padding:16px 18px 16px;box-shadow:0 14px 40px #000a}
+.dlg h4{margin:0;font-size:14px;font-weight:600}
+.dlg p{margin-top:9px;font-size:12px;line-height:1.6;color:var(--ink2)}
+.dlg .act{display:flex;justify-content:flex-end;gap:9px;margin-top:15px}
+.btn{border:1px solid var(--line);border-radius:7px;background:var(--card2);padding:5px 11px;color:var(--ink2);font-size:11.5px;line-height:1.3}
+.btn.go{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+
+/* accounts panel */
+.acc{padding:11px 0 10px;border-bottom:1px solid var(--rule)}
+.acc:first-of-type{padding-top:2px}
+.acc:last-child{border-bottom:0;padding-bottom:0}
+.actrow{display:flex;align-items:center;gap:9px;margin:8px 0 2px}
+.act{display:flex;gap:2px;flex:none}
+.act i{width:6px;height:6px;border-radius:1.5px;background:#242830}
+.act .a1{background:color-mix(in srgb,var(--accent) 34%,transparent)}
+.act .a2{background:color-mix(in srgb,var(--accent) 66%,transparent)}
+.act .a3{background:var(--accent)}
+.act .af{background:var(--crit)}
+.acc .fig{font-size:12.5px;margin-top:8px}
+.acc .sub{font-size:11px;margin-top:2px}
+.acc .muted{color:var(--ink3);font-weight:500}
+
+/* overview tab */
+.ovh{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.ovh h3{font-size:13.5px;font-weight:650}
+.ovh span{font-size:11px;color:var(--ink3)}
+.ovh svg{color:var(--ink2)}
+.ow{padding:11px 0 1px}
+.ow+.ow{border-top:1px solid var(--rule);margin-top:9px}
+.ow .fig{font-size:13px}
+.ow .fig .l{font-weight:550;color:var(--ink)}
+.ow .bar{margin:7px 0 6px}
+.ow .sub{font-size:11px}
+.navt .ti{color:var(--ink)}
+
+/* ---------- popover shape ---------- */
+.qg-pop{display:flex;flex-direction:column}
+.qg-pop .chrome{padding:12px 12px 10px;border-bottom:1px solid var(--rule);background:var(--bg);position:relative;z-index:1}
+.qg-pop .chrome .hd{margin:0 2px 11px}
+.qg-pop .scroll{flex:1;min-height:0;overflow:auto;padding:12px 8px 14px;scrollbar-width:none}
+.qg-pop .pnl{padding:12px 12px 13px}
+.qg-pop .sbar{position:absolute;right:3px;width:5px;border-radius:3px;background:#ffffff38;pointer-events:none}
+.qg-pop .scroll::-webkit-scrollbar{display:none}
+
+/* ---------- page shape ---------- */
+.qg-page{max-width:820px;margin:0 auto;padding:24px 24px 30px}
+.qg-page .hd{margin:0 2px 20px}
+.qg-page .hd h1{font-size:19px;font-weight:650;letter-spacing:-.015em}
+.qg-page .hd .meta{font-size:11.5px}
+.qg-page .cols{display:grid;grid-template-columns:196px minmax(0,1fr);gap:18px;align-items:start}
+.qg-page .sh{margin-top:4px}
+.qg-page .pnl{padding:14px 16px 16px}
+.qg-page .fig{font-size:15px}
+.qg-page .ar .fig{font-size:12.5px}
+.qg-page .acc .fig{font-size:13px}
+</style>
+</head>
+<body>
+<header class="caption">
+  <span class="tag">E</span>
+  <h1>Provider tabs</h1>
+  <p>The popover becomes a Stats-style utility: a segmented icon strip (Overview · Codex · Claude · Grok), and under each tab a stack of panels in the reference's anatomy — banked-reset tiles first, then one full-width bar per window with its figures around it, then the accounts. On a wide screen the same tabs become a left rail. Tabs and tiles are live: click them.</p>
+</header>
+
+<main class="stage">
+  <section class="pageview">
+    <div class="label">PAGE · 820 px column · Codex tab</div>
+    <div class="frame">
+      <div class="frame-bar"><i></i><i></i><i></i><span>cpa.local/quota-glance</span></div>
+      <div class="qg qg-page" id="page"></div>
+    </div>
+  </section>
+
+  <section class="mbview">
+    <div class="label">MENU BAR · 400 × 620 popover · Claude tab</div>
+    <div class="desk" id="desk">
+      <div class="mbar">
+        <svg width="13" height="15" viewBox="0 0 13 15" aria-hidden="true"><path fill="currentColor" d="M10.6 7.9c0-1.6 1.3-2.4 1.4-2.4-.8-1.1-2-1.3-2.4-1.3-1-.1-2 .6-2.5.6s-1.3-.6-2.2-.6C3.8 4.2 2.7 4.9 2.1 6 .9 8.1 1.8 11.2 3 12.9c.6.8 1.2 1.7 2.1 1.7.8 0 1.2-.5 2.2-.5s1.3.5 2.2.5c.9 0 1.5-.9 2-1.7.7-1 .9-1.9 1-1.9 0 0-1.9-.7-1.9-3.1ZM8.9 3c.5-.6.8-1.4.7-2.2-.7 0-1.5.5-2 1.1-.4.5-.8 1.3-.7 2.1.8.1 1.5-.4 2-1Z"/></svg>
+        <b>Finder</b><span class="muted">File</span><span class="muted">Edit</span>
+        <span class="sp"></span>
+        <button class="si on" id="si" aria-expanded="true" aria-label="Quota Glance: Codex weekly 23% left">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3.2 14.2a7 7 0 1 1 13.6 0"/><path d="M10 13.6l3.4-4"/><circle cx="10" cy="13.6" r="1.3" fill="currentColor" stroke="none"/></svg>
+          <span class="n">23%</span>
+        </button>
+        <svg width="16" height="13" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-label="Wi-Fi"><path d="M2 5.5Q10-1.5 18 5.5M5 8.6Q10 4 15 8.6M8 11.6Q10 10 12 11.6"/><circle cx="10" cy="14.2" r=".9" fill="currentColor"/></svg>
+        <svg width="24" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor" aria-label="Battery"><rect x=".5" y=".5" width="20" height="11" rx="3" opacity=".6"/><path d="M22.5 4v4" stroke-width="1.6" stroke-linecap="round" opacity=".6"/><rect x="2.5" y="2.5" width="12" height="7" rx="1.5" fill="currentColor" stroke="none"/></svg>
+        <svg width="15" height="14" viewBox="0 0 16 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-label="Control Centre"><rect x="1" y="1" width="14" height="5" rx="2.5"/><circle cx="4" cy="3.5" r="1.2" fill="currentColor"/><rect x="1" y="8" width="14" height="5" rx="2.5"/><circle cx="12" cy="10.5" r="1.2" fill="currentColor"/></svg>
+        <span class="clock">Mon 5 Oct&nbsp; 22:41</span>
+      </div>
+      <div class="pop" id="popwrap"><div class="arrow" id="arrow"></div><div class="qg qg-pop" id="pop"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ---------- icons (inline, like the app) ---------- */
+const S = (d, w = 18, extra = '') =>
+  `<svg width="${w}" height="${w}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${d}</svg>`;
+const ICON = {
+  overview: w => S('<path d="M3.2 14.2a7 7 0 1 1 13.6 0"/><path d="M10 13.6l3.4-4"/><circle cx="10" cy="13.6" r="1.3" fill="currentColor" stroke="none"/>', w),
+  codex: w => S('<rect x="2.5" y="3.5" width="15" height="13" rx="3.2"/><path d="M6.2 8.2 8.7 10.2 6.2 12.2M10.6 12.6h3.4"/>', w),
+  claude: w => S('<path d="M10 2.8v4.3M10 12.9v4.3M2.8 10h4.3M12.9 10h4.3M4.9 4.9l3 3M12.1 12.1l3 3M15.1 4.9l-3 3M7.9 12.1l-3 3"/>', w),
+  grok: w => S('<path d="M14.6 5.2A6.6 6.6 0 1 0 16.2 12"/><path d="M4.6 16.6 16.4 3.8"/>', w),
+  reset: w => S('<path d="M4.4 10.3a5.7 5.7 0 1 0 1.9-4.6"/><path d="M5.6 2.9v3.3h3.3"/><path d="M10 7.6v2.7l1.8 1.2"/>', w),
+  hold: w => S('<circle cx="10" cy="10" r="6.6"/><path d="M10 6.4V10l2.4 1.6"/>', w),
+  week: w => S('<rect x="3" y="4.2" width="14" height="12.6" rx="2.6"/><path d="M3 8.2h14M7 2.6v3M13 2.6v3"/><path d="M6.6 11.6h1.6M9.2 11.6h1.6M11.8 11.6h1.6" stroke-width="1.9"/>', w),
+  fivehr: w => S('<circle cx="10" cy="10.6" r="6.4"/><path d="M10 7.2v3.4l2.3 1.5M8 2.6h4"/>', w),
+  model: w => S('<rect x="3" y="4.2" width="14" height="12.6" rx="2.6"/><path d="M3 8.2h14M7 2.6v3M13 2.6v3"/><path d="M10 10.1v4.2M7.9 12.2h4.2" stroke-width="1.5"/>', w),
+  coins: w => S('<ellipse cx="10" cy="5.6" rx="5.8" ry="2.4"/><path d="M4.2 5.6v4.4c0 1.3 2.6 2.4 5.8 2.4s5.8-1.1 5.8-2.4V5.6M4.2 10v4.4c0 1.3 2.6 2.4 5.8 2.4s5.8-1.1 5.8-2.4V10"/>', w),
+  people: w => S('<circle cx="7.6" cy="7" r="2.8"/><path d="M2.8 16.2c.6-2.7 2.5-4.2 4.8-4.2s4.2 1.5 4.8 4.2"/><path d="M13 4.6a2.6 2.6 0 0 1 0 5M14.2 12.2c1.6.5 2.6 1.8 3 4"/>', w),
+  arrow: w => S('<path d="M5 10h10M11 6l4 4-4 4"/>', w),
+};
+
+/* ---------- the fixed fictional dataset ---------- */
+const STRIP = {
+  idle: Array(20).fill(0),
+  ben: [1, 2, 2, 3, 2, 'f', 3, 3, 2, 3, 3, 2, 'f', 2, 3, 3, 2, 3, 3, 3],
+  cy:  [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 2, 2, 3, 2, 3, 3, 3],
+  dee: [1, 1, 2, 1, 2, 2, 1, 'f', 2, 1, 1, 'f', 'f', 1, 0, 0, 0, 0, 0, 0],
+};
+const A = {
+  ada: { local: 'ada', dom: '@northwind.dev', plan: 'Pro 100', status: 'cooldown', strip: 'idle', seen: 'idle',
+         renews: 'Oct 29', renewsIn: 'in 24d', credits: '0', creditsNote: 'credit balance',
+         bank: { n: 1, exp: '24d 14h', hint: null } },
+  ben: { local: 'ben.k', dom: '@example.com', plan: 'Pro 200', status: null, strip: 'ben', seen: 'now',
+         renews: 'Oct 17', renewsIn: 'in 12d', credits: '57,706.15', creditsNote: 'credit balance',
+         bank: { n: 2, exp: '17d 15h', hint: null } },
+  ops: { local: 'ops', dom: '@northwind.dev', plan: 'Team', status: 'cooldown', strip: 'idle', seen: 'idle',
+         bank: { n: 1, exp: '26d', hint: null } },
+  cy:  { local: 'cy', dom: '@example.com', plan: 'Max 20x', status: null, strip: 'cy', seen: 'now',
+         bank: { n: 1, exp: '21d', hint: 'cooling down · 5h 12m' } },
+  dee: { local: 'dee', dom: '@example.com', plan: 'Max 5x', status: 'cooldown', strip: 'dee', seen: '37m ago' },
+  max: { local: 'max', dom: '@example.com', plan: 'SuperGrok Heavy', status: null, strip: 'idle', seen: 'idle',
+         credits: '$12.40', creditsNote: 'prepaid credits' },
+};
+const P = [
+  { id: 'codex', name: 'Codex', accts: ['ada', 'ben'], windows: [
+    { name: 'Weekly', short: 'weekly', icon: 'week', pct: 23, trend: 'down', gain: '+50%', in: '4d 15h', who: 'ada',
+      rows: [['ada', 0, '4d 15h'], ['ben', 46, '4d 15h']] },
+    { name: '5-hour', icon: 'fivehr', pct: 64, trend: 'up', gain: '+36%', in: '3h 2m', who: 'ben',
+      rows: [['ada', 100, '—'], ['ben', 28, '3h 2m']] },
+  ]},
+  { id: 'claude', name: 'Claude', accts: ['ops', 'cy', 'dee'], windows: [
+    { name: 'Weekly', short: 'weekly', icon: 'week', pct: 29, trend: 'down', gain: '+100%', in: '19h', who: 'ops',
+      rows: [['ops', 100, '19h 22m'], ['cy', 13, '2d 4h'], ['dee', 0, '2d 1h']] },
+    { name: '5-hour', icon: 'fivehr', pct: 6, trend: 'down', gain: '+32%', in: '1h', who: 'ops',
+      rows: [['ops', 5, '1h'], ['cy', 5, '4h'], ['dee', 8, '2h 40m']] },
+    { name: 'Weekly · Fable 5', icon: 'model', pct: 0, trend: null, gain: '+33%', in: '19h', who: 'ops',
+      rows: [['ops', 0, '19h'], ['cy', 0, '2d 4h'], ['dee', 0, '2d 1h']] },
+  ]},
+  { id: 'grok', name: 'Grok', accts: ['max'], windows: [
+    { name: 'Monthly credits', short: 'monthly', icon: 'coins', pct: 62, trend: null, gain: '+38%', in: '11d', who: 'max',
+      rows: [['max', 62, '11d']] },
+  ]},
+];
+const TOTAL_CREDS = 6;
+
+/* ---------- helpers ---------- */
+const lvl = p => (p < 20 ? 'crit' : p < 40 ? 'low' : 'ok');
+const worst = pr => pr.windows.reduce((w, x) => (x.pct < w ? x.pct : w), 101);
+const plural = (n, one) => `${n} ${n === 1 ? one : one + 's'}`;
+const em = a => `<span class="em">${A[a].local}<i>${A[a].dom}</i></span>`;
+const chip = (t, c = '') => `<span class="chip ${c}">${t}</span>`;
+const bar = (p, cls) => `<div class="bar ${cls}" role="img" aria-label="${p}% left"><i style="width:${Math.max(p, 0)}%"></i></div>`;
+const seen = a => {
+  const s = A[a].seen;
+  return `<span class="seen ${s === 'now' ? 'live' : s === 'idle' ? 'idle' : ''}">${s}</span>`;
+};
+const strip = a => `<span class="act" role="img" aria-label="request activity, last 3h 20m">${
+  STRIP[A[a].strip].map(b => `<i class="${b === 'f' ? 'af' : b ? 'a' + b : ''}"></i>`).join('')}</span>`;
+const trendChip = t => (t === 'down' ? chip('▼ falling', 'tr') : t === 'up' ? chip('▲ rising', 'tr') : '');
+
+/* ---------- panels ---------- */
+function bankPanel(pr, st, mode) {
+  const holders = pr.accts.filter(a => A[a].bank);
+  if (!holders.length) return '';
+  const without = pr.accts.filter(a => !A[a].bank);
+  const tiles = holders.map(a => {
+    const b = A[a].bank;
+    const cls = [b.hint ? 'held' : '', st.pressed === a ? 'is-pressed' : '', st.hover === a ? 'is-hover' : ''].join(' ');
+    return `<button class="tile ${cls}" data-tile="${a}" aria-haspopup="dialog">
+      <span class="tt"><span class="ti">${ICON[b.hint ? 'hold' : 'reset'](15)}</span><span class="tn">${A[a].local}<i>${A[a].dom}</i></span></span>
+      <span class="tm"><span>${plural(b.n, 'reset')} banked</span><span>expires in <span class="n">${b.exp}</span></span></span>
+      <span class="th ${b.hint ? 'hold' : 'ok'}"><span class="hs">${b.hint ? b.hint : 'usable now'}</span><span class="go">Use one ›</span></span>
+    </button>`;
+  }).join('');
+  const none = without.length
+    ? `<div class="none">${without.map(em).join(', ')} ${without.length === 1 ? 'holds' : 'hold'} no banked resets</div>` : '';
+  let inset = '';
+  if (mode === 'page' && st.pressed && A[st.pressed] && A[st.pressed].bank && pr.accts.includes(st.pressed)) {
+    const a = st.pressed, b = A[a].bank, addr = A[a].local + A[a].dom;
+    inset = `<div class="inset"><div class="il"><b>${ICON.arrow(12)}On click</b>Pressing ${A[a].local}’s tile opens this. Nothing is spent until “Use one reset”.</div>
+      <div class="dlg" role="dialog" aria-labelledby="dlg-t">
+        <h4 id="dlg-t">Use a banked reset?</h4>
+        <p>This spends one of ${addr}’s ${plural(b.n, 'banked reset')} straight away. It clears that account’s 5-hour and weekly ${pr.name} windows and moves its weekly reset date.</p>
+        <p>It cannot be undone, and it does not add allowance — it brings your existing allowance forward.</p>
+        <div class="act"><button class="btn" data-cancel>Cancel</button><button class="btn go" data-cancel>Use one reset</button></div>
+      </div></div>`;
+  }
+  return `<section class="pnl">
+    <div class="pl"><span>Banked resets</span><small>spending one clears that account’s windows</small></div>
+    <div class="tiles">${tiles}</div>${none}${inset}
+  </section>`;
+}
+
+function windowPanel(w) {
+  const n = w.rows.length, at = w.rows.filter(r => r[1] === 0).length, L = lvl(w.pct);
+  const rows = n > 1 ? `<div class="rows">${w.rows.map(([a, p, r]) => `
+      <div class="ar">
+        <div class="top">${em(a)}<span class="chips">${seen(a)}${A[a].status ? chip(A[a].status, 'st') : ''}</span></div>
+        ${bar(p, 'sm ' + (lvl(p) === 'crit' ? 'crit' : ''))}
+        <div class="fig"><span><span class="n lv-${lvl(p)}">${p}%</span> <span class="w">left</span></span><span class="r">resets <span class="n">${r}</span></span></div>
+      </div>`).join('')}</div>` : '';
+  return `<section class="pnl win">
+    <div class="wt">${ICON[w.icon](17)}<h3>${w.name}</h3><span class="chips">${chip(plural(n, 'account'))}${trendChip(w.trend)}</span></div>
+    ${bar(w.pct, L === 'ok' ? '' : L)}
+    <div class="fig"><span><span class="n lv-${L}">${w.pct}%</span> left</span><span><span class="n">${w.gain}</span> in <span class="n">${w.in}</span></span></div>
+    <div class="sub"><span>${n === 1 ? em(w.who) : at ? `${at} of ${n} at limit` : 'none at limit'}</span><span>when ${A[w.who].local} resets</span></div>
+    ${rows}
+  </section>`;
+}
+
+function accountsPanel(pr) {
+  return `<section class="pnl">
+    <div class="pl"><span>Accounts</span><small>plan · routing · activity · billing</small></div>
+    ${pr.accts.map(a => {
+      const x = A[a];
+      const money = x.renews || x.credits;
+      return `<div class="acc">
+        <div class="top">${em(a)}<span class="chips">${chip(x.plan, 'plan')}${x.status ? chip(x.status, 'st') : ''}</span></div>
+        <div class="actrow">${strip(a)}${seen(a)}</div>
+        ${money ? `<div class="fig"><span>${x.renews ? `Renews <span class="n">${x.renews}</span>` : '<span class="muted">—</span>'}</span><span>${x.credits ? `<span class="n">${x.credits}</span>` : ''}</span></div>
+        <div class="sub"><span>${x.renews ? `<span class="n">${x.renewsIn}</span>` : 'no renewal reported'}</span><span>${x.creditsNote || ''}</span></div>` : ''}
+      </div>`;
+    }).join('')}
+  </section>`;
+}
+
+function providerTab(pr, st, mode) {
+  return `<div class="sh"><h2>${pr.name}</h2><span>${plural(pr.accts.length, 'credential')}</span></div>
+    ${bankPanel(pr, st, mode)}
+    ${pr.windows.map(windowPanel).join('')}
+    ${accountsPanel(pr)}`;
+}
+
+function overviewTab() {
+  const banks = P.filter(pr => pr.accts.some(a => A[a].bank)).map(pr => {
+    const h = pr.accts.filter(a => A[a].bank);
+    const n = h.reduce((s, a) => s + A[a].bank.n, 0), held = h.filter(a => A[a].bank.hint).length;
+    return `<button class="tile navt" data-goto="${pr.id}">
+      <span class="tt"><span class="ti">${ICON[pr.id](15)}</span><span class="tn">${pr.name}</span></span>
+      <span class="tm"><span>${plural(n, 'reset')} banked</span><span>on ${plural(h.length, 'account')}</span></span>
+      <span class="th ${held ? 'hold' : 'ok'}"><span class="hs">${held ? `${held} cooling down` : 'all usable now'}</span><span class="go">Open ›</span></span>
+    </button>`;
+  }).join('');
+  return `<div class="sh"><h2>Overview</h2><span>${TOTAL_CREDS} credentials</span></div>
+    <section class="pnl"><div class="pl"><span>Banked resets</span><small>open a provider to use one</small></div><div class="tiles">${banks}</div></section>
+    ${P.map(pr => `<section class="pnl">
+      <div class="ovh">${ICON[pr.id](16)}<h3>${pr.name}</h3><span>${plural(pr.accts.length, 'credential')}</span></div>
+      ${pr.windows.map(w => {
+        const L = lvl(w.pct);
+        return `<div class="ow">
+          <div class="fig"><span class="l">${w.name}</span><span><span class="n lv-${L}">${w.pct}%</span> left</span></div>
+          ${bar(w.pct, 'md ' + (L === 'ok' ? '' : L))}
+          <div class="sub"><span>${w.gain} when ${A[w.who].local} resets in <span class="n">${w.in}</span></span><span>${w.trend === 'down' ? '▼ falling' : w.trend === 'up' ? '▲ rising' : ''}</span></div>
+        </div>`;
+      }).join('')}
+    </section>`).join('')}`;
+}
+
+/* ---------- shells ---------- */
+const TABS = [{ id: 'overview', name: 'Overview' }, ...P.map(p => ({ id: p.id, name: p.name }))];
+const header = () => `<div class="hd"><span class="logo">${ICON.overview(18)}</span><h1>Quota Glance</h1>
+  <span class="meta"><span class="dot"></span>updated just now · ${TOTAL_CREDS} credentials</span></div>`;
+
+function render(root, mode, st) {
+  const pr = P.find(p => p.id === st.tab);
+  const body = pr ? providerTab(pr, st, mode) : overviewTab();
+  const lvDot = id => {
+    const p = P.find(x => x.id === id); if (!p) return '';
+    const L = lvl(worst(p)); return L === 'ok' ? '' : `<span class="lvd ${L}"></span>`;
+  };
+  if (mode === 'pop') {
+    root.innerHTML = `<div class="chrome">${header()}
+      <div class="tabs" role="tablist">${TABS.map(t => `<button class="tab" role="tab" data-tab="${t.id}" aria-selected="${t.id === st.tab}">
+        <span class="gl">${ICON[t.id](19)}${lvDot(t.id)}</span><span class="tl">${t.name}</span></button>`).join('')}</div></div>
+      <div class="scroll">${body}</div><div class="sbar"></div>`;
+    const sc = root.querySelector('.scroll'), sb = root.querySelector('.sbar');
+    const thumb = () => {
+      const h = sc.clientHeight, H = sc.scrollHeight, top = sc.offsetTop;
+      sb.style.display = H <= h ? 'none' : '';
+      sb.style.height = Math.max(28, h * h / H - 6) + 'px';
+      sb.style.top = top + 3 + (h - 6 - Math.max(28, h * h / H - 6)) * (sc.scrollTop / (H - h || 1)) + 'px';
+    };
+    sc.addEventListener('scroll', thumb); requestAnimationFrame(thumb);
+  } else {
+    root.innerHTML = `${header()}<div class="cols">
+      <nav><div class="rail" role="tablist" aria-orientation="vertical">${TABS.map(t => {
+        const p = P.find(x => x.id === t.id);
+        const fig = p ? `<span class="rf"><span class="n lv-${lvl(p.windows[0].pct)}">${p.windows[0].pct}%</span><small>${p.windows[0].short}</small></span>` : '<span class="rf"></span>';
+        return `<button class="ri" role="tab" data-tab="${t.id}" aria-selected="${t.id === st.tab}">
+          <span class="gb"><span class="gl">${ICON[t.id](17)}${lvDot(t.id)}</span></span><span class="rn">${t.name}</span>
+          ${fig}<span class="rs">${p ? plural(p.accts.length, 'credential') : 'all providers'}</span></button>`;
+      }).join('')}</div>
+</nav>
+      <div>${body}</div></div>`;
+  }
+  root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { st.tab = b.dataset.tab; st.hover = st.pressed = null; render(root, mode, st); }));
+  root.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => { st.tab = b.dataset.goto; render(root, mode, st); }));
+  root.querySelectorAll('[data-tile]').forEach(b => b.addEventListener('click', () => { st.hover = null; st.pressed = st.pressed === b.dataset.tile ? null : b.dataset.tile; render(root, mode, st); }));
+  root.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => { st.pressed = null; render(root, mode, st); }));
+}
+
+/* ---------- boot ---------- */
+const q = new URLSearchParams(location.search);
+const view = q.get('view') || 'both';
+document.body.classList.add('v-' + view);
+const pageState = { tab: q.get('pagetab') || 'codex', pressed: 'ben', hover: null };
+const popState = { tab: q.get('tab') || 'claude', pressed: null, hover: 'ops' };
+render(document.getElementById('page'), 'page', pageState);
+render(document.getElementById('pop'), 'pop', popState);
+
+/* Hang the popover under the status item, as AppKit would. */
+function place() {
+  const desk = document.getElementById('desk').getBoundingClientRect();
+  const si = document.getElementById('si').getBoundingClientRect();
+  const cx = si.left + si.width / 2 - desk.left;
+  const left = Math.max(8, Math.min(desk.width - 408, cx - 200));
+  const wrap = document.getElementById('popwrap');
+  wrap.style.left = left + 'px';
+  document.getElementById('arrow').style.left = (cx - left - 7) + 'px';
+}
+place();
+addEventListener('resize', place);
+</script>
+</body>
+</html>
