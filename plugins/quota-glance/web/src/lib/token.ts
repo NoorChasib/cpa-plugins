@@ -1,13 +1,32 @@
-// The fallback credential, for a reader with no CPA console session.
+// The dashboard password: `web-token` from the plugin's configuration.
 //
-// The primary way in is the console's own management key (see cpa-auth.ts),
-// which costs the reader nothing. This is what is left when that is not
-// available: a browser that has never signed in to the console, a phone, a
-// bookmark. Resource routes are GET-only, so there is no login POST and no
-// endpoint that can set a cookie — the value is held here and sent as a bearer
-// header.
+// It is the door this page tries first (see access.ts). It goes to this
+// plugin's own resource routes, which CPA does not authenticate, so a wrong or
+// stale one costs the reader nothing at CPA — no management sign-in is counted
+// against the address. With it the page reads the document and, since 0.5.0,
+// spends banked resets through the GET spend route. Resource routes are
+// GET-only, so there is no login POST and no endpoint that can set a cookie:
+// the value is held here and sent as a bearer header.
 
-const STORAGE_KEY = "quota-glance.token"
+import { ACCESS_CHANGED, TOKEN_KEY } from "./access"
+
+/**
+ * The value the plugin refused in this document, held back so no poll, retry
+ * or press presents it again. Memory only, on purpose: a reload, saving a new
+ * password or signing out each forgets it, and each of those is the reader
+ * acting on the refusal.
+ */
+let refusedToken: string | null = null
+
+/**
+ * Tells this document's listeners that a door may have opened or closed. A
+ * `storage` event reaches only other documents, and the refusal above is not
+ * in storage at all. Deferred, so a change made while React renders is not
+ * announced into the middle of that render.
+ */
+function changed(): void {
+  queueMicrotask(() => window.dispatchEvent(new Event(ACCESS_CHANGED)))
+}
 
 /**
  * Takes a token out of the URL and into storage, before anything renders or
@@ -30,7 +49,8 @@ export function captureTokenFromURL(): void {
 
 export function read(): string | null {
   try {
-    return window.localStorage.getItem(STORAGE_KEY)
+    const value = window.localStorage.getItem(TOKEN_KEY)
+    return value === "" ? null : value
   } catch {
     // Private browsing, or storage disabled. The page still works for this one
     // load; the sign-in screen is what the reader sees next time.
@@ -38,18 +58,35 @@ export function read(): string | null {
   }
 }
 
+/** Saves a password the reader typed, and forgets that an earlier one was refused. */
 export function write(token: string): void {
+  refusedToken = null
   try {
-    window.localStorage.setItem(STORAGE_KEY, token.trim())
+    window.localStorage.setItem(TOKEN_KEY, token.trim())
   } catch {
     /* see read() */
   }
+  changed()
 }
 
 export function clear(): void {
+  refusedToken = null
   try {
-    window.localStorage.removeItem(STORAGE_KEY)
+    window.localStorage.removeItem(TOKEN_KEY)
   } catch {
     /* see read() */
   }
+  changed()
+}
+
+/** Holds `value` back: the plugin refused it, and it is not tried again here. */
+export function refuse(value: string): void {
+  if (refusedToken === value) return
+  refusedToken = value
+  changed()
+}
+
+/** The value refused in this document, if any. */
+export function refused(): string | null {
+  return refusedToken
 }

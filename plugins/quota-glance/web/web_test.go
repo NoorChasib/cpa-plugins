@@ -162,3 +162,23 @@ func TestContentSecurityPolicyLocksDownTheDefault(t *testing.T) {
 		t.Fatal("connect-src must stay same-origin")
 	}
 }
+
+// The outcome_unknown answer carries the one sentence on the page that tells
+// an operator pressing again is safe, so it must name every event that ends
+// that safety. The unanswered claim lives in the plugin's memory, and CPA ends
+// that copy of the plugin not only when it restarts but when it loads an update
+// or a switch off and on in place. A promise that named CPA's restart alone
+// would let an operator update Quota Glance inside the window and press again
+// into a second spend, believing it could not happen.
+func TestRetryPromiseNamesEveryEventThatEndsIt(t *testing.T) {
+	promise := regexp.MustCompile(`cannot spend a second reset\. After that, or if ([^.]*) first, a press is a new claim\.`)
+	match := promise.FindStringSubmatch(Shell())
+	if match == nil {
+		t.Fatal("the shell no longer carries the outcome_unknown retry promise")
+	}
+	for _, event := range []string{"CPA", "Quota Glance", "restarts", "updated"} {
+		if !strings.Contains(match[1], event) {
+			t.Errorf("the retry promise ends on %q alone; it must also name %q", match[1], event)
+		}
+	}
+}

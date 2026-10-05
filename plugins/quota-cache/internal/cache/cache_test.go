@@ -17,12 +17,17 @@ type fakeFetcher struct {
 	calls    int
 	now      time.Time
 	failure  error
+	// details is returned with every observation, and known records the
+	// account details each call was handed.
+	details *client.AccountDetails
+	known   []*client.AccountDetails
 }
 
 func (f *fakeFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
-func (f *fakeFetcher) Fetch(context.Context, Account) (Observation, error) {
+func (f *fakeFetcher) Fetch(_ context.Context, _ Account, known *client.AccountDetails) (Observation, error) {
 	f.calls++
-	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now, RequestSent: true, HTTPStatus: 200}, f.failure
+	f.known = append(f.known, known)
+	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now, AccountDetails: f.details, RequestSent: true, HTTPStatus: 200}, f.failure
 }
 func fixture(t *testing.T) (*Cache, *fakeFetcher, Options) {
 	t.Helper()
@@ -190,7 +195,7 @@ type blockingFetcher struct{ entered, finish chan struct{} }
 func (f *blockingFetcher) List(context.Context) ([]Account, error) {
 	return []Account{{"claude", "one"}}, nil
 }
-func (f *blockingFetcher) Fetch(context.Context, Account) (Observation, error) {
+func (f *blockingFetcher) Fetch(context.Context, Account, *client.AccountDetails) (Observation, error) {
 	close(f.entered)
 	<-f.finish
 	return Observation{}, nil
@@ -350,8 +355,8 @@ type detailsFetcher struct {
 	quota *client.Quota
 }
 
-func (f *detailsFetcher) Fetch(ctx context.Context, a Account) (Observation, error) {
-	o, err := f.fakeFetcher.Fetch(ctx, a)
+func (f *detailsFetcher) Fetch(ctx context.Context, a Account, known *client.AccountDetails) (Observation, error) {
+	o, err := f.fakeFetcher.Fetch(ctx, a, known)
 	o.Quota = f.quota
 	return o, err
 }
@@ -363,7 +368,7 @@ type windowFetcher struct {
 }
 
 func (f *windowFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
-func (f *windowFetcher) Fetch(context.Context, Account) (Observation, error) {
+func (f *windowFetcher) Fetch(context.Context, Account, *client.AccountDetails) (Observation, error) {
 	return Observation{
 		Percent: 76, ResetAt: f.now.Add(62 * time.Hour), ObservedAt: f.now,
 		Windows: f.windows, Plan: "Max", TierName: "max_20x",
@@ -414,5 +419,82 @@ func TestCanonicalWindowsAndPlanSurviveTheWriteAndReload(t *testing.T) {
 	fresh, err := client.ReadFresh(opts.Path, "claude", "one", now, 30*time.Minute)
 	if err != nil || fresh.Percent != 76 {
 		t.Fatalf("fresh=%+v err=%v", fresh, err)
+	}
+}
+
+// Account details are read on a slower schedule than the poll, so the cache
+// carries them: through a poll that did not read them, through a failed poll,
+// and through a restart, after which the fetcher is handed the persisted copy
+// and can tell that nothing is due yet.
+func TestAccountDetailsCarryForwardAndReachTheFetcherAfterRestart(t *testing.T) {
+	c, f, opts := fixture(t)
+	start := f.now
+	// The subscription start rides along with the plan: both are read from
+	// one profile, and both have to survive the file and the restart.
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	read := &client.AccountDetails{CheckedAt: start, Plan: "team", SubscriptionStartedAt: &started}
+	f.details = read
+	if err := c.Step(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	entry := func() client.Entry {
+		t.Helper()
+		s, err := client.Load(opts.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Entries[client.Key("claude", "one")]
+	}
+	if got := entry().AccountDetails; got == nil || got.Plan != "team" || !got.CheckedAt.Equal(start) || f.known[0] != nil {
+		t.Fatalf("details=%+v handed=%+v", got, f.known)
+	}
+
+	// A successful poll that did not read them leaves them as they were.
+	f.details = nil
+	if err := c.Step(context.Background(), start.Add(opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	if got := entry().AccountDetails; got == nil || got.Plan != "team" {
+		t.Fatalf("a poll without a read erased the details: %+v", got)
+	}
+	if f.known[1] == nil || f.known[1].Plan != "team" {
+		t.Fatalf("the fetcher was not handed what the snapshot holds: %+v", f.known[1])
+	}
+
+	// A failed poll keeps them too, like every other last-known value.
+	f.failure = errors.New("synthetic failure")
+	if err := c.Step(context.Background(), start.Add(2*opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	if got := entry().AccountDetails; got == nil || got.Plan != "team" || got.SubscriptionStartedAt == nil || !got.SubscriptionStartedAt.Equal(started) {
+		t.Fatalf("a failed poll erased the details: %+v", got)
+	}
+
+	c.Close()
+	f.failure = nil
+	restarted, err := Open(opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	// The failure backed the credential off one interval further.
+	if err := restarted.Step(context.Background(), start.Add(4*opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.known) != 4 {
+		t.Fatalf("calls=%d", len(f.known))
+	}
+	if handed := f.known[3]; handed == nil || handed.Plan != "team" || !handed.CheckedAt.Equal(start) ||
+		handed.SubscriptionStartedAt == nil || !handed.SubscriptionStartedAt.Equal(started) {
+		t.Fatalf("after a restart the fetcher was handed %+v; it would ask every credential again", handed)
+	}
+
+	// A fresh read replaces them.
+	f.details = &client.AccountDetails{CheckedAt: start.Add(5 * opts.Interval), Plan: "enterprise"}
+	if err := restarted.Step(context.Background(), start.Add(5*opts.Interval)); err != nil {
+		t.Fatal(err)
+	}
+	if got := entry(); got.AccountDetails == nil || got.AccountDetails.Plan != "enterprise" {
+		t.Fatalf("a fresh read did not replace the details: %+v", got.AccountDetails)
 	}
 }

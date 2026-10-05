@@ -23,12 +23,22 @@ type Observation struct {
 	ResetAt, ObservedAt time.Time
 	Plan, TierName      string
 	RenewalAt           time.Time
-	RequestSent         bool
-	HTTPStatus          int
+	// AccountDetails replaces the entry's on success. Nil keeps the entry's,
+	// so a fetcher that did not read them cannot erase what an earlier read
+	// learned.
+	AccountDetails *client.AccountDetails
+	RequestSent    bool
+	HTTPStatus     int
 }
+
+// Fetcher performs one poll. known is the account details the snapshot already
+// holds for the account, nil when it holds none: they are read on a slower
+// schedule than the poll, and the fetcher needs them to tell whether a read is
+// due. Because they come from the snapshot, a restart does not make every
+// credential due at once.
 type Fetcher interface {
 	List(context.Context) ([]Account, error)
-	Fetch(context.Context, Account) (Observation, error)
+	Fetch(ctx context.Context, account Account, known *client.AccountDetails) (Observation, error)
 }
 
 type RateLimited struct{ RetryAfter time.Time }
@@ -234,7 +244,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 			return err
 		}
 		started := time.Now()
-		observation, fetchErr := c.fetcher.Fetch(ctx, a)
+		observation, fetchErr := c.fetcher.Fetch(ctx, a, entry.AccountDetails)
 		elapsed := time.Since(started)
 		poll := client.Poll{Provider: a.Provider, AuthIndex: a.AuthIndex, StartedAt: now,
 			FinishedAt: now.Add(elapsed), DurationMS: elapsed.Milliseconds(), RequestSent: observation.RequestSent,
@@ -280,6 +290,12 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 			if !observation.RenewalAt.IsZero() {
 				renewal := observation.RenewalAt
 				entry.RenewalAt = &renewal
+			}
+			// Unlike the observation, these are carried forward: they are read
+			// every few hours, not every poll, and their absence from one poll
+			// means only that they were not asked for.
+			if observation.AccountDetails != nil {
+				entry.AccountDetails = observation.AccountDetails
 			}
 			entry.Failures, entry.LastError = 0, ""
 		}

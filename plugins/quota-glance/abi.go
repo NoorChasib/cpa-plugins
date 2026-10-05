@@ -235,9 +235,10 @@ func cliproxyPluginShutdown() {
 	clearStoredHostAPI()
 }
 
-// quota-glance uses exactly two host callbacks: the credential roster and the
-// log. There is deliberately no host.http.do and no host.auth.get here — this
-// plugin reads a file and serves memory, and holds no credential material.
+// Everything quota-glance does on a schedule uses two host callbacks: the
+// credential roster and the log. It reads a file and serves memory. The
+// callbacks below the roster — host.auth.get and host.http.do — belong to the
+// redeem path alone, which runs only on a confirmed press of the button.
 
 func (hostBridge) ListAuth(ctx context.Context) ([]protocol.HostAuthFileEntry, error) {
 	result, err := callHost(ctx, protocol.MethodHostAuthList, map[string]any{})
@@ -252,8 +253,8 @@ func (hostBridge) ListAuth(ctx context.Context) ([]protocol.HostAuthFileEntry, e
 }
 
 // GetAuth returns the raw physical credential JSON for one auth index. The
-// document contains OAuth tokens: the redeem path decodes only the two fields
-// one Codex request needs and never logs, persists, or renders it. Nothing else
+// document contains OAuth tokens: the redeem path decodes only the fields one
+// provider request needs and never logs, persists, or renders it. Nothing else
 // in this plugin calls it.
 func (hostBridge) GetAuth(ctx context.Context, authIndex string) ([]byte, error) {
 	result, err := callHost(ctx, protocol.MethodHostAuthGet, protocol.HostAuthGetRequest{AuthIndex: authIndex})
@@ -273,9 +274,41 @@ func (hostBridge) GetAuth(ctx context.Context, authIndex string) ([]byte, error)
 // HTTPDo performs one upstream HTTP request through CPA's proxy-aware client.
 // It is reached only from the redeem path, on the request goroutine of a POST
 // the operator confirmed; no timer and no rebuild in this plugin calls it.
+//
+// The call into the host is synchronous and takes no deadline: ctx is checked
+// once on the way in and never again, and CPA runs the request on a context of
+// its own. So a deadline on ctx is carried across by hand. The request is
+// opened as a host operation first, and if ctx ends while it is in flight, a
+// second callback cancels that operation and the host abandons the request.
+// Without this, every bound the redeem path sets would be advisory, and a
+// provider that stalled would hold the route open until the browser gave up.
+//
+// A host without the operation callbacks gets the request without them — the
+// behaviour every earlier release had — rather than no request at all.
 func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	request.OperationID = ""
+	if ctx.Done() != nil {
+		if operation, ok := openHTTPOperation(ctx); ok {
+			request.OperationID = operation
+			finished := make(chan struct{})
+			defer close(finished)
+			go func() {
+				select {
+				case <-ctx.Done():
+					cancelHTTPOperation(operation)
+				case <-finished:
+				}
+			}()
+		}
+	}
 	result, err := callHost(ctx, protocol.MethodHostHTTPDo, request)
 	if err != nil {
+		if request.OperationID != "" {
+			// An operation the request never claimed would otherwise stay
+			// open on the host. Cancelling one that already finished is a
+			// no-op there.
+			cancelHTTPOperation(request.OperationID)
+		}
 		return protocol.HostHTTPResponse{}, err
 	}
 	var response protocol.HostHTTPResponse
@@ -283,6 +316,25 @@ func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) 
 		return protocol.HostHTTPResponse{}, errors.New("decode host.http.do response")
 	}
 	return response, nil
+}
+
+// openHTTPOperation asks the host for an operation id a later cancel can name.
+func openHTTPOperation(ctx context.Context) (string, bool) {
+	result, err := callHost(ctx, protocol.MethodHostHTTPOperationOpen, map[string]any{})
+	if err != nil {
+		return "", false
+	}
+	var response protocol.HostHTTPOperationOpenResponse
+	if json.Unmarshal(result, &response) != nil || response.OperationID == "" {
+		return "", false
+	}
+	return response.OperationID, true
+}
+
+// cancelHTTPOperation abandons an operation. It runs on a fresh context because
+// the one it answers for has, by definition, already ended.
+func cancelHTTPOperation(operation string) {
+	_, _ = callHost(context.Background(), protocol.MethodHostHTTPCancel, protocol.HostHTTPCancelRequest{OperationID: operation})
 }
 
 func (hostBridge) Log(ctx context.Context, level, message string, fields map[string]any) {

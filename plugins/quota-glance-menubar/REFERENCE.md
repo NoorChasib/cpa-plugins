@@ -82,6 +82,14 @@ summary request inside WebKit; credentials never cross the native message
 boundary or enter preferences or logs. The app does not inherit a session
 from another browser.
 
+Once signed in with `web-token`, **Use one** spends a banked reset from the
+popover as it does on the page, with Quota Glance 0.5.0 or newer. The page
+sends that press itself, as a GET to its `/spend` route; the bridge passes it
+through untouched and never repeats it, and credentials still never cross the
+native boundary. Which sign-in the page uses, and how it avoids costing CPA
+management sign-ins, is in
+[Quota Glance's access reference](../quota-glance/docs/access.md).
+
 Same-origin navigation stays inside the web view, including the console and
 its sign-in flow. A user-clicked external HTTP(S) link opens in the default
 browser. Other cross-origin navigation and non-web URL schemes are blocked.
@@ -285,6 +293,8 @@ Before treating a Mac build as ready to use:
    opens after logging out and back in. Opening directly from the DMG should
    explain that installation is required before enabling Open at login.
 
-The web preview in `../quota-glance/web/design/menubar-options.html` records the
-selected compact design. It is a browser mockup, not native runtime evidence.
+The web preview in `../quota-glance/web/design/redesign/option-d.html` (open it
+with `?view=menubar`) records the selected compact design; the earlier
+candidates are in `../quota-glance/web/design/menubar-options.html`. Both are
+browser mockups, not native runtime evidence.
 Verified API sources are in [docs/apple-api-notes.md](docs/apple-api-notes.md).

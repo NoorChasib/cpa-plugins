@@ -13,7 +13,7 @@
       "last_attempt": "2026-09-10T03:55:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "Max",
+      "plan": "max_20x",
       "windows": [
         {
           "key": "session",
@@ -36,7 +36,12 @@
           "reset_at": "2026-09-11T03:59:00Z",
           "observed_at": "2026-09-10T03:55:00Z"
         }
-      ]
+      ],
+      "account_details": {
+        "checked_at": "2026-09-10T03:30:00Z",
+        "plan": "max_20x",
+        "subscription_started_at": "2026-09-10T20:00:00Z"
+      }
     },
     "claude:claude-stale@example.com.json": {
       "provider": "claude",
@@ -47,7 +52,7 @@
       "last_attempt": "2026-09-10T01:00:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "Max",
+      "plan": "max",
       "windows": [
         {
           "key": "session",
@@ -63,7 +68,22 @@
           "reset_at": "2026-09-12T04:00:00Z",
           "observed_at": "2026-09-10T01:00:00Z"
         }
-      ]
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T01:00:00Z",
+        "reset_credits": {
+          "available_count": 1,
+          "hold": "cooldown",
+          "hold_until": "2026-09-10T03:30:00Z"
+        },
+        "billing_period": "annual"
+      },
+      "account_details": {
+        "checked_at": "2026-09-09T20:00:00Z",
+        "plan": "max",
+        "subscription_started_at": "2024-02-29T08:00:00Z"
+      }
     },
     "claude:claude-failing@example.com.json": {
       "provider": "claude",
@@ -75,7 +95,7 @@
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 2,
       "last_error": "quota fetch failed",
-      "plan": "Team",
+      "plan": "team",
       "windows": [
         {
           "key": "session",
@@ -112,7 +132,7 @@
       "last_attempt": "2026-09-10T03:55:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "Max",
+      "plan": "pro",
       "windows": [
         {
           "key": "session",
@@ -128,7 +148,15 @@
           "reset_at": "2026-09-14T04:00:00Z",
           "observed_at": "2026-09-10T03:55:00Z"
         }
-      ]
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "reset_credits": {
+          "available_count": 1,
+          "soonest_expiry": "2026-09-30T00:00:00Z"
+        }
+      }
     },
     "claude:claude-unavailable@example.com.json": {
       "provider": "claude",
@@ -139,7 +167,7 @@
       "last_attempt": "2026-09-10T03:55:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "Max",
+      "plan": "max_5x",
       "windows": [
         {
           "key": "session",
@@ -155,7 +183,17 @@
           "reset_at": "2026-09-14T05:13:20Z",
           "observed_at": "2026-09-10T03:55:00Z"
         }
-      ]
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "reset_credits": {
+          "available_count": 2,
+          "soonest_expiry": "2026-09-12T00:00:00Z",
+          "hold": "cooldown",
+          "hold_until": "2026-09-10T06:00:00Z"
+        }
+      }
     },
     "codex:codex-model@example.com.json": {
       "provider": "codex",
@@ -166,7 +204,7 @@
       "last_attempt": "2026-09-10T03:55:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "pro",
+      "plan": "prolite",
       "windows": [
         {
           "key": "session",
@@ -204,8 +242,17 @@
         "observed_at": "2026-09-10T03:55:00Z",
         "reset_credits": {
           "available_count": 1
+        },
+        "plan": "prolite",
+        "balances": {
+          "credits": {
+            "unit": "credits",
+            "has_credits": true,
+            "unlimited": true
+          }
         }
-      }
+      },
+      "renewal_at": "2026-09-01T00:00:00Z"
     },
     "xai:xai-raw@example.com.json": {
       "provider": "xai",
@@ -216,7 +263,7 @@
       "last_attempt": "2026-09-10T03:55:00Z",
       "next_attempt": "2026-09-10T04:10:00Z",
       "failures": 0,
-      "plan": "SuperGrok Heavy",
+      "plan": "SuperGrok",
       "windows": [
         {
           "key": "credits",
@@ -230,7 +277,18 @@
           "used_percent": 22,
           "observed_at": "2026-09-10T03:55:00Z"
         }
-      ]
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "plan": "SuperGrok",
+        "balances": {
+          "prepaid": {
+            "unit": "usd_cents",
+            "remaining": "0"
+          }
+        }
+      }
     },
     "openrouter:key-8d41e07a2b9c": {
       "provider": "openrouter",

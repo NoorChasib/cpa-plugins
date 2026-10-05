@@ -8,11 +8,13 @@
 // costs nothing and needs no key.
 //
 // The single exception is redemption, in internal/redeem: spending a banked
-// Codex rate-limit reset is a write, it cannot come out of a snapshot, and it
-// happens only when the operator presses the button and confirms. It runs on
-// the request goroutine of one POST route and on no timer, so the rebuild path
-// below is as free of provider contact as it ever was. Set allow-redeem to
-// false and the capability is never constructed.
+// Codex or Claude rate-limit reset is a write, it cannot come out of a
+// snapshot, and it happens only when the operator presses the button and
+// confirms. It runs on the request goroutine of that press — the redeem POST,
+// or the spend GET that carries the same press for a reader signed in with the
+// web token — and on no timer, so the rebuild path below is as free of provider
+// contact as it ever was. Set allow-redeem to false and the capability is never
+// constructed.
 package plugin
 
 import (
@@ -41,7 +43,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.4.0"
+var Version = "0.5.0"
 
 const (
 	defaultStaleAfter = 45 * time.Minute
@@ -57,7 +59,8 @@ type Host interface {
 	Log(context.Context, string, string, map[string]any)
 	// GetAuth and HTTPDo are used only by the redeem path. GetAuth returns the
 	// physical credential document, OAuth tokens included; it is decoded for
-	// the two fields one Codex request needs and never logged or persisted.
+	// the one or two fields a provider request needs and never logged or
+	// persisted.
 	GetAuth(context.Context, string) ([]byte, error)
 	HTTPDo(context.Context, protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error)
 }
@@ -127,6 +130,16 @@ type Plugin struct {
 	builtAt   time.Time
 	written   time.Time
 	nextReq   time.Time
+
+	// redeemer is built the first time redemption is configured on and kept
+	// for the life of this Plugin, guarded by mu. Its journal holds the claims
+	// whose outcome is unknown, and a new redeemer per reconfigure would forget
+	// them: the press after saving an unrelated setting would make a fresh
+	// claim where it should have repeated the unresolved one, and that is the
+	// press that can spend a second reset. That is all it outlives, though, not
+	// the process: CPA applies an update or a switch off and on by loading a
+	// fresh copy of the plugin, and the new Plugin starts with an empty journal.
+	redeemer *redeem.Redeemer
 }
 
 func New(host Host) *Plugin { return &Plugin{host: host, api: api.New(ID, "")} }
@@ -146,26 +159,32 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				{Method: "GET", Path: "/plugins/" + ID + "/summary", Description: "Aggregated quota document the dashboard renders"},
 				{Method: "GET", Path: "/plugins/" + ID + "/health", Description: "Snapshot time, watcher state, and last error"},
 				{Method: "GET", Path: "/plugins/" + ID + "/windows", Description: "Observed window keys and the credentials reporting them"},
-				// The one route on this plugin that changes anything. It spends
-				// a banked Codex rate-limit reset, which is irreversible, and
-				// it refuses any body that does not carry an explicit
-				// confirmation.
-				{Method: "POST", Path: "/plugins/" + ID + "/redeem", Description: "Spend one banked Codex rate-limit reset for a credential"},
+				// The one management route that changes anything; /spend below
+				// is the resource tree's. It spends a banked Codex or Claude
+				// rate-limit reset, which is irreversible, and it refuses any
+				// body that does not carry an explicit confirmation.
+				{Method: "POST", Path: "/plugins/" + ID + "/redeem", Description: "Spend one banked Codex or Claude rate-limit reset for a credential"},
 			},
-			// The page, and the document down its fallback path. CPA
-			// authenticates neither — the page carries no data, and the
-			// document behind /summary carries this plugin's own token check
-			// for readers arriving without a console session.
+			// The page, the document down its fallback path, and the press
+			// for readers arriving without a console session. CPA
+			// authenticates none of them — the page carries no data, and
+			// everything else here carries this plugin's own token check.
 			Resources: []protocol.ResourceRoute{
 				{Path: "/app", Menu: "Quota Glance", Description: "Remaining quota across every credential and window"},
 				{Path: "/summary", Description: "Aggregated quota document; requires the plugin web token"},
 				// Registered for the reader who has no console session, and
-				// carrying the same token check as /summary. Whether CPA
-				// dispatches a POST to a resource path at all is the host's
-				// decision, not this plugin's: where it does not, redemption is
-				// a console-session action and the dashboard says so rather
-				// than offering a button that cannot work.
-				{Path: "/redeem", Description: "Spend one banked Codex rate-limit reset; requires the plugin web token"},
+				// carrying the same token check as /summary. CPA v8.0.15
+				// dispatches only GET to a resource route
+				// (pluginhost/management.go:295-297), so it never reaches
+				// this; /spend carries the press meanwhile. It stays because
+				// it is where the press belongs once CPA dispatches a POST
+				// here, and the smoke reports whether it does.
+				{Path: "/redeem", Description: "Spend one banked Codex or Claude rate-limit reset; requires the plugin web token"},
+				// The same press as /redeem, as a GET, because that is all CPA
+				// dispatches here. Nothing selecting the action is in the URL:
+				// the token, the confirmation and a single-use press id all
+				// travel in headers. See api.spendResponse.
+				{Path: "/spend", Description: "Spend one banked Codex or Claude rate-limit reset by GET for a reader signed in with the web token; CPA dispatches only GET to resource routes"},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -284,9 +303,13 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	served.SetToken(token)
 	// Nil when redemption is off, which closes the route rather than leaving it
 	// open behind a flag: with no redeemer there is no code path from a request
-	// to a provider.
+	// to a provider. When it is on, it is the same redeemer every time, so an
+	// unresolved claim outlives the reconfigure.
 	if allowRedeem {
-		served.SetRedeemer(redeem.New(hostRedeem{p.host}))
+		if p.redeemer == nil {
+			p.redeemer = redeem.New(hostRedeem{p.host})
+		}
+		served.SetRedeemer(p.redeemer)
 	} else {
 		served.SetRedeemer(nil)
 	}
@@ -330,10 +353,10 @@ func registration() protocol.Registration {
 			ConfigFields: []protocol.ConfigField{
 				{Name: "cache-path", Type: "string", Description: "quota-cache snapshot path; must match quota-cache's own"},
 				{Name: "data-dir", Type: "string", Description: "Private directory for trend history"},
-				{Name: "web-token", Type: "string", Description: "Fallback password for the dashboard when there is no CPA console session; generated and logged once if empty"},
+				{Name: "web-token", Type: "string", Description: "Dashboard password for browsers without a CPA console session; also spends banked resets while allow-redeem is on; generated and logged once if empty"},
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
-				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex rate-limit reset from the dashboard; default true. Set false to show the count without a button"},
+				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex or Claude rate-limit reset from the dashboard; default true. Set false to show the count without a button; governs both the console and the dashboard-password doors"},
 				{Name: "openrouter-warn-below", Type: "number", Description: "OpenRouter balance in dollars below which its card turns amber; default 5. It turns red at $0. Needs an OpenRouter management key in Quota Cache"},
 			},
 		},

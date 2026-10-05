@@ -3,93 +3,20 @@ package redeem
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
+	"time"
 )
-
-// fakeHost answers per URL and records everything, so a test can assert not
-// only what came back but whether the POST was made at all. For an irreversible
-// action that second question is the one that matters.
-type fakeHost struct {
-	mu       sync.Mutex
-	auth     string
-	authErr  error
-	bodies   map[string]string
-	status   map[string]int
-	errs     map[string]error
-	requests []protocol.HostHTTPRequest
-}
-
-func (h *fakeHost) GetAuth(context.Context, string) ([]byte, error) {
-	if h.authErr != nil {
-		return nil, h.authErr
-	}
-	if h.auth == "" {
-		return []byte(`{"access_token":"synthetic-token","account_id":"synthetic-account"}`), nil
-	}
-	return []byte(h.auth), nil
-}
-
-func (h *fakeHost) HTTPDo(_ context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.requests = append(h.requests, request)
-	if err := h.errs[request.URL]; err != nil {
-		return protocol.HostHTTPResponse{}, err
-	}
-	status := h.status[request.URL]
-	if status == 0 {
-		status = 200
-	}
-	return protocol.HostHTTPResponse{StatusCode: status, Body: []byte(h.bodies[request.URL])}, nil
-}
-
-func (h *fakeHost) posted() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, request := range h.requests {
-		if request.Method == "POST" {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *fakeHost) postBody(t *testing.T) map[string]string {
-	t.Helper()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, request := range h.requests {
-		if request.Method != "POST" {
-			continue
-		}
-		var body map[string]string
-		if json.Unmarshal(request.Body, &body) != nil {
-			t.Fatalf("POST body is not JSON: %q", request.Body)
-		}
-		return body
-	}
-	t.Fatal("no POST was made")
-	return nil
-}
 
 const oneAvailable = `{"available_count":1,"credits":[{"id":"credit-a","status":"available","expires_at":"2026-10-01T00:00:00Z"}]}`
 
-func hostWith(bodies map[string]string) *fakeHost {
-	return &fakeHost{bodies: bodies, status: map[string]int{}, errs: map[string]error{}}
-}
-
 func TestRedeemSpendsOneCreditAndReportsTheOutcome(t *testing.T) {
 	host := hostWith(map[string]string{
-		creditsURL: `{"available_count":2,"credits":[` +
+		codexCreditsURL: `{"available_count":2,"credits":[` +
 			`{"id":"credit-a","status":"available","expires_at":"2026-10-01T00:00:00Z"},` +
 			`{"id":"credit-b","status":"available","expires_at":"2026-11-01T00:00:00Z"}]}`,
-		consumeURL: `{"code":"reset","windows_reset":2,"credit":{"id":"credit-a","status":"redeemed"}}`,
+		codexConsumeURL: `{"code":"reset","windows_reset":2,"credit":{"id":"credit-a","status":"redeemed"}}`,
 	})
 	result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
 	if err != nil {
@@ -106,6 +33,10 @@ func TestRedeemSpendsOneCreditAndReportsTheOutcome(t *testing.T) {
 	if len(body["redeem_request_id"]) != 36 {
 		t.Fatalf("redeem_request_id = %q, want a uuid-shaped key", body["redeem_request_id"])
 	}
+	// The request shape is the provider's, and nothing was added to it.
+	if len(body) != 2 {
+		t.Fatalf("consume body = %v, want exactly credit_id and redeem_request_id", body)
+	}
 }
 
 // Nothing available means no POST. A request built from a stale count is how a
@@ -117,7 +48,7 @@ func TestRedeemMakesNoRequestWhenNothingIsAvailable(t *testing.T) {
 		"all expired":    `{"credits":[{"id":"credit-a","status":"expired"}]}`,
 		"no credits key": `{"available_count":3}`,
 	} {
-		host := hostWith(map[string]string{creditsURL: inventory})
+		host := hostWith(map[string]string{codexCreditsURL: inventory})
 		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -140,7 +71,7 @@ func TestRedeemTreatsAnyAcceptedPostAsSpent(t *testing.T) {
 		"unknown code":    `{"code":"something_new"}`,
 		"empty object":    `{}`,
 	} {
-		host := hostWith(map[string]string{creditsURL: oneAvailable, consumeURL: body})
+		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: body})
 		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -159,8 +90,8 @@ func TestRedeemMapsProviderCodes(t *testing.T) {
 		"already_redeemed": OutcomeNoCredit,
 	} {
 		host := hostWith(map[string]string{
-			creditsURL: oneAvailable,
-			consumeURL: `{"code":"` + code + `"}`,
+			codexCreditsURL: oneAvailable,
+			codexConsumeURL: `{"code":"` + code + `"}`,
 		})
 		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
 		if err != nil {
@@ -172,13 +103,13 @@ func TestRedeemMapsProviderCodes(t *testing.T) {
 	}
 }
 
-// Only Codex has banked resets. A credential on any other provider must not
-// produce a request at all, whatever the caller claims about it.
+// Only Codex and Claude bank resets. A credential on any other provider must
+// not produce a request at all, whatever the caller claims about it.
 func TestRedeemRefusesEveryOtherProvider(t *testing.T) {
-	for _, provider := range []string{"claude", "xai", "gemini", ""} {
-		host := hostWith(map[string]string{creditsURL: oneAvailable, consumeURL: `{"code":"reset"}`})
-		if _, err := New(host).Redeem(context.Background(), provider, "some-credential"); !errors.Is(err, ErrNotCodex) {
-			t.Fatalf("provider %q: err = %v, want ErrNotCodex", provider, err)
+	for _, provider := range []string{"xai", "gemini", "openrouter", ""} {
+		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
+		if _, err := New(host).Redeem(context.Background(), provider, "some-credential"); !errors.Is(err, ErrUnsupportedProvider) {
+			t.Fatalf("provider %q: err = %v, want ErrUnsupportedProvider", provider, err)
 		}
 		if len(host.requests) != 0 {
 			t.Fatalf("provider %q reached the provider", provider)
@@ -189,8 +120,8 @@ func TestRedeemRefusesEveryOtherProvider(t *testing.T) {
 // A provider that refuses the inventory read must not be followed by a POST
 // built on a guess.
 func TestRedeemStopsAtARefusedInventory(t *testing.T) {
-	host := hostWith(map[string]string{consumeURL: `{"code":"reset"}`})
-	host.status[creditsURL] = 401
+	host := hostWith(map[string]string{codexConsumeURL: `{"code":"reset"}`})
+	host.status[codexCreditsURL] = 401
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRefused) {
 		t.Fatalf("err = %v, want ErrRefused", err)
 	}
@@ -201,19 +132,42 @@ func TestRedeemStopsAtARefusedInventory(t *testing.T) {
 
 func TestRedeemReportsAnUnreachableProvider(t *testing.T) {
 	host := hostWith(map[string]string{})
-	host.errs[creditsURL] = errors.New("dial failed")
+	host.errs[codexCreditsURL] = errors.New("dial failed")
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }
 
-// A refused POST is the one case where the credit's fate is genuinely unknown.
-// It is reported as a refusal so the operator can look, rather than as a spend.
-func TestRedeemReportsARefusedConsume(t *testing.T) {
-	host := hostWith(map[string]string{creditsURL: oneAvailable})
-	host.status[consumeURL] = 500
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRefused) {
-		t.Fatalf("err = %v, want ErrRefused", err)
+// A consume that did not come back with a 2xx is sorted by what its status
+// proves. Authentication and throttling turn a request away before it is acted
+// on, so those spent nothing and say so. Everything else — a 5xx above all,
+// which is what a gateway sends when the service behind it was slow rather
+// than idle, and a request that never came back at all — may have spent the
+// credit, and is reported as exactly that rather than as a refusal the
+// operator would answer with a fresh press.
+func TestRedeemSortsAFailedConsumeByWhatItProves(t *testing.T) {
+	for name, want := range map[string]struct {
+		status int
+		err    error
+		want   error
+	}{
+		"401":         {status: 401, want: ErrRefused},
+		"403":         {status: 403, want: ErrRefused},
+		"429":         {status: 429, want: ErrRateLimited},
+		"400":         {status: 400, want: ErrOutcomeUnknown},
+		"404":         {status: 404, want: ErrOutcomeUnknown},
+		"409":         {status: 409, want: ErrOutcomeUnknown},
+		"500":         {status: 500, want: ErrOutcomeUnknown},
+		"502":         {status: 502, want: ErrOutcomeUnknown},
+		"504":         {status: 504, want: ErrOutcomeUnknown},
+		"302":         {status: 302, want: ErrOutcomeUnknown},
+		"no response": {err: errors.New("context deadline exceeded"), want: ErrOutcomeUnknown},
+	} {
+		host := hostWith(map[string]string{codexCreditsURL: oneAvailable})
+		host.queue(codexConsumeURL, reply{status: want.status, err: want.err})
+		if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, want.want) {
+			t.Fatalf("%s: err = %v, want %v", name, err, want.want)
+		}
 	}
 }
 
@@ -228,7 +182,7 @@ func TestRedeemRefusesACredentialItCannotAuthenticate(t *testing.T) {
 		"not json":        {`api-key-only`, ErrNoAccessToken},
 		"no account id":   {`{"access_token":"tok"}`, ErrNoAccountID},
 	} {
-		host := hostWith(map[string]string{creditsURL: oneAvailable, consumeURL: `{"code":"reset"}`})
+		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 		host.auth = doc.auth
 		if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, doc.want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, doc.want)
@@ -244,7 +198,7 @@ func TestRedeemRefusesACredentialItCannotAuthenticate(t *testing.T) {
 // credit on a different account than the card reported.
 func TestRedeemResolvesTheAccountFromTheIDToken(t *testing.T) {
 	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-from-token"}}`))
-	host := hostWith(map[string]string{creditsURL: oneAvailable, consumeURL: `{"code":"reset"}`})
+	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	host.auth = `{"tokens":{"access_token":"tok","id_token":"header.` + claims + `.sig"}}`
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
 		t.Fatal(err)
@@ -259,7 +213,7 @@ func TestRedeemResolvesTheAccountFromTheIDToken(t *testing.T) {
 // Every request must be account-scoped and CLI-shaped, or the ChatGPT edge
 // rejects it — the same finding quota-cache made on the usage endpoint.
 func TestRedeemRequestsCarryTheProviderContract(t *testing.T) {
-	host := hostWith(map[string]string{creditsURL: oneAvailable, consumeURL: `{"code":"reset"}`})
+	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
 		t.Fatal(err)
 	}
@@ -286,16 +240,60 @@ func TestRedeemRequestsCarryTheProviderContract(t *testing.T) {
 	}
 }
 
+// Every request carries its own bound, and the consume gets the longer one. A
+// deadline that only the whole exchange had would let one stalled read eat the
+// time the spend needs.
+func TestRedeemBoundsEveryRequest(t *testing.T) {
+	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	if _, err := New(host).Redeem(ctx, "codex", "c"); err != nil {
+		t.Fatal(err)
+	}
+	if read := host.budgets[0]; read <= 0 || read > readTimeout {
+		t.Fatalf("inventory read had %v, want at most %v", read, readTimeout)
+	}
+	if spend := host.budgets[1]; spend <= readTimeout || spend > spendTimeout {
+		t.Fatalf("consume had %v, want at most %v and more than a read", spend, spendTimeout)
+	}
+}
+
+// A spend is only sent with its whole bound available. Cut short by the
+// exchange around it, a slow answer would become an unknown one.
+func TestRedeemSendsNoSpendItCannotWaitFor(t *testing.T) {
+	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
+	ctx, cancel := context.WithTimeout(context.Background(), spendTimeout-time.Second)
+	defer cancel()
+	if _, err := New(host).Redeem(ctx, "codex", "c"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if host.posted() {
+		t.Fatal("a spend was sent without the time to hear its answer")
+	}
+}
+
+// The whole exchange, at its worst, fits inside the bound the API gives it,
+// with room left over: two reads and one spend for Claude, the longest.
+func TestTheOverallBoundCoversTheLongestExchange(t *testing.T) {
+	if worst := 2*readTimeout + spendTimeout; worst >= Timeout {
+		t.Fatalf("two reads and a spend take %v, the bound is %v", worst, Timeout)
+	}
+	// The browser waits 65 seconds and a proxy in front of CPA commonly 60.
+	if Timeout > 55*time.Second {
+		t.Fatalf("Timeout = %v; the route must answer before anything in front of it gives up", Timeout)
+	}
+}
+
 // A credit id is echoed straight back into a request body. An unbounded or
 // quote-bearing string from a response has no business being one.
 func TestRedeemIgnoresMalformedCreditIDs(t *testing.T) {
 	host := hostWith(map[string]string{
-		creditsURL: `{"credits":[` +
+		codexCreditsURL: `{"credits":[` +
 			`{"id":"` + strings.Repeat("x", 200) + `","status":"available"},` +
 			`{"id":"with\"quote","status":"available"},` +
 			`{"id":"","status":"available"},` +
 			`{"id":"credit-good","status":"available","expires_at":"2026-12-01T00:00:00Z"}]}`,
-		consumeURL: `{"code":"reset"}`,
+		codexConsumeURL: `{"code":"reset"}`,
 	})
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
 		t.Fatal(err)
@@ -309,10 +307,10 @@ func TestRedeemIgnoresMalformedCreditIDs(t *testing.T) {
 // to spend one first, and an unknown one is not a reason to spend it sooner.
 func TestRedeemPrefersADatedCreditOverAnUndatedOne(t *testing.T) {
 	host := hostWith(map[string]string{
-		creditsURL: `{"credits":[` +
+		codexCreditsURL: `{"credits":[` +
 			`{"id":"undated","status":"available"},` +
 			`{"id":"dated","status":"available","expires_at":"2026-12-01T00:00:00Z"}]}`,
-		consumeURL: `{"code":"reset"}`,
+		codexConsumeURL: `{"code":"reset"}`,
 	})
 	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
 		t.Fatal(err)
@@ -328,8 +326,8 @@ func TestRedeemPrefersADatedCreditOverAnUndatedOne(t *testing.T) {
 func TestRedeemRefusesASecondConcurrentAttempt(t *testing.T) {
 	release := make(chan struct{})
 	host := &blockingHost{fakeHost: *hostWith(map[string]string{
-		creditsURL: oneAvailable,
-		consumeURL: `{"code":"reset"}`,
+		codexCreditsURL: oneAvailable,
+		codexConsumeURL: `{"code":"reset"}`,
 	}), gate: release}
 	redeemer := New(host)
 
@@ -362,8 +360,8 @@ func TestRedeemLocksOneCredentialNotAllOfThem(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	host := &blockingHost{fakeHost: *hostWith(map[string]string{
-		creditsURL: oneAvailable,
-		consumeURL: `{"code":"reset"}`,
+		codexCreditsURL: oneAvailable,
+		codexConsumeURL: `{"code":"reset"}`,
 	}), gate: release}
 	redeemer := New(host)
 	go func() { _, _ = redeemer.Redeem(context.Background(), "codex", "credential-one") }()
@@ -382,8 +380,10 @@ func TestRedeemerWithoutAHostIsInert(t *testing.T) {
 	if redeemer.Enabled() {
 		t.Fatal("a redeemer with no host reports itself enabled")
 	}
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v", err)
+	for _, provider := range []string{"codex", "claude"} {
+		if _, err := redeemer.Redeem(context.Background(), provider, "c"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("%s: err = %v", provider, err)
+		}
 	}
 }
 
@@ -403,6 +403,10 @@ func TestRequestIDsAreUniqueAndWellShaped(t *testing.T) {
 		parts := strings.Split(id, "-")
 		if len(parts) != 5 || len(id) != 36 || parts[2][0] != '4' {
 			t.Fatalf("request id %q is not a version 4 uuid", id)
+		}
+		// And it is the shape Claude's claim endpoint accepts.
+		if !claudeRequestIDPattern.MatchString(id) {
+			t.Fatalf("request id %q would be refused by Claude", id)
 		}
 	}
 }

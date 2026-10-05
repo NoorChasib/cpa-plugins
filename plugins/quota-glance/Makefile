@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-VERSION ?= 0.4.0
+VERSION ?= 0.5.0
 
 # The dashboard. Its build output is committed, because `go build` embeds it and
 # must never need Node; web-verify is what stops that committed copy drifting.
@@ -7,7 +7,7 @@ WEB_DIR := web
 WEB_BUNDLE := $(WEB_DIR)/dist/index.html
 WEB_SCRATCH := $(WEB_DIR)/.verify
 
-.PHONY: ci build fmt-check test race vet golden smoke web web-verify web-dev
+.PHONY: ci build fmt-check test race vet golden smoke web web-verify web-dev web-test
 fmt-check:
 	@test -z "$$(gofmt -l .)"
 vet:
@@ -20,7 +20,7 @@ race:
 # develops against them, so review the diff: a change here is a contract change.
 golden:
 	go test ./internal/aggregate/ -run 'TestGolden' -count=1 -update
-ci: fmt-check vet web-verify race build
+ci: fmt-check vet web-test web-verify race build
 # Loads the built library into a disposable pinned CPA container and drives the
 # real routes. Needs docker; nothing else in the suite leaves the process.
 smoke: build
@@ -39,9 +39,18 @@ web:
 	cd $(WEB_DIR) && pnpm install --frozen-lockfile && pnpm build
 
 # The dev server, against the committed golden documents. Needs no CPA running.
-# Set QUOTA_GLANCE_PROXY to develop against a live one instead.
+# QUOTA_GLANCE_PROXY forwards the rest of /v0 to a CPA host, but the summary and
+# every press path are always answered by the fixture, so it never sees a press.
 web-dev:
 	cd $(WEB_DIR) && pnpm install && pnpm dev
+
+# The page's own tests: which credential it may present, and when, so that it
+# never costs the reader a failed CPA management sign-in; and the dev fixture
+# that stands in for CPA. Node alone, no install: node >= 22.18 strips the
+# types itself, and the files under test import nothing but each other and
+# Node's built-ins.
+web-test:
+	cd $(WEB_DIR) && node --test 'test/*.test.ts'
 
 # Rebuilds the dashboard into a scratch directory and compares it to the
 # committed bundle.
