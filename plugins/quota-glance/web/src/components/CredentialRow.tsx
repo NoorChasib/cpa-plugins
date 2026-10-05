@@ -24,19 +24,18 @@ function Email({ address }: { address: string }) {
 }
 
 /**
- * The account's own bar, in its identity shade, so the row and its slice of
- * the pool above read as the same thing.
+ * The account's own bar, in the colour of its own level: the accent while it
+ * has room, amber when it runs low, red when it is critical — the same three
+ * the pool bar uses, so a red row is what makes a pool turn.
  *
  * Sized from the fraction and labelled from the integer percent, both of which
- * the server sends, so the bar and the number beside it cannot disagree. The
- * level is carried by the number's ink and, for assistive technology, by the
- * label — not by the bar, whose colour already means "which account".
+ * the server sends, so the bar and the number beside it cannot disagree.
  */
-function Bar({ fraction, percent, slot }: { fraction: number; percent: number; slot: number }) {
+function Bar({ fraction, percent, level }: { fraction: number; percent: number; level: string }) {
   const width = Math.max(0, Math.min(1, fraction)) * 100
   return (
-    <span className="qg-abar" role="img" aria-label={`${percent}% left`}>
-      <i className={`qg-id-${slot}`} style={{ width: `${width}%` }} />
+    <span className={`qg-abar qg-lvl-${level}`} role="img" aria-label={`${percent}% left`}>
+      <i style={{ width: `${width}%` }} />
     </span>
   )
 }
@@ -221,12 +220,10 @@ const LEVEL_INK: Record<string, string> = {
 export function CredentialRow({
   entry,
   credential,
-  slot,
   solo,
 }: {
   entry: RowEntry
   credential: Credential | undefined
-  slot: number
   /** The only account on the card, whose bar and figure the pool already shows. */
   solo: boolean
 }) {
@@ -265,15 +262,10 @@ export function CredentialRow({
   const creditsInline = compact && !resets && credits !== null
   const figureLine = percent || resets || credential?.activity || creditsInline
 
-  // The swatch says what the row's slice in the bar looks like: stippled for a
-  // reading the server will not vouch for, hollow for none.
-  const swatch = !entry.hasReading ? "is-hollow" : degraded ? "is-faded" : ""
-
   return (
     <div className={`qg-acct ${degraded ? "is-degraded" : ""}`}>
       <div className="qg-aline">
         <span className="qg-addr">
-          <i className={`qg-sw qg-id-${slot} ${swatch}`} aria-hidden="true" />
           <Email address={credential?.email || entry.credentialId} />
         </span>
         {/* Full names, never truncated: "SuperGrok Heavy" and "Enterprise"
@@ -296,7 +288,7 @@ export function CredentialRow({
           // this reading has not earned that.
           <span className="qg-astate">{STATE_LABELS[entry.state] ?? entry.state}</span>
         ) : (
-          <Bar fraction={entry.remainingFraction} percent={entry.remainingPercent} slot={slot} />
+          <Bar fraction={entry.remainingFraction} percent={entry.remainingPercent} level={entry.level} />
         ))}
 
       {figureLine && (

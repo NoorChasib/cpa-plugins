@@ -2,7 +2,7 @@ import { useId } from "react"
 
 import { CredentialRow } from "./CredentialRow"
 import { useNowSeconds } from "../lib/now"
-import { type AccountName, hasSlices, identitySlot, nameText, recoveryNames, shortName } from "../lib/pool"
+import { type AccountName, nameText, recoveryNames, shortName } from "../lib/pool"
 import { formatDuration, secondsUntil } from "../lib/time"
 import type { Credential, Row } from "../lib/types"
 
@@ -68,73 +68,31 @@ function Chevron() {
   )
 }
 
-/** What a row's readers need to name its accounts, in entry order. */
-type Named = { name: string; slot: number }
+/** What a row's readers call its accounts, in entry order. */
+type Named = { name: string }
 
 /**
- * A legend swatch's state: solid for a reading the bar shows, an outline round
- * a tint for one it shows stippled, hollow for no reading, and plain grey when
- * the document has no slices at all — a coloured dot would promise a slice of
- * the bar that is not there.
- */
-function swatchState(entry: Row["entries"][number], sliced: boolean): string {
-  if (!sliced) return "is-plain"
-  if (!entry.hasReading) return "is-hollow"
-  return entry.state !== "ok" ? "is-faded" : ""
-}
-
-/**
- * The pool, as one bar.
+ * The pool, as one bar in one colour.
  *
- * Each account's slice of what is left, laid end to end in entry order, then a
- * hatched slice for each account in the next recovery — what that reset gives
- * back — then the empty track: capacity no scheduled reset is about to return.
- * Every width is a field the server wrote, so the bar is the headline taken
- * apart and cannot disagree with the number under it.
+ * What is left, as a single fill in the level's colour — the accent while the
+ * pool is healthy, amber when it runs low, red when it is critical — then a
+ * hatched stretch in the same colour for what the next reset gives back, then
+ * the empty track. Which account holds what is the rows' job below, not the
+ * bar's: one fill reads as one quantity, which is what a pool is.
  *
- * A slice of an account whose reading the server does not vouch for — stale,
- * failed — is drawn faded: it is in the mean, so it stays in the bar, but it
- * should not read as firmly as the rest.
+ * Every width is a field the server wrote, so the bar cannot disagree with
+ * the number under it. A plugin too old to report the projected gain draws
+ * no hatching rather than guessing at it.
  */
-function PoolBar({ row, named, sliced, label }: { row: Row; named: Named[]; sliced: boolean; label: string }) {
-  const kept = row.entries.flatMap((entry, index) => {
-    const share = entry.poolShare ?? 0
-    if (!sliced || share <= 0) return []
-    const who = named[index]!
-    return [
-      <i
-        key={`k${index}`}
-        className={`qg-seg qg-id-${who.slot} ${entry.state !== "ok" ? "is-faded" : ""}`}
-        style={{ width: `${share * 100}%` }}
-        title={`${who.name} · ${entry.remainingPercent}% left`}
-      />,
-    ]
-  })
-  const returning = row.entries.flatMap((entry, index) => {
-    const share = entry.recoveryShare ?? 0
-    if (!sliced || share <= 0) return []
-    const who = named[index]!
-    return [
-      <i
-        key={`r${index}`}
-        className={`qg-ghost qg-id-${who.slot} ${entry.state !== "ok" ? "is-faded" : ""}`}
-        style={{ width: `${share * 100}%` }}
-        title={`${who.name} · back to full at its next reset`}
-      />,
-    ]
-  })
-
+function PoolBar({ row, label }: { row: Row; label: string }) {
+  const aggregate = row.aggregate
+  const gain = typeof aggregate.projectedGainFraction === "number" ? aggregate.projectedGainFraction : 0
   return (
-    <div className="qg-bar" role="img" aria-label={label}>
-      {sliced ? (
-        <>
-          {kept}
-          {returning}
-        </>
-      ) : (
-        // A document without slices: the row's own fraction, undivided.
-        <i className="qg-seg-whole" style={{ width: `${row.aggregate.remainingFraction * 100}%` }} />
+    <div className={`qg-bar qg-lvl-${aggregate.level}`} role="img" aria-label={label}>
+      {aggregate.remainingFraction > 0 && (
+        <i className="qg-fill" style={{ width: `${aggregate.remainingFraction * 100}%` }} />
       )}
+      {gain > 0 && <i className="qg-ghost" style={{ width: `${gain * 100}%` }} title="back at the next reset" />}
     </div>
   )
 }
@@ -195,8 +153,8 @@ function recoverySentence(row: Row, named: Named[], now: number): string {
  * One window across a provider's credentials: the pool first, its accounts
  * after, foldable.
  *
- * What folds is the per-account detail; the pool stays. The bar, the number,
- * when it recovers and the legend are all still there when the card is shut,
+ * What folds is the per-account detail; the pool stays. The bar, the number
+ * and when it recovers are all still there when the card is shut,
  * because those are what a reader scanning the page came for — a fold that hid
  * the number would just be a card that was gone.
  */
@@ -224,16 +182,14 @@ export function WindowCard({
   const countID = useId()
   const now = useNowSeconds()
   const aggregate = row.aggregate
-  const sliced = hasSlices(row.entries)
 
-  const named: Named[] = row.entries.map((entry, index) => ({
+  const named: Named[] = row.entries.map((entry) => ({
     name: nameText(
       names.get(entry.credentialId) ?? {
         local: shortName(credentials.get(entry.credentialId), entry.credentialId),
         qualifier: "",
       },
     ),
-    slot: identitySlot(index),
   }))
   const levelWord = LEVEL_WORD[aggregate.level]
 
@@ -260,17 +216,13 @@ export function WindowCard({
   ]
     .filter(Boolean)
     .join(" ")
-  // A legend for one account repeats the number above it.
-  const legend = row.entries.length > 1
-
   // One account: the pool bar above is that account's bar, so its row carries
   // who it is and what it is doing, not the same bar and figure again.
   const solo = row.entries.length === 1
 
   return (
-    // A critical pool says so at the card's edge as well as in its number and
-    // chip. Only there: the accounts keep their own shades, which say who each
-    // is, and a healthy account in a critical pool is still healthy.
+    // A critical pool says so at the card's edge as well as in its bar, its
+    // number and its chip.
     <article className={`qg-win ${aggregate.level === "critical" ? "is-crit" : ""}`} aria-label={row.title}>
       <div className="qg-whead">
         <h3 id={titleID} className="qg-wtitle">
@@ -282,7 +234,7 @@ export function WindowCard({
         </span>
       </div>
 
-      <PoolBar row={row} named={named} sliced={sliced} label={label} />
+      <PoolBar row={row} label={label} />
 
       <div className="qg-hfig">
         <span className={`qg-big ${LEVEL_CLASS[aggregate.level] ?? ""}`}>
@@ -292,26 +244,13 @@ export function WindowCard({
         <Recovery row={row} named={named} now={now} />
       </div>
 
-      {(legend || full > 0) && (
-        // The bar's label already carries every figure here, so assistive
-        // technology is not read the same list twice.
+      {full > 0 && (
+        // The bar's label already carries this, so assistive technology is
+        // not read it twice.
         <div className="qg-hsub" aria-hidden="true">
-          {legend && (
-            <span className="qg-legend">
-              {row.entries.map((entry, index) => (
-                <span key={entry.credentialId} className={entry.state !== "ok" ? "is-faded" : ""}>
-                  <i className={`qg-sw qg-id-${named[index]!.slot} ${swatchState(entry, sliced)}`} />
-                  {named[index]!.name}
-                  <b className="num">{entry.hasReading ? `${entry.remainingPercent}%` : "—"}</b>
-                </span>
-              ))}
-            </span>
-          )}
-          {full > 0 && (
-            <span className="qg-full">
-              full again in <b className="num">{formatDuration(full)}</b>
-            </span>
-          )}
+          <span className="qg-full">
+            full again in <b className="num">{formatDuration(full)}</b>
+          </span>
         </div>
       )}
 
@@ -344,12 +283,11 @@ export function WindowCard({
         * ticking is work nobody can see. */}
       <div id={bodyID} hidden={collapsed} className="qg-rows">
         {!collapsed &&
-          row.entries.map((entry, index) => (
+          row.entries.map((entry) => (
             <CredentialRow
               key={entry.credentialId}
               entry={entry}
               credential={credentials.get(entry.credentialId)}
-              slot={named[index]!.slot}
               solo={solo}
             />
           ))}

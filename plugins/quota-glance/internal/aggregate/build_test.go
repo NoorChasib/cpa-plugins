@@ -280,7 +280,11 @@ func TestLevelThresholdIsServerSide(t *testing.T) {
 	for _, tc := range []struct {
 		used  float64
 		level string
-	}{{0, LevelOK}, {60, LevelOK}, {61, LevelLow}, {80, LevelLow}, {81, LevelCritical}, {100, LevelCritical}} {
+	}{
+		{0, LevelOK}, {59, LevelOK}, {59.4, LevelOK}, // 41% and 40.6% (printed 41%) left
+		{59.6, LevelLow}, {60, LevelLow}, {89, LevelLow}, // 40.4% (printed 40%), 40%, 11% left
+		{89.6, LevelCritical}, {90, LevelCritical}, {100, LevelCritical}, // 10.4% (printed 10%), 10%, 0% left
+	} {
 		remaining, _ := remainingOf(tc.used)
 		if got := levelOf(remaining); got != tc.level {
 			t.Fatalf("used %v -> %s; want %s", tc.used, got, tc.level)

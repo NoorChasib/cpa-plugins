@@ -1,34 +1,12 @@
-// Naming and colouring the pieces of a pooled bar.
+// Naming the accounts around a pooled bar.
 //
 // Nothing here takes a share of anything. Every width the bar draws is a
-// field the server wrote — `poolShare`, `recoveryShare`, the aggregate's
-// fractions — and this module only decides which account a slice belongs to
-// and what to call it.
+// field the server wrote — the aggregate's fractions — and this module only
+// decides what to call each account in a sentence or on a tile.
 
-import type { Credential, RowEntry } from "./types"
+import type { Credential } from "./types"
 
-/**
- * How many identity shades there are before they repeat.
- *
- * Six shades of the accent's cool family (index.css says how they were
- * chosen), ordered so that neighbours — which touch on the bar — differ in
- * both lightness and hue. Past six the cycle repeats, by which point the
- * legend and the row swatches are doing the identifying anyway.
- */
-export const IDENTITY_STEPS = 6
-
-/**
- * An account's shade within its provider, from its place in the entries.
- *
- * Every row lists every one of the provider's credentials in the catalog's
- * order, so a credential's index is the same on every card: the same account
- * is the same shade in the bar, the legend and its row, on each card it is on.
- */
-export function identitySlot(index: number): number {
-  return index % IDENTITY_STEPS
-}
-
-/** The part of an address before the "@", which is how a bar labels a slice. */
+/** The part of an address before the "@", which is how a sentence names an account. */
 export function shortName(credential: Credential | undefined, fallback: string): string {
   const address = credential?.email || fallback
   const at = address.indexOf("@")
@@ -83,17 +61,6 @@ export function accountNames(credentials: Credential[]): Map<string, AccountName
       return [item.id, { local: item.local, qualifier: `@${short ? item.label : item.domain}` }]
     }),
   )
-}
-
-/**
- * Whether this document carries the pool's slices.
- *
- * A plugin older than the pooled bar sends none. Then the bar draws the row's
- * own fraction as one undivided slice and no recovery mark — both straight
- * from the aggregate — rather than this page dividing the mean itself.
- */
-export function hasSlices(entries: RowEntry[]): boolean {
-  return entries.every((entry) => typeof entry.poolShare === "number" && typeof entry.recoveryShare === "number")
 }
 
 /**

@@ -141,8 +141,8 @@ can make data fresher; Quota Cache owns the schedule. The document reports
 
 Percentages in the document are **remaining** capacity, converted once from the
 used percentage Quota Cache records. `level` is computed server-side —
-`critical` below 20% remaining — so every client agrees without recomputing a
-threshold in CSS.
+`low` at 40% remaining or less, `critical` at 10% or less — so every client
+agrees without recomputing a threshold in CSS.
 
 Credentials are emitted sorted by their weekly reset, soonest first, and every
 row repeats that order, so the top row of each card is always the credential

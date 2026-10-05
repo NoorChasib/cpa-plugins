@@ -677,45 +677,20 @@
     color: var(--color-ink-3);
   }
 
-  /* Account identities inside one provider: six shades of the accent's cool
-   * family, from cerulean through the accent itself to periwinkle. The same
-   * shade marks the same account in the bar, the legend, the row swatch and
-   * the row's own bar, on every card — including a critical one, whose level
-   * is said by its number, its chip and its border, never by repainting who
-   * each account is.
-   *
-   * Hue does the separating, not lightness alone. Every shade has to stand at
-   * 3:1 or better against the track it is drawn on (the lowest here is 3.45),
-   * and that floor leaves too little lightness range for six steps to differ
-   * from one another by lightness: the darkest blues the old ramp used to get
-   * there were the ones a reader could not see. So shades that never touch
-   * differ in hue, and neighbours — which do touch, in the bar — differ in
-   * both: every adjacent pair, slot 5 back round to slot 0 included, is at
-   * least 16 apart in OKLab ΔE×100, and the closest pair of all is 10, where
-   * the light-dark ramp's two navies were under 7. The bar never asks colour
-   * to do this alone: the legend names each slice in the order it is drawn. */
-  .qg-id-0 {
-    --id: #3987e5;
+  /* Bar colours, from the level the server computed: the accent while there
+   * is room, amber when it runs low, red when it is critical. The pool and
+   * every account bar use the same three, so a bar's colour always means how
+   * much is left and never which account it is. */
+  .qg-lvl-ok {
+    --lvl: var(--color-accent);
   }
 
-  .qg-id-1 {
-    --id: #a6ebff;
+  .qg-lvl-low {
+    --lvl: var(--color-warn);
   }
 
-  .qg-id-2 {
-    --id: #31a1bd;
-  }
-
-  .qg-id-3 {
-    --id: #a69bfc;
-  }
-
-  .qg-id-4 {
-    --id: #7870b4;
-  }
-
-  .qg-id-5 {
-    --id: #4ad3fe;
+  .qg-lvl-critical {
+    --lvl: var(--color-crit);
   }
 
   /* A critical pool, said once at the card's edge as well as in its figures. */
@@ -723,15 +698,10 @@
     border-color: color-mix(in srgb, var(--color-crit) 38%, var(--color-line));
   }
 
-  /* The pool. Slices are flex items sized from the server's shares; each is
-   * kept at least a few pixels wide so an account down to its last percent
-   * still shows, and the rest give up that width between them. A 2px rule in
-   * the card's colour separates neighbours, so two slices of similar shades
-   * still read as two.
-   *
-   * 8px is the radius plus the rule: the bar's rounded end clips the first
-   * slice, and anything narrower is cut into a sliver that reads as a
-   * rendering fault rather than an account. */
+  /* The pool: one fill for what is left, then the hatched stretch the next
+   * reset gives back, then the empty track. The fill keeps a few pixels even
+   * at its last percent, so a pool that is nearly out still shows as a pool
+   * and not as an empty track. */
   .qg-bar {
     display: flex;
     height: 12px;
@@ -744,54 +714,20 @@
   .qg-bar > i {
     display: block;
     flex: 0 1 auto;
-    min-width: 8px;
+    min-width: 6px;
     height: 100%;
   }
 
-  .qg-seg {
-    background: var(--id);
+  .qg-fill {
+    background: var(--lvl);
   }
 
-  /* A plugin too old to slice the pool: one undivided fill in the accent,
-   * which is nobody's shade in particular. */
-  .qg-seg-whole {
-    background: var(--color-accent);
-  }
-
-  .qg-bar > .qg-seg:not(:last-child) {
-    box-shadow: inset -2px 0 0 var(--color-card);
-  }
-
-  /* Read, but from a reading the server no longer vouches for: the account's
-   * shade as a stipple over a tint of itself. A pattern rather than a fade,
-   * because a faded shade is just a darker shade — one that, in this palette,
-   * can pass for another account's. */
-  .qg-seg.is-faded {
-    background:
-      radial-gradient(circle, var(--id) 0 0.9px, transparent 1.3px) 0 0 / 3px 3px,
-      color-mix(in srgb, var(--id) 24%, var(--color-track));
-  }
-
-  /* What the next reset gives back: the account's own shade, hatched, so it
-   * reads as capacity on its way rather than capacity held. */
+  /* What the next reset gives back: the same colour, hatched, so it reads as
+   * capacity on its way rather than capacity held. */
   .qg-ghost {
-    --ink: color-mix(in srgb, var(--id) 62%, transparent);
-    --edge: color-mix(in srgb, var(--id) 45%, transparent);
+    --ink: color-mix(in srgb, var(--lvl) 62%, transparent);
     background: repeating-linear-gradient(135deg, var(--ink) 0 1.5px, transparent 1.5px 5px);
-    box-shadow: inset 0 0 0 1px var(--edge);
-  }
-
-  /* An account the server does not vouch for gives back less certainly, too:
-   * its hatching is drawn in thinner ink, matching its stippled slice. */
-  .qg-ghost.is-faded {
-    --ink: color-mix(in srgb, var(--id) 34%, transparent);
-    --edge: color-mix(in srgb, var(--id) 26%, transparent);
-  }
-
-  .qg-bar > .qg-ghost:not(:last-child) {
-    box-shadow:
-      inset -2px 0 0 var(--color-card),
-      inset 0 0 0 1px var(--edge);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lvl) 45%, transparent);
   }
 
   /* The figures around the bar, the way the reference's disk block has them:
@@ -895,59 +831,6 @@
   /* The legend's entries are the line's own items, so "full again" can sit at
    * the end of whichever line the legend finishes on rather than claiming a
    * line to itself once the legend wraps. */
-  .qg-legend {
-    display: contents;
-  }
-
-  .qg-legend > span {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-  }
-
-  .qg-legend b {
-    font-size: 10.5px;
-    font-weight: 500;
-    color: var(--color-ink-2);
-  }
-
-  /* A reading the server no longer vouches for: its figure drops to the
-   * line's own ink, and its swatch says why in the slice's own language. */
-  .qg-legend .is-faded b {
-    color: var(--color-ink-3);
-  }
-
-  .qg-sw {
-    display: inline-block;
-    flex: none;
-    width: 8px;
-    height: 8px;
-    border-radius: 2.5px;
-    background: var(--id);
-  }
-
-  /* No reading: the account's place in the legend, with nothing in it, in
-   * neutral ink — there is no slice of it for a shade to point at. */
-  .qg-sw.is-hollow {
-    background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--color-ink-3);
-  }
-
-  /* Stale or failed: the shade as an outline round a tint of itself, the
-   * swatch-sized cousin of the stippled slice. */
-  .qg-sw.is-faded {
-    background: color-mix(in srgb, var(--id) 24%, transparent);
-    box-shadow: inset 0 0 0 1.5px var(--id);
-  }
-
-  /* A document too old to slice the pool: the bar is one undivided fill, so
-   * a shaded dot would promise a slice that is not there. */
-  .qg-sw.is-plain {
-    background: var(--color-ink-4);
-    box-shadow: none;
-  }
-
   .qg-full {
     margin-left: auto;
     white-space: nowrap;
@@ -1075,7 +958,7 @@
     position: absolute;
     inset: 0 auto 0 0;
     border-radius: 3px;
-    background: var(--id);
+    background: var(--lvl);
   }
 
   /* In the bar's place on a reading the server will not vouch for: the word

@@ -578,8 +578,10 @@ front of CPA must allow at least 60 seconds and pass `Authorization` and
 
 ### `level` — computed server-side, on both rows and entries
 
-`critical` below 20% remaining, `low` below 40%, otherwise `ok`. The design
-turns the bar red at `critical`. **Do not recompute this threshold in CSS**; if
+Judged on the whole percent the document prints (`remainingPercent`), so the
+level always agrees with the figure: `ok` at 41% and above, `low` from 40% down
+to 11%, `critical` at 10% and below. The page draws bars blue, amber and red,
+and the big number green, amber and red. **Do not recompute this threshold in CSS**; if
 the rule changes it changes here, once.
 
 ### `trend` — `up`, `down`, `flat`, `unknown`

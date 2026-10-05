@@ -10,11 +10,13 @@ import (
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 )
 
-// Level thresholds. The design turns a bar red below 20% remaining; the rule
-// lives here so every client agrees and none of them recomputes it in CSS.
+// Level thresholds, in the whole percent the page prints: 41% and up is ok,
+// 40% down to 11% is low, and 10% and under is critical. Bars are blue, amber
+// and red in turn, and the big number green, amber and red. The rule lives
+// here so every client agrees and none of them recomputes it in CSS.
 const (
-	criticalBelow = 0.20
-	lowBelow      = 0.40
+	criticalAtOrBelow = 10
+	lowAtOrBelow      = 40
 )
 
 // Where a request bucket lands on the intensity ramp, as a share of the busiest
@@ -86,11 +88,14 @@ func remainingOf(used float64) (float64, string) {
 
 func percentOf(fraction float64) int { return int(math.Round(fraction * 100)) }
 
+// levelOf judges the rounded percent rather than the raw fraction, so the
+// colour always agrees with the figure printed beside it: a pool reading
+// 40.4% is printed "40%" and is amber, never a green "40".
 func levelOf(remaining float64) string {
-	switch {
-	case remaining < criticalBelow:
+	switch percent := percentOf(remaining); {
+	case percent <= criticalAtOrBelow:
 		return LevelCritical
-	case remaining < lowBelow:
+	case percent <= lowAtOrBelow:
 		return LevelLow
 	}
 	return LevelOK
