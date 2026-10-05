@@ -8,8 +8,8 @@
 // component that polls one.
 //
 // host.auth.get and host.http.do are the two exceptions, and they exist for
-// exactly one action: spending a banked Codex rate-limit reset when the
-// operator presses the button and confirms. That is a write the snapshot
+// exactly one action: spending a banked Codex or Claude rate-limit reset when
+// the operator presses the button and confirms. That is a write the snapshot
 // cannot carry and quota-cache's poller has no business performing, and it
 // happens only on an explicit request — never on a timer, never on a rebuild,
 // and never on any route that merely reads. See internal/redeem.
@@ -36,10 +36,16 @@ const (
 	MethodHostAuthList = "host.auth.list"
 	// MethodHostAuthGet and MethodHostHTTPDo are reachable only from the
 	// redeem path. host.auth.get returns the physical credential document,
-	// OAuth tokens included, so its result is decoded for the two fields one
+	// OAuth tokens included, so its result is decoded for the fields one
 	// request needs and never logged, persisted, or rendered.
 	MethodHostAuthGet = "host.auth.get"
 	MethodHostHTTPDo  = "host.http.do"
+	// MethodHostHTTPOperationOpen and MethodHostHTTPCancel are how a deadline
+	// reaches a host.http.do already under way. The call itself is synchronous
+	// and carries no deadline across the ABI, so without them a request that
+	// stalls holds the redeem route until the browser gives up.
+	MethodHostHTTPOperationOpen = "host.http.operation_open"
+	MethodHostHTTPCancel        = "host.http.cancel"
 )
 
 type Envelope struct {
@@ -187,6 +193,20 @@ type HostHTTPRequest struct {
 	URL     string              `json:"url,omitempty"`
 	Headers map[string][]string `json:"headers,omitempty"`
 	Body    []byte              `json:"body,omitempty"`
+	// OperationID names an operation opened with host.http.operation_open, so
+	// host.http.cancel can stop this request. Set by the ABI bridge, never by
+	// a caller.
+	OperationID string `json:"operation_id,omitempty"`
+}
+
+// HostHTTPOperationOpenResponse is the host.http.operation_open result.
+type HostHTTPOperationOpenResponse struct {
+	OperationID string `json:"operation_id"`
+}
+
+// HostHTTPCancelRequest is the host.http.cancel request.
+type HostHTTPCancelRequest struct {
+	OperationID string `json:"operation_id"`
 }
 
 // HostHTTPResponse is the host.http.do result. Upstream returns the untagged

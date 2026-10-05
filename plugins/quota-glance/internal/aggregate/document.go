@@ -199,13 +199,42 @@ type Credential struct {
 	Activity *Activity `json:"activity"`
 	// ResetCredits is the account's banked rate-limit resets, and is null for
 	// every credential that has none — which is every credential on a provider
-	// with no such concept, and a Codex account that has not been granted one.
-	// Null rather than a zero count, so a client renders nothing at all rather
-	// than having to decide that "0 banked" is not worth a badge.
+	// with no such concept, and a Codex or Claude account that has not been
+	// granted one. Null rather than a zero count, so a client renders nothing at
+	// all rather than having to decide that "0 banked" is not worth a badge.
 	ResetCredits *ResetCredits `json:"resetCredits"`
+	// RenewalAtEpoch is when the subscription renews or ends, for a provider
+	// that reports it — Codex does. Null when it does not, and null once the
+	// instant has passed: a renewal behind us is a poll that has not yet seen
+	// the new one, and counting down past zero to it would be wrong.
+	RenewalAtEpoch *int64 `json:"renewalAtEpoch"`
+	// Credits is the prepaid or granted balance the account can spend beyond
+	// its windows, and null for a provider that reports none. Codex reports
+	// credits; Grok reports a prepaid dollar balance.
+	Credits *Credits `json:"credits"`
 }
 
-// ResetCredits is what a credential holds in banked rate-limit resets.
+// Credits is a credential's spendable balance, already written out.
+//
+// It is a figure rather than a bar for the same reason an OpenRouter balance
+// is: there is no ceiling to take a fraction of. Display is the headline and
+// is all a client needs; Amount and Unit are the same figure as data, for a
+// client that wants to compare or sort rather than print.
+type Credits struct {
+	// Display is formatted for direct rendering: "57,706.15" for Codex
+	// credits, "$12.40" for a dollar balance, "Unlimited" when the provider
+	// says there is no limit.
+	Display   string `json:"display"`
+	Unlimited bool   `json:"unlimited"`
+	// Amount is the exact decimal in Unit, unrounded and ungrouped, and "" when
+	// Unlimited is true.
+	Amount string `json:"amount"`
+	// Unit is "credits" or "usd".
+	Unit string `json:"unit"`
+}
+
+// ResetCredits is what a credential holds in banked rate-limit resets — Codex's
+// rate-limit reset credits, or Claude's reset grants.
 //
 // It is not remaining capacity and never becomes a bar: it is a count of
 // entitlements that, when one is spent, clear the account's windows outright.
@@ -216,15 +245,25 @@ type ResetCredits struct {
 	AvailableCount int `json:"availableCount"`
 	// ExpiresAtEpoch and ExpiresInSeconds date the soonest credit that can
 	// still be spent, and are null when the provider did not say. A banked
-	// reset lapses thirty days after it is granted, so a count with no deadline
-	// beside it is the shape in which they are quietly lost.
+	// reset lapses — a Codex credit thirty days after it is granted, a Claude
+	// grant at its own end date — so a count with no deadline beside it is the
+	// shape in which they are quietly lost.
 	ExpiresAtEpoch   *int64 `json:"expiresAtEpoch"`
 	ExpiresInSeconds *int64 `json:"expiresInSeconds"`
 	// Redeemable is false when this plugin cannot spend the credit on the
-	// operator's behalf — the credential is not one CPA can hand a token for,
-	// or redemption is switched off in configuration. The count still shows;
-	// only the button goes. Clients must not offer redemption without it.
+	// operator's behalf — the provider is not one it knows how to redeem on,
+	// the credential is disabled in CPA, or redemption is switched off in
+	// configuration. The count still shows; only the button goes. Clients must
+	// not offer redemption without it.
 	Redeemable bool `json:"redeemable"`
+	// Hold is the provider's reason, at the last poll, that none can be spent
+	// right now: "notLimited", "cooldown", "paused" or "ineligible". Empty when
+	// one can be, or when the provider does not say. It is a hint to print
+	// beside the button, never a reason to hide it: the reading can be a poll
+	// old, and the plugin checks the provider afresh before spending anything.
+	Hold string `json:"hold"`
+	// HoldUntilEpoch is when a "cooldown" hold lifts, and null otherwise.
+	HoldUntilEpoch *int64 `json:"holdUntilEpoch"`
 }
 
 // Activity is one credential's recent request traffic, as a fixed ring of
@@ -304,7 +343,19 @@ type Aggregate struct {
 	SoonestResetAtEpoch   *int64  `json:"soonestResetAtEpoch"`
 	SoonestResetInSeconds *int64  `json:"soonestResetInSeconds"`
 	ProjectedGainPercent  int     `json:"projectedGainPercent"`
-	Subtext               string  `json:"subtext"`
+	// ProjectedGainFraction is the same gain unrounded, on the same 0-1 scale
+	// as RemainingFraction, so a client drawing what the next reset returns
+	// sizes it from this and prints ProjectedGainPercent beside it — the pair
+	// that keeps every other bar and label in this document in agreement.
+	ProjectedGainFraction float64 `json:"projectedGainFraction"`
+	// FullAtEpoch is when the row would read 100% if nothing more were used:
+	// the latest reset among the members below full. Null when every member is
+	// already full, when a member below full has no reset instant (that window
+	// does not refill on a schedule), or when there is nothing ahead to count
+	// down to. It is the far end of the recovery SoonestResetAtEpoch begins.
+	FullAtEpoch   *int64 `json:"fullAtEpoch"`
+	FullInSeconds *int64 `json:"fullInSeconds"`
+	Subtext       string `json:"subtext"`
 }
 
 type RowEntry struct {
@@ -314,17 +365,32 @@ type RowEntry struct {
 	// dash, not 0%. Level is "" in that case rather than the level zero would
 	// compute to, so a client that ignores this flag shows a neutral row rather
 	// than a confident red one.
-	HasReading        bool     `json:"hasReading"`
-	RemainingFraction float64  `json:"remainingFraction"`
-	RemainingPercent  int      `json:"remainingPercent"`
-	Level             string   `json:"level"`
-	ResetAtEpoch      *int64   `json:"resetAtEpoch"`
-	ResetInSeconds    *int64   `json:"resetInSeconds"`
-	ResetDisplayHint  string   `json:"resetDisplayHint"`
-	ObservedAtEpoch   int64    `json:"observedAtEpoch"`
-	NextAttemptEpoch  int64    `json:"nextAttemptEpoch"`
-	SourceWindowKey   string   `json:"sourceWindowKey"`
-	SourceModel       *string  `json:"sourceModel"`
-	DataIssues        []string `json:"dataIssues"`
-	State             string   `json:"state"`
+	HasReading        bool    `json:"hasReading"`
+	RemainingFraction float64 `json:"remainingFraction"`
+	RemainingPercent  int     `json:"remainingPercent"`
+	Level             string  `json:"level"`
+	// PoolShare is this credential's slice of the row's aggregate, on the
+	// row's 0-1 scale: across a row's entries the shares sum to the
+	// aggregate's RemainingFraction, so a pooled bar is these laid end to end.
+	// Zero for an entry with no reading, which is not in the mean.
+	PoolShare float64 `json:"poolShare"`
+	// RecoveryShare is what the row regains from this credential at its next
+	// recovery, on the same scale, and zero unless ResetsNext. Across a row the
+	// shares sum to the aggregate's ProjectedGainFraction: the next reset's
+	// return, credential by credential.
+	RecoveryShare float64 `json:"recoveryShare"`
+	// ResetsNext is true for every credential whose window resets at the
+	// row's soonest reset or within the minute after it — the ones that
+	// recovery is made of. True even for a credential already full, whose
+	// reset returns nothing: it is still the next thing to happen to the row.
+	ResetsNext       bool     `json:"resetsNext"`
+	ResetAtEpoch     *int64   `json:"resetAtEpoch"`
+	ResetInSeconds   *int64   `json:"resetInSeconds"`
+	ResetDisplayHint string   `json:"resetDisplayHint"`
+	ObservedAtEpoch  int64    `json:"observedAtEpoch"`
+	NextAttemptEpoch int64    `json:"nextAttemptEpoch"`
+	SourceWindowKey  string   `json:"sourceWindowKey"`
+	SourceModel      *string  `json:"sourceModel"`
+	DataIssues       []string `json:"dataIssues"`
+	State            string   `json:"state"`
 }

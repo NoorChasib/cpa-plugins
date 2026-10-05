@@ -53,7 +53,8 @@ type Input struct {
 	Samples    []Sample
 	StaleAfter time.Duration
 	// PlanLabels overrides the built-in plan display names, keyed by the
-	// provider-reported value in lower case.
+	// provider-reported value in lower case, bare or as "provider:value". See
+	// planLabelOf for which wins.
 	PlanLabels map[string]string
 	// Redeemable reports whether this plugin is configured and able to spend a
 	// banked reset on the operator's behalf. It is an input rather than a
@@ -495,6 +496,8 @@ func Build(in Input, now time.Time) Document {
 			LastObservedEpoch: epochOf(r.freshest),
 			Activity:          activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
 			ResetCredits:      resetCreditsOf(r, in.Redeemable, now),
+			RenewalAtEpoch:    renewalOf(r, now),
+			Credits:           accountCreditsOf(r),
 		})
 	}
 
@@ -531,12 +534,20 @@ func resetCreditsOf(r record, redeemable bool, now time.Time) *ResetCredits {
 	}
 	credits := &ResetCredits{
 		AvailableCount: source.AvailableCount,
-		// Only a credential CPA is willing to hand a token for can be spent,
-		// and a credential CPA will not route to is one it will not authorize
-		// either. The count still shows on a parked credential; the button does
-		// not, because offering an action that is going to fail is worse than
-		// not offering it.
-		Redeemable: redeemable && r.identity.Provider == "codex" && !r.identity.Disabled && !r.identity.Unavailable,
+		// Every account holding a reset gets its own button, so the operator
+		// chooses which account to spend on. Two things take it away. A
+		// disabled credential is one the operator switched off, and spending on
+		// it would be acting against that. And a provider this plugin cannot
+		// redeem on has nothing to press.
+		//
+		// CPA's routing state deliberately does not. A credential CPA has
+		// parked in a cooldown is reported unavailable, but that is a statement
+		// about routing, not about the account: CPA still hands its token to
+		// host.auth.get, quota-cache polls it with that same token, and the
+		// provider still answers. A cooldown is also exactly when an operator
+		// reaches for a reset — hiding the button then removed it from the one
+		// account that needed it.
+		Redeemable: redeemable && redeemableProvider(r.identity.Provider) && !r.identity.Disabled,
 	}
 	// An expiry already behind us is dropped rather than counted down past
 	// zero: quota-cache filters the same way at the poll, and this covers the
@@ -545,7 +556,58 @@ func resetCreditsOf(r record, redeemable bool, now time.Time) *ResetCredits {
 		epoch, seconds := at.Unix(), int64(at.Sub(now)/time.Second)
 		credits.ExpiresAtEpoch, credits.ExpiresInSeconds = &epoch, &seconds
 	}
+	credits.Hold, credits.HoldUntilEpoch = holdOf(source, now)
 	return credits
+}
+
+// redeemableProvider reports whether this plugin knows how to spend a banked
+// reset on a provider. The redeem package refuses every other provider as
+// well; this keeps the button from being offered for a press that would only be
+// refused.
+func redeemableProvider(provider string) bool {
+	return provider == "codex" || provider == "claude"
+}
+
+// holdOf translates quota-cache's reading of why no reset can be spent right
+// now into this document's vocabulary.
+//
+// A hold this build does not know is dropped rather than passed through: it is
+// a provider string, and an unrecognised one has no wording a client could put
+// beside the button. A cooldown whose end has already passed is dropped too,
+// along with its instant, for the same reason an expired expiry is — it was
+// true at the poll and is not now, and a hint that contradicts the clock is
+// worse than none. The hint never hides the button; the plugin asks the
+// provider afresh before spending anything.
+func holdOf(source *qc.ResetCredits, now time.Time) (string, *int64) {
+	hold := ""
+	switch source.Hold {
+	case "not_limited":
+		hold = "notLimited"
+	case "cooldown", "paused", "ineligible":
+		hold = source.Hold
+	default:
+		return "", nil
+	}
+	if hold != "cooldown" || source.HoldUntil == nil {
+		return hold, nil
+	}
+	if !source.HoldUntil.After(now) {
+		return "", nil
+	}
+	epoch := source.HoldUntil.Unix()
+	return hold, &epoch
+}
+
+// renewalOf is the subscription's renewal instant, when quota-cache read one.
+// One already behind us is dropped: the subscription either renewed, and the
+// next poll will carry the new date, or it lapsed, and either way the old date
+// says nothing true about the future.
+func renewalOf(r record, now time.Time) *int64 {
+	if !r.hasEntry || r.entry.RenewalAt == nil || !r.entry.RenewalAt.After(now) {
+		return nil
+	}
+	epoch := r.entry.RenewalAt.Unix()
+	return &epoch
 }
 
 func epochOf(t time.Time) int64 {
@@ -674,23 +736,92 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 		if title == "" {
 			title = rowTitleOf(windowKeys[id], models[id])
 		}
+		// Found once and handed to both halves of the row, so the gain the
+		// aggregate announces and the per-entry shares a client draws it from
+		// are taken over the same credentials by the same rule.
+		next := nextRecoveryOf(byRow[id], now)
 		rows = append(rows, Row{
 			RowID:     id,
 			Title:     title,
 			Order:     rowOrderOf(windowKeys[id]),
 			Matched:   !strings.HasPrefix(windowKeys[id], qc.WindowRawPrefix),
-			Aggregate: buildAggregate(id, byRow[id], len(records), in, now),
-			Entries:   buildEntries(records, byRow[id], now),
+			Aggregate: buildAggregate(id, byRow[id], next, len(records), in, now),
+			Entries:   buildEntries(records, byRow[id], next, now),
 		})
 	}
 	return rows
+}
+
+// recovery is a row's next recovery: the soonest future reset among its
+// members, and every member resetting with it.
+type recovery struct {
+	// at is the soonest future reset, and zero when no member has one.
+	at time.Time
+	// with holds the auth index of each member whose window resets at `at` or
+	// within the minute after it. They land together because a card claiming
+	// two separate gains seconds apart would be noise.
+	with map[string]bool
+}
+
+func nextRecoveryOf(members []member, now time.Time) recovery {
+	next := recovery{with: map[string]bool{}}
+	for _, m := range members {
+		reset := m.window.ResetAt
+		if reset.IsZero() || !reset.After(now) {
+			continue
+		}
+		if next.at.IsZero() || reset.Before(next.at) {
+			next.at = reset
+		}
+	}
+	if next.at.IsZero() {
+		return next
+	}
+	for _, m := range members {
+		reset := m.window.ResetAt
+		if reset.IsZero() || reset.Before(next.at) || reset.After(next.at.Add(time.Minute)) {
+			continue
+		}
+		next.with[m.record.identity.AuthIndex] = true
+	}
+	return next
+}
+
+// fullAgainOf is when the row would read 100% if nothing more were used: the
+// latest reset among the members below full, since a reset restores its window
+// outright and a full member has nothing to wait for.
+//
+// It is unknowable, and reported as such, when a member below full has no
+// reset instant at all — that window does not refill on a schedule. A member
+// whose reset has already passed is mid-turnover and refilling now, so it
+// neither delays the instant nor voids it. Zero when there is nothing ahead to
+// count down to: every member full, or every one below full already turning
+// over.
+func fullAgainOf(members []member, now time.Time) time.Time {
+	latest := now
+	for _, m := range members {
+		if m.remaining >= 1 {
+			continue
+		}
+		reset := m.window.ResetAt
+		if reset.IsZero() {
+			return time.Time{}
+		}
+		if reset.After(latest) {
+			latest = reset
+		}
+	}
+	if !latest.After(now) {
+		return time.Time{}
+	}
+	return latest
 }
 
 // buildAggregate computes the row summary. The mean is arithmetic over member
 // credentials only: a credential that did not report this window is excluded
 // rather than counted as full, which would let a silent credential inflate the
 // number that the whole card is read from.
-func buildAggregate(rowID string, members []member, providerCredentials int, in Input, now time.Time) Aggregate {
+func buildAggregate(rowID string, members []member, next recovery, providerCredentials int, in Input, now time.Time) Aggregate {
 	excluded := providerCredentials - len(members)
 	if excluded < 0 {
 		excluded = 0
@@ -712,15 +843,15 @@ func buildAggregate(rowID string, members []member, providerCredentials int, in 
 	agg.RemainingPercent = percentOf(agg.RemainingFraction)
 	agg.Level = levelOf(agg.RemainingFraction)
 
-	var soonest time.Time
+	soonest := next.at
+	// The subtext names the first member resetting at that exact instant —
+	// which, with members in catalog order, is the credential at the top of the
+	// card.
 	var soonestName string
 	for _, m := range members {
-		reset := m.window.ResetAt
-		if reset.IsZero() || !reset.After(now) {
-			continue
-		}
-		if soonest.IsZero() || reset.Before(soonest) {
-			soonest, soonestName = reset, shortName(emailOf(m.record.identity))
+		if !soonest.IsZero() && m.window.ResetAt.Equal(soonest) {
+			soonestName = shortName(emailOf(m.record.identity))
+			break
 		}
 	}
 	current := make([]observation, 0, len(members))
@@ -734,19 +865,22 @@ func buildAggregate(rowID string, members []member, providerCredentials int, in 
 
 	epoch, seconds := soonest.Unix(), int64(soonest.Sub(now)/time.Second)
 	agg.SoonestResetAtEpoch, agg.SoonestResetInSeconds = &epoch, &seconds
+	if full := fullAgainOf(members, now); !full.IsZero() {
+		epoch, seconds := full.Unix(), int64(full.Sub(now)/time.Second)
+		agg.FullAtEpoch, agg.FullInSeconds = &epoch, &seconds
+	}
 
-	// Capacity the row regains when the soonest window resets. Members resetting
-	// in the same minute land together, because a card claiming two separate
-	// gains seconds apart would be noise.
+	// Capacity the row regains when the soonest window resets: what each member
+	// resetting with it has used, as a share of the whole row. The same sum,
+	// member by member, is each entry's recoveryShare.
 	gain := 0.0
 	for _, m := range members {
-		reset := m.window.ResetAt
-		if reset.IsZero() || reset.Before(soonest) || reset.After(soonest.Add(time.Minute)) {
-			continue
+		if next.with[m.record.identity.AuthIndex] {
+			gain += 1 - m.remaining
 		}
-		gain += 1 - m.remaining
 	}
-	agg.ProjectedGainPercent = percentOf(gain / float64(len(members)))
+	agg.ProjectedGainFraction = gain / float64(len(members))
+	agg.ProjectedGainPercent = percentOf(agg.ProjectedGainFraction)
 
 	// Precomputed so the wording lives in one place rather than in each client.
 	countdown := humanDuration(soonest.Sub(now))
@@ -763,7 +897,7 @@ func buildAggregate(rowID string, members []member, providerCredentials int, in 
 // printed, with HasReading false: the card is the place an operator counts
 // their credentials, and a list that quietly omits the ones in trouble is worth
 // less than no list.
-func buildEntries(records []record, members []member, now time.Time) []RowEntry {
+func buildEntries(records []record, members []member, next recovery, now time.Time) []RowEntry {
 	byCredential := make(map[string]member, len(members))
 	for _, m := range members {
 		byCredential[m.record.identity.AuthIndex] = m
@@ -776,12 +910,26 @@ func buildEntries(records []record, members []member, now time.Time) []RowEntry 
 			continue
 		}
 		remaining, issue := remainingOf(m.window.UsedPercent)
+		// This credential's slice of the row, in the row's own units: the mean
+		// is taken over members, so each holds an equal 1/members of the bar.
+		// Served rather than left to the client so that a weighted mean, if the
+		// row ever takes one, changes the slices in the same place as the
+		// headline they add up to.
+		weight := 1 / float64(len(members))
+		resetsNext := next.with[m.record.identity.AuthIndex]
+		recoveryShare := 0.0
+		if resetsNext {
+			recoveryShare = (1 - m.remaining) * weight
+		}
 		entry := RowEntry{
 			CredentialID:      m.record.identity.AuthIndex,
 			HasReading:        true,
 			RemainingFraction: remaining,
 			RemainingPercent:  percentOf(remaining),
 			Level:             levelOf(remaining),
+			PoolShare:         m.remaining * weight,
+			RecoveryShare:     recoveryShare,
+			ResetsNext:        resetsNext,
 			ResetDisplayHint:  HintNone,
 			ObservedAtEpoch:   epochOf(m.window.ObservedAt),
 			NextAttemptEpoch:  epochOf(m.record.entry.NextAttempt),

@@ -10,10 +10,12 @@ and they are the only ones no unit test can reach.
 No real accounts and no provider requests: quota-cache is absent and the
 snapshot is written directly, which is the whole point of the split.
 """
+import base64
 import gzip
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -97,6 +99,23 @@ def snapshot(now, indices, nudge=0):
     }
     return {'schema': 1, 'written_at': stamp(now - 60), 'next_request': stamp(now + 600),
             'provider_cooldown': {}, 'entries': entries}
+
+
+def header(headers, name):
+    """One response header, by name in any case. Go canonicalises what CPA
+    sends (X-CPA-VERSION arrives as X-Cpa-Version), and the response headers
+    here are a plain dict."""
+    return next((value for key, value in headers.items() if key.lower() == name.lower()), None)
+
+
+def error_of(body, headers):
+    """The JSON error code of a refusal, or None when the body is not one."""
+    if (header(headers, 'Content-Encoding') or '').lower() == 'gzip':
+        body = gzip.decompress(body)
+    try:
+        return json.loads(body).get('error')
+    except (ValueError, AttributeError):
+        return None
 
 
 def commit(path, document):
@@ -227,9 +246,18 @@ def checks(container, cache_path, now):
     #    CPA refuses an absent or wrong management key on its own path. The
     #    public fallback path is CPA-authenticated by nobody, so the plugin
     #    checks its own token there and refuses bare.
-    for label, key in (('no key', None), ('wrong key', 'nope')):
-        status, _, _ = request(f'/v0/management/plugins/{PLUGIN}/summary', token=key)
-        assert status in (401, 403), f'management, {label}: {status}'
+    #
+    #    These are the smoke's only two failed management-key attempts, and
+    #    the only two it may make: CPA bans an address for 30 minutes after 5,
+    #    and the success that follows resets the count. They also pin the exact
+    #    strings the page's refusal classifier reads, so an upstream rewording
+    #    fails here rather than silently turning every refusal into "other".
+    for label, key, message in (('no key', None, 'missing management key'),
+                                ('wrong key', 'nope', 'invalid management key')):
+        status, body, headers = request(f'/v0/management/plugins/{PLUGIN}/summary', token=key)
+        assert status == 401, f'management, {label}: {status}'
+        assert error_of(body, headers) == message, f'management, {label}: {body[:200]!r}'
+        assert header(headers, 'X-Cpa-Version'), f'management, {label}: no X-Cpa-Version in {headers}'
     for label, tok in (('no token', None), ('wrong token', 'nope')):
         status, body, _ = request(f'/v0/resource/plugins/{PLUGIN}/summary', token=tok)
         assert status == 401, f'fallback, {label}: {status}'
@@ -387,9 +415,56 @@ def checks(container, cache_path, now):
                            body=payload, headers=json_header)
         assert ok == 409, f'token redeem: {ok} (expected 409 not_redeemable)'
     else:
-        token_door = f'not dispatched by CPA ({status}); console session required'
+        token_door = f'POST not dispatched by CPA ({status}); /spend carries the press'
     print(f'  redeem        management POST dispatched, confirmation enforced; '
           f'token door {token_door}')
+
+    # 6b'. The token door's press, which is a GET because that is all CPA
+    #      dispatches to a resource route. A bare request is the proof it is
+    #      dispatched at all: 401 is the plugin's own token check, and a 404
+    #      would mean CPA never handed it over. Everything after that is
+    #      refused or answered by the plugin, and nothing can be spent: the
+    #      credential named is not one the document offers.
+    #
+    #      None of this touches the management tree, so none of it counts
+    #      toward CPA's ban; the two failures the plugin's own limiter sees are
+    #      far under its limit of 20 a minute.
+    spend = f'/v0/resource/plugins/{PLUGIN}/spend'
+
+    def press(body):
+        return {'X-Quota-Glance-Spend':
+                base64.urlsafe_b64encode(json.dumps(body).encode()).rstrip(b'=').decode()}
+
+    status, body, _ = request(spend)
+    assert status != 404, 'CPA did not dispatch GET to the spend route; the token door cannot spend'
+    assert status == 401 and not body, f'bare spend: {status} {body[:200]!r} (expected a bare 401)'
+    status, _, _ = request(spend, token='nope')
+    assert status == 401, f'wrong-token spend: {status}'
+    status, body, headers = request(spend, token=WEB_TOKEN)
+    assert (status, error_of(body, headers)) == (400, 'invalid_request'), f'spend without the header: {status} {body!r}'
+
+    press_id = secrets.token_urlsafe(16)
+    offered = press({'credentialId': 'x', 'confirmed': True, 'pressId': press_id})
+    # A browser that says the request came from another site is refused before
+    # anything else is read. CPA passes the header through; this proves it.
+    status, body, headers = request(spend, token=WEB_TOKEN, headers={**offered, 'Sec-Fetch-Site': 'cross-site'})
+    assert (status, error_of(body, headers)) == (403, 'cross_site'), f'cross-site spend: {status} {body!r}'
+    status, body, headers = request(spend, token=WEB_TOKEN,
+                                    headers=press({'credentialId': 'x', 'confirmed': False, 'pressId': press_id}))
+    assert (status, error_of(body, headers)) == (400, 'confirmation_required'), f'unconfirmed spend: {status} {body!r}'
+    # The first copy of the press reaches the document check; the second is
+    # answered from the ledger, byte for byte, and says so.
+    status, first, headers = request(spend, token=WEB_TOKEN, headers=offered)
+    assert (status, error_of(first, headers)) == (409, 'not_redeemable'), f'spend: {status} {first!r}'
+    assert header(headers, 'X-Quota-Glance-Replayed') is None, 'the first copy of a press was marked as a replay'
+    status, again, headers = request(spend, token=WEB_TOKEN, headers=offered)
+    assert status == 409 and again == first, f'repeated press: {status} {again!r}'
+    assert header(headers, 'X-Quota-Glance-Replayed') == '1', f'repeated press not marked as a replay: {headers}'
+    # And it is a GET route only: CPA refuses anything else before the plugin.
+    status, _, _ = request(spend, token=WEB_TOKEN, method='POST', body=payload, headers={**json_header, **offered})
+    assert status == 404, f'POST to the spend route: {status} (expected 404)'
+    print('  spend         token door GET /spend dispatched; token, fetch metadata, confirmation '
+          'and document checked; a repeated press replayed; POST refused')
 
     # 6c. The OpenRouter balance, and its threshold changed the way CPA's
     #     panel changes it: a JSON number sent to CPA's own plugin-config

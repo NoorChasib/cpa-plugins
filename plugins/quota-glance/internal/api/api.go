@@ -8,6 +8,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +83,9 @@ type API struct {
 	// rather than a flag means a disabled plugin has no way to make the request
 	// at all, instead of a branch that could be got wrong.
 	redeemer Redeemer
+	// ledger remembers how each press was answered, so a second copy of one
+	// press is told the same thing instead of spending again. See ledger.go.
+	ledger *ledger
 }
 
 // Redeemer is the one action this API can take on the world. It is an interface
@@ -113,7 +119,7 @@ func (a *API) Enable() {
 }
 
 func New(pluginID, token string) *API {
-	a := &API{pluginID: pluginID, limiter: newLimiter()}
+	a := &API{pluginID: pluginID, limiter: newLimiter(), ledger: newLedger()}
 	a.SetToken(token)
 	// Serve a valid, honest document before the first build completes rather
 	// than a null body.
@@ -191,9 +197,11 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	if disabled {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "disabled"})
 	}
-	// Exactly one path accepts a method other than GET, and it accepts only
-	// POST. Everything else on this plugin reads, and a read that answered a
-	// POST would be the seam through which a write arrived somewhere unintended.
+	// Two paths write. /redeem accepts only POST, on both trees. /spend accepts
+	// only GET, on the resource tree only, because CPA dispatches nothing else
+	// there (pluginhost/management.go:295-297). It acts only with the web
+	// token, an explicit confirmation and a single-use press id, all carried in
+	// headers. No path both reads and writes.
 	if req.Method == http.MethodPost {
 		switch req.Path {
 		case a.managementPath("/redeem"):
@@ -225,6 +233,8 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 		return a.documentResponse(req)
 	case a.resourcePath("/summary"):
 		return a.tokenSummaryResponse(req, now)
+	case a.resourcePath("/spend"):
+		return a.spendResponse(req, now)
 	case a.managementPath("/health"):
 		return a.healthResponse()
 	case a.managementPath("/windows"):
@@ -233,11 +243,12 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 }
 
-// redeemResponse spends one banked reset. It is the only route on this plugin
-// that changes anything anywhere.
+// redeemResponse is the POST door to a press, on either tree. Between them,
+// it and spendResponse are the only routes on this plugin that change anything
+// anywhere, and both end in spend.
 //
 // Three things must hold before the provider is contacted, and each of them is
-// checked here rather than trusted from the caller:
+// checked rather than trusted from the caller:
 //
 //  1. The caller is authenticated, by whichever of the two doors it arrived at.
 //  2. The body carries an explicit confirmation. The dialog lives in the
@@ -247,23 +258,19 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 //  3. The served document says this credential has a redeemable credit. That is
 //     what stops a POST naming an arbitrary credential from turning into a
 //     provider request, and it is why the check reads the document rather than
-//     asking the provider.
+//     asking the provider. spend makes this check.
+//
+// A press id is optional here. With one, a second copy of the same press is
+// answered from the ledger rather than spent; without one, the route behaves
+// exactly as it did before press ids existed, so a page cached from an older
+// release keeps working.
 func (a *API) redeemResponse(req protocol.ManagementRequest, now time.Time, viaToken bool) protocol.ManagementResponse {
 	if viaToken && !a.authorized(req.Headers) {
-		if !a.limiter.allowFailure(now) {
-			return protocol.ManagementResponse{
-				StatusCode: http.StatusTooManyRequests,
-				Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
-			}
-		}
-		return protocol.ManagementResponse{
-			StatusCode: http.StatusUnauthorized,
-			Headers:    http.Header{"Cache-Control": {"no-store"}},
-		}
+		return a.tokenRefusal(now)
 	}
 
 	a.mu.RLock()
-	redeemer, doc := a.redeemer, a.doc
+	redeemer := a.redeemer
 	a.mu.RUnlock()
 	if redeemer == nil {
 		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
@@ -278,24 +285,210 @@ func (a *API) redeemResponse(req protocol.ManagementRequest, now time.Time, viaT
 			return jsonResponse(http.StatusUnsupportedMediaType, map[string]string{"error": "unsupported_media_type"})
 		}
 	}
-	var body struct {
-		CredentialID string `json:"credentialId"`
-		Confirmed    bool   `json:"confirmed"`
-	}
-	if len(req.Body) > 4096 || json.Unmarshal(req.Body, &body) != nil {
+	if len(req.Body) > maxPressBytes {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	}
+	p, code := parsePress(req.Body)
+	if code != "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": code})
+	}
+	return a.spend(redeemer, p)
+}
+
+// spendResponse is the GET door to a press, for a reader signed in with the
+// web token rather than a CPA console session.
+//
+// It is a GET only because CPA dispatches nothing else to a resource route
+// (pluginhost/management.go:295-297), and a resource route is the only place a
+// reader without the management key can reach this plugin at all. That makes
+// it a GET that acts, which is everything a GET is not supposed to be, so the
+// action is fenced off from everything that treats a GET as safe:
+//
+//   - Nothing selecting the action is in the URL. The credential, the
+//     confirmation and the press id travel in one header, and the token in
+//     another, so a link, a prefetch, a crawler or a cache that holds this URL
+//     holds nothing that can spend.
+//   - A browser that says this request did not come from a script on this page
+//     — another site, a navigation, a prefetch — is refused before the token is
+//     looked at. That costs the limiter nothing, because nothing was guessed.
+//   - Early data is refused outright, because it can be replayed by anyone on
+//     the path before the handshake proves who sent it.
+//   - Every press carries a single-use id, and the ledger answers any second
+//     copy of it with the first copy's answer, so a transport that resends a
+//     GET it thinks is safe gets an answer and not a second spend.
+//
+// After that it is the same press as the POST: the same confirmation, the same
+// document check, the same redeemer, and the same answer byte for byte.
+func (a *API) spendResponse(req protocol.ManagementRequest, now time.Time) protocol.ManagementResponse {
+	if crossSite(req.Headers) {
+		return jsonResponse(http.StatusForbidden, map[string]string{"error": "cross_site"})
+	}
+	// RFC 8470 §5.1: any instance of the field, whatever its value, means the
+	// request may have arrived as early data.
+	if len(req.Headers.Values("Early-Data")) > 0 {
+		return jsonResponse(http.StatusTooEarly, map[string]string{"error": "too_early"})
+	}
+	if !a.authorized(req.Headers) {
+		return a.tokenRefusal(now)
+	}
+
+	a.mu.RLock()
+	redeemer := a.redeemer
+	a.mu.RUnlock()
+	if redeemer == nil {
+		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
+	}
+
+	// The header is the POST body, base64url-encoded so any JSON survives as a
+	// header value. Exactly one copy: two would leave it to whichever layer
+	// reads them to decide which was meant.
+	values := req.Headers.Values(spendHeader)
+	if len(values) != 1 || len(values[0]) > maxPressBytes {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(values[0])
+	if err != nil {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	}
+	// An object and nothing else. JSON null decodes into a struct without
+	// complaint, and would otherwise read as a press that merely forgot to
+	// confirm.
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	}
+	p, code := parsePress(raw)
+	if code == "" && p.id == "" {
+		// Required on this door. It is what makes a resent GET harmless, and
+		// this is the door where a resend is most likely.
+		code = "invalid_request"
+	}
+	if code != "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": code})
+	}
+	return a.spend(redeemer, p)
+}
+
+const (
+	// spendHeader carries the press on the GET door.
+	spendHeader = "X-Quota-Glance-Spend"
+	// replayedHeader marks an answer handed out from the ledger, so the page
+	// can say the reset was spent by an earlier copy of the press.
+	replayedHeader = "X-Quota-Glance-Replayed"
+	// maxPressBytes bounds the POST body and the encoded GET header alike.
+	maxPressBytes = 4096
+)
+
+// pressIDPattern is the press id's shape: what the page draws is 22 base64url
+// characters, and nothing shorter is random enough to be single-use.
+var pressIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
+
+// press is one confirmed request to spend a reset, from either door.
+type press struct {
+	credentialID string
+	// id is empty only on the POST door, where it is optional.
+	id string
+}
+
+// parsePress reads a press from JSON, returning the error code to answer with
+// when it cannot. Both doors read the same body, so a page can send the same
+// object down either.
+func parsePress(raw []byte) (press, string) {
+	var body struct {
+		CredentialID string  `json:"credentialId"`
+		Confirmed    bool    `json:"confirmed"`
+		PressID      *string `json:"pressId"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return press{}, "invalid_request"
 	}
 	if !body.Confirmed {
 		// Spending a credit is irreversible, so the absence of a confirmation
 		// is refused rather than defaulted.
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "confirmation_required"})
+		return press{}, "confirmation_required"
 	}
+	p := press{credentialID: body.CredentialID}
+	if body.PressID != nil {
+		if !pressIDPattern.MatchString(*body.PressID) {
+			return press{}, "invalid_request"
+		}
+		p.id = *body.PressID
+	}
+	return p, ""
+}
 
-	credential, ok := redeemableCredential(doc, body.CredentialID)
+// crossSite reports whether the browser says this request did not come from a
+// script on this page. Each header may be absent — a browser on a plain-HTTP
+// origin sends none of them, and neither does anything that is not a browser —
+// but a present one must say same-origin, a script fetch, and no destination,
+// and nothing may say it is a prefetch.
+func crossSite(headers http.Header) bool {
+	only := func(name string, allowed ...string) bool {
+		for _, value := range headers.Values(name) {
+			if !slices.Contains(allowed, strings.ToLower(strings.TrimSpace(value))) {
+				return false
+			}
+		}
+		return true
+	}
+	if !only("Sec-Fetch-Site", "same-origin") || !only("Sec-Fetch-Mode", "cors", "same-origin") || !only("Sec-Fetch-Dest", "empty") {
+		return true
+	}
+	return len(headers.Values("Sec-Purpose")) > 0 || len(headers.Values("Purpose")) > 0
+}
+
+// spend carries out one press, from either door, against the redeemer the
+// door found installed.
+//
+// A press with an id is looked up in the ledger before anything else, the
+// document check included. A second copy of a press is owed the first copy's
+// answer, and that answer does not change because the document has since
+// stopped offering the account — which, after a press that spent its last
+// reset, is exactly what happens.
+func (a *API) spend(redeemer Redeemer, p press) protocol.ManagementResponse {
+	if p.id == "" {
+		return a.redeemOnce(redeemer, p.credentialID)
+	}
+	entry, fresh, err := a.ledger.begin(p.id, p.credentialID)
+	switch {
+	case errors.Is(err, errPressMismatch):
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+	case err != nil:
+		// The ledger is full of presses it may not forget yet. Nothing was
+		// spent, and a press made once older ones age out is admitted.
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "already_in_flight"})
+	case !fresh:
+		if answer, ok := a.ledger.replay(entry); ok {
+			return answer
+		}
+		return jsonResponse(http.StatusConflict, map[string]string{"error": "already_in_flight"})
+	}
+	var answer protocol.ManagementResponse
+	defer func() {
+		// Every path out of here records an answer, or the entry would stay in
+		// flight for good: unevictable, and making its copies wait the full
+		// minute. A status of zero is reached only by a panic in the redeemer,
+		// which may have happened after the claim was sent, so the copies are
+		// told the outcome is unknown rather than given an empty success.
+		if answer.StatusCode == 0 {
+			answer = jsonResponse(http.StatusBadGateway, map[string]any{"error": "outcome_unknown", "retryUntilEpoch": nil})
+		}
+		a.ledger.finish(entry, answer)
+	}()
+	answer = a.redeemOnce(redeemer, p.credentialID)
+	return answer
+}
+
+// redeemOnce checks the document and asks the redeemer, once.
+func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.ManagementResponse {
+	credential, ok := redeemableCredential(a.Document(), credentialID)
 	if !ok {
 		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
 	}
 
+	// The redeemer's own bound, which CPA does not shorten: it imposes no
+	// deadline on a plugin's management or resource route, and the browser
+	// waits longer than this. See redeem.Timeout for why the number is what
+	// it is.
 	ctx, cancel := context.WithTimeout(context.Background(), redeem.Timeout)
 	defer cancel()
 	result, err := redeemer.Redeem(ctx, credential.Provider, credential.ID)
@@ -303,6 +496,10 @@ func (a *API) redeemResponse(req protocol.ManagementRequest, now time.Time, viaT
 		return redeemError(err)
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
+		// Which provider answered, so the client can word the outcome in that
+		// provider's terms — a Codex credit and a Claude grant are not the
+		// same thing, and "cooldown" is only ever Claude's word.
+		"provider":       credential.Provider,
 		"outcome":        result.Outcome,
 		"windowsReset":   result.WindowsReset,
 		"remainingCount": result.RemainingCount,
@@ -338,14 +535,41 @@ func redeemableCredential(doc aggregate.Document, id string) (aggregate.Credenti
 // Provider error text is never forwarded. It is unbounded input that would land
 // in a dashboard and a log, and none of it tells the operator anything the code
 // below does not.
+//
+// The 502s split because the operator does something different after each.
+// provider_unavailable and provider_refused mean nothing was spent and the
+// press can simply be tried again later; provider_rate_limited says the same
+// with a reason. outcome_unknown is the one that may have cost a reset, and it
+// is the only one where pressing again is a different act: until
+// retryUntilEpoch it repeats the same claim rather than making a new one. That
+// instant is the claim's own, fixed when it was first made, so it is sent as an
+// instant rather than as "ten minutes" a client would count from the answer.
+// retry_window_closed is the same uncertainty with that window gone: the next
+// press is a new claim.
 func redeemError(err error) protocol.ManagementResponse {
 	switch {
 	case errors.Is(err, redeem.ErrInFlight):
 		return jsonResponse(http.StatusConflict, map[string]string{"error": "already_in_flight"})
-	case errors.Is(err, redeem.ErrNotCodex):
+	case errors.Is(err, redeem.ErrUnsupportedProvider):
 		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
-	case errors.Is(err, redeem.ErrNoAccessToken), errors.Is(err, redeem.ErrNoAccountID):
+	case errors.Is(err, redeem.ErrNoAccessToken), errors.Is(err, redeem.ErrNoAccountID),
+		// The credential can no longer be used for the claim left unresolved
+		// on it: it now signs in as a different account. Nothing was sent.
+		errors.Is(err, redeem.ErrIdentityChanged):
 		return jsonResponse(http.StatusConflict, map[string]string{"error": "credential_unusable"})
+	case errors.Is(err, redeem.ErrRetryWindowClosed):
+		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "retry_window_closed"})
+	case errors.Is(err, redeem.ErrOutcomeUnknown):
+		// Null when the redeemer did not say, which a client must read as no
+		// promise at all rather than as the usual window.
+		var until any
+		var unknown *redeem.OutcomeUnknownError
+		if errors.As(err, &unknown) && !unknown.RetryUntil.IsZero() {
+			until = unknown.RetryUntil.Unix()
+		}
+		return jsonResponse(http.StatusBadGateway, map[string]any{"error": "outcome_unknown", "retryUntilEpoch": until})
+	case errors.Is(err, redeem.ErrRateLimited):
+		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_rate_limited"})
 	case errors.Is(err, redeem.ErrRefused):
 		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_refused"})
 	default:
@@ -359,20 +583,28 @@ func (a *API) tokenSummaryResponse(req protocol.ManagementRequest, now time.Time
 	// token. That is what makes a lockout impossible: no volume of hostile
 	// traffic can stop the operator reaching their own dashboard.
 	if !a.authorized(req.Headers) {
-		if !a.limiter.allowFailure(now) {
-			return protocol.ManagementResponse{
-				StatusCode: http.StatusTooManyRequests,
-				Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
-			}
-		}
-		// Bare: no hint about whether the token was absent, malformed, or
-		// merely wrong.
-		return protocol.ManagementResponse{
-			StatusCode: http.StatusUnauthorized,
-			Headers:    http.Header{"Cache-Control": {"no-store"}},
-		}
+		return a.tokenRefusal(now)
 	}
 	return a.documentResponse(req)
+}
+
+// tokenRefusal answers a request on the resource tree that did not present the
+// web token. It is the only place a failure is counted, so every token door is
+// throttled by the same limiter, and it is reached only after authentication
+// failed: a request carrying the right token never gets here.
+func (a *API) tokenRefusal(now time.Time) protocol.ManagementResponse {
+	if !a.limiter.allowFailure(now) {
+		return protocol.ManagementResponse{
+			StatusCode: http.StatusTooManyRequests,
+			Headers:    http.Header{"Retry-After": {"60"}, "Cache-Control": {"no-store"}},
+		}
+	}
+	// Bare: no hint about whether the token was absent, malformed, or merely
+	// wrong.
+	return protocol.ManagementResponse{
+		StatusCode: http.StatusUnauthorized,
+		Headers:    http.Header{"Cache-Control": {"no-store"}},
+	}
 }
 
 // documentResponse serves the document to a caller that is already authorized,

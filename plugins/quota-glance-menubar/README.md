@@ -61,7 +61,9 @@ https://your-server/v0/resource/plugins/quota-glance/app
 Choose **Save and Open**, then sign in using the page's dashboard password
 (`web-token`) or its CPA console link. The app remembers its own session;
 Safari and Chrome sessions are separate. Enter the password on the page instead
-of adding `?token=` to the saved URL.
+of adding `?token=` to the saved URL. Once signed in with the dashboard
+password, **Use one** spends a banked reset from the popover just as it does on
+the page (Quota Glance 0.5.0 or newer).
 
 Click the menu bar chart icon to open or close the page. Scroll inside the
 popover to see more. Right-click or Control-click the icon for **Settings**,

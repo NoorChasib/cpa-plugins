@@ -310,18 +310,23 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	// Four authenticated routes, and three public ones: the page, which carries
-	// no data, and the document's fallback path plus the redeem action, both of
-	// which carry this plugin's own token check because CPA carries none.
-	if len(registration.Routes) != 4 || len(registration.Resources) != 3 {
+	// Four authenticated routes, and four public ones: the page, which carries
+	// no data, then the document's fallback path, the redeem action, and the
+	// spend action that carries the same press as a GET. Those three carry
+	// this plugin's own token check because CPA carries none.
+	if len(registration.Routes) != 4 || len(registration.Resources) != 4 {
 		t.Fatalf("registration = %+v", registration)
 	}
-	if registration.Resources[0].Path != "/app" || registration.Resources[1].Path != "/summary" || registration.Resources[2].Path != "/redeem" {
-		t.Fatalf("public resources = %+v", registration.Resources)
+	for i, path := range []string{"/app", "/summary", "/redeem", "/spend"} {
+		if registration.Resources[i].Path != path {
+			t.Fatalf("public resources = %+v", registration.Resources)
+		}
 	}
-	// Exactly one route may be anything other than GET, and it must be the one
-	// that spends a credit. A second write route appearing here without a
-	// deliberate change to this list is the thing worth catching.
+	// Exactly one management route may be anything other than GET, and it must
+	// be the one that spends a credit. (Resource routes are GET by
+	// construction; /spend is the resource tree's spend.) A second write route
+	// appearing here without a deliberate change to this list is the thing
+	// worth catching.
 	writes := map[string]string{"/plugins/" + ID + "/redeem": "POST"}
 	for _, route := range registration.Routes {
 		if route.Menu != "" {
@@ -622,4 +627,75 @@ func TestARebuildPicksUpNewActivityWithoutANewSnapshot(t *testing.T) {
 		return
 	}
 	t.Fatal("the credential vanished from the document")
+}
+
+// One redeemer lives for the life of the plugin. Its journal holds the claims
+// whose outcome is unknown, and a fresh one per reconfigure would forget them:
+// the press after saving an unrelated setting would make a new claim where it
+// should have repeated the unresolved one.
+func TestTheRedeemerOutlivesAReconfigure(t *testing.T) {
+	p, _, cachePath := newFixturePlugin(t)
+	dataDir := filepath.Join(filepath.Dir(cachePath), "data")
+	base := "cache-path: " + cachePath + "\ndata-dir: " + dataDir + "\nweb-token: test-token\n"
+	redeemPOST := func() int {
+		raw, _ := json.Marshal(protocol.ManagementRequest{
+			Method: "POST", Path: "/v0/management/plugins/quota-glance/redeem",
+			Headers: http.Header{"Content-Type": {"application/json"}},
+			Body:    []byte(`{"credentialId":"nobody","confirmed":true}`),
+		})
+		result, err := p.Handle(protocol.MethodManagementHandle, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.(protocol.ManagementResponse).StatusCode
+	}
+
+	p.mu.Lock()
+	first := p.redeemer
+	p.mu.Unlock()
+	if first == nil {
+		t.Fatal("redemption is on by default but no redeemer was built")
+	}
+	if _, err := configure(t, p, base+"stale-after: 30m\n"); err != nil {
+		t.Fatal(err)
+	}
+	// Switched off, the route is gone; switched back on, it is the same
+	// redeemer, journal and all.
+	if _, err := configure(t, p, base+"allow-redeem: false\n"); err != nil {
+		t.Fatal(err)
+	}
+	if status := redeemPOST(); status != http.StatusNotFound {
+		t.Fatalf("redeem with allow-redeem false = %d, want 404", status)
+	}
+	if _, err := configure(t, p, base+"allow-redeem: true\n"); err != nil {
+		t.Fatal(err)
+	}
+	if status := redeemPOST(); status != http.StatusConflict {
+		t.Fatalf("redeem for a credential the document does not offer = %d, want 409", status)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.redeemer != first {
+		t.Fatal("a reconfigure replaced the redeemer and dropped its journal")
+	}
+}
+
+// A plugin that never had redemption switched on never builds the capability.
+func TestARedeemerIsNeverBuiltWhileRedemptionIsOff(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(cachePath, fixtureSnapshot(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New(&fakeHost{})
+	t.Cleanup(p.Shutdown)
+	cfg := "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(dir, "data") + "\nweb-token: test-token\nallow-redeem: false\n"
+	if _, err := configure(t, p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.redeemer != nil {
+		t.Fatal("a redeemer was built with redemption switched off")
+	}
 }

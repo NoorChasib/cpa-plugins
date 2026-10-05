@@ -102,6 +102,10 @@ func TestRoutesAreExactAndGETOnly(t *testing.T) {
 		"/v0/resource/plugins/quota-glance",
 		"/v0/management/plugins/quota-glance/../summary",
 		"/v0/management/plugins/quota-glance/status",
+		"/v0/resource/plugins/quota-glance/spend/",
+		"/v0/resource/plugins/quota-glance/spend/x",
+		// /spend exists on the resource tree only.
+		"/v0/management/plugins/quota-glance/spend",
 	} {
 		if res := get(a, path, nil); res.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s -> %d; paths match exactly, with no prefix matching", path, res.StatusCode)
@@ -232,6 +236,7 @@ func TestTokenIsHashedComparedInConstantTimeAndNeverEmitted(t *testing.T) {
 		"/v0/management/plugins/quota-glance/health",
 		"/v0/management/plugins/quota-glance/windows",
 		"/v0/resource/plugins/quota-glance/missing",
+		"/v0/resource/plugins/quota-glance/spend",
 	} {
 		res := get(a, path, bearer(testToken))
 		emitted := string(res.Body)

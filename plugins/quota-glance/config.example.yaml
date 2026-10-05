@@ -8,23 +8,29 @@ plugins:
       # provider; it reads what quota-cache already collected.
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       data-dir: /CLIProxyAPI/plugins/data/quota-glance
-      # Fallback password for the dashboard, used only by a browser with no
-      # CPA console session — a phone, a bookmark, a machine that has never
-      # signed in. From the console sidebar none of this is involved: the page
-      # authenticates as whoever is signed in there.
+      # The dashboard password, for a browser with no remembered CPA console
+      # session — a phone, a bookmark, the menu bar app. A browser that has
+      # one, such as the console sidebar with Remember password ticked, needs
+      # none; a browser that has both uses this.
       #
-      # Set it to a password of your choosing. Left empty, one is generated and
-      # printed once in the CPA log at startup, then persisted under data-dir
-      # so restarts keep it.
+      # It also spends banked resets while allow-redeem is on, so treat it as
+      # a password: anyone holding it can view the dashboard and use a reset.
+      # A wrong one never counts toward CPA's management IP ban.
+      #
+      # Set it to a password of your choosing, at least 20 random characters.
+      # Left empty, one is generated and printed once in the CPA log at
+      # startup, then persisted under data-dir so restarts keep it.
       web-token: ""
       # Age at which an observation is shown with a staleness badge.
       stale-after: 45m
-      # Using a banked Codex rate-limit reset from the dashboard. Default
-      # true. This is the one thing quota-glance does that reaches a provider,
-      # it happens only when you press the button and confirm, and it cannot
-      # be undone — spending a credit clears that account's session and weekly
-      # windows and moves its weekly reset date.
+      # Using a banked Codex or Claude rate-limit reset from the dashboard.
+      # Default true. This is the one thing quota-glance does that reaches a
+      # provider, it happens only when you press the button and confirm, and
+      # it cannot be undone — spending one clears that account's session and
+      # weekly windows.
       #
+      # It governs both ways in: a console session and the dashboard password
+      # spend through the same plugin, so this switches both off together.
       # Set false to keep the count and the expiry on the card and remove the
       # button. The plugin then has no code path to a provider at all.
       allow-redeem: true
@@ -33,12 +39,21 @@ plugins:
       # and 0 keeps it green until then. The card appears only when
       # quota-cache has an openrouter-management-key (0.1.9 or newer).
       openrouter-warn-below: 5
-      # Optional. Plan names are already display-ready: Claude reports "Max"
-      # and "Team", and Codex's plan enum is mapped to the name the tier is
-      # sold under ("pro" -> "Pro 20x", "prolite" -> "Pro 5x"). Override only
-      # if a provider renames a tier before this plugin catches up.
+      # Optional. Plan names are already display-ready: each provider's plan
+      # token is mapped to the name the tier is sold under — Codex "pro" ->
+      # "Pro 200", "prolite" -> "Pro 100"; Claude "max_20x" -> "Max 20x",
+      # "team" -> "Team" — and Grok's own display name passes through.
+      # Override only if a provider renames a tier before this plugin catches
+      # up. Prefix a key with the provider id to rename one provider's value
+      # ("codex:pro", "claude:pro"; Grok's id is xai, as in "xai:supergrok").
+      # A key without a prefix applies on every provider, Grok included,
+      # except to Claude's pro, team, free and enterprise: Codex sends those
+      # same tokens for different tiers, so an unprefixed key for one of them
+      # is taken as written for Codex, and renaming Claude's needs
+      # "claude:pro".
       # plan-labels:
-      #   pro: "Pro 20x"
+      #   "codex:pro": "Pro 200"
+      #   prolite: "Pro 100"
     quota-cache:
       # quota-glance requires quota-cache 0.1.6 or newer for the full
       # session / weekly / weekly-fable layout: Anthropic moved model-scoped

@@ -15,7 +15,7 @@
       "id": "claude-siphorchannel@example.com.json",
       "email": "siphorchannel@example.com",
       "provider": "claude",
-      "plan": "Max",
+      "plan": "Max 20x",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -128,7 +128,16 @@
         "lastRequestAtEpoch": 1789012200,
         "live": false
       },
-      "resetCredits": null
+      "resetCredits": {
+        "availableCount": 1,
+        "expiresAtEpoch": 1790586000,
+        "expiresInSeconds": 1573200,
+        "redeemable": true,
+        "hold": "",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-agency@example.com.json",
@@ -247,13 +256,22 @@
         "lastRequestAtEpoch": 1789012800,
         "live": true
       },
-      "resetCredits": null
+      "resetCredits": {
+        "availableCount": 3,
+        "expiresAtEpoch": 1789495200,
+        "expiresInSeconds": 482400,
+        "redeemable": true,
+        "hold": "notLimited",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-chasibnoor@example.com.json",
       "email": "chasibnoor@example.com",
       "provider": "claude",
-      "plan": "Max",
+      "plan": "Max 5x",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -366,13 +384,15 @@
         "lastRequestAtEpoch": 1789006200,
         "live": false
       },
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-noor@example.com.json",
       "email": "noor@example.com",
       "provider": "claude",
-      "plan": "Team",
+      "plan": "Enterprise",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -485,7 +505,9 @@
         "lastRequestAtEpoch": null,
         "live": false
       },
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-noorchasib@example.com.json",
@@ -604,13 +626,15 @@
         "lastRequestAtEpoch": null,
         "live": false
       },
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "codex-noor@example.com.json",
       "email": "noor@example.com",
       "provider": "codex",
-      "plan": "Pro 20x",
+      "plan": "Pro 200",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -727,7 +751,16 @@
         "availableCount": 2,
         "expiresAtEpoch": 1790251200,
         "expiresInSeconds": 1238400,
-        "redeemable": true
+        "redeemable": true,
+        "hold": "",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": 1791604800,
+      "credits": {
+        "display": "57,706.15",
+        "unlimited": false,
+        "amount": "57706.149",
+        "unit": "credits"
       }
     },
     {
@@ -738,7 +771,14 @@
       "status": "error",
       "lastObservedEpoch": 1789012500,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": {
+        "display": "$12.40",
+        "unlimited": false,
+        "amount": "12.40",
+        "unit": "usd"
+      }
     }
   ],
   "providers": [
@@ -763,6 +803,9 @@
             "soonestResetAtEpoch": 1789017300,
             "soonestResetInSeconds": 4500,
             "projectedGainPercent": 6,
+            "projectedGainFraction": 0.06200000000000001,
+            "fullAtEpoch": 1789017300,
+            "fullInSeconds": 4500,
             "subtext": "+6% when siphorchannel resets in 1h 15m"
           },
           "entries": [
@@ -772,6 +815,9 @@
               "remainingFraction": 0.69,
               "remainingPercent": 69,
               "level": "ok",
+              "poolShare": 0.13799999999999998,
+              "recoveryShare": 0.06200000000000001,
+              "resetsNext": true,
               "resetAtEpoch": 1789017300,
               "resetInSeconds": 4500,
               "resetDisplayHint": "countdown",
@@ -788,6 +834,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789023600,
               "resetInSeconds": 10800,
               "resetDisplayHint": "countdown",
@@ -804,6 +853,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789027200,
               "resetInSeconds": 14400,
               "resetDisplayHint": "countdown",
@@ -820,6 +872,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789030800,
               "resetInSeconds": 18000,
               "resetDisplayHint": "countdown",
@@ -836,6 +891,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789034400,
               "resetInSeconds": 21600,
               "resetDisplayHint": "countdown",
@@ -863,6 +921,9 @@
             "soonestResetAtEpoch": 1789106400,
             "soonestResetInSeconds": 93600,
             "projectedGainPercent": 5,
+            "projectedGainFraction": 0.048,
+            "fullAtEpoch": 1789455600,
+            "fullInSeconds": 442800,
             "subtext": "+5% when siphorchannel resets in 1d 2h"
           },
           "entries": [
@@ -872,6 +933,9 @@
               "remainingFraction": 0.76,
               "remainingPercent": 76,
               "level": "ok",
+              "poolShare": 0.15200000000000002,
+              "recoveryShare": 0.048,
+              "resetsNext": true,
               "resetAtEpoch": 1789106400,
               "resetInSeconds": 93600,
               "resetDisplayHint": "countdown",
@@ -888,6 +952,9 @@
               "remainingFraction": 0.9,
               "remainingPercent": 90,
               "level": "ok",
+              "poolShare": 0.18000000000000002,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789171200,
               "resetInSeconds": 158400,
               "resetDisplayHint": "countdown",
@@ -904,6 +971,9 @@
               "remainingFraction": 0.24,
               "remainingPercent": 24,
               "level": "low",
+              "poolShare": 0.048,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789272000,
               "resetInSeconds": 259200,
               "resetDisplayHint": "countdown",
@@ -920,6 +990,9 @@
               "remainingFraction": 0.6,
               "remainingPercent": 60,
               "level": "ok",
+              "poolShare": 0.12,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789412400,
               "resetInSeconds": 399600,
               "resetDisplayHint": "countdown",
@@ -936,6 +1009,9 @@
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
+              "poolShare": 0.09000000000000001,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789455600,
               "resetInSeconds": 442800,
               "resetDisplayHint": "countdown",
@@ -963,6 +1039,9 @@
             "soonestResetAtEpoch": 1789106340,
             "soonestResetInSeconds": 93540,
             "projectedGainPercent": 20,
+            "projectedGainFraction": 0.2,
+            "fullAtEpoch": 1789455540,
+            "fullInSeconds": 442740,
             "subtext": "+20% when siphorchannel resets in 1d 1h"
           },
           "entries": [
@@ -972,6 +1051,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "critical",
+              "poolShare": 0,
+              "recoveryShare": 0.2,
+              "resetsNext": true,
               "resetAtEpoch": 1789106340,
               "resetInSeconds": 93540,
               "resetDisplayHint": "countdown",
@@ -988,6 +1070,9 @@
               "remainingFraction": 0.88,
               "remainingPercent": 88,
               "level": "ok",
+              "poolShare": 0.17600000000000002,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789171140,
               "resetInSeconds": 158340,
               "resetDisplayHint": "countdown",
@@ -1004,6 +1089,9 @@
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
+              "poolShare": 0.09000000000000001,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789271940,
               "resetInSeconds": 259140,
               "resetDisplayHint": "countdown",
@@ -1020,6 +1108,9 @@
               "remainingFraction": 0.7,
               "remainingPercent": 70,
               "level": "ok",
+              "poolShare": 0.13999999999999999,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789412340,
               "resetInSeconds": 399540,
               "resetDisplayHint": "countdown",
@@ -1036,6 +1127,9 @@
               "remainingFraction": 0.1,
               "remainingPercent": 10,
               "level": "critical",
+              "poolShare": 0.020000000000000004,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789455540,
               "resetInSeconds": 442740,
               "resetDisplayHint": "countdown",
@@ -1071,6 +1165,9 @@
             "soonestResetAtEpoch": 1789020000,
             "soonestResetInSeconds": 7200,
             "projectedGainPercent": 12,
+            "projectedGainFraction": 0.12,
+            "fullAtEpoch": 1789020000,
+            "fullInSeconds": 7200,
             "subtext": "+12% when noor resets in 2h"
           },
           "entries": [
@@ -1080,6 +1177,9 @@
               "remainingFraction": 0.88,
               "remainingPercent": 88,
               "level": "ok",
+              "poolShare": 0.88,
+              "recoveryShare": 0.12,
+              "resetsNext": true,
               "resetAtEpoch": 1789020000,
               "resetInSeconds": 7200,
               "resetDisplayHint": "countdown",
@@ -1107,6 +1207,9 @@
             "soonestResetAtEpoch": 1789531200,
             "soonestResetInSeconds": 518400,
             "projectedGainPercent": 34,
+            "projectedGainFraction": 0.33999999999999997,
+            "fullAtEpoch": 1789531200,
+            "fullInSeconds": 518400,
             "subtext": "+34% when noor resets in 6d"
           },
           "entries": [
@@ -1116,6 +1219,9 @@
               "remainingFraction": 0.66,
               "remainingPercent": 66,
               "level": "ok",
+              "poolShare": 0.66,
+              "recoveryShare": 0.33999999999999997,
+              "resetsNext": true,
               "resetAtEpoch": 1789531200,
               "resetInSeconds": 518400,
               "resetDisplayHint": "countdown",
@@ -1151,6 +1257,9 @@
             "soonestResetAtEpoch": 1789617600,
             "soonestResetInSeconds": 604800,
             "projectedGainPercent": 68,
+            "projectedGainFraction": 0.6799999999999999,
+            "fullAtEpoch": 1789617600,
+            "fullInSeconds": 604800,
             "subtext": "+68% when noor resets in 7d"
           },
           "entries": [
@@ -1160,6 +1269,9 @@
               "remainingFraction": 0.32,
               "remainingPercent": 32,
               "level": "low",
+              "poolShare": 0.32,
+              "recoveryShare": 0.6799999999999999,
+              "resetsNext": true,
               "resetAtEpoch": 1789617600,
               "resetInSeconds": 604800,
               "resetDisplayHint": "countdown",

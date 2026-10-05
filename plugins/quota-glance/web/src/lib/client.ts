@@ -1,30 +1,33 @@
-import { authHeaders, managementKey, managementPath } from "./cpa-auth"
-import * as token from "./token"
+import { ConsoleUnansweredError, NoSessionError, readThrough, refetchInterval } from "./access"
+import { managementPath, resourcePath } from "./cpa-auth"
+import { accessContext, openDoors } from "./session"
 import type { Summary } from "./types"
 
 /**
- * Neither way in worked.
- *
- * `hadCredential` distinguishes "nothing to try" — a browser with no console
- * session and no saved password — from "what we had was refused", which is the
- * difference between asking the reader to sign in and telling them their
- * credential stopped working.
+ * Neither way in worked. `hadCredential` and `reason` are documented where the
+ * class lives, in access.ts, which is where it is thrown.
  */
-export class NoSessionError extends Error {
-  constructor(readonly hadCredential: boolean) {
-    super(hadCredential ? "credentials rejected" : "no credentials")
-    this.name = "NoSessionError"
-  }
-}
+export { NoSessionError }
 
-/** Where the document lives, by which credential is being spent. */
-const RESOURCE_FALLBACK = "/v0/resource/plugins/quota-glance/summary"
+/**
+ * A console read got no answer, so reads with that key stop until the reader
+ * asks again. Documented where it is thrown, in access.ts.
+ */
+export { ConsoleUnansweredError }
 
-function fallbackURL(): string {
-  // The sibling of this page, so a reverse-proxy prefix survives; the literal
-  // path is only for the dev server, where the page is served from /.
-  const path = window.location.pathname.replace(/\/+$/, "")
-  return path.endsWith("/app") ? `${path.slice(0, -"/app".length)}/summary` : RESOURCE_FALLBACK
+/**
+ * How often to poll the document: every minute while some door is open, and
+ * not at all while none is.
+ *
+ * TanStack keeps an interval running whatever the last attempt came to, so a
+ * fixed one would ask again every minute with nothing to ask with. Polling
+ * with no door sends nothing — fetchSummary throws before the network — but it
+ * would keep the sign-in screen re-rendering for no reason. A door that opens
+ * later, by a sign-in here or a storage change from another tab, comes with a
+ * refetch of its own.
+ */
+export function summaryRefetchInterval(): number | false {
+  return refetchInterval(openDoors())
 }
 
 /**
@@ -40,30 +43,6 @@ export function resetCache(): void {
   cached = null
 }
 
-type Attempt = { url: string; headers: Record<string, string> }
-
-/**
- * How to try to read the document, best first.
- *
- * The console's key costs the reader nothing, so it goes first whenever it is
- * there. The saved password is the fallback, and the only thing a reader
- * arriving without a console session has.
- */
-function attempts(): Attempt[] {
-  const list: Attempt[] = []
-  if (managementKey() !== null) {
-    list.push({ url: managementPath("/summary"), headers: authHeaders({ Accept: "application/json" }) })
-  }
-  const saved = token.read()
-  if (saved) {
-    list.push({
-      url: fallbackURL(),
-      headers: { Accept: "application/json", Authorization: ["Bearer", saved].join(" ") },
-    })
-  }
-  return list
-}
-
 function devScenario(url: string): string {
   if (!import.meta.env.DEV) return url
   // The dev fixture route serves one scenario per state. Stripped from the
@@ -77,44 +56,40 @@ function devScenario(url: string): string {
   return [...forwarded].length > 0 ? `${url}?${forwarded}` : url
 }
 
-async function attempt(one: Attempt, signal?: AbortSignal): Promise<Summary | "rejected"> {
-  const headers = { ...one.headers }
-  if (cached && cached.url === one.url) headers["If-None-Match"] = cached.etag
+/**
+ * The document, through the first open door: the dashboard password, else
+ * the console's key. Which door, and what a refusal does to it, is decided in
+ * access.ts readThrough; this adds the cache and reads the body.
+ *
+ * `signal` is TanStack's. It cancels a read through the password, which costs
+ * nothing to abandon, and never one through the console — see readThrough.
+ */
+export async function fetchSummary(signal?: AbortSignal): Promise<Summary> {
+  let read: Awaited<ReturnType<typeof readThrough>>
+  try {
+    read = await readThrough(
+      accessContext(),
+      (door) => {
+        const url = devScenario(door.kind === "token" ? resourcePath("/summary") : managementPath("/summary"))
+        const headers: Record<string, string> = { Accept: "application/json" }
+        if (cached && cached.url === url) headers["If-None-Match"] = cached.etag
+        return { url, headers }
+      },
+      signal,
+    )
+  } catch (error) {
+    // Neither door let the page in: drop whatever was cached against the old
+    // credential before the sign-in screen, or a later one, can be handed it.
+    if (error instanceof NoSessionError) resetCache()
+    throw error
+  }
 
-  // A connection that is refused rejects on its own; one that is accepted and
-  // then never answered does not. Without a deadline a hung plugin leaves the
-  // page showing old figures with no banner and no further attempt, because the
-  // poll interval will not start a second request while the first is in flight.
-  const deadline = AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])])
-  const response = await fetch(devScenario(one.url), {
-    headers,
-    signal: deadline,
-    cache: "no-store",
-    credentials: "same-origin",
-  })
-
-  // 429 is the fallback route's rate limit on failed attempts. It means this
-  // credential is not getting in right now, which is a rejection like any other.
-  if (response.status === 401 || response.status === 403 || response.status === 429) return "rejected"
-  if (response.status === 304 && cached && cached.url === one.url) return cached.document
+  const { target, response } = read
+  if (response.status === 304 && cached && cached.url === target.url) return cached.document
   if (!response.ok) throw new Error(`summary request failed: ${response.status}`)
 
   const document = (await response.json()) as Summary
   const etag = response.headers.get("ETag")
-  cached = etag ? { url: one.url, etag, document } : null
+  cached = etag ? { url: target.url, etag, document } : null
   return document
-}
-
-export async function fetchSummary(signal?: AbortSignal): Promise<Summary> {
-  const list = attempts()
-  if (list.length === 0) throw new NoSessionError(false)
-
-  for (const one of list) {
-    const result = await attempt(one, signal)
-    if (result !== "rejected") return result
-    // Rejected: drop any document cached against this route before trying the
-    // next credential, or falling through to the sign-in screen.
-    if (cached && cached.url === one.url) resetCache()
-  }
-  throw new NoSessionError(true)
 }

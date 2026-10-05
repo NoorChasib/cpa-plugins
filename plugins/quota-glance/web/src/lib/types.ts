@@ -43,24 +43,57 @@ export interface Credential {
   /**
    * Banked rate-limit resets this account holds, or null when it holds none —
    * which is every credential on a provider that has no such thing, and every
-   * Codex account that has not been granted one. Null is the signal to render
-   * nothing at all, rather than a badge reading zero.
+   * Codex or Claude account that has not been granted one. Null is the signal
+   * to render nothing at all, rather than a badge reading zero.
    */
   resetCredits: ResetCredits | null
+  /**
+   * When the account's subscription renews or ends, or null when the provider
+   * does not say — today only Codex does. An instant, so the page ticks the
+   * distance to it like every other countdown.
+   */
+  renewalAtEpoch: number | null
+  /**
+   * The credit balance the provider reports for this account, or null when it
+   * reports none. Codex accounts carry ChatGPT credits and Grok accounts a
+   * prepaid dollar balance. A figure to print, never a bar: there is no
+   * allowance for it to be a fraction of.
+   */
+  credits: Credits | null
+}
+
+/**
+ * A credential's own credit balance. Not to be confused with `ResetCredits`,
+ * which are banked resets, or with `Balance`, which is a prepaid account that
+ * belongs to no credential at all.
+ */
+export interface Credits {
+  /**
+   * Already formatted by the server — "57,706.15", "$12.40", "Unlimited" — so
+   * every client prints the same figure the same way.
+   */
+  display: string
+  unlimited: boolean
+  /** The provider's decimal, in `unit`. Empty when unlimited. */
+  amount: string
+  unit: Open<"credits" | "usd">
 }
 
 /**
  * Entitlements that clear this account's windows when one is spent. Not
- * capacity, and never drawn as a bar: spending one resets the session and
- * weekly Codex windows outright and moves the weekly reset date.
+ * capacity, and never drawn as a bar. On Codex, spending one resets the
+ * session and weekly windows outright and moves the weekly reset date; on
+ * Claude it clears the 5-hour and weekly limits, and only once the account is
+ * at one.
  */
 export interface ResetCredits {
   /** At least 1 whenever this object exists. */
   availableCount: number
   /**
    * The soonest credit that can still be spent. Null when the provider did not
-   * date it — a banked reset lapses thirty days after it is granted, so the
-   * absence of a deadline is worth rendering differently from a distant one.
+   * date it — a Codex banked reset lapses thirty days after it is granted and
+   * a Claude grant has an end date of its own, so the absence of a deadline is
+   * worth rendering differently from a distant one.
    */
   expiresAtEpoch: number | null
   expiresInSeconds: number | null
@@ -71,6 +104,15 @@ export interface ResetCredits {
    * redemption without this.
    */
   redeemable: boolean
+  /**
+   * The provider's reason, at the last poll, that none can be spent right
+   * now. Empty when one can be or the provider does not say. A hint printed
+   * beside the button, never a reason to hide it: the plugin checks the
+   * provider afresh before spending anything.
+   */
+  hold: "" | "notLimited" | "cooldown" | "paused" | "ineligible" | (string & {})
+  /** When a "cooldown" hold lifts, or null. */
+  holdUntilEpoch: number | null
 }
 
 /** One bucket of the ring. Empty buckets are present, and are half the shape. */
@@ -106,6 +148,21 @@ export interface Aggregate {
   soonestResetAtEpoch: number | null
   soonestResetInSeconds: number | null
   projectedGainPercent: number
+  /**
+   * The same gain unrounded, on the 0-1 scale of `remainingFraction`. The
+   * width of what the next reset returns comes from this; the label beside it
+   * prints `projectedGainPercent`. Absent from a plugin older than the pooled
+   * bar, which then draws no such mark rather than inventing one.
+   */
+  projectedGainFraction?: number
+  /**
+   * When the row would read 100% if nothing more were used — the latest reset
+   * among the members below full — or null when that cannot be said: every
+   * member already full, or one below full with no reset at all.
+   */
+  fullAtEpoch?: number | null
+  fullInSeconds?: number | null
+  /** The recovery as one sentence, for printing whole. Never parsed. */
   subtext: string
 }
 
@@ -121,6 +178,24 @@ export interface RowEntry {
   remainingFraction: number
   remainingPercent: number
   level: Level
+  /**
+   * This credential's slice of the row's pool, on the row's 0-1 scale. Laid
+   * end to end, the entries' shares are `aggregate.remainingFraction` — the
+   * server's slices of the server's mean, so the pooled bar needs no
+   * arithmetic here. Zero with no reading. Absent from an older plugin.
+   */
+  poolShare?: number
+  /**
+   * What the row regains from this credential at its next recovery, on the
+   * same scale; zero unless `resetsNext`. Summed, `projectedGainFraction`.
+   */
+  recoveryShare?: number
+  /**
+   * Part of the row's next recovery: its window resets at the row's soonest
+   * reset or within the minute after. True for a full credential too, which
+   * the recovery names but which returns nothing.
+   */
+  resetsNext?: boolean
   resetAtEpoch: number | null
   resetInSeconds: number | null
   resetDisplayHint: ResetDisplayHint

@@ -192,7 +192,7 @@ func TestSessionRowMatchesTheDesign(t *testing.T) {
 	if doc.Counters != (Counters{Credentials: 7, ObservedOK: 6, ObserveError: 1}) {
 		t.Fatalf("counters = %+v", doc.Counters)
 	}
-	if doc.Credentials[0].Email != "siphorchannel@example.com" || doc.Credentials[0].Plan != "Max" {
+	if doc.Credentials[0].Email != "siphorchannel@example.com" || doc.Credentials[0].Plan != "Max 20x" {
 		t.Fatalf("identity = %+v", doc.Credentials[0])
 	}
 }
@@ -915,15 +915,18 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 }
 
 // End to end: the plan badge the design shows beside each credential. Claude
-// reports a presentable name already; Codex reports an enum token and must
-// arrive as the name the tier is sold under, precomputed, so no client needs a
-// mapping table of its own.
+// and Codex both report tokens and must arrive as the names the plans are sold
+// under, precomputed, so no client needs a mapping table of its own; Grok's
+// display name arrives as Grok wrote it.
 func TestPlanBadgesAreDisplayReadyInTheDocument(t *testing.T) {
 	doc := buildFixture(t)
 	want := map[string]string{
-		"claude-siphorchannel@example.com.json": "Max",
+		"claude-siphorchannel@example.com.json": "Max 20x",
+		"claude-chasibnoor@example.com.json":    "Max 5x",
+		"claude-noorchasib@example.com.json":    "Max",
 		"claude-agency@example.com.json":        "Team",
-		"codex-noor@example.com.json":           "Pro 20x",
+		"claude-noor@example.com.json":          "Enterprise",
+		"codex-noor@example.com.json":           "Pro 200",
 		"xai-noor@example.com.json":             "SuperGrok Heavy",
 	}
 	for _, c := range doc.Credentials {

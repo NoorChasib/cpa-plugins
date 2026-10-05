@@ -15,11 +15,13 @@
       "id": "claude-fresh@example.com.json",
       "email": "fresh@example.com",
       "provider": "claude",
-      "plan": "Max",
+      "plan": "Max 20x",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-stale@example.com.json",
@@ -29,7 +31,16 @@
       "status": "ok",
       "lastObservedEpoch": 1789002000,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": {
+        "availableCount": 1,
+        "expiresAtEpoch": null,
+        "expiresInSeconds": null,
+        "redeemable": true,
+        "hold": "",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-failing@example.com.json",
@@ -39,23 +50,34 @@
       "status": "error",
       "lastObservedEpoch": 1789012200,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-disabled@example.com.json",
       "email": "disabled@example.com",
       "provider": "claude",
-      "plan": "Max",
+      "plan": "Pro",
       "status": "disabled",
       "lastObservedEpoch": 1789012500,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": {
+        "availableCount": 1,
+        "expiresAtEpoch": 1790726400,
+        "expiresInSeconds": 1713600,
+        "redeemable": false,
+        "hold": "",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "claude-unavailable@example.com.json",
       "email": "unavailable@example.com",
       "provider": "claude",
-      "plan": "Max",
+      "plan": "Max 5x",
       "status": "unavailable",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -168,13 +190,22 @@
         "lastRequestAtEpoch": 1789012200,
         "live": false
       },
-      "resetCredits": null
+      "resetCredits": {
+        "availableCount": 2,
+        "expiresAtEpoch": 1789171200,
+        "expiresInSeconds": 158400,
+        "redeemable": true,
+        "hold": "cooldown",
+        "holdUntilEpoch": 1789020000
+      },
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "codex-model@example.com.json",
       "email": "model@example.com",
       "provider": "codex",
-      "plan": "Pro 20x",
+      "plan": "Pro 100",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": {
@@ -251,7 +282,16 @@
         "availableCount": 1,
         "expiresAtEpoch": null,
         "expiresInSeconds": null,
-        "redeemable": true
+        "redeemable": true,
+        "hold": "",
+        "holdUntilEpoch": null
+      },
+      "renewalAtEpoch": null,
+      "credits": {
+        "display": "Unlimited",
+        "unlimited": true,
+        "amount": "",
+        "unit": "credits"
       }
     },
     {
@@ -262,7 +302,9 @@
       "status": "pending",
       "lastObservedEpoch": 0,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "gemini-unsupported@example.com.json",
@@ -272,17 +314,26 @@
       "status": "unsupported",
       "lastObservedEpoch": 0,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": null
     },
     {
       "id": "xai-raw@example.com.json",
       "email": "raw@example.com",
       "provider": "xai",
-      "plan": "SuperGrok Heavy",
+      "plan": "SuperGrok",
       "status": "ok",
       "lastObservedEpoch": 1789012500,
       "activity": null,
-      "resetCredits": null
+      "resetCredits": null,
+      "renewalAtEpoch": null,
+      "credits": {
+        "display": "$0.00",
+        "unlimited": false,
+        "amount": "0.00",
+        "unit": "usd"
+      }
     }
   ],
   "providers": [
@@ -307,6 +358,9 @@
             "soonestResetAtEpoch": 1789014600,
             "soonestResetInSeconds": 1800,
             "projectedGainPercent": 8,
+            "projectedGainFraction": 0.08,
+            "fullAtEpoch": 1789020000,
+            "fullInSeconds": 7200,
             "subtext": "+8% when stale resets in 30m"
           },
           "entries": [
@@ -316,6 +370,9 @@
               "remainingFraction": 0.85,
               "remainingPercent": 85,
               "level": "ok",
+              "poolShare": 0.17,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789016400,
               "resetInSeconds": 3600,
               "resetDisplayHint": "countdown",
@@ -332,6 +389,9 @@
               "remainingFraction": 0.6,
               "remainingPercent": 60,
               "level": "ok",
+              "poolShare": 0.12,
+              "recoveryShare": 0.08000000000000002,
+              "resetsNext": true,
               "resetAtEpoch": 1789014600,
               "resetInSeconds": 1800,
               "resetDisplayHint": "countdown",
@@ -350,6 +410,9 @@
               "remainingFraction": 0.1,
               "remainingPercent": 10,
               "level": "critical",
+              "poolShare": 0.020000000000000004,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789012680,
               "resetInSeconds": 0,
               "resetDisplayHint": "none",
@@ -369,6 +432,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789020000,
               "resetInSeconds": 7200,
               "resetDisplayHint": "countdown",
@@ -385,6 +451,9 @@
               "remainingFraction": 0.95,
               "remainingPercent": 95,
               "level": "ok",
+              "poolShare": 0.19,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789020000,
               "resetInSeconds": 7200,
               "resetDisplayHint": "countdown",
@@ -401,6 +470,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -428,6 +500,9 @@
             "soonestResetAtEpoch": 1789099200,
             "soonestResetInSeconds": 86400,
             "projectedGainPercent": 11,
+            "projectedGainFraction": 0.11000000000000001,
+            "fullAtEpoch": 1789362800,
+            "fullInSeconds": 350000,
             "subtext": "+11% when fresh resets in 1d"
           },
           "entries": [
@@ -437,6 +512,9 @@
               "remainingFraction": 0.45,
               "remainingPercent": 45,
               "level": "ok",
+              "poolShare": 0.09000000000000001,
+              "recoveryShare": 0.11000000000000001,
+              "resetsNext": true,
               "resetAtEpoch": 1789099200,
               "resetInSeconds": 86400,
               "resetDisplayHint": "countdown",
@@ -453,6 +531,9 @@
               "remainingFraction": 0.3,
               "remainingPercent": 30,
               "level": "low",
+              "poolShare": 0.06,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789185600,
               "resetInSeconds": 172800,
               "resetDisplayHint": "countdown",
@@ -471,6 +552,9 @@
               "remainingFraction": 0.05,
               "remainingPercent": 5,
               "level": "critical",
+              "poolShare": 0.010000000000000002,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789272000,
               "resetInSeconds": 259200,
               "resetDisplayHint": "countdown",
@@ -489,6 +573,9 @@
               "remainingFraction": 1,
               "remainingPercent": 100,
               "level": "ok",
+              "poolShare": 0.2,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789358400,
               "resetInSeconds": 345600,
               "resetDisplayHint": "countdown",
@@ -505,6 +592,9 @@
               "remainingFraction": 0.95,
               "remainingPercent": 95,
               "level": "ok",
+              "poolShare": 0.19,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": 1789362800,
               "resetInSeconds": 350000,
               "resetDisplayHint": "countdown",
@@ -521,6 +611,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -548,6 +641,9 @@
             "soonestResetAtEpoch": 1789099140,
             "soonestResetInSeconds": 86340,
             "projectedGainPercent": 85,
+            "projectedGainFraction": 0.85,
+            "fullAtEpoch": 1789099140,
+            "fullInSeconds": 86340,
             "subtext": "+85% when fresh resets in 23h 59m"
           },
           "entries": [
@@ -557,6 +653,9 @@
               "remainingFraction": 0.15,
               "remainingPercent": 15,
               "level": "critical",
+              "poolShare": 0.15,
+              "recoveryShare": 0.85,
+              "resetsNext": true,
               "resetAtEpoch": 1789099140,
               "resetInSeconds": 86340,
               "resetDisplayHint": "countdown",
@@ -573,6 +672,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -589,6 +691,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -605,6 +710,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -621,6 +729,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -637,6 +748,9 @@
               "remainingFraction": 0,
               "remainingPercent": 0,
               "level": "",
+              "poolShare": 0,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -672,6 +786,9 @@
             "soonestResetAtEpoch": 1789018200,
             "soonestResetInSeconds": 5400,
             "projectedGainPercent": 20,
+            "projectedGainFraction": 0.19999999999999996,
+            "fullAtEpoch": 1789018200,
+            "fullInSeconds": 5400,
             "subtext": "+20% when model resets in 1h 30m"
           },
           "entries": [
@@ -681,6 +798,9 @@
               "remainingFraction": 0.8,
               "remainingPercent": 80,
               "level": "ok",
+              "poolShare": 0.8,
+              "recoveryShare": 0.19999999999999996,
+              "resetsNext": true,
               "resetAtEpoch": 1789018200,
               "resetInSeconds": 5400,
               "resetDisplayHint": "countdown",
@@ -708,6 +828,9 @@
             "soonestResetAtEpoch": 1789444800,
             "soonestResetInSeconds": 432000,
             "projectedGainPercent": 30,
+            "projectedGainFraction": 0.30000000000000004,
+            "fullAtEpoch": 1789444800,
+            "fullInSeconds": 432000,
             "subtext": "+30% when model resets in 5d"
           },
           "entries": [
@@ -717,6 +840,9 @@
               "remainingFraction": 0.7,
               "remainingPercent": 70,
               "level": "ok",
+              "poolShare": 0.7,
+              "recoveryShare": 0.30000000000000004,
+              "resetsNext": true,
               "resetAtEpoch": 1789444800,
               "resetInSeconds": 432000,
               "resetDisplayHint": "countdown",
@@ -744,6 +870,9 @@
             "soonestResetAtEpoch": 1789018200,
             "soonestResetInSeconds": 5400,
             "projectedGainPercent": 25,
+            "projectedGainFraction": 0.25,
+            "fullAtEpoch": 1789018200,
+            "fullInSeconds": 5400,
             "subtext": "+25% when model resets in 1h 30m"
           },
           "entries": [
@@ -753,6 +882,9 @@
               "remainingFraction": 0.75,
               "remainingPercent": 75,
               "level": "ok",
+              "poolShare": 0.75,
+              "recoveryShare": 0.25,
+              "resetsNext": true,
               "resetAtEpoch": 1789018200,
               "resetInSeconds": 5400,
               "resetDisplayHint": "countdown",
@@ -780,6 +912,9 @@
             "soonestResetAtEpoch": 1789444800,
             "soonestResetInSeconds": 432000,
             "projectedGainPercent": 60,
+            "projectedGainFraction": 0.6,
+            "fullAtEpoch": 1789444800,
+            "fullInSeconds": 432000,
             "subtext": "+60% when model resets in 5d"
           },
           "entries": [
@@ -789,6 +924,9 @@
               "remainingFraction": 0.4,
               "remainingPercent": 40,
               "level": "ok",
+              "poolShare": 0.4,
+              "recoveryShare": 0.6,
+              "resetsNext": true,
               "resetAtEpoch": 1789444800,
               "resetInSeconds": 432000,
               "resetDisplayHint": "countdown",
@@ -824,6 +962,9 @@
             "soonestResetAtEpoch": null,
             "soonestResetInSeconds": null,
             "projectedGainPercent": 0,
+            "projectedGainFraction": 0,
+            "fullAtEpoch": null,
+            "fullInSeconds": null,
             "subtext": ""
           },
           "entries": [
@@ -833,6 +974,9 @@
               "remainingFraction": 0.32,
               "remainingPercent": 32,
               "level": "low",
+              "poolShare": 0.32,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",
@@ -860,6 +1004,9 @@
             "soonestResetAtEpoch": null,
             "soonestResetInSeconds": null,
             "projectedGainPercent": 0,
+            "projectedGainFraction": 0,
+            "fullAtEpoch": null,
+            "fullInSeconds": null,
             "subtext": ""
           },
           "entries": [
@@ -869,6 +1016,9 @@
               "remainingFraction": 0.78,
               "remainingPercent": 78,
               "level": "ok",
+              "poolShare": 0.78,
+              "recoveryShare": 0,
+              "resetsNext": false,
               "resetAtEpoch": null,
               "resetInSeconds": null,
               "resetDisplayHint": "none",

@@ -3,7 +3,9 @@
 //
 // It is a development tool: it stands in for CPA's request dispatch and nothing
 // else. The handler, the document, the token check, and the ETag are the
-// production ones.
+// production ones. It never contacts a provider: with -redeem set, a press on
+// the button is answered by a stand-in that returns the ending named, so each
+// one can be looked at without spending anything.
 package main
 
 import (
@@ -11,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +22,7 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/api"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
 )
 
@@ -32,7 +36,15 @@ func main() {
 	token := flag.String("token", "dev-token", "fallback web token for the public summary route")
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
 	epoch := flag.Int64("now", 1789012800, "build clock, in Unix seconds")
+	ending := flag.String("redeem", "", "answer every confirmed redeem with this ending and offer the button: "+
+		"an outcome (reset, nothingToReset, noCredit, failed, notLimited, cooldown, paused, ineligible, alreadyUsed) "+
+		"or an error (outcome_unknown, retry_window_closed, provider_rate_limited, provider_refused, provider_unavailable, already_in_flight, credential_unusable). "+
+		"Empty leaves redemption off")
 	flag.Parse()
+	stand, err := standInFor(*ending)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	now := time.Unix(*epoch, 0).UTC()
 	files, err := rosterFor(*snapshot, *rosterPath)
@@ -48,14 +60,21 @@ func main() {
 		Snapshot:   result.Snapshot,
 		Identities: result.Identities,
 		StaleAfter: 45 * time.Minute,
+		Redeemable: stand != nil,
 	}, now)
 
 	served := api.New("quota-glance", *token)
 	served.Publish(doc, api.Health{Version: "fixtureserve", CachePath: *snapshot, StaleAfter: "45m"})
+	if stand != nil {
+		served.SetRedeemer(stand)
+	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// The redeem body, bounded well past what the route accepts so the
+		// route's own size check is the one that answers.
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
 		res := served.Handle(protocol.ManagementRequest{
-			Method: r.Method, Path: r.URL.Path, Headers: r.Header, Query: r.URL.Query(),
+			Method: r.Method, Path: r.URL.Path, Headers: r.Header, Query: r.URL.Query(), Body: body,
 		}, time.Now())
 		for name, values := range res.Headers {
 			for _, value := range values {
@@ -69,8 +88,57 @@ func main() {
 	fmt.Printf("  page     http://%s/v0/resource/plugins/quota-glance/app\n", *addr)
 	fmt.Printf("  document http://%s/v0/management/plugins/quota-glance/summary\n", *addr)
 	fmt.Printf("  fallback http://%s/v0/resource/plugins/quota-glance/summary  (Bearer %s)\n", *addr, *token)
+	if stand != nil {
+		fmt.Printf("  redeem   POST http://%s/v0/management/plugins/quota-glance/redeem  (answers %q, contacts nothing)\n", *addr, *ending)
+		fmt.Printf("  spend    GET http://%s/v0/resource/plugins/quota-glance/spend  (Bearer %s + X-Quota-Glance-Spend)\n", *addr, *token)
+	}
 	fmt.Println("  (CPA authenticates the management tree in production; this stand-in does not)")
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+// standIn answers every press with one fixed ending, in place of a redeemer
+// that would reach a provider.
+type standIn struct {
+	result redeem.Result
+	err    error
+}
+
+func (s standIn) Redeem(context.Context, string, string) (redeem.Result, error) {
+	// The real redeemer names the instant its unresolved claim stops being
+	// repeated. Ten minutes from the press is what a first unknown answer
+	// would say.
+	if s.err == redeem.ErrOutcomeUnknown {
+		return redeem.Result{}, &redeem.OutcomeUnknownError{RetryUntil: time.Now().Add(10 * time.Minute)}
+	}
+	return s.result, s.err
+}
+
+// standInFor maps a -redeem value onto the ending the real redeemer would
+// produce: an outcome, or the error the API turns into that code.
+func standInFor(ending string) (*standIn, error) {
+	switch ending {
+	case "":
+		return nil, nil
+	case redeem.OutcomeReset, redeem.OutcomeNothingToReset, redeem.OutcomeAlreadyUsed:
+		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1}}, nil
+	case redeem.OutcomeNoCredit, redeem.OutcomeFailed, redeem.OutcomeNotLimited,
+		redeem.OutcomeCooldown, redeem.OutcomePaused, redeem.OutcomeIneligible:
+		return &standIn{result: redeem.Result{Outcome: ending, RemainingCount: 2}}, nil
+	}
+	for code, err := range map[string]error{
+		"outcome_unknown":       redeem.ErrOutcomeUnknown,
+		"retry_window_closed":   redeem.ErrRetryWindowClosed,
+		"provider_rate_limited": redeem.ErrRateLimited,
+		"provider_refused":      redeem.ErrRefused,
+		"provider_unavailable":  redeem.ErrUnavailable,
+		"already_in_flight":     redeem.ErrInFlight,
+		"credential_unusable":   redeem.ErrNoAccessToken,
+	} {
+		if code == ending {
+			return &standIn{err: err}, nil
+		}
+	}
+	return nil, fmt.Errorf("-redeem %q is not an ending this stand-in knows", ending)
 }
 
 // rosterFor stands in for host.auth.list.
