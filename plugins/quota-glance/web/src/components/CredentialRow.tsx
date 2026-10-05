@@ -165,16 +165,34 @@ function CreditsFigure({ credits }: { credits: { figure: string; unit: string; n
   )
 }
 
+const DAY_SECONDS = 86400
+
 /**
  * When the subscription renews: the date, so it can be checked against a
  * receipt, and the distance, ticking like every other countdown here.
+ *
+ * An estimate says so twice in the line itself — "~" on the date, "(est.)"
+ * after it — because it is read at a glance and the tooltip is not. Its
+ * distance is whole days: a date that can be days out, if the billing day has
+ * moved, has no business being counted down to the hour. One that comes round
+ * while the page is open is due rather than passed, since the next document
+ * will already carry the anniversary after it.
  */
-function renewalText(renewalAtEpoch: number, now: number): string {
+function renewalText(renewalAtEpoch: number, now: number, estimated: boolean): string {
   const remaining = renewalAtEpoch - now
-  return remaining > 0
-    ? `renews ${formatDate(renewalAtEpoch)} · in ${formatDuration(remaining)}`
-    : "renewal date passed"
+  if (!estimated) {
+    return remaining > 0
+      ? `renews ${formatDate(renewalAtEpoch)} · in ${formatDuration(remaining)}`
+      : "renewal date passed"
+  }
+  if (remaining <= 0) return "renewal due (est.)"
+  const distance = remaining >= DAY_SECONDS ? `${Math.floor(remaining / DAY_SECONDS)}d` : formatDuration(remaining)
+  return `renews ~${formatDate(renewalAtEpoch)} (est.) · in ${distance}`
 }
+
+/** What an estimated renewal is, for the reader who wonders. */
+const ESTIMATED_RENEWAL_TITLE =
+  "Estimated from when the subscription started. Anthropic does not report the renewal date, so this can be off if the billing date has moved."
 
 /** Why a row is dimmed, in the words the contract uses. */
 const STATE_LABELS: Record<string, string> = {
@@ -239,8 +257,11 @@ export function CredentialRow({
 
   // Checked by type rather than against null: a document from a plugin that
   // predates these fields has neither, and must render as it always did.
+  const estimated = credential?.renewalEstimated === true
   const renewal =
-    credential && typeof credential.renewalAtEpoch === "number" ? renewalText(credential.renewalAtEpoch, now) : null
+    credential && typeof credential.renewalAtEpoch === "number"
+      ? renewalText(credential.renewalAtEpoch, now, estimated)
+      : null
   const credits = credential?.credits ? creditsText(credential.credits) : null
 
   // What the figure line carries, piece by piece, so a line with nothing to
@@ -334,7 +355,9 @@ export function CredentialRow({
         * credential. */}
       {(renewal || (credits && !creditsInline)) && (
         <div className="qg-amuted">
-          <span className="truncate">{renewal}</span>
+          <span className="truncate" title={renewal && estimated ? ESTIMATED_RENEWAL_TITLE : undefined}>
+            {renewal}
+          </span>
           {credits && !creditsInline && <CreditsFigure credits={credits} />}
         </div>
       )}

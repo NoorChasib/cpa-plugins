@@ -15,22 +15,24 @@ import (
 
 // Account details are the facts about a credential that change rarely and that
 // the usage response does not carry, or carries only in a weaker spelling:
-// Claude's plan, Codex's subscription renewal, Grok's plan name. Each costs a
-// request of its own, so they keep a slow schedule of their own — at most one
-// read per credential every DetailsInterval — and the last good answer is
-// carried between reads and across failed requests. Nothing here can fail a
-// poll, back it off, or pause its provider: every request that goes wrong
-// leaves the previous value standing and the observation as it was. An
-// endpoint that answers but no longer names the value is different: that is
-// the account saying it has none now — a lapsed plan, a subscription with no
-// renewal date — and the carried value is dropped so the weaker sources apply
-// again, rather than showing a plan the account stopped having.
+// Claude's plan and when its subscription began, Codex's subscription renewal,
+// Grok's plan name. Each costs a request of its own, so they keep a slow
+// schedule of their own — at most one read per credential every
+// DetailsInterval — and the last good answer is carried between reads and
+// across failed requests. Nothing here can fail a poll, back it off, or pause
+// its provider: every request that goes wrong leaves the previous value
+// standing and the observation as it was. An endpoint that answers but no
+// longer names the value is different: that is the account saying it has none
+// now — a lapsed plan, a subscription with no renewal date — and the carried
+// value is dropped so the weaker sources apply again, rather than showing a
+// plan the account stopped having.
 //
 // The same endpoints the CPA management centre reads for its own cards:
 //
 //	Claude: GET https://api.anthropic.com/api/oauth/profile
 //	        -> organization.organization_type, .subscription_status,
-//	           .rate_limit_tier; account.has_claude_max, .has_claude_pro
+//	           .rate_limit_tier, .subscription_created_at;
+//	           account.has_claude_max, .has_claude_pro
 //	Codex:  GET https://chatgpt.com/backend-api/subscriptions?account_id=<id>
 //	        -> active_until (unix seconds, as a number or a string)
 //	Grok:   GET https://cli-chat-proxy.grok.com/v1/settings
@@ -57,6 +59,16 @@ const (
 	// accountHorizon bounds any date read from an account endpoint, the same
 	// ten years detailedReset allows. Further out is a misread unit, not a date.
 	accountHorizon = 10 * 366 * 24 * time.Hour
+
+	// A subscription's start is bounded on its own terms rather than by
+	// accountHorizon, because it lies behind us by design and a long-standing
+	// subscription is the ordinary case. Twenty years predates every plan
+	// these endpoints sell, so anything older is a misread unit. A day ahead is
+	// tolerated as clock skew between Anthropic and this host — a subscription
+	// bought a moment ago can be stamped a moment from now — and anything
+	// further ahead is not a start that has happened.
+	subscriptionStartMaxAgeYears = 20
+	subscriptionStartSkew        = 24 * time.Hour
 )
 
 // hasAccountDetails reports whether the provider has account endpoints this
@@ -82,10 +94,10 @@ func detailsDue(known *client.AccountDetails, now time.Time) bool {
 // When known was checked within DetailsInterval it is returned as it is, and no
 // request is made. Otherwise the account endpoints are asked and what they
 // answer replaces known: a value they answered without — no plan named, no
-// renewal still ahead — is cleared, and only a value whose request failed
-// (transport error, non-2xx status, unreadable body) keeps the one known
-// already had. CheckedAt advances either way, so a failing endpoint is asked
-// again in six hours, not on every poll.
+// renewal still ahead, no plausible subscription start — is cleared, and only
+// a value whose request failed (transport error, non-2xx status, unreadable
+// body) keeps the one known already had. CheckedAt advances either way, so a
+// failing endpoint is asked again in six hours, not on every poll.
 //
 // Call it only once the usage observation is a success, and with a doer whose
 // statuses are not the poll's: a 429 from an account endpoint says nothing
@@ -101,12 +113,15 @@ func RefreshDetails(ctx context.Context, doer Doer, provider string, rawAuth []b
 	}
 	next := &client.AccountDetails{CheckedAt: now}
 	if known != nil {
-		next.Plan, next.RenewalAt = known.Plan, known.RenewalAt
+		next.Plan, next.RenewalAt, next.SubscriptionStartedAt = known.Plan, known.RenewalAt, known.SubscriptionStartedAt
 	}
 	switch provider {
 	case "claude":
-		if plan, answered := claudeProfilePlan(ctx, doer, creds); answered {
-			next.Plan = plan
+		// One response, two facts, each judged on its own: a profile that
+		// names a plan but no usable start clears the start and keeps the
+		// plan, and the other way about.
+		if profile, answered := claudeProfile(ctx, doer, creds, now); answered {
+			next.Plan, next.SubscriptionStartedAt = profile.plan, profile.startedAt
 		}
 	case "codex":
 		if at, answered := codexSubscriptionEnd(ctx, doer, creds, now); answered {
@@ -158,10 +173,19 @@ func readAccount(ctx context.Context, doer Doer, request protocol.HostHTTPReques
 	return root, err == nil
 }
 
-// claudeProfilePlan reads the account's plan from Claude's profile endpoint.
-// answered is false only when the request failed; a profile that answered
-// without naming a plan is ("", true).
-func claudeProfilePlan(ctx context.Context, doer Doer, creds credentials) (plan string, answered bool) {
+// claudeAccount is what Claude's profile endpoint says about the account. A
+// field the profile does not supply, or supplies in a shape this code does not
+// trust, is zero.
+type claudeAccount struct {
+	plan      string
+	startedAt *time.Time
+}
+
+// claudeProfile reads the account's plan, and when its subscription began,
+// from Claude's profile endpoint: one request for both. answered is false only
+// when the request failed; a profile that answered without naming either is
+// (claudeAccount{}, true).
+func claudeProfile(ctx context.Context, doer Doer, creds credentials, now time.Time) (profile claudeAccount, answered bool) {
 	root, ok := readAccount(ctx, doer, protocol.HostHTTPRequest{
 		Method: "GET",
 		URL:    claudeProfileURL,
@@ -175,9 +199,32 @@ func claudeProfilePlan(ctx context.Context, doer Doer, creds credentials) (plan 
 		},
 	})
 	if !ok {
-		return "", false
+		return claudeAccount{}, false
 	}
-	return claudePlanToken(object(root, "organization"), object(root, "account")), true
+	organization := object(root, "organization")
+	return claudeAccount{
+		plan:      claudePlanToken(organization, object(root, "account")),
+		startedAt: claudeSubscriptionStart(organization, now),
+	}, true
+}
+
+// claudeSubscriptionStart reads when the organisation's subscription began.
+// Claude Code reads the same field into its own subscriptionCreatedAt.
+//
+// It is the only anchor Anthropic gives for a Claude renewal date, so it is
+// read as carefully as Codex's active_until — RFC 3339, or unix seconds or
+// milliseconds as a number or a numeric string — and held to the window a
+// start can plausibly occupy. Nil when the profile does not say, or says
+// something outside that window.
+func claudeSubscriptionStart(organization map[string]any, now time.Time) *time.Time {
+	for _, key := range []string{"subscription_created_at", "subscriptionCreatedAt"} {
+		at, ok := instant(organization[key])
+		if !ok || at.After(now.Add(subscriptionStartSkew)) || at.Before(now.AddDate(-subscriptionStartMaxAgeYears, 0, 0)) {
+			continue
+		}
+		return &at
+	}
+	return nil
 }
 
 // claudePlanToken names the plan with a fixed machine token for consumers to

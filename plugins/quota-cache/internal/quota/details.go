@@ -218,7 +218,9 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 		}
 		extra := object(root, "extra_usage")
 		addBalance(q, "extra_usage", client.Balance{Unit: "provider_units", Used: decimal(extra, "used_credits"), Limit: decimal(extra, "monthly_limit"), UsedPercent: percent(extra, "utilization"), Enabled: boolean(extra, "is_enabled")})
-		q.ResetCredits = claudeResetGrants(q, object(root, "cedar_ember"), now)
+		block := object(root, "cedar_ember")
+		q.ResetCredits = claudeResetGrants(q, block, now)
+		q.BillingPeriod = claudeBillingPeriod(block)
 	case "codex":
 		q.Plan = name(root, "plan_type", "planType")
 		q.ActiveLimit = name(root, "metered_limit_name", "meteredLimitName", "limit_name", "limitName")
@@ -439,6 +441,29 @@ func claudeResetGrants(q *client.Quota, block map[string]any, now time.Time) *cl
 	next, _ := block["next_grant_id"].(string)
 	credits.Hold, credits.HoldUntil = resetGrantHold(*eligible, flag(block, "at_limit", false), block, live, next, now)
 	return credits
+}
+
+// claudeBillingPeriod reads how often the subscription is billed from the
+// cedar_ember block's event_props, the one field of them kept.
+//
+// Anthropic reports no renewal date for a Claude subscription. The profile's
+// subscription start, read on the account-details schedule, says when the
+// billing anchor is; this says whether it comes round monthly or yearly, and
+// costs nothing because it rides on the usage request already made.
+//
+// event_props is analytics context, not a contract, so it is read defensively
+// and in isolation: independent of eligibility and of the grants, and
+// incapable of touching either. Only the two cadences a reader can schedule
+// are kept; "unknown", a value this code was not built for, a non-string, a
+// null or missing event_props all store nothing, which a reader takes as
+// "not stated". Every other event_props field — the tier, the surface — is
+// left where it was found.
+func claudeBillingPeriod(block map[string]any) string {
+	switch period := stringField(object(block, "event_props"), "billing_period"); period {
+	case client.BillingMonthly, client.BillingAnnual:
+		return period
+	}
+	return ""
 }
 
 // resetGrantHold is the provider's reason none of the live grants can be spent

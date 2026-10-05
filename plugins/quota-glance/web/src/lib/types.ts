@@ -48,11 +48,21 @@ export interface Credential {
    */
   resetCredits: ResetCredits | null
   /**
-   * When the account's subscription renews or ends, or null when the provider
-   * does not say — today only Codex does. An instant, so the page ticks the
-   * distance to it like every other countdown.
+   * When the account's subscription renews or ends, or null when there is
+   * nothing to say. Codex reports its own date; Claude reports none, and gets
+   * an estimate instead (`renewalEstimated`). An instant, so the page ticks
+   * the distance to it like every other countdown.
    */
   renewalAtEpoch: number | null
+  /**
+   * True when `renewalAtEpoch` is not the provider's date but the next
+   * billing anniversary of when the subscription began, which is all
+   * Anthropic reports. It must be shown as an estimate: a billing date that
+   * has moved since the subscription started is invisible to the server.
+   * Optional because a plugin built before it sends no such field, and every
+   * renewal it sent was the provider's own.
+   */
+  renewalEstimated?: boolean
   /**
    * The credit balance the provider reports for this account, or null when it
    * reports none. Codex accounts carry ChatGPT credits and Grok accounts a

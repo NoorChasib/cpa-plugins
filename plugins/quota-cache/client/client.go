@@ -94,10 +94,11 @@ type Entry struct {
 }
 
 // AccountDetails are the facts about an account that rarely change and cost a
-// request of their own to learn: Claude's plan, Codex's subscription renewal,
-// Grok's plan name. The usage response either lacks them or carries a weaker
-// spelling, and asking on every poll would multiply the requests made against
-// each credential for an answer that changes once a month at most.
+// request of their own to learn: Claude's plan and when its subscription
+// began, Codex's subscription renewal, Grok's plan name. The usage response
+// either lacks them or carries a weaker spelling, and asking on every poll
+// would multiply the requests made against each credential for an answer that
+// changes once a month at most.
 //
 // They are read at most once per credential every six hours. A read that fails
 // leaves the last good value in place, so a value here may be older than
@@ -115,6 +116,20 @@ type AccountDetails struct {
 	// subscription endpoint reports. Nil until a read supplies one still ahead,
 	// and nil again once a read answers without one.
 	RenewalAt *time.Time `json:"renewal_at,omitempty"`
+	// SubscriptionStartedAt is when a Claude subscription began, as the
+	// profile endpoint's organization.subscription_created_at reports it.
+	//
+	// Anthropic reports no renewal date for a Claude subscription — neither
+	// Claude Code nor the CPA management centre shows one — and this is the
+	// nearest fact it does report. A consumer may estimate the next renewal
+	// from it, as the next anniversary of the start at Quota.BillingPeriod's
+	// cadence, and must say it is an estimate: a billing date that has moved
+	// since the subscription began is invisible here.
+	//
+	// It is the start, not a renewal, so it is kept whether it is past or not
+	// and is never written to Entry.RenewalAt. Nil until a read supplies a
+	// plausible date, and nil again once a read answers without one.
+	SubscriptionStartedAt *time.Time `json:"subscription_started_at,omitempty"`
 }
 
 type Snapshot struct {

@@ -20,7 +20,8 @@ that one request and on no timer — see [Banked resets](#banked-resets), or set
 
 - Quota Cache installed and polling, with a snapshot on disk.
 - Quota Cache **0.1.10 or newer** for banked Claude resets, Claude plan names,
-  Grok's subscription display name, and Codex's subscription renewal date.
+  Claude's estimated renewal date, Grok's subscription display name, and
+  Codex's subscription renewal date.
   Against an older snapshot Claude's resets are absent and its plan badge reads
   "—", Grok shows the tier its usage response names, and Codex shows the
   spend-control reset as its renewal; each fills in on its own once Quota Cache
@@ -172,7 +173,9 @@ Claude's alone; rename Claude's with `claude:`.
 
 Where the provider reports them, a credential also carries its **credit
 balance** — Codex credits, or Grok's prepaid dollars — and its **renewal date**,
-which Codex reports.
+which Codex reports. Anthropic reports no renewal date, so a Claude account
+shows an estimate, `renews ~Oct 29 (est.)`, taken from when its subscription
+started ([how](docs/summary-contract.md#renewalestimated--whether-that-renewal-is-an-estimate)).
 
 Each credential also carries **which of them CPA is actually routing to**, as a
 strip of request counts under its address. A credential sitting at 100% is

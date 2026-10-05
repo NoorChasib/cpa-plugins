@@ -36,7 +36,12 @@
           "reset_at": "2026-09-11T03:59:00Z",
           "observed_at": "2026-09-10T03:55:00Z"
         }
-      ]
+      ],
+      "account_details": {
+        "checked_at": "2026-09-10T03:30:00Z",
+        "plan": "max_20x",
+        "subscription_started_at": "2026-09-10T20:00:00Z"
+      }
     },
     "claude:claude-stale@example.com.json": {
       "provider": "claude",
@@ -71,7 +76,13 @@
           "available_count": 1,
           "hold": "cooldown",
           "hold_until": "2026-09-10T03:30:00Z"
-        }
+        },
+        "billing_period": "annual"
+      },
+      "account_details": {
+        "checked_at": "2026-09-09T20:00:00Z",
+        "plan": "max",
+        "subscription_started_at": "2024-02-29T08:00:00Z"
       }
     },
     "claude:claude-failing@example.com.json": {

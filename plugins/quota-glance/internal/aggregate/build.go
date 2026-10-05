@@ -492,6 +492,7 @@ func Build(in Input, now time.Time) Document {
 		default:
 			doc.Counters.ObservedOK++
 		}
+		renewal, estimated := renewalFor(r, now)
 		doc.Credentials = append(doc.Credentials, Credential{
 			ID:                r.identity.AuthIndex,
 			Email:             emailOf(r.identity),
@@ -501,7 +502,8 @@ func Build(in Input, now time.Time) Document {
 			LastObservedEpoch: epochOf(r.freshest),
 			Activity:          activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
 			ResetCredits:      resetCreditsOf(r, in.Redeemable, now),
-			RenewalAtEpoch:    renewalOf(r, now),
+			RenewalAtEpoch:    renewal,
+			RenewalEstimated:  estimated,
 			Credits:           accountCreditsOf(r),
 		})
 	}
@@ -601,18 +603,6 @@ func holdOf(source *qc.ResetCredits, now time.Time) (string, *int64) {
 	}
 	epoch := source.HoldUntil.Unix()
 	return hold, &epoch
-}
-
-// renewalOf is the subscription's renewal instant, when quota-cache read one.
-// One already behind us is dropped: the subscription either renewed, and the
-// next poll will carry the new date, or it lapsed, and either way the old date
-// says nothing true about the future.
-func renewalOf(r record, now time.Time) *int64 {
-	if !r.hasEntry || r.entry.RenewalAt == nil || !r.entry.RenewalAt.After(now) {
-		return nil
-	}
-	epoch := r.entry.RenewalAt.Unix()
-	return &epoch
 }
 
 func epochOf(t time.Time) int64 {

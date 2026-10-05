@@ -136,7 +136,8 @@
         "hold": "",
         "holdUntilEpoch": null
       },
-      "renewalAtEpoch": null,
+      "renewalAtEpoch": 1790759700,
+      "renewalEstimated": true,
       "credits": null
     },
     {
@@ -264,7 +265,8 @@
         "hold": "notLimited",
         "holdUntilEpoch": null
       },
-      "renewalAtEpoch": null,
+      "renewalAtEpoch": 1804873200,
+      "renewalEstimated": true,
       "credits": null
     },
     {
@@ -385,7 +387,8 @@
         "live": false
       },
       "resetCredits": null,
-      "renewalAtEpoch": null,
+      "renewalAtEpoch": 1790085900,
+      "renewalEstimated": true,
       "credits": null
     },
     {
@@ -507,6 +510,7 @@
       },
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -628,6 +632,7 @@
       },
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -756,6 +761,7 @@
         "holdUntilEpoch": null
       },
       "renewalAtEpoch": 1791604800,
+      "renewalEstimated": false,
       "credits": {
         "display": "57,706.15",
         "unlimited": false,
@@ -773,6 +779,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": {
         "display": "$12.40",
         "unlimited": false,

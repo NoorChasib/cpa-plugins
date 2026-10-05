@@ -12,8 +12,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, and Grok prepaid credits. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, and an empty Grok balance. |
+| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -281,11 +281,50 @@ outcome below, with nothing spent.
 
 ### `renewalAtEpoch` — when the subscription renews, or `null`
 
-The instant the account's subscription renews or ends, for a provider that
-reports one — Codex does. `null` for every other provider, when quota-cache has
-not read one, and once the instant has passed: a renewal behind us is a poll
-that has not yet seen the next one, and counting down past zero to it would be
-wrong. Render it as a date with a countdown, ticking against your own clock.
+The instant the account's subscription renews or ends. Codex reports its own;
+Claude's is an estimate, flagged by `renewalEstimated` below. `null` for every
+other provider, when quota-cache has read neither, and once a reported instant
+has passed: a renewal behind us is a poll that has not yet seen the next one,
+and counting down past zero to it would be wrong. Render it as a date with a
+countdown, ticking against your own clock.
+
+### `renewalEstimated` — whether that renewal is an estimate
+
+Always present. `true` only when `renewalAtEpoch` is an estimate rather than the
+provider's own date, and `false` otherwise, including when `renewalAtEpoch` is
+`null`. A plugin older than this field omits it, so read a missing field as
+`false`.
+
+Anthropic does not report when a Claude subscription renews: Claude Code and
+the CPA management centre show no renewal date either. It does report when the
+subscription was created, and Quota Cache 0.1.10 keeps that as
+`account_details.subscription_started_at` with the plan's `billing_period`
+(`monthly` or `annual`) beside it. When a credential has no reported renewal
+still ahead and has a start, `renewalAtEpoch` is the start's next anniversary
+strictly after the build, and `renewalEstimated` is `true`:
+
+- **Cadence**: yearly when `billing_period` is `annual`, and monthly otherwise,
+  including when it is missing or `unknown`.
+- **Anchor**: the start's day of the month and time of day, in UTC. In a month
+  too short for that day it falls on the month's last day: a start on Jan 31
+  renews Feb 28 (Feb 29 in a leap year), Mar 31, Apr 30, and so on. Each
+  anniversary is counted from the start itself, never from the previous one,
+  so the day does not drift down after February. An annual plan begun on Feb 29
+  renews on Feb 28 outside leap years.
+- **Boundary**: at the anniversary's own second, the next one is reported.
+- A start still in the future produces no estimate.
+
+A reported renewal always takes precedence and is never marked estimated. Codex
+reports its own date and has no start, so a Codex renewal is always `false`.
+
+**Say that it is an estimate wherever you print it.** The anniversary is correct
+for an account whose billing date has never moved. It is wrong by however far
+the date has moved for one that was paused, changed plan mid-cycle, or
+re-subscribed, and nothing in the snapshot can show that. The dashboard prints
+`renews ~Oct 29 (est.) · in 24d`, counts the distance in whole days, and
+explains the estimate in a tooltip. An estimate costs no request: the start
+comes from the profile Quota Cache already reads for the plan, and the cadence
+from the usage response it already polls.
 
 ### `credits` — money or credit the account can spend, or `null`
 

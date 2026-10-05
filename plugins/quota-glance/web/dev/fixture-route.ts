@@ -64,7 +64,9 @@ const EPOCH_FIELDS = new Set([
   // distance from now as it would against a live snapshot.
   "expiresAtEpoch",
   // When a Claude reset cooldown lifts, and when a subscription renews: both
-  // tick on the page, and both would read as long past without this.
+  // tick on the page, and both would read as long past without this. A Claude
+  // renewal is an estimate the golden build already placed ahead of its own
+  // clock, so moving it with the rest keeps it ahead here too.
   "holdUntilEpoch",
   "renewalAtEpoch",
   // When a card's pool is full again, which the card counts down to beside

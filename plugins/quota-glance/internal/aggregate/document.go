@@ -204,10 +204,18 @@ type Credential struct {
 	// all rather than having to decide that "0 banked" is not worth a badge.
 	ResetCredits *ResetCredits `json:"resetCredits"`
 	// RenewalAtEpoch is when the subscription renews or ends, for a provider
-	// that reports it — Codex does. Null when it does not, and null once the
-	// instant has passed: a renewal behind us is a poll that has not yet seen
-	// the new one, and counting down past zero to it would be wrong.
+	// that reports it — Codex does — and an estimate of it for one that
+	// reports only when the subscription began — Claude. Null when there is
+	// neither, and null once a reported instant has passed: a renewal behind
+	// us is a poll that has not yet seen the new one, and counting down past
+	// zero to it would be wrong. An estimate is always the next one ahead.
 	RenewalAtEpoch *int64 `json:"renewalAtEpoch"`
+	// RenewalEstimated is true when RenewalAtEpoch is not the provider's date
+	// but the next billing anniversary of the subscription's start, and false
+	// otherwise, including when there is no renewal at all. A client must say
+	// so beside the date: an anniversary is wrong for an account whose billing
+	// date has moved since it subscribed, and nothing here can see that.
+	RenewalEstimated bool `json:"renewalEstimated"`
 	// Credits is the prepaid or granted balance the account can spend beyond
 	// its windows, and null for a provider that reports none. Codex reports
 	// credits; Grok reports a prepaid dollar balance.

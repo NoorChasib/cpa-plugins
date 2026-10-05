@@ -21,6 +21,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -39,7 +40,8 @@
         "hold": "",
         "holdUntilEpoch": null
       },
-      "renewalAtEpoch": null,
+      "renewalAtEpoch": 1803801600,
+      "renewalEstimated": true,
       "credits": null
     },
     {
@@ -52,6 +54,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -71,6 +74,7 @@
         "holdUntilEpoch": null
       },
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -199,6 +203,7 @@
         "holdUntilEpoch": 1789020000
       },
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -287,6 +292,7 @@
         "holdUntilEpoch": null
       },
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": {
         "display": "Unlimited",
         "unlimited": true,
@@ -304,6 +310,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -316,6 +323,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": null
     },
     {
@@ -328,6 +336,7 @@
       "activity": null,
       "resetCredits": null,
       "renewalAtEpoch": null,
+      "renewalEstimated": false,
       "credits": {
         "display": "$0.00",
         "unlimited": false,

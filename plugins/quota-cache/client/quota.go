@@ -17,8 +17,25 @@ type Quota struct {
 	Balances           map[string]Balance `json:"balances,omitempty"`
 	UnifiedBilling     *bool              `json:"unified_billing,omitempty"`
 	ResetCredits       *ResetCredits      `json:"reset_credits,omitempty"`
-	Truncated          bool               `json:"truncated,omitempty"`
+	// BillingPeriod is how often a Claude subscription is billed, as the
+	// usage response's cedar_ember block states it in event_props:
+	// BillingMonthly or BillingAnnual. Empty for every other provider, and
+	// whenever the block is absent, says "unknown", or says anything else.
+	//
+	// It rides on the usage request every poll already makes, so it costs
+	// nothing, and it is what turns AccountDetails.SubscriptionStartedAt into
+	// an estimated renewal: the same anniversary monthly or yearly.
+	BillingPeriod string `json:"billing_period,omitempty"`
+	Truncated     bool   `json:"truncated,omitempty"`
 }
+
+// The values Quota.BillingPeriod takes. Anything else the provider says is
+// stored as empty, so a reader never has to guess at a cadence it was not
+// built for.
+const (
+	BillingMonthly = "monthly"
+	BillingAnnual  = "annual"
+)
 
 // ResetCredits is an account's inventory of banked rate-limit resets:
 // entitlements already granted to the account, which clear its current windows

@@ -133,10 +133,15 @@ func TestRecentAccountDetailsAreUsedWithoutARequest(t *testing.T) {
 }
 
 // End to end through the real writer: the first poll reads the profile once,
-// the plan reaches the snapshot entry consumers read, and neither a later poll
-// nor a restart asks for it again inside the interval.
+// the plan and the subscription start reach the snapshot entry consumers read,
+// the billing period arrives with every usage poll, and neither a later poll
+// nor a restart asks for the profile again inside the interval.
 func TestAccountDetailsSurviveARestartWithoutARead(t *testing.T) {
 	host := newClaudeHost()
+	host.bodies[profileURL] = `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x",` +
+		`"subscription_created_at":"2025-01-31T09:15:00Z"}}`
+	host.bodies[usageURL] = `{"seven_day":{"utilization":40,"resets_at":"2099-01-01T00:00:00Z"},` +
+		`"cedar_ember":{"eligible":false,"event_props":{"billing_period":"monthly","tier":"claude_max_20x"}}}`
 	opts := cache.Options{Path: filepath.Join(t.TempDir(), "cache", "snapshot.json"), Interval: 15 * time.Minute, Spacing: time.Second}
 	start := time.Now().UTC()
 	current, err := cache.Open(opts, fetcherWith(host, ""))
@@ -168,5 +173,12 @@ func TestAccountDetailsSurviveARestartWithoutARead(t *testing.T) {
 	entry := snapshot.Entries[client.Key("claude", "one")]
 	if entry.Plan != "max_20x" || entry.AccountDetails == nil || entry.AccountDetails.Plan != "max_20x" || entry.LastError != "" {
 		t.Fatalf("entry plan = %q details = %+v error = %q", entry.Plan, entry.AccountDetails, entry.LastError)
+	}
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	if at := entry.AccountDetails.SubscriptionStartedAt; at == nil || !at.Equal(started) || entry.RenewalAt != nil {
+		t.Fatalf("subscription started at %v, renewal %v; want the start kept as a start", at, entry.RenewalAt)
+	}
+	if entry.Quota == nil || entry.Quota.BillingPeriod != client.BillingMonthly {
+		t.Fatalf("quota = %+v; want the billing period from the last usage poll", entry.Quota)
 	}
 }

@@ -97,6 +97,163 @@ func TestClaudeProfileRequestIdentifiesItself(t *testing.T) {
 	}
 }
 
+// When the Claude subscription began, read off the profile the plan already
+// comes from: the only anchor Anthropic gives for estimating a renewal. Read as
+// Codex's active_until is — RFC 3339, or unix seconds or milliseconds as a
+// number or a string — and held to the window a start can occupy: no more than
+// a day ahead (clock skew), no more than twenty years back.
+func TestClaudeSubscriptionStartFromTheProfile(t *testing.T) {
+	want := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	profile := func(value string) string {
+		return `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x",` +
+			`"subscription_created_at":` + value + `}}`
+	}
+	read := func(t *testing.T, body string) *client.AccountDetails {
+		t.Helper()
+		doer := &routingDoer{bodies: map[string]string{claudeProfileURL: body}}
+		details := RefreshDetails(context.Background(), doer, "claude", []byte(claudeAuth), nil, now)
+		if details == nil || len(doer.urls) != 1 {
+			t.Fatalf("details = %+v urls = %v; the start must ride on the one profile request", details, doer.urls)
+		}
+		// The start is judged on its own: a bad one costs nothing else.
+		if details.Plan != "max_20x" {
+			t.Fatalf("plan = %q; the start's reading touched the plan", details.Plan)
+		}
+		return details
+	}
+	for name, one := range map[string]struct {
+		body string
+		want time.Time
+	}{
+		"rfc3339":             {profile(`"2025-01-31T09:15:00Z"`), want},
+		"rfc3339 with offset": {profile(`"2025-01-31T10:15:00+01:00"`), want},
+		"rfc3339 fractional":  {profile(`"2025-01-31T09:15:00.250Z"`), want.Add(250 * time.Millisecond)},
+		"seconds":             {profile(`1738314900`), want},
+		"seconds as string":   {profile(`"1738314900"`), want},
+		"milliseconds":        {profile(`1738314900000`), want},
+		"ms as string":        {profile(`"1738314900000"`), want},
+		"camel case": {`{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x",` +
+			`"subscriptionCreatedAt":"2025-01-31T09:15:00Z"}}`, want},
+		// Bought a moment ago, stamped by a clock a little ahead of this one.
+		"within a day ahead":      {profile(`"2026-09-04T23:00:00Z"`), now.Add(time.Hour)},
+		"nearly twenty years ago": {profile(`"2006-09-05T00:00:00Z"`), time.Date(2006, time.September, 5, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			details := read(t, one.body)
+			if details.SubscriptionStartedAt == nil || !details.SubscriptionStartedAt.Equal(one.want) ||
+				details.SubscriptionStartedAt.Location() != time.UTC {
+				t.Fatalf("subscription started at %v, want %s in UTC", details.SubscriptionStartedAt, one.want)
+			}
+		})
+	}
+	for name, body := range map[string]string{
+		"absent":             `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}`,
+		"null":               profile(`null`),
+		"zero":               profile(`0`),
+		"zero as string":     profile(`"0"`),
+		"negative":           profile(`-5`),
+		"empty":              profile(`""`),
+		"garbage":            profile(`"last spring"`),
+		"boolean":            profile(`true`),
+		"object":             profile(`{"seconds":1738314900}`),
+		"list":               profile(`[1738314900]`),
+		"absurd":             profile(`99999999999999999`),
+		"more than a day on": profile(`"2026-09-06T00:00:00Z"`),
+		"years ahead":        profile(`"2030-01-01T00:00:00Z"`),
+		"over twenty years":  profile(`"2006-09-04T21:00:00Z"`),
+		"ancient":            profile(`"1999-01-01T00:00:00Z"`),
+		"the epoch":          profile(`1`),
+		// The organisation is where Claude Code reads it, and only there.
+		"on the account": `{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"},` +
+			`"account":{"subscription_created_at":"2025-01-31T09:15:00Z"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if details := read(t, body); details.SubscriptionStartedAt != nil {
+				t.Fatalf("subscription started at %s, want none", details.SubscriptionStartedAt)
+			}
+		})
+	}
+}
+
+// The start follows the plan's rules: a failed profile read keeps the last
+// good one, a profile that answers without a usable one clears it, and the
+// two are judged independently. Codex and Grok never read it, so whatever an
+// entry carries passes through their reads untouched.
+func TestClaudeSubscriptionStartIsCarriedAndCleared(t *testing.T) {
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	previous := func() *client.AccountDetails {
+		return &client.AccountDetails{CheckedAt: now.Add(-7 * time.Hour), Plan: "max_5x", SubscriptionStartedAt: &started}
+	}
+	for name, doer := range map[string]*routingDoer{
+		"transport error": {err: map[string]error{claudeProfileURL: errors.New("unreachable")}},
+		"rate limited":    {status: map[string]int{claudeProfileURL: 429}},
+		"refused":         {status: map[string]int{claudeProfileURL: 401}},
+		"unreadable":      {bodies: map[string]string{claudeProfileURL: `not json`}},
+	} {
+		t.Run("kept on "+name, func(t *testing.T) {
+			details := RefreshDetails(context.Background(), doer, "claude", []byte(claudeAuth), previous(), now)
+			if details == nil || details.SubscriptionStartedAt == nil || !details.SubscriptionStartedAt.Equal(started) || details.Plan != "max_5x" {
+				t.Fatalf("details = %+v; a failed read lost the last good start", details)
+			}
+		})
+	}
+	for name, one := range map[string]struct {
+		profile string
+		plan    string
+	}{
+		"no start, still a plan": {`{"organization":{"organization_type":"claude_pro"}}`, "pro"},
+		"a start out of range":   {`{"organization":{"organization_type":"claude_pro","subscription_created_at":"2031-01-01T00:00:00Z"}}`, "pro"},
+		"nothing at all":         {`{}`, ""},
+	} {
+		t.Run("cleared by "+name, func(t *testing.T) {
+			doer := &routingDoer{bodies: map[string]string{claudeProfileURL: one.profile}}
+			details := RefreshDetails(context.Background(), doer, "claude", []byte(claudeAuth), previous(), now)
+			if details == nil || details.SubscriptionStartedAt != nil || details.Plan != one.plan {
+				t.Fatalf("details = %+v; want the start cleared and plan %q", details, one.plan)
+			}
+		})
+	}
+	t.Run("replaced, plan cleared on its own", func(t *testing.T) {
+		doer := &routingDoer{bodies: map[string]string{claudeProfileURL: `{"organization":{"subscription_created_at":"2026-03-12T17:40:00Z"}}`}}
+		details := RefreshDetails(context.Background(), doer, "claude", []byte(claudeAuth), previous(), now)
+		moved := time.Date(2026, time.March, 12, 17, 40, 0, 0, time.UTC)
+		if details == nil || details.Plan != "" || details.SubscriptionStartedAt == nil || !details.SubscriptionStartedAt.Equal(moved) {
+			t.Fatalf("details = %+v; want plan cleared and the new start %s", details, moved)
+		}
+	})
+	for _, tc := range []struct{ provider, auth, url, body string }{
+		{"codex", codexAuth, codexSubscriptionURL, `{"active_until":1793270280}`},
+		{"xai", xaiAuth, xaiSettingsURL, `{"subscription_tier_display":"SuperGrok"}`},
+	} {
+		t.Run("untouched by "+tc.provider, func(t *testing.T) {
+			doer := &routingDoer{bodies: map[string]string{tc.url: tc.body}}
+			details := RefreshDetails(context.Background(), doer, tc.provider, []byte(tc.auth), previous(), now)
+			if details == nil || details.SubscriptionStartedAt == nil || !details.SubscriptionStartedAt.Equal(started) {
+				t.Fatalf("details = %+v", details)
+			}
+		})
+	}
+	// Within the interval nothing is asked, and the start comes back as it was.
+	recent := previous()
+	recent.CheckedAt = now.Add(-time.Hour)
+	doer := &routingDoer{}
+	if got := RefreshDetails(context.Background(), doer, "claude", []byte(claudeAuth), recent, now); got != recent || len(doer.urls) != 0 {
+		t.Fatalf("details = %+v urls = %v", got, doer.urls)
+	}
+}
+
+// The start is a fact for a consumer to estimate from, never a renewal: it is
+// kept on the details and nothing of it reaches the entry's renewal or plan.
+func TestASubscriptionStartIsNotARenewal(t *testing.T) {
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	o := fetchDetails(t, "claude", `{"seven_day":{"utilization":10}}`)
+	details := &client.AccountDetails{CheckedAt: now, Plan: "max_20x", SubscriptionStartedAt: &started}
+	o.ApplyDetails(details, now)
+	if !o.RenewalAt.IsZero() || o.Plan != "max_20x" || o.AccountDetails != details {
+		t.Fatalf("observation = %+v; the start must stay on the details", o)
+	}
+}
+
 // Each provider's account endpoints are asked at most once per interval. A
 // restart does not reset that, because the check time is in the snapshot the
 // caller hands back, and a clock that moved backwards does not freeze it.

@@ -187,7 +187,8 @@ func TestClaudeResetGrantsAreBounded(t *testing.T) {
 }
 
 // Grant ids and labels identify the account and have no display use. Nothing
-// from the block may reach the snapshot except the count, the date and the hold.
+// from the block may reach the snapshot except the count, the date, the hold,
+// and the billing period (TestOnlyTheBillingPeriodLeavesEventProps).
 func TestClaudeResetGrantsLeakNothingIntoTheSnapshot(t *testing.T) {
 	q := claudeGrants(t, `{"eligible":true,"next_grant_id":"synthetic-grant-id",`+
 		`"event_props":{"tier":"claude_max_20x","surface":"synthetic-surface"},`+
@@ -232,5 +233,96 @@ func TestCodexResetCreditsNeverReportAHold(t *testing.T) {
 	}
 	if c := o.Quota.ResetCredits; c == nil || c.Hold != "" || c.HoldUntil != nil {
 		t.Fatalf("reset credits = %+v", c)
+	}
+}
+
+// How often the subscription bills, read off the cedar_ember block's
+// event_props on every poll. Only the two cadences a reader can schedule are
+// kept; anything else — "unknown", a cadence this code was not built for, the
+// wrong type, a missing or null event_props — stores nothing.
+func TestClaudeBillingPeriodFromEventProps(t *testing.T) {
+	const grant = `"grants":[{"id":"g1","resets_left":1,"usable_now":true,"ends_at":"2026-09-20T00:00:00Z"}]`
+	for name, one := range map[string]struct{ block, want string }{
+		"monthly": {`{"eligible":true,"at_limit":true,` + grant + `,"event_props":{"tier":"claude_max_20x","billing_period":"monthly"}}`, client.BillingMonthly},
+		"annual":  {`{"eligible":true,"at_limit":true,` + grant + `,"event_props":{"billing_period":"annual"}}`, client.BillingAnnual},
+		// The cadence is a fact about the subscription, not the grants: an
+		// account that holds none, or is not eligible for them, still says it.
+		"ineligible, no grants": {`{"eligible":false,"ineligible_reason":"tier","event_props":{"billing_period":"annual"}}`, client.BillingAnnual},
+		"eligible missing":      {`{"event_props":{"billing_period":"monthly"}}`, client.BillingMonthly},
+		"unknown":               {`{"eligible":true,` + grant + `,"event_props":{"billing_period":"unknown"}}`, ""},
+		"another cadence":       {`{"eligible":true,` + grant + `,"event_props":{"billing_period":"weekly"}}`, ""},
+		"another spelling":      {`{"eligible":true,` + grant + `,"event_props":{"billing_period":"Monthly"}}`, ""},
+		"garbage":               {`{"eligible":true,` + grant + `,"event_props":{"billing_period":"monthly\nannual"}}`, ""},
+		"empty":                 {`{"eligible":true,` + grant + `,"event_props":{"billing_period":""}}`, ""},
+		"a number":              {`{"eligible":true,` + grant + `,"event_props":{"billing_period":12}}`, ""},
+		"a boolean":             {`{"eligible":true,` + grant + `,"event_props":{"billing_period":true}}`, ""},
+		"an object":             {`{"eligible":true,` + grant + `,"event_props":{"billing_period":{"value":"monthly"}}}`, ""},
+		"a list":                {`{"eligible":true,` + grant + `,"event_props":{"billing_period":["monthly"]}}`, ""},
+		"null":                  {`{"eligible":true,` + grant + `,"event_props":{"billing_period":null}}`, ""},
+		"field absent":          {`{"eligible":true,` + grant + `,"event_props":{"tier":"claude_pro"}}`, ""},
+		"event_props null":      {`{"eligible":true,` + grant + `,"event_props":null}`, ""},
+		"event_props absent":    {`{"eligible":true,` + grant + `}`, ""},
+		"event_props a string":  {`{"eligible":true,` + grant + `,"event_props":"monthly"}`, ""},
+		"event_props a list":    {`{"eligible":true,` + grant + `,"event_props":[{"billing_period":"monthly"}]}`, ""},
+		// Read from event_props only, never from a key that merely looks right.
+		"beside event_props": {`{"eligible":true,` + grant + `,"billing_period":"monthly"}`, ""},
+		"block absent":       {``, ""},
+		"block null":         {`null`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := claudeGrants(t, one.block).BillingPeriod; got != one.want {
+				t.Fatalf("billing period = %q, want %q", got, one.want)
+			}
+		})
+	}
+}
+
+// A malformed event_props costs the cadence and nothing else: the grants
+// beside it are counted and held exactly as they would be without it, and the
+// poll itself (checked inside claudeGrants) comes through whole.
+func TestAMalformedEventPropsLeavesTheGrantsAlone(t *testing.T) {
+	const grants = `"eligible":true,"cooldown_until":"2026-09-05T03:00:00Z","grants":[` +
+		`{"id":"g1","resets_left":2,"usable_now":true,"ends_at":"2026-09-20T00:00:00Z"}]`
+	want := claudeGrants(t, `{`+grants+`}`).ResetCredits
+	for name, props := range map[string]string{
+		"a string":  `"monthly"`,
+		"a list":    `[1,2,3]`,
+		"a number":  `7`,
+		"nested":    `{"billing_period":{"billing_period":"monthly"},"tier":[null]}`,
+		"oversized": `{"billing_period":"` + strings.Repeat("m", 4096) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := claudeGrants(t, `{`+grants+`,"event_props":`+props+`}`)
+			got := q.ResetCredits
+			if got == nil || got.AvailableCount != want.AvailableCount || got.Hold != want.Hold ||
+				!got.SoonestExpiry.Equal(*want.SoonestExpiry) || !got.HoldUntil.Equal(*want.HoldUntil) {
+				t.Fatalf("reset credits = %+v, want %+v", got, want)
+			}
+			if q.BillingPeriod != "" || q.Truncated {
+				t.Fatalf("billing period = %q truncated = %v", q.BillingPeriod, q.Truncated)
+			}
+		})
+	}
+}
+
+// billing_period is the one event_props field that reaches the snapshot.
+// The rest is analytics context about the account, and is left behind.
+func TestOnlyTheBillingPeriodLeavesEventProps(t *testing.T) {
+	q := claudeGrants(t, `{"eligible":true,"grants":[{"id":"g1","resets_left":1}],"event_props":{`+
+		`"billing_period":"annual","tier":"claude_max_20x","surface":"synthetic-surface",`+
+		`"org_uuid":"synthetic-org","seat_tier":"synthetic-seat","nested":{"billing_period":"monthly"}}}`)
+	raw, _ := json.Marshal(q)
+	if !strings.Contains(string(raw), `"billing_period":"annual"`) {
+		t.Fatalf("the billing period did not reach the snapshot: %s", raw)
+	}
+	for _, leaked := range []string{"claude_max_20x", "synthetic-surface", "synthetic-org", "synthetic-seat", "monthly", "event_props", "tier"} {
+		if strings.Contains(string(raw), leaked) {
+			t.Fatalf("the snapshot carries %q from event_props: %s", leaked, raw)
+		}
+	}
+	// And a provider without the block never gains the key at all.
+	codex := fetchDetails(t, "codex", codexUsageWithBankedResets).Quota
+	if raw, _ := json.Marshal(codex); strings.Contains(string(raw), "billing_period") {
+		t.Fatalf("a Codex observation carries a billing period: %s", raw)
 	}
 }

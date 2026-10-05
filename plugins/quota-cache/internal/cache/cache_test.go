@@ -429,7 +429,10 @@ func TestCanonicalWindowsAndPlanSurviveTheWriteAndReload(t *testing.T) {
 func TestAccountDetailsCarryForwardAndReachTheFetcherAfterRestart(t *testing.T) {
 	c, f, opts := fixture(t)
 	start := f.now
-	read := &client.AccountDetails{CheckedAt: start, Plan: "team"}
+	// The subscription start rides along with the plan: both are read from
+	// one profile, and both have to survive the file and the restart.
+	started := time.Date(2025, time.January, 31, 9, 15, 0, 0, time.UTC)
+	read := &client.AccountDetails{CheckedAt: start, Plan: "team", SubscriptionStartedAt: &started}
 	f.details = read
 	if err := c.Step(context.Background(), start); err != nil {
 		t.Fatal(err)
@@ -463,7 +466,7 @@ func TestAccountDetailsCarryForwardAndReachTheFetcherAfterRestart(t *testing.T) 
 	if err := c.Step(context.Background(), start.Add(2*opts.Interval)); err != nil {
 		t.Fatal(err)
 	}
-	if got := entry().AccountDetails; got == nil || got.Plan != "team" {
+	if got := entry().AccountDetails; got == nil || got.Plan != "team" || got.SubscriptionStartedAt == nil || !got.SubscriptionStartedAt.Equal(started) {
 		t.Fatalf("a failed poll erased the details: %+v", got)
 	}
 
@@ -481,7 +484,8 @@ func TestAccountDetailsCarryForwardAndReachTheFetcherAfterRestart(t *testing.T) 
 	if len(f.known) != 4 {
 		t.Fatalf("calls=%d", len(f.known))
 	}
-	if handed := f.known[3]; handed == nil || handed.Plan != "team" || !handed.CheckedAt.Equal(start) {
+	if handed := f.known[3]; handed == nil || handed.Plan != "team" || !handed.CheckedAt.Equal(start) ||
+		handed.SubscriptionStartedAt == nil || !handed.SubscriptionStartedAt.Equal(started) {
 		t.Fatalf("after a restart the fetcher was handed %+v; it would ask every credential again", handed)
 	}
 
