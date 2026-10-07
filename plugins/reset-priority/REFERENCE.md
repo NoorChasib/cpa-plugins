@@ -63,6 +63,12 @@ At the deadline it synchronously:
 
 Fresh reads use bounded retries at `+5s`, `+30s`, `+2m`, `+5m`, and `+15m`, then return to the normal reconciliation interval. An expired or repeated provider timestamp never re-promotes the account.
 
+In quota-cache mode the same schedule also handles first confirmation for accounts not yet confirmed in this process: every account after a restart, and an account when it is added. It is armed after each reconciliation that leaves such an account `unknown`, as one schedule shared by all of them. Each step re-reads every still-unconfirmed account from the local snapshot, never from the provider. The schedule writes the corrected order once: at the step that confirms the last unconfirmed account, or at the `+15m` step for the accounts confirmed by then. Until that write, an account the schedule has confirmed shows `confirmed` but keeps its provisional priority, unless another write (a reset deadline, a retry, or a reconciliation) persists the order first. A step that confirms nothing writes nothing. An account leaves the schedule at its first cache answer. A fresh entry that reports no weekly window also counts, so the same answer is not re-read on every pass. Standalone mode does not retry unconfirmed accounts this way, because each attempt would be a provider request.
+
+### Restarting in quota-cache mode
+
+Runtime state is rebuilt after a CPA restart, so every account starts unconfirmed. Quota-cache mode is `use-quota-cache: true` (see the [README](README.md#optional-shared-quota-cache)). The startup pass reads the snapshot once. An account whose entry is missing, older than 30 minutes, or failed ranks last for now, using the stable filename/ID tie-break, and that provisional order is written. The schedule above writes the corrected order once Quota Cache has fresh data for every account, usually within the first few minutes, so the schedule writes each account at most once. Quota Cache often refills its entries a few at a time, and the partial rankings in between are never written. If an account is still unconfirmed at the `+15m` step, that step writes the order of the confirmed accounts, with the rest last, and the rest wait for the next `reconcile-interval` pass.
+
 Codex can lazily continue reporting an expired window. v0.1.0 keeps the account in `awaiting_new_window` and performs passive retries; it does not send a quota-consuming activation request. `codex-reset-window-activation: true` is accepted but ignored with a status warning.
 
 ## Requirements and platform support
@@ -117,7 +123,7 @@ The credential priorities managed inside physical OAuth auth JSON are `100`, `20
 | --- | ---: | --- |
 | `enabled` | `false` | Enables the plugin runtime. |
 | `priority` | host-owned | CPA plugin load/order priority; ignored by credential ranking. |
-| `reconcile-interval` | `1h` | Full roster/provider reconciliation interval. `refresh-interval` is an alias. |
+| `reconcile-interval` | `1h` | Full roster/provider reconciliation interval. `refresh-interval` is an alias. A short interval is cheap only with the quota cache, where each pass reads the local snapshot. Never shorten it in standalone mode, where every pass makes one provider request per account. |
 | `request-timeout` | `10s` | Per-account provider quota-request timeout. |
 | `priority-floor` | `100` | Lowest healthy priority; must be positive. |
 | `priority-step` | `100` | Gap between healthy ranks; must be positive. |

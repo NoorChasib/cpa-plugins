@@ -279,8 +279,12 @@
     const entries = all.filter(e => selected === 'all' || e.provider === selected).sort((a,b) => (a.provider + a.auth_index).localeCompare(b.provider + b.auth_index));
     const cooldowns = Object.entries(s.provider_cooldown || {}).filter(([,until]) => date(until) > now);
     const usable = all.filter(e => fresh(e, now) || freshBalance(e, now)).length;
-    $('health').textContent = cooldowns.length ? 'Provider cooldown' : s.activity?.error ? 'Needs attention' : all.length ? 'Running' : 'Waiting for accounts';
-    $('health').className = 'pill ' + (cooldowns.length || s.activity?.error ? 'warn' : all.length ? 'ok' : '');
+    // Waiting for CPA to load its credentials is an expected startup state,
+    // not a failed check.
+    const waiting = Boolean(s.activity?.waiting);
+    const failed = Boolean(s.activity?.error) && !waiting;
+    $('health').textContent = cooldowns.length ? 'Provider cooldown' : waiting ? 'Starting' : failed ? 'Needs attention' : all.length ? 'Running' : 'Waiting for accounts';
+    $('health').className = 'pill ' + (cooldowns.length || failed ? 'warn' : waiting ? '' : all.length ? 'ok' : '');
     $('fresh').textContent = usable + ' / ' + all.length;
     const calls = (s.history || []).filter(p => p.request_sent);
     const last = calls[calls.length - 1];
@@ -295,8 +299,9 @@
       $('cooldowns').append(p);
     }
     $('cooldowns').hidden = !cooldowns.length;
-    $('activity-error').textContent = s.activity?.error ? 'The last scheduled check failed: ' + s.activity.error + '. Check CPA logs and the cache storage path.' : '';
-    $('activity-error').hidden = !s.activity?.error;
+    $('activity-error').textContent = waiting ? 'Waiting for CPA to finish loading credentials. Saved observations are kept, and polling resumes once they are loaded.' : failed ? 'The last scheduled check failed: ' + s.activity.error + '. Check CPA logs and the cache storage path.' : '';
+    $('activity-error').className = 'alert' + (waiting ? '' : ' error');
+    $('activity-error').hidden = !waiting && !failed;
     $('account-count').textContent = entries.length + ' shown / ' + all.length + ' total';
     $('accounts').replaceChildren();
     for (const e of entries) {

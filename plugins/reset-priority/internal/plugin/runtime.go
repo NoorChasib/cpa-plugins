@@ -23,7 +23,7 @@ import (
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.1.7"
+	PluginVersion = "0.1.8"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
@@ -462,7 +462,7 @@ func configFields() []hostapi.ConfigField {
 	return []hostapi.ConfigField{
 		{Name: "enabled", Type: "boolean", Description: "Enable the reset-priority plugin."},
 		{Name: "priority", Type: "integer", Description: "CPA plugin load/order priority. NOT related to the credential priorities this plugin manages."},
-		{Name: "reconcile-interval", Type: "string", Description: "Background reconciliation interval (default 1h). Exact reset deadlines fire independently."},
+		{Name: "reconcile-interval", Type: "string", Description: "Background reconciliation interval (default 1h). Exact reset deadlines fire independently. Without the quota cache each pass makes one provider request per account, so do not shorten it."},
 		{Name: "request-timeout", Type: "string", Description: "Per provider quota request timeout (default 10s)."},
 		{Name: "priority-floor", Type: "integer", Description: "Priority of the latest-resetting healthy account (default 100)."},
 		{Name: "priority-step", Type: "integer", Description: "Priority gap between adjacent ranks (default 100)."},
@@ -470,7 +470,7 @@ func configFields() []hostapi.ConfigField {
 		{Name: "manage-claude", Type: "boolean", Description: "Manage Claude OAuth credentials (default true)."},
 		{Name: "manage-codex", Type: "boolean", Description: "Manage Codex OAuth credentials (default true)."},
 		{Name: "dry-run", Type: "boolean", Description: "Compute and report priorities without writing auth files (default false; recommended true for first install)."},
-		{Name: "use-quota-cache", Type: "boolean", Description: "Use shared quota observations instead of direct requests. Optional; off by default. When on, wait for fresh data if the cache is unavailable."},
+		{Name: "use-quota-cache", Type: "boolean", Description: "Use shared quota observations instead of direct requests. Optional; off by default. When on, wait for fresh data if the cache is unavailable; unconfirmed accounts are re-read from the local snapshot from +5s to +15m after each reconciliation."},
 		{Name: "quota-cache-path", Type: "string", Description: "Optional shared snapshot path; default plugins/data/quota-cache/snapshot.json when use-quota-cache is on. Legacy path-only config also opts in; explicit false overrides it."},
 		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" for the host zone (default UTC). Presentation only."},
 	}
