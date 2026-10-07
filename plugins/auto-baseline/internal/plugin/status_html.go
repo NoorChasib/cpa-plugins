@@ -75,8 +75,8 @@ type pageProvider struct {
 	NextWriteAfter pageTime
 	AwaitingReload bool
 	PendingCount   int
-	// Sources summarizes where each baseline value comes from (v8, legacy,
-	// default), e.g. "user-agent v8 · package-version legacy".
+	// Sources summarizes where each baseline value comes from (upstream, v8,
+	// legacy, default), e.g. "user-agent v8 · package-version legacy".
 	Sources string
 	Paused  bool
 }
