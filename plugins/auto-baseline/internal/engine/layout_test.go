@@ -107,6 +107,105 @@ func TestV8PromotionWritesTheV8BlockAndReportsSources(t *testing.T) {
 	}
 }
 
+// upstreamConfig is production's file after CPA v8.0.13's first
+// /v8/management save: v8.0.11+ keeps the Claude block at the canonical
+// upstream.claude.header-defaults and Codex cloaking at upstream.codex, while
+// the Codex block stays under oauth.providers.codex.
+const upstreamConfig = `config-version: 8
+server:
+  port: 8317
+access:
+  api-keys:
+    - "k"
+oauth:
+  providers:
+    codex:
+      header-defaults:
+        user-agent: "codex-tui/0.156.0 (Ubuntu 26.4.0; x86_64) xterm-ghostty (codex-tui; 0.156.0)"
+upstream:
+  codex:
+    disable-codex-cloaking: true
+  claude:
+    header-defaults:
+      user-agent: "claude-cli/2.1.300 (external, cli)"
+      package-version: "0.112.1"
+      runtime-version: "v26.3.0"
+      timeout: "600"
+` + pluginsEnabledYAML
+
+// TestUpstreamPromotionIsConfirmed replays the 2026-10-04 incident. CPA
+// v8.0.11+ made upstream.claude.header-defaults canonical; 0.1.5 still wrote
+// the oauth.providers alias, which the upstream leaves shadow, so CPA's next
+// load deleted it ~150ms later and the plugin paused as
+// promotion_not_effective. The write must now land in the upstream block and
+// be confirmed by the reload.
+func TestUpstreamPromotionIsConfirmed(t *testing.T) {
+	h := newHarness(t)
+	h.writeConfig(upstreamConfig)
+	h.eng.Start()
+
+	claude, codex := h.claude(), h.codex()
+	if claude.Effective.Version.String() != "2.1.300" || claude.Effective.Sources["user-agent"] != configfile.SourceUpstream ||
+		claude.Effective.WriteTarget != "upstream.claude.header-defaults" {
+		t.Fatalf("before: version=%s sources=%v target=%q", claude.Effective.Version, claude.Effective.Sources, claude.Effective.WriteTarget)
+	}
+	if codex.DisableCodexCloaking == nil || !codex.DisableCodexCloaking.Value || codex.DisableCodexCloaking.Source != configfile.SourceUpstream {
+		t.Errorf("codex cloaking = %+v", codex.DisableCodexCloaking)
+	}
+	for _, w := range codex.Warnings {
+		if strings.Contains(w, "disable-codex-cloaking") {
+			t.Errorf("upstream cloaking=true still warned: %s", w)
+		}
+	}
+
+	h.observeClaude("a", "b", "c")
+	text := h.readConfig()
+	if !strings.Contains(text, "  claude:\n    header-defaults:\n      user-agent: \"claude-cli/2.1.318 (external, cli)\"\n      package-version: \"0.112.1\"\n      runtime-version: \"v26.3.0\"\n      timeout: \"600\"\n") {
+		t.Errorf("upstream block not updated in place:\n%s", text)
+	}
+	if strings.Contains(text, "    claude:\n") || strings.Contains(text, "claude-header-defaults") {
+		t.Errorf("a claude block was written where the upstream block shadows it:\n%s", text)
+	}
+	if !h.logs.contains("promoted claude baseline 2.1.300 -> 2.1.318") || !h.logs.contains("at upstream.claude.header-defaults") {
+		t.Errorf("promotion log = %v", h.logs.lines)
+	}
+	claude = h.claude()
+	if claude.LastPromotion == nil || claude.LastPromotion.Target != "upstream.claude.header-defaults" || !claude.AwaitingReload {
+		t.Errorf("last promotion = %+v", claude.LastPromotion)
+	}
+	if claude.Effective.Sources["runtime-version"] != configfile.SourceUpstream {
+		t.Errorf("sources right after the write = %v", claude.Effective.Sources)
+	}
+	// CPA's reload re-reads the file and reconfigures the plugin. The file is
+	// already what CPA's load would leave, so nothing rewrites it.
+	h.eng.Reconfigure(h.cfg)
+	claude = h.claude()
+	if claude.AwaitingReload || claude.LastPromotion.ConfirmedAt.IsZero() || claude.Paused != nil {
+		t.Errorf("reload not confirmed: %+v paused=%+v", claude.LastPromotion, claude.Paused)
+	}
+	if claude.Effective.Sources["package-version"] != configfile.SourceUpstream {
+		t.Errorf("sources after reload = %v", claude.Effective.Sources)
+	}
+}
+
+// TestCodexCloakingWarningNamesTheUpstreamKey: in a file with CPA v8.0.11+'s
+// upstream section the cloaking switch the operator must set is
+// upstream.codex.disable-codex-cloaking.
+func TestCodexCloakingWarningNamesTheUpstreamKey(t *testing.T) {
+	h := newHarness(t)
+	h.writeConfig(strings.Replace(upstreamConfig, "disable-codex-cloaking: true", "disable-codex-cloaking: false", 1))
+	h.eng.Start()
+	codex := h.codex()
+	if codex.DisableCodexCloaking == nil || codex.DisableCodexCloaking.Value || codex.DisableCodexCloaking.Source != configfile.SourceUpstream {
+		t.Fatalf("codex cloaking = %+v", codex.DisableCodexCloaking)
+	}
+	warnings := strings.Join(codex.Warnings, "\n")
+	if !strings.Contains(warnings, "upstream.codex.disable-codex-cloaking (legacy names oauth.providers.codex.disable-codex-cloaking, codex.disable-codex-cloaking) is not true") ||
+		!strings.Contains(warnings, "a learned oauth.providers.codex.header-defaults.user-agent has no effect") {
+		t.Errorf("warnings = %v", codex.Warnings)
+	}
+}
+
 // TestNoLoopWhenV8BlockAlreadyCarriesTheObservedVersion replays the
 // 2026-09-29 incident: a v8 write moved the baseline into
 // oauth.providers.claude.header-defaults. 0.1.4 looked only at the root key,

@@ -136,8 +136,9 @@ type EffectiveStatus struct {
 	// Unsupported names a structural problem in the provider block
 	// (duplicate_key, unsupported_config_shape) that blocks promotion.
 	Unsupported string `json:"unsupported,omitempty"`
-	// Sources says where CPA takes each value from: "v8", "legacy", or
-	// "default" (key absent or blank, so CPA's compiled default applies).
+	// Sources says where CPA takes each value from: "upstream" (CPA
+	// v8.0.11+'s canonical upstream.* key), "v8", "legacy", or "default"
+	// (key absent or blank, so CPA's compiled default applies).
 	Sources map[string]configfile.Source `json:"sources,omitempty"`
 	// WriteTarget is the config.yaml block a promotion writes to.
 	WriteTarget string `json:"write_target,omitempty"`
@@ -276,11 +277,22 @@ func (e *Engine) Status(pluginID, pluginVersion string) Snapshot {
 			}
 			ps.DisableCodexCloaking = &CloakingStatus{Value: e.disableCodex, Source: source}
 			if ps.Managed && !e.disableCodex {
-				key, uaKey := "codex.disable-codex-cloaking", "codex-header-defaults.user-agent"
-				if e.configLayout == configfile.LayoutV8 {
-					key, uaKey = "oauth.providers.codex.disable-codex-cloaking", "oauth.providers.codex.header-defaults.user-agent"
+				key := "codex.disable-codex-cloaking"
+				switch {
+				case e.configUpstream:
+					// CPA v8.0.11+ moved cloaking under upstream; the Codex
+					// header defaults did not move.
+					key = "upstream.codex.disable-codex-cloaking (legacy names oauth.providers.codex.disable-codex-cloaking, codex.disable-codex-cloaking)"
+				case e.configLayout == configfile.LayoutV8:
+					key = "oauth.providers.codex.disable-codex-cloaking (legacy name codex.disable-codex-cloaking)"
 				}
-				ps.Warnings = append(ps.Warnings, key+" (legacy name codex.disable-codex-cloaking) is not true: CPA forces its compiled Codex User-Agent on outbound requests, so a learned "+uaKey+" has no effect until the operator sets it to true")
+				uaKey := "codex-header-defaults"
+				if eff, ok := e.effective[p]; ok && eff.TargetPath != "" {
+					uaKey = eff.TargetPath
+				} else if e.configLayout == configfile.LayoutV8 {
+					uaKey = "oauth.providers.codex.header-defaults"
+				}
+				ps.Warnings = append(ps.Warnings, key+" is not true: CPA forces its compiled Codex User-Agent on outbound requests, so a learned "+uaKey+".user-agent has no effect until the operator sets it to true")
 			}
 		}
 		snap.Baselines = append(snap.Baselines, ps)

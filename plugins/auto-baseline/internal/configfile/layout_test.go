@@ -158,6 +158,119 @@ oauth:
 claude-header-defaults:
   user-agent: "claude-cli/2.1.250 (external, cli)"
 ` + layoutPlugins
+
+	// fixtureUpstreamLive is production's file after CPA v8.0.13's first
+	// /v8/management save (2026-10-04): v8.0.11+ moved the Claude block and
+	// Codex cloaking under upstream; Codex header-defaults did not move.
+	fixtureUpstreamLive = `config-version: 8
+server:
+  port: 8317
+oauth:
+  providers:
+    codex:
+      header-defaults:
+        user-agent: "codex-tui/0.156.0 (Ubuntu 26.4.0; x86_64) xterm-ghostty (codex-tui; 0.156.0)"
+upstream:
+  codex:
+    disable-codex-cloaking: true
+  claude:
+    header-defaults:
+      user-agent: "claude-cli/2.1.289 (external, cli)"
+      package-version: "0.128.0"
+      runtime-version: "v26.3.0"
+      timeout: "600"
+` + layoutPlugins
+
+	// fixtureUpstreamShadowedAlias is the file 0.1.5 wrote at 2026-10-07
+	// 04:28:37.660: its promotion went to the oauth.providers alias, which
+	// the upstream block shadows leaf by leaf. CPA served 2.1.289 and its
+	// next load deleted the alias block.
+	fixtureUpstreamShadowedAlias = `config-version: 8
+server:
+  port: 8317
+oauth:
+  providers:
+    codex:
+      header-defaults:
+        user-agent: "codex-tui/0.156.0 (Ubuntu 26.4.0; x86_64) xterm-ghostty (codex-tui; 0.156.0)"
+    claude:
+      header-defaults:
+        user-agent: "claude-cli/2.1.291 (external, cli)"
+        package-version: "0.128.0"
+        runtime-version: "v26.3.0"
+upstream:
+  codex:
+    disable-codex-cloaking: true
+  claude:
+    header-defaults:
+      user-agent: "claude-cli/2.1.289 (external, cli)"
+      package-version: "0.128.0"
+      runtime-version: "v26.3.0"
+      timeout: "600"
+` + layoutPlugins
+
+	// fixtureUpstreamThreeLayers resolves one leaf from each layer: the
+	// upstream root exists but carries only the user-agent, the alias block
+	// the package version, the legacy block the runtime version.
+	fixtureUpstreamThreeLayers = `config-version: 8
+oauth:
+  providers:
+    claude:
+      header-defaults:
+        user-agent: "claude-cli/2.1.250 (external, cli)"
+        package-version: "0.112.2"
+        os: "Linux"
+upstream:
+  claude:
+    header-defaults:
+      user-agent: "claude-cli/2.1.287 (external, cli)"
+claude-header-defaults:
+  package-version: "0.100.0"
+  runtime-version: "v24.0.0"
+  arch: "x64"
+` + layoutPlugins
+
+	// fixtureUpstreamRootOnly has the upstream section (codex cloaking only)
+	// but keeps the Claude block at the alias path, which CPA v8.0.11+ still
+	// honours while no upstream leaf shadows it.
+	fixtureUpstreamRootOnly = `config-version: 8
+oauth:
+  providers:
+    claude:
+      header-defaults:
+        user-agent: "claude-cli/2.1.286 (external, cli)"
+        package-version: "0.112.1"
+        runtime-version: "v26.3.0"
+        os: "Linux"
+upstream:
+  codex:
+    disable-codex-cloaking: true
+` + layoutPlugins
+
+	// fixtureUpstreamBlankWins: present upstream leaves win even when blank
+	// or false, exactly like v8 leaves over legacy ones.
+	fixtureUpstreamBlankWins = `config-version: 8
+oauth:
+  providers:
+    claude:
+      header-defaults:
+        user-agent: "claude-cli/2.1.286 (external, cli)"
+    codex:
+      disable-codex-cloaking: true
+upstream:
+  claude:
+    header-defaults:
+      user-agent: ""
+  codex:
+    disable-codex-cloaking: false
+` + layoutPlugins
+
+	// fixtureUpstreamNullParent: CPA refuses to load a file whose upstream
+	// parent is not a mapping.
+	fixtureUpstreamNullParent = `config-version: 8
+upstream:
+  claude: ~
+` + layoutPlugins
 )
 
 type leafWant struct {
@@ -165,8 +278,9 @@ type leafWant struct {
 	source Source
 }
 
-func legacyLeaf(v string) leafWant { return leafWant{v, SourceLegacy} }
-func v8Leaf(v string) leafWant     { return leafWant{v, SourceV8} }
+func legacyLeaf(v string) leafWant   { return leafWant{v, SourceLegacy} }
+func v8Leaf(v string) leafWant       { return leafWant{v, SourceV8} }
+func upstreamLeaf(v string) leafWant { return leafWant{v, SourceUpstream} }
 
 var (
 	defaultClaudeUA  = leafWant{fingerprint.CompiledClaudeUserAgent, SourceDefault}
@@ -179,6 +293,7 @@ type readCase struct {
 	name                 string
 	yaml                 string
 	layout               Layout
+	upstream             bool
 	claudeUA             leafWant
 	claudePkg            leafWant
 	claudeRT             leafWant
@@ -273,8 +388,54 @@ func readCases() []readCase {
 			cloakingSource: SourceDefault,
 		},
 		{
-			// CPA refuses to load a file whose v8 parent is not a mapping.
+			// CPA v8.0.4-v8.0.10 refuse to load a file whose v8 parent is not
+			// a mapping. v8.0.11+ read a null alias parent as empty, but
+			// without an upstream root the plugin cannot tell which build
+			// runs, so it stays conservative.
 			name: "v8-parent-not-a-mapping", yaml: fixtureV8NullParent, layout: LayoutV8,
+			claudeUnsupported: "unsupported_config_shape", claudeWantsNoCompare: true,
+			codexUA: defaultCodexUA, codexTarget: "oauth.providers.codex.header-defaults",
+			cloakingSource: SourceDefault,
+		},
+		{
+			name: "upstream-live", yaml: fixtureUpstreamLive, layout: LayoutV8, upstream: true,
+			claudeUA: upstreamLeaf("claude-cli/2.1.289 (external, cli)"), claudePkg: upstreamLeaf("0.128.0"), claudeRT: upstreamLeaf("v26.3.0"),
+			claudeTarget: "upstream.claude.header-defaults",
+			codexUA:      v8Leaf("codex-tui/0.156.0 (Ubuntu 26.4.0; x86_64) xterm-ghostty (codex-tui; 0.156.0)"), codexTarget: "oauth.providers.codex.header-defaults",
+			cloaking: true, cloakingSource: SourceUpstream,
+		},
+		{
+			// 0.1.5 read this as the compiled default 2.1.280 from the alias
+			// path; CPA serves the upstream 2.1.289.
+			name: "upstream-shadows-alias", yaml: fixtureUpstreamShadowedAlias, layout: LayoutV8, upstream: true,
+			claudeUA: upstreamLeaf("claude-cli/2.1.289 (external, cli)"), claudePkg: upstreamLeaf("0.128.0"), claudeRT: upstreamLeaf("v26.3.0"),
+			claudeTarget: "upstream.claude.header-defaults",
+			codexUA:      v8Leaf("codex-tui/0.156.0 (Ubuntu 26.4.0; x86_64) xterm-ghostty (codex-tui; 0.156.0)"), codexTarget: "oauth.providers.codex.header-defaults",
+			cloaking: true, cloakingSource: SourceUpstream,
+		},
+		{
+			name: "upstream-alias-legacy-per-leaf", yaml: fixtureUpstreamThreeLayers, layout: LayoutV8, upstream: true,
+			claudeUA: upstreamLeaf("claude-cli/2.1.287 (external, cli)"), claudePkg: v8Leaf("0.112.2"), claudeRT: legacyLeaf("v24.0.0"),
+			claudeTarget: "upstream.claude.header-defaults",
+			codexUA:      defaultCodexUA, codexTarget: "oauth.providers.codex.header-defaults",
+			cloakingSource: SourceDefault,
+		},
+		{
+			name: "upstream-root-without-claude-block", yaml: fixtureUpstreamRootOnly, layout: LayoutV8, upstream: true,
+			claudeUA: v8Leaf("claude-cli/2.1.286 (external, cli)"), claudePkg: v8Leaf("0.112.1"), claudeRT: v8Leaf("v26.3.0"),
+			claudeTarget: "upstream.claude.header-defaults",
+			codexUA:      defaultCodexUA, codexTarget: "oauth.providers.codex.header-defaults",
+			cloaking: true, cloakingSource: SourceUpstream,
+		},
+		{
+			name: "upstream-blank-and-false-win", yaml: fixtureUpstreamBlankWins, layout: LayoutV8, upstream: true,
+			claudeUA: defaultClaudeUA, claudePkg: defaultClaudePkg, claudeRT: defaultClaudeRT,
+			claudeTarget: "upstream.claude.header-defaults",
+			codexUA:      defaultCodexUA, codexTarget: "oauth.providers.codex.header-defaults",
+			cloaking: false, cloakingSource: SourceUpstream,
+		},
+		{
+			name: "upstream-parent-not-a-mapping", yaml: fixtureUpstreamNullParent, layout: LayoutV8, upstream: true,
 			claudeUnsupported: "unsupported_config_shape", claudeWantsNoCompare: true,
 			codexUA: defaultCodexUA, codexTarget: "oauth.providers.codex.header-defaults",
 			cloakingSource: SourceDefault,
@@ -299,6 +460,9 @@ func TestReadResolvesBothLayoutsLeafByLeaf(t *testing.T) {
 			}
 			if snap.Layout != tc.layout {
 				t.Errorf("layout = %s, want %s", snap.Layout, tc.layout)
+			}
+			if snap.Upstream != tc.upstream {
+				t.Errorf("upstream = %t, want %t", snap.Upstream, tc.upstream)
 			}
 			if tc.claudeUnsupported != "" {
 				if snap.Claude.Unsupported != tc.claudeUnsupported {
@@ -416,6 +580,78 @@ func TestApplySelectsWriteTargetPerLayout(t *testing.T) {
 			name: "v8 block with a merge key is refused", yaml: fixtureV8Merge, target: LayoutV8,
 			// The v8 block itself has a merge key, so it is refused below.
 		},
+		{
+			// Production on 2026-10-07: the write must land in the canonical
+			// block, keep its other leaves, and leave Codex where CPA reads it.
+			name: "upstream block is updated in place", yaml: fixtureUpstreamLive, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.timeout", "upstream.codex.disable-codex-cloaking", "oauth.providers.codex.header-defaults.user-agent"},
+			absent:  []string{"oauth.providers.claude", "claude-header-defaults"},
+			contains: []string{
+				"upstream:\n  codex:\n    disable-codex-cloaking: true\n  claude:\n    header-defaults:\n      user-agent: \"claude-cli/2.1.290 (external, cli)\"\n      package-version: \"0.113.0\"\n      runtime-version: \"v26.4.0\"\n      timeout: \"600\"\n",
+			},
+		},
+		{
+			// The 2026-10-07 incident file: the shadowed alias block is what
+			// CPA's load deleted; the write removes it, emptied parents and all.
+			name: "upstream write removes the shadowed alias block", yaml: fixtureUpstreamShadowedAlias, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.timeout", "oauth.providers.codex.header-defaults.user-agent"},
+			absent:  []string{"oauth.providers.claude", "claude-header-defaults"},
+		},
+		{
+			// Written leaves leave the alias and legacy blocks; the leaves
+			// the write does not supply (os, arch) stay where CPA reads them.
+			name: "upstream write drops shadowed alias and legacy leaves", yaml: fixtureUpstreamThreeLayers, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.package-version", "oauth.providers.claude.header-defaults.os", "claude-header-defaults.arch"},
+			absent: []string{
+				"oauth.providers.claude.header-defaults.user-agent", "oauth.providers.claude.header-defaults.package-version",
+				"claude-header-defaults.package-version", "claude-header-defaults.runtime-version",
+			},
+		},
+		{
+			// An alias-path block with no upstream leaf works on v8.0.11+, but
+			// the next /v8 save moves it under upstream; write there directly.
+			name: "upstream root moves the claude write off the alias path", yaml: fixtureUpstreamRootOnly, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.user-agent", "upstream.codex.disable-codex-cloaking", "oauth.providers.claude.header-defaults.os"},
+			absent:  []string{"oauth.providers.claude.header-defaults.user-agent", "oauth.providers.claude.header-defaults.runtime-version"},
+		},
+		{
+			// Removing the explicit oauth key would expose the root merge's
+			// oauth (and its auth-dir); CPA expands merges before cleaning.
+			name: "root merge key keeps shadowed alias leaves for CPA", yaml: `config-version: 8
+x-shared: &shared
+  oauth:
+    auth-dir: "/srv/other-auths"
+<<: *shared
+oauth:
+  providers:
+    claude:
+      header-defaults:
+        user-agent: "claude-cli/2.1.250 (external, cli)"
+upstream:
+  codex: {}
+` + layoutPlugins, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.user-agent", "oauth.providers.claude.header-defaults.user-agent"},
+		},
+		{
+			// Removing an anchored leaf would leave *ua dangling.
+			name: "anchored alias leaf is kept for CPA", yaml: `config-version: 8
+oauth:
+  providers:
+    claude:
+      header-defaults:
+        user-agent: &ua "claude-cli/2.1.250 (external, cli)"
+upstream:
+  codex: {}
+x-reference: *ua
+` + layoutPlugins, target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.user-agent", "oauth.providers.claude.header-defaults.user-agent", "x-reference"},
+		},
+		{
+			// An alias-shared oauth block cannot be edited in place; CPA's own
+			// load removes its shadowed leaves without changing the result.
+			name: "upstream write leaves an aliased oauth block for CPA", yaml: strings.Replace(fixtureV8Aliases, "oauth:", "upstream:\n  codex: {}\noauth:", 1), target: LayoutUpstream,
+			present: []string{"upstream.claude.header-defaults.user-agent", "oauth.providers.claude.header-defaults"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -483,6 +719,43 @@ func TestApplySelectsWriteTargetPerLayout(t *testing.T) {
 	}
 }
 
+// TestUpstreamParentsCPARefusesBlockCodex: CPA refuses the whole file when
+// upstream or upstream.codex is present but not a mapping, so Codex (whose
+// canonical cloaking leaf lives there) is unsupported rather than read as
+// cloaking off, and a Codex write is refused.
+func TestUpstreamParentsCPARefusesBlockCodex(t *testing.T) {
+	ua := "codex-tui/0.160.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.160.1)"
+	for name, tc := range map[string]struct {
+		yaml          string
+		claudeBlocked bool
+	}{
+		"null upstream.codex":     {"config-version: 8\nupstream:\n  codex: ~\n", false},
+		"sequence upstream.codex": {"config-version: 8\nupstream:\n  codex: []\n", false},
+		"null upstream":           {"config-version: 8\nupstream: ~\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			content := tc.yaml + layoutPlugins
+			p := newPaths(t, content)
+			snap, err := Read(p.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.Codex.Unsupported != "unsupported_config_shape" {
+				t.Errorf("codex unsupported = %q", snap.Codex.Unsupported)
+			}
+			if got := snap.Claude.Unsupported != ""; got != tc.claudeBlocked {
+				t.Errorf("claude unsupported = %q, want blocked=%t", snap.Claude.Unsupported, tc.claudeBlocked)
+			}
+			if _, err := Apply(p.config, p.backup, codexCandidate(t, ua), nil); !errors.Is(err, ErrUnsupportedShape) {
+				t.Errorf("codex Apply -> %v, want ErrUnsupportedShape", err)
+			}
+			if mustReadFile(t, p.config) != content {
+				t.Error("refused write changed the file")
+			}
+		})
+	}
+}
+
 func TestApplyCodexUsesTheSameTargetRules(t *testing.T) {
 	ua := "codex-tui/0.160.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.160.1)"
 	for _, tc := range []struct {
@@ -492,6 +765,9 @@ func TestApplyCodexUsesTheSameTargetRules(t *testing.T) {
 		{fixtureV8Only, "oauth.providers.codex.header-defaults.user-agent", "codex-header-defaults"},
 		{fixtureInterim, "codex-header-defaults.user-agent", "oauth.providers"},
 		{fixtureLegacyEmpty, "codex-header-defaults.user-agent", "oauth"},
+		// CPA v8.0.11+ did not move the Codex block: it stays canonical
+		// under oauth.providers even when the upstream section exists.
+		{fixtureUpstreamLive, "oauth.providers.codex.header-defaults.user-agent", "upstream.codex.header-defaults"},
 	} {
 		p := newPaths(t, tc.yaml)
 		if _, err := Apply(p.config, p.backup, codexCandidate(t, ua), nil); err != nil {

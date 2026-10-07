@@ -27,7 +27,7 @@ CPA must be able to write its existing `config.yaml`. Send normal requests from 
 
 The plugin reads and writes both CPA config layouts, and status shows which keys it uses. **Upgrading from 0.1.4 on CPA v8:** switch to dry-run with the plugin's own switch *before* updating; see [the upgrade steps](docs/install-docker-compose.md#upgrading-from-014-to-015-cpa-v8).
 
-For learned **Codex** baselines to affect outgoing requests, the existing implementation requires `oauth.providers.codex.disable-codex-cloaking: true` (legacy name `codex.disable-codex-cloaking`). Review that deliberate setting before enabling it; see the [architecture reference](docs/architecture.md).
+For learned **Codex** baselines to affect outgoing requests, the existing implementation requires `disable-codex-cloaking: true` (`upstream.codex.disable-codex-cloaking` on CPA v8.0.11+, `oauth.providers.codex.disable-codex-cloaking` before that, legacy name `codex.disable-codex-cloaking`). Review that deliberate setting before enabling it; see the [architecture reference](docs/architecture.md).
 
 The default state directory is `plugins/auto-baseline` relative to CPA's working directory. Preserve it, any custom `state-dir`/`backup-dir`/`config-path`, and the promoted header defaults in `config.yaml`.
 

@@ -27,7 +27,9 @@ import (
 
 // YAML keys edited or read by the plugin. Legacy root keys:
 // internal/config/config.go:144,154 and config_types.go:126-143,182-184 in
-// the audited CPA build; their v8 paths: internal/config/config_v8.go:47-50.
+// the audited CPA build; their v8 paths: internal/config/config_v8.go:47-50;
+// the upstream paths CPA v8.0.11 made canonical: config_v8.go:34-52,93,96 in
+// v8.0.13 (d7914af).
 const (
 	keyClaudeHeaderDefaults = "claude-header-defaults"
 	keyCodexHeaderDefaults  = "codex-header-defaults"
@@ -35,6 +37,7 @@ const (
 	keyClaude               = "claude"
 	keyOAuth                = "oauth"
 	keyProviders            = "providers"
+	keyUpstream             = "upstream"
 	keyHeaderDefaults       = "header-defaults"
 	keyConfigVersion        = "config-version"
 	keyUserAgent            = "user-agent"
@@ -103,20 +106,29 @@ type Layout string
 // Config layouts. LayoutV8 is the nested layout CPA writes after a
 // /v8/management save (config-version: 8); LayoutLegacy is the flat layout
 // with root keys such as claude-header-defaults.
+//
+// LayoutUpstream is never a document layout. It names the upstream.* block
+// of a CPA v8.0.11+ v8 document when it is a write target (Effective.Target),
+// so that Source(target) is the source of every value the write supplies.
 const (
-	LayoutLegacy Layout = "legacy"
-	LayoutV8     Layout = "v8"
+	LayoutLegacy   Layout = "legacy"
+	LayoutV8       Layout = "v8"
+	LayoutUpstream Layout = "upstream"
 )
 
-// Source says where CPA takes an effective value from: a v8 key, a legacy
-// key, or its compiled default (key absent or blank).
+// Source says where CPA takes an effective value from: an upstream key, a v8
+// key, a legacy key, or its compiled default (key absent or blank).
 type Source string
 
-// Value sources, in CPA's precedence order.
+// Value sources, in CPA's precedence order. SourceUpstream exists only for
+// the settings CPA v8.0.11 moved under upstream.*; for them SourceV8 names
+// the historical oauth.providers.* alias, which v8.0.4-v8.0.10 read as
+// canonical.
 const (
-	SourceV8      Source = "v8"
-	SourceLegacy  Source = "legacy"
-	SourceDefault Source = "default"
+	SourceUpstream Source = "upstream"
+	SourceV8       Source = "v8"
+	SourceLegacy   Source = "legacy"
+	SourceDefault  Source = "default"
 )
 
 // keyPath is a YAML mapping path from the document root.
@@ -124,27 +136,49 @@ type keyPath []string
 
 func (p keyPath) String() string { return strings.Join(p, ".") }
 
-// Paths of the settings the plugin reads or writes, in both layouts.
+// Paths of the settings the plugin reads or writes, in every layout. CPA
+// v8.0.11 (commits 52d5507d, 3be5fa44) moved the canonical Claude
+// header-defaults block and Codex cloaking under upstream.*; the
+// oauth.providers.* paths that v8.0.4 treats as canonical became aliases. The
+// Codex header-defaults block did not move.
 var (
-	legacyClaudeBlock   = keyPath{keyClaudeHeaderDefaults}
-	v8ClaudeBlock       = keyPath{keyOAuth, keyProviders, keyClaude, keyHeaderDefaults}
-	legacyCodexBlock    = keyPath{keyCodexHeaderDefaults}
-	v8CodexBlock        = keyPath{keyOAuth, keyProviders, keyCodex, keyHeaderDefaults}
-	legacyCodexCloaking = keyPath{keyCodex, keyDisableCodexCloaking}
-	v8CodexCloaking     = keyPath{keyOAuth, keyProviders, keyCodex, keyDisableCodexCloaking}
+	legacyClaudeBlock     = keyPath{keyClaudeHeaderDefaults}
+	v8ClaudeBlock         = keyPath{keyOAuth, keyProviders, keyClaude, keyHeaderDefaults}
+	upstreamClaudeBlock   = keyPath{keyUpstream, keyClaude, keyHeaderDefaults}
+	legacyCodexBlock      = keyPath{keyCodexHeaderDefaults}
+	v8CodexBlock          = keyPath{keyOAuth, keyProviders, keyCodex, keyHeaderDefaults}
+	legacyCodexCloaking   = keyPath{keyCodex, keyDisableCodexCloaking}
+	v8CodexCloaking       = keyPath{keyOAuth, keyProviders, keyCodex, keyDisableCodexCloaking}
+	upstreamCodexCloaking = keyPath{keyUpstream, keyCodex, keyDisableCodexCloaking}
 )
 
-// blockPaths returns the legacy and v8 paths of a provider's header-defaults
-// block.
-func blockPaths(provider fingerprint.Provider) (legacy, v8 keyPath, err error) {
+// providerPaths are the places a provider's header-defaults block can live.
+// upstream is nil for Codex, whose canonical block CPA keeps at
+// oauth.providers.codex.header-defaults. mappings lists further paths that
+// must be mappings when present because CPA refuses to load the file
+// otherwise; for Codex that is upstream.codex, the parent of its canonical
+// cloaking leaf.
+type providerPaths struct {
+	upstream, v8, legacy keyPath
+	mappings             keyPath
+}
+
+// blockPaths returns the paths of a provider's header-defaults block.
+func blockPaths(provider fingerprint.Provider) (providerPaths, error) {
 	switch provider {
 	case fingerprint.ProviderClaude:
-		return legacyClaudeBlock, v8ClaudeBlock, nil
+		return providerPaths{upstream: upstreamClaudeBlock, v8: v8ClaudeBlock, legacy: legacyClaudeBlock}, nil
 	case fingerprint.ProviderCodex:
-		return legacyCodexBlock, v8CodexBlock, nil
+		return providerPaths{v8: v8CodexBlock, legacy: legacyCodexBlock, mappings: upstreamCodexCloaking[:len(upstreamCodexCloaking)-1]}, nil
 	default:
-		return nil, nil, fmt.Errorf("unsupported provider %q", provider)
+		return providerPaths{}, fmt.Errorf("unsupported provider %q", provider)
 	}
+}
+
+// providerBlockNodes are the resolved blocks at a provider's paths; nil when
+// a block does not exist.
+type providerBlockNodes struct {
+	upstream, v8, legacy *yaml.Node
 }
 
 // Effective describes the baseline CPA currently applies for one provider.
@@ -170,15 +204,16 @@ type Effective struct {
 	// block is fine.
 	Unsupported string
 	// UserAgentSource, PackageVersionSource, and RuntimeVersionSource record
-	// where each value came from (v8, legacy, or default). Codex has no
-	// package or runtime version and leaves those empty.
+	// where each value came from (upstream, v8, legacy, or default). Codex
+	// has no package or runtime version and leaves those empty.
 	UserAgentSource      Source
 	PackageVersionSource Source
 	RuntimeVersionSource Source
 	// Target is the layout a promotion writes to and TargetPath the dotted
-	// path of that block: an existing v8 block, else an existing legacy
-	// block, else the v8 path when the file declares config-version: 8,
-	// else the legacy path.
+	// path of that block: for Claude the upstream block when the file has an
+	// upstream root (only CPA v8.0.11+ writes one); else an existing v8
+	// block, else an existing legacy block, else the v8 path when the file
+	// declares config-version: 8, else the legacy path.
 	Target     Layout
 	TargetPath string
 }
@@ -191,10 +226,16 @@ type Snapshot struct {
 	// LayoutLegacy otherwise. It only decides where a block that does not
 	// exist yet is created; existing keys are read in both layouts.
 	Layout Layout
-	Claude Effective
-	Codex  Effective
+	// Upstream reports whether the file has an upstream root key. Only CPA
+	// v8.0.11+ writes one (v8.0.4 does not know the section), so it is the
+	// file's evidence that upstream.* is canonical: the plugin then writes
+	// the Claude block there. The plugin cannot ask CPA for its version.
+	Upstream bool
+	Claude   Effective
+	Codex    Effective
 	// DisableCodexCloaking is the effective codex.disable-codex-cloaking
-	// (v8: oauth.providers.codex.disable-codex-cloaking); its source is
+	// (v8: oauth.providers.codex.disable-codex-cloaking; v8.0.11+:
+	// upstream.codex.disable-codex-cloaking); its source is
 	// DisableCodexCloakingSource.
 	DisableCodexCloaking       bool
 	DisableCodexCloakingSource Source
@@ -403,13 +444,16 @@ func parse(path string, raw []byte) (Snapshot, *yaml.Node, error) {
 	// Root-level lookup failures (a cycle or duplicate reached from the
 	// root) make the whole file unreadable; anything deeper is confined to
 	// the provider that owns it.
-	for _, key := range []string{keyClaudeHeaderDefaults, keyCodexHeaderDefaults, keyCodex, keyOAuth} {
+	for _, key := range []string{keyClaudeHeaderDefaults, keyCodexHeaderDefaults, keyCodex, keyOAuth, keyUpstream} {
 		if _, err := resolvedLookup(root, key); err != nil {
 			return Snapshot{}, nil, err
 		}
 	}
-	snap.Claude = readProvider(root, fingerprint.ProviderClaude, snap.Layout)
-	snap.Codex = readProvider(root, fingerprint.ProviderCodex, snap.Layout)
+	if snap.Upstream, err = hasUpstreamRoot(root); err != nil {
+		return Snapshot{}, nil, err
+	}
+	snap.Claude = readProvider(root, fingerprint.ProviderClaude, snap.Layout, snap.Upstream)
+	snap.Codex = readProvider(root, fingerprint.ProviderCodex, snap.Layout, snap.Upstream)
 	snap.DisableCodexCloaking, snap.DisableCodexCloakingSource = readCodexCloaking(root)
 
 	pluginsNode, err := resolvedLookup(root, keyPlugins)
@@ -622,6 +666,14 @@ func documentLayout(root *yaml.Node) (Layout, error) {
 	return LayoutV8, nil
 }
 
+// hasUpstreamRoot reports whether the document has an upstream root key (see
+// Snapshot.Upstream). A non-mapping value still counts: CPA refuses to load
+// such a file, and providerBlocks reports both providers unsupported.
+func hasUpstreamRoot(root *yaml.Node) (bool, error) {
+	v, err := resolvedLookup(root, keyUpstream)
+	return v != nil, err
+}
+
 // resolvePath follows path from root with resolvedLookup at every level and
 // returns nil when any key is missing.
 func resolvePath(root *yaml.Node, path keyPath) (*yaml.Node, error) {
@@ -658,15 +710,20 @@ func checkV8Parents(root *yaml.Node, path keyPath, prefixes int) error {
 
 // leafValue reads one leaf the way CPA's loader does. A present v8 leaf wins
 // over its legacy counterpart even when it is null or blank: flattenV8 moves
-// every present v8 leaf over the legacy one (config_v8.go:215-220). A leaf
-// that ends up blank falls back to the compiled default (hdrDefault,
+// every present v8 leaf over the legacy one (config_v8.go:215-220). In
+// v8.0.11+ a present upstream leaf wins over both the same way: flattenV8
+// copies an oauth.providers alias leaf to its upstream path only when that
+// path is absent, then moves every upstream leaf over the legacy one
+// (config_v8.go:297-336 in d7914af; "canonical upstream fields win by
+// presence"). Precedence is per leaf, never per block. A leaf that ends up
+// blank falls back to the compiled default (hdrDefault,
 // helps/claude_device_profile.go:129-134; SanitizeClaudeHeaderDefaults trims
 // first). A non-scalar leaf cannot be decoded into CPA's string field.
-func leafValue(v8Block, legacyBlock *yaml.Node, key string) (string, Source, error) {
+func leafValue(blocks providerBlockNodes, key string) (string, Source, error) {
 	for _, layer := range []struct {
 		block  *yaml.Node
 		source Source
-	}{{v8Block, SourceV8}, {legacyBlock, SourceLegacy}} {
+	}{{blocks.upstream, SourceUpstream}, {blocks.v8, SourceV8}, {blocks.legacy, SourceLegacy}} {
 		v, err := resolvedLookup(layer.block, key)
 		if err != nil {
 			return "", "", err
@@ -712,23 +769,23 @@ func compiledEffective(provider fingerprint.Provider) Effective {
 }
 
 // readProvider resolves one provider's effective baseline leaf by leaf
-// (v8 leaf, then legacy leaf, then compiled default) and decides where a
-// promotion for it would be written.
-func readProvider(root *yaml.Node, provider fingerprint.Provider, layout Layout) Effective {
+// (upstream leaf, then v8 leaf, then legacy leaf, then compiled default) and
+// decides where a promotion for it would be written.
+func readProvider(root *yaml.Node, provider fingerprint.Provider, layout Layout, upstream bool) Effective {
 	eff := compiledEffective(provider)
-	legacyPath, v8Path, err := blockPaths(provider)
+	paths, err := blockPaths(provider)
 	if err != nil {
 		eff.Unsupported = unsupportedReason(err)
 		return eff
 	}
-	legacyBlock, v8Block, err := providerBlocks(root, legacyPath, v8Path)
+	blocks, err := providerBlocks(root, paths)
 	if err != nil {
 		eff.Unsupported = unsupportedReason(err)
 		return eff
 	}
-	eff.Target, eff.TargetPath = writeTarget(legacyBlock, v8Block, layout, legacyPath, v8Path)
+	eff.Target, eff.TargetPath = writeTarget(blocks, layout, upstream, paths)
 
-	ua, uaSource, err := leafValue(v8Block, legacyBlock, keyUserAgent)
+	ua, uaSource, err := leafValue(blocks, keyUserAgent)
 	if err != nil {
 		eff.Unsupported = unsupportedReason(err)
 		return eff
@@ -758,7 +815,7 @@ func readProvider(root *yaml.Node, provider fingerprint.Provider, layout Layout)
 		{keyPackageVersion, &eff.PackageVersion, &eff.PackageVersionSource},
 		{keyRuntimeVersion, &eff.RuntimeVersion, &eff.RuntimeVersionSource},
 	} {
-		value, source, err := leafValue(v8Block, legacyBlock, leaf.key)
+		value, source, err := leafValue(blocks, leaf.key)
 		if err != nil {
 			eff.Unsupported = unsupportedReason(err)
 			continue
@@ -771,50 +828,81 @@ func readProvider(root *yaml.Node, provider fingerprint.Provider, layout Layout)
 	return eff
 }
 
-// providerBlocks resolves a provider's legacy and v8 header-defaults blocks
-// (alias- and merge-aware), after checking that CPA can load the v8 path.
-func providerBlocks(root *yaml.Node, legacyPath, v8Path keyPath) (legacyBlock, v8Block *yaml.Node, err error) {
-	if err := checkV8Parents(root, v8Path, len(v8Path)); err != nil {
-		return nil, nil, err
+// providerBlocks resolves a provider's header-defaults blocks (alias- and
+// merge-aware), after checking that CPA can load the v8 and upstream paths.
+func providerBlocks(root *yaml.Node, paths providerPaths) (providerBlockNodes, error) {
+	var blocks providerBlockNodes
+	for _, path := range []keyPath{paths.v8, paths.upstream, paths.mappings} {
+		if err := checkV8Parents(root, path, len(path)); err != nil {
+			return blocks, err
+		}
 	}
-	if legacyBlock, err = resolvePath(root, legacyPath); err != nil {
-		return nil, nil, err
+	for _, layer := range []struct {
+		path keyPath
+		node **yaml.Node
+	}{{paths.upstream, &blocks.upstream}, {paths.v8, &blocks.v8}, {paths.legacy, &blocks.legacy}} {
+		if layer.path == nil {
+			continue
+		}
+		block, err := resolvePath(root, layer.path)
+		if err != nil {
+			return providerBlockNodes{}, err
+		}
+		*layer.node = block
 	}
-	if v8Block, err = resolvePath(root, v8Path); err != nil {
-		return nil, nil, err
-	}
-	return legacyBlock, v8Block, nil
+	return blocks, nil
 }
 
-// writeTarget picks where a provider's block is written: the existing v8
+// writeTarget picks where a provider's block is written. For Claude in a file
+// with an upstream root (CPA v8.0.11+) that is always the canonical upstream
+// block: a write to the oauth.providers alias or the legacy key would be
+// shadowed by any upstream leaf, deleted by CPA's next load, and then reported
+// as not effective (the 2026-10-04 incident). Otherwise it is the existing v8
 // block, else the existing legacy block, else the v8 path in a
-// config-version: 8 file, else the legacy path. Because the legacy path is
-// only chosen when no v8 block exists, the plugin never creates a legacy
-// leaf while its v8 counterpart exists (CPA would discard it on reload).
-func writeTarget(legacyBlock, v8Block *yaml.Node, layout Layout, legacyPath, v8Path keyPath) (Layout, string) {
+// config-version: 8 file, else the legacy path. A lower-precedence path is
+// only chosen when no higher one exists, so the plugin never creates a leaf
+// that CPA would discard on reload.
+func writeTarget(blocks providerBlockNodes, layout Layout, upstream bool, paths providerPaths) (Layout, string) {
 	switch {
-	case v8Block != nil:
-		return LayoutV8, v8Path.String()
-	case legacyBlock != nil:
-		return LayoutLegacy, legacyPath.String()
+	case paths.upstream != nil && upstream:
+		return LayoutUpstream, paths.upstream.String()
+	case blocks.v8 != nil:
+		return LayoutV8, paths.v8.String()
+	case blocks.legacy != nil:
+		return LayoutLegacy, paths.legacy.String()
 	case layout == LayoutV8:
-		return LayoutV8, v8Path.String()
+		return LayoutV8, paths.v8.String()
 	default:
-		return LayoutLegacy, legacyPath.String()
+		return LayoutLegacy, paths.legacy.String()
+	}
+}
+
+// targetPath returns the keyPath writeTarget's layout names.
+func (p providerPaths) targetPath(target Layout) keyPath {
+	switch target {
+	case LayoutUpstream:
+		return p.upstream
+	case LayoutV8:
+		return p.v8
+	default:
+		return p.legacy
 	}
 }
 
 // readCodexCloaking resolves codex.disable-codex-cloaking with the same
-// v8-over-legacy precedence. A present v8 leaf wins even when it is null or
-// false; a value that is not a boolean reads as false.
+// per-leaf precedence: upstream, then v8, then legacy. A present
+// higher-precedence leaf wins even when it is null or false; a value that is
+// not a boolean reads as false.
 func readCodexCloaking(root *yaml.Node) (bool, Source) {
-	if checkV8Parents(root, v8CodexCloaking, len(v8CodexCloaking)-1) != nil {
-		return false, SourceDefault
+	for _, path := range []keyPath{v8CodexCloaking, upstreamCodexCloaking} {
+		if checkV8Parents(root, path, len(path)-1) != nil {
+			return false, SourceDefault
+		}
 	}
 	for _, layer := range []struct {
 		path   keyPath
 		source Source
-	}{{v8CodexCloaking, SourceV8}, {legacyCodexCloaking, SourceLegacy}} {
+	}{{upstreamCodexCloaking, SourceUpstream}, {v8CodexCloaking, SourceV8}, {legacyCodexCloaking, SourceLegacy}} {
 		v, err := resolvePath(root, layer.path)
 		if err != nil {
 			return false, SourceDefault
@@ -959,7 +1047,8 @@ func renderPromotion(before Snapshot, doc *yaml.Node, raw []byte, candidate fing
 		before.PluginsEnabled != after.PluginsEnabled ||
 		before.InstanceEnabled != after.InstanceEnabled ||
 		before.DryRun != after.DryRun ||
-		before.Layout != after.Layout {
+		before.Layout != after.Layout ||
+		before.Upstream != after.Upstream {
 		return nil, fmt.Errorf("%w: the edit would change a setting other than the %s baseline", ErrNotEffective, candidate.Provider)
 	}
 	return out, nil
@@ -1003,7 +1092,7 @@ func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte
 	if err := checkDuplicateKeys(root); err != nil {
 		return nil, err
 	}
-	legacyPath, v8Path, err := blockPaths(candidate.Provider)
+	paths, err := blockPaths(candidate.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -1011,16 +1100,16 @@ func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	legacyBlock, v8Block, err := providerBlocks(root, legacyPath, v8Path)
+	upstream, err := hasUpstreamRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	target, _ := writeTarget(legacyBlock, v8Block, layout, legacyPath, v8Path)
-	path := legacyPath
-	if target == LayoutV8 {
-		path = v8Path
+	blocks, err := providerBlocks(root, paths)
+	if err != nil {
+		return nil, err
 	}
-	block, err := ensurePath(root, path)
+	target, _ := writeTarget(blocks, layout, upstream, paths)
+	block, err := ensurePath(root, paths.targetPath(target))
 	if err != nil {
 		return nil, err
 	}
@@ -1035,12 +1124,17 @@ func render(doc *yaml.Node, raw []byte, candidate fingerprint.Candidate) ([]byte
 			return nil, err
 		}
 	}
-	if target == LayoutV8 {
-		keys := make([]string, len(values))
-		for i, kv := range values {
-			keys[i] = kv[0]
-		}
-		dropShadowedLegacy(root, legacyPath, keys)
+	keys := make([]string, len(values))
+	for i, kv := range values {
+		keys[i] = kv[0]
+	}
+	// Every lower-precedence copy of a written leaf is now shadowed.
+	switch target {
+	case LayoutUpstream:
+		dropShadowed(root, paths.v8, keys)
+		dropShadowed(root, paths.legacy, keys)
+	case LayoutV8:
+		dropShadowed(root, paths.legacy, keys)
 	}
 	return encodeDocument(doc, raw)
 }
@@ -1060,42 +1154,78 @@ func ensurePath(root *yaml.Node, path keyPath) (*yaml.Node, error) {
 	return node, nil
 }
 
-// dropShadowedLegacy removes the legacy leaves the plugin just wrote in the
-// v8 block, and the legacy block itself once nothing is left in it. CPA's
-// loader deletes exactly these conflicting leaves on every load and then
+// dropShadowed removes, from the lower-precedence block at path, the leaves
+// the plugin just wrote at a higher-precedence path; then the block itself
+// once nothing is left in it, and every ancestor that removal empties. CPA's
+// loader deletes exactly these conflicting leaves on every load, prunes the
+// parents they leave empty (deleteYAMLPath, config_v8.go:214-231 in d7914af),
+// drops an empty or null block beside its canonical counterpart, and then
 // rewrites the whole file with 4-space indentation and anchors expanded
-// (config_load.go:209-222, NormalizeConfigLayout); removing them here keeps
-// the plugin's write the only change to the file. Only a plain, explicit
-// legacy mapping is edited; one shared through an alias or merge key is left
-// for CPA, which does not change what CPA loads.
-func dropShadowedLegacy(root *yaml.Node, legacyPath keyPath, keys []string) {
-	if len(legacyPath) != 1 {
-		return
-	}
-	block, err := lookupExplicit(root, legacyPath[0])
-	if err != nil || block == nil || block.Anchor != "" {
-		return
+// (config_load.go:209-226, NormalizeConfigLayout). Removing them here leaves
+// CPA nothing to clean on account of the write. (A file that already held
+// other conflicts, or an empty claude struct beside a newly created
+// upstream.claude, is still normalized by CPA once; the written values
+// survive that.) Only plain, explicit mappings without merge keys are edited,
+// and nothing anchored is removed: a block shared through an alias, anchor,
+// or merge key is left for CPA, which does not change what CPA loads, and a
+// key removed from a mapping with a merge key could expose a merged value.
+func dropShadowed(root *yaml.Node, path keyPath, keys []string) {
+	// parents[i] is the mapping that holds path[i].
+	parents := make([]*yaml.Node, 0, len(path))
+	node := root
+	for _, key := range path {
+		if node.Kind != yaml.MappingNode || hasMergeKey(node) || checkDuplicateKeys(node) != nil {
+			return
+		}
+		next, err := lookupExplicit(node, key)
+		if err != nil || next == nil || next.Anchor != "" {
+			return
+		}
+		parents = append(parents, node)
+		node = next
 	}
 	switch {
-	case isEmptyScalar(block):
-	case block.Kind == yaml.MappingNode && !hasMergeKey(block) && checkDuplicateKeys(block) == nil:
-		for _, key := range keys {
-			for i := 0; i+1 < len(block.Content); i += 2 {
-				if k := block.Content[i]; k.Kind == yaml.ScalarNode && k.Value == key {
-					block.Content = append(block.Content[:i], block.Content[i+2:]...)
-					break
-				}
-			}
+	case isEmptyScalar(node):
+	case node.Kind == yaml.MappingNode && !hasMergeKey(node) && checkDuplicateKeys(node) == nil:
+		if hasAnchoredKey(node, keys) {
+			return
 		}
-		if len(block.Content) > 0 {
+		for _, key := range keys {
+			removeKey(node, key)
+		}
+		if len(node.Content) > 0 {
 			return
 		}
 	default:
 		return
 	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if k := root.Content[i]; k.Kind == yaml.ScalarNode && !isMergeKey(k) && k.Value == legacyPath[0] {
-			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+	for i := len(path) - 1; i >= 0; i-- {
+		removeKey(parents[i], path[i])
+		if i == 0 || len(parents[i].Content) > 0 {
+			return
+		}
+	}
+}
+
+// hasAnchoredKey reports whether any of keys in mapping carries an anchor on
+// its key or value node; removing it would leave an alias dangling.
+func hasAnchoredKey(mapping *yaml.Node, keys []string) bool {
+	for _, key := range keys {
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if k := mapping.Content[i]; k.Kind == yaml.ScalarNode && !isMergeKey(k) && k.Value == key &&
+				(k.Anchor != "" || mapping.Content[i+1].Anchor != "") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// removeKey deletes an explicit key and its value from a mapping.
+func removeKey(mapping *yaml.Node, key string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if k := mapping.Content[i]; k.Kind == yaml.ScalarNode && !isMergeKey(k) && k.Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
 			return
 		}
 	}

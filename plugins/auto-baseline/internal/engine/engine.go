@@ -125,9 +125,13 @@ type Engine struct {
 	modeUnsupported bool
 	modeLogged      bool
 	configLayout    configfile.Layout
-	effective       map[fingerprint.Provider]configfile.Effective
-	disableCodex    bool
-	// disableCodexSource is where disableCodex came from (v8, legacy, default).
+	// configUpstream mirrors Snapshot.Upstream: the file has CPA v8.0.11+'s
+	// upstream section, so upstream.* names are canonical.
+	configUpstream bool
+	effective      map[fingerprint.Provider]configfile.Effective
+	disableCodex   bool
+	// disableCodexSource is where disableCodex came from (upstream, v8,
+	// legacy, default).
 	disableCodexSource configfile.Source
 	// awaitingReload records, per provider, when a written promotion is
 	// still waiting for CPA's hot reload to be observed.
@@ -573,6 +577,7 @@ func (e *Engine) refreshConfig() {
 func (e *Engine) applySnapshotLocked(snap configfile.Snapshot, readEpoch uint64) {
 	e.configHash = snap.SHA256
 	e.configLayout = snap.Layout
+	e.configUpstream = snap.Upstream
 	e.disableCodex = snap.DisableCodexCloaking
 	e.disableCodexSource = snap.DisableCodexCloakingSource
 	now := e.clk.Now()

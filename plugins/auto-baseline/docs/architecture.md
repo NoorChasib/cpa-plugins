@@ -8,7 +8,9 @@ limitations of the `auto-baseline` plugin. Unless marked otherwise, CLIProxyAPI
 design was first audited. The compiled defaults (section 1), the config layouts
 and loop guard (section 2.4), and effective-value discovery (section 4, step 6)
 were re-audited against **v8.0.4**
-(`d33f63f8e3d98428440ebca5a5b6a981a61ff71e`); those references say so.
+(`d33f63f8e3d98428440ebca5a5b6a981a61ff71e`); those references say so. The
+`upstream` section CPA v8.0.11 added (section 2.5) was audited against
+**v8.0.13** (`d7914af`).
 Revalidate every file:line after a CPA upgrade.
 
 ## 1. The problem in CPA terms
@@ -226,6 +228,99 @@ each pair with v8.0.4's loader gave identical header defaults and cloaking in
 every read case; CPA refused the non-mapping-parent case exactly as the plugin
 does; and none of the files the plugin writes is rewritten on load.
 
+### 2.5 The upstream section (CPA v8.0.11+, audited against v8.0.13)
+
+CPA v8.0.11 (commits `52d5507d` "add shared upstream provider settings" and
+`3be5fa44` "support historical v8 aliases") moved several v8 keys under a new
+`upstream` root. References below are to v8.0.13 (`d7914af`); the files involved
+are unchanged through v8.0.16. For this plugin:
+
+| Setting | Canonical from v8.0.11 | Historical alias (v8.0.4 canonical) | Legacy |
+| --- | --- | --- | --- |
+| Claude header defaults | `upstream.claude.header-defaults.<field>` | `oauth.providers.claude.header-defaults.<field>` | `claude-header-defaults.<field>` |
+| Codex cloaking | `upstream.codex.disable-codex-cloaking` | `oauth.providers.codex.disable-codex-cloaking` | `codex.disable-codex-cloaking` |
+| Codex header defaults | not moved: `oauth.providers.codex.header-defaults.<field>` | | `codex-header-defaults.<field>` |
+
+(`v8SharedPaths` and `v8SharedStructPaths`, `config_v8.go:34-64`; `buildV8Paths`
+`:93,96`.)
+
+What CPA v8.0.11+ does differently:
+
+- **Load.** `flattenV8` first copies each present alias leaf to its upstream
+  path only when that path is absent, and always drops the alias
+  (`config_v8.go:297-304`, "canonical upstream fields win by presence"); it
+  then moves every present upstream leaf over the legacy leaf as before
+  (`:330-336`). Precedence is per leaf: upstream, then alias, then legacy, then
+  the compiled default.
+- **Loading cleans conflicts and writes the file.** `NormalizeConfigLayout(data,
+  false)` (`config_v8.go:452-535`, called at `config_load.go:212-226`) deletes
+  every alias or legacy leaf whose upstream leaf exists, prunes the mappings
+  that leaves empty (`deleteYAMLPath`, `:214-231`), deletes an empty or null
+  alias or legacy struct beside its upstream counterpart, and `os.WriteFile`s
+  the result. An alias with no upstream counterpart is kept and applies.
+- **`/v8/management` saves migrate aliases too.** `SaveConfigPreserveComments`
+  forces migration for any v8 document (`config_yaml.go:42`, `:107`), which
+  moves alias leaves under `upstream`. That includes the plugin Store's delete
+  (`management/plugins.go:388`). v8.0.4 has no `upstream` root at all
+  (`v8AllowedRoots`), so a file with one was written by v8.0.11 or later.
+
+What the plugin does (0.1.6):
+
+- **Read.** Every Claude leaf and `disable-codex-cloaking` resolve as upstream,
+  then v8 (now the alias), then legacy, then the compiled default, by presence.
+  Status reports `upstream` as the source. A non-mapping ancestor on an upstream
+  path marks the provider `unsupported_config_shape`, as CPA refuses to load it.
+- **Write target.** For Claude, `upstream.claude.header-defaults` whenever the
+  file has an `upstream` root (`Snapshot.Upstream`); the plugin cannot ask CPA
+  for its version (the ABI exposes only ABI and schema versions), so the file is
+  the evidence. Otherwise section 2.4's rules apply unchanged, so v8.0.4-v8.0.10
+  files are written exactly as by 0.1.5. Codex is never written under
+  `upstream`.
+- **Superseded leaves.** An upstream write removes the written keys from the
+  alias block and the legacy block, and every plain, un-anchored mapping that
+  leaves empty, exactly what `NormalizeConfigLayout(false)` would delete. CPA's
+  reload then has nothing to clean and never writes the file. `os`, `arch`,
+  `timeout`, `timezone` and `stabilize-device-profile` stay wherever they are.
+  Nothing is pruned from a mapping with a merge key (that could expose a merged
+  value) and no anchored leaf is removed (that would leave an alias dangling);
+  such shapes, an alias-shared block, or conflicts already in the file are left
+  for CPA, which normalizes the file once and keeps the written values.
+- **Shape.** `upstream`, `upstream.claude`, `upstream.claude.header-defaults`
+  and `upstream.codex` must be mappings when present, or CPA refuses the whole
+  file; the plugin marks the provider that owns the path unsupported (both, for
+  `upstream` itself) instead of writing into a file CPA cannot load.
+- **Downgrades.** v8.0.4-v8.0.10 ignore an `upstream` section silently. After a
+  downgrade to such a build, a leftover `upstream` root keeps the plugin
+  writing there and confirming values CPA does not apply. Remove the section
+  (moving its Claude block back to `oauth.providers.claude.header-defaults`)
+  when downgrading.
+
+The 2026-10-04 incident this closes: production ran CPA v8.0.12/v8.0.13 with
+the Claude block at the alias path, which still applied. At 11:50:37 CST a
+panel `DELETE /v8/management/plugins/token-usage` re-saved the file, moving the
+block to `upstream.claude.header-defaults` (2.1.289). 0.1.5 no longer found it,
+reported the compiled default 2.1.280, and wrote 2.1.289 to the alias path;
+CPA ignored that write, its reload deleted it as a conflicting legacy field
+(the second `WRITE` event ~155 ms later, inside `LoadConfig`), and the plugin
+paused with `promotion_not_effective`. **Clear pending** on 2026-10-07 repeated
+it with 2.1.291. CPA kept serving the upstream 2.1.289 throughout, and the
+status page's Codex cloaking warning was also false, because 0.1.5 did not read
+`upstream.codex.disable-codex-cloaking: true`.
+
+Verification against CPA's real loaders, with the fixture export of section
+2.4: on v8.0.13 and v8.0.16 every read fixture, including the six `upstream`
+ones and production's shape, loads to exactly the plugin's reading (the null
+alias parent case is refused by the plugin and loaded by v8.0.11+, which is
+conservative), and every file the plugin writes is left alone by
+`NormalizeConfigLayout(false)` except the three shapes deliberately left for
+CPA above, whose written values survive CPA's normalization and re-read
+identically. On v8.0.4 every fixture without an `upstream` root still passes,
+and 0.1.6 renders byte-identical output to 0.1.5 for those files. A private
+copy of production's `config.yaml` was promoted to 2.1.292 by 0.1.6: v8.0.13's
+normalizer left the result unchanged and its loader served 2.1.292, while the
+same run with 0.1.5 reproduced the incident (alias written, deleted on load,
+2.1.289 served).
+
 ## 3. Version-source options
 
 | Option | How | Pros | Cons | Decision |
@@ -317,7 +412,7 @@ does; and none of the files the plugin writes is rewritten on load.
 | Internally consistent tuples only | A candidate is built from one request; the key includes package-version and runtime-version; the learner never merges keys. Claude UA is canonicalized so `sdk-ts, agent-sdk/...` never reaches the baseline. |
 | Only valid fingerprints | Regex-validated versions, bounded UA length (512), no control characters, safe OS/Arch charset; values are written as double-quoted YAML scalars so `0.94.0`-like values can never be re-read as floats. |
 | Anti-poisoning | Quorum across distinct sessions within a window; `force` is only available through the authenticated management API with a CSRF header. |
-| Touch nothing else in `config.yaml` | yaml.v3 Node edits of exactly the Claude header-defaults `user-agent`, `package-version`, `runtime-version`, or the Codex header-defaults `user-agent`, in the write target of section 2.4, plus removal of the legacy leaves a v8 write supersedes (which CPA would delete anyway); missing mapping nodes are created; a null placeholder is converted in place; comments, order, `os`/`arch`/`timeout`/`timezone`/`stabilize-device-profile`, and `beta-features` are untouched (tested in `configfile_test.go`). |
+| Touch nothing else in `config.yaml` | yaml.v3 Node edits of exactly the Claude header-defaults `user-agent`, `package-version`, `runtime-version`, or the Codex header-defaults `user-agent`, in the write target of section 2.4, plus removal of the lower-precedence leaves a write supersedes, and of mappings that leaves empty (which CPA would delete anyway, sections 2.4 and 2.5); missing mapping nodes are created; a null placeholder is converted in place; comments, order, `os`/`arch`/`timeout`/`timezone`/`stabilize-device-profile`, and `beta-features` are untouched (tested in `configfile_test.go`). |
 | Never destroy operator content, never crash the host | A duplicate mapping key anywhere the plugin traverses is refused (`duplicate_key`): CPA's yaml.v3 struct decode rejects such a file ("mapping key ... already defined"), so it could never reload. Reads resolve aliases and `<<` merge keys (identified by the `!!merge` tag, never by scalar text) so a shared-defaults config yields the real effective values; resolution carries a visited set and a depth bound of 32, so an alias or merge cycle yields `unsupported_config_shape` instead of the stack overflow that would kill CPA. Writes refuse (`unsupported_config_shape`) when the target is a non-empty scalar, a sequence, an alias, or reachable only through a merge key, and refuse multi-document streams (`multi_document_config`). A problem confined to one provider's block only blocks that provider. |
 | Never write what CPA would not load | The loop guard of section 2.4: the rendered file is parsed again with CPA's layout rules before the write, and a read after the write that shows a different tuple pauses the provider instead of retrying every cooldown (`promotion_not_effective`). |
 | Concurrent editors | sha256 at read, after the backup, and immediately before the write; `ErrChanged` triggers up to 3 retries of the full read-modify-write; the write is skipped when the rendered bytes are identical. Other writers do not take a lock, so this narrows the race without eliminating it. |
@@ -337,7 +432,7 @@ does; and none of the files the plugin writes is rewritten on load.
 | Keys written | `user-agent`, `package-version`, `runtime-version` of `oauth.providers.claude.header-defaults` (legacy `claude-header-defaults`) | `user-agent` of `oauth.providers.codex.header-defaults` (legacy `codex-header-defaults`) only, never `beta-features` |
 | UA written | Canonical `claude-cli/<v> (external, cli)` (CPA compares the version only, `claudeCLIVersionPattern` prefix match `claude_device_profile.go:33`; the `cli` entrypoint is what cloaked requests announce) | The full observed UA verbatim; it carries OS/terminal details (`codex-tui/0.152.1 (Ubuntu 24.4.0; x86_64) WezTerm/...`) and CPA injects it as-is |
 | Authenticity signals | x-app, anthropic-version, stainless lang/runtime/package/runtime-version/os/arch, claude-code beta | `Originator` header (`codex_cli_rs`, `codex-tui`, `Codex Desktop`, ...) |
-| Effect once written | Immediate after hot reload (in the v8 layout, for OAuth credentials only) | **Only when `oauth.providers.codex.disable-codex-cloaking` (legacy `codex.disable-codex-cloaking`) is `true`.** The references in this cell are to v7.2.146; in v8.0.4 the flag is still read from `cfg.Codex.DisableCodexCloaking` (`codex_executor_request.go:303-306`). `ensureHeaderWithConfigPrecedence` gives `codex-header-defaults.user-agent` precedence over the client UA (`codex_websockets_request.go:309-329`, used at `codex_executor_request.go:342`), but `applyCodexCloakingHeaders` (`codex_executor_request.go:372-378`) then forces the compiled `codexUserAgent` (`:26`) and `Originator` unless `cfg.Codex.DisableCodexCloaking` is set (`config_types.go:147-150`). The plugin reads that flag and shows a status warning when it is not set. |
+| Effect once written | Immediate after hot reload (in the v8 layout, for OAuth credentials only) | **Only when `disable-codex-cloaking` is `true`** (`upstream.codex.` on CPA v8.0.11+, `oauth.providers.codex.` before that, legacy `codex.`). The references in this cell are to v7.2.146; in v8.0.4 the flag is still read from `cfg.Codex.DisableCodexCloaking` (`codex_executor_request.go:303-306`). `ensureHeaderWithConfigPrecedence` gives `codex-header-defaults.user-agent` precedence over the client UA (`codex_websockets_request.go:309-329`, used at `codex_executor_request.go:342`), but `applyCodexCloakingHeaders` (`codex_executor_request.go:372-378`) then forces the compiled `codexUserAgent` (`:26`) and `Originator` unless `cfg.Codex.DisableCodexCloaking` is set (`config_types.go:147-150`). The plugin reads that flag and shows a status warning when it is not set. |
 
 ## 7. Fail-safe analysis
 
