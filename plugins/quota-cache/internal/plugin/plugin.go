@@ -24,7 +24,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.10"
+var Version = "0.1.11"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -196,9 +196,19 @@ func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct
 	defer close(done)
 	ticker := time.NewTicker(spacing)
 	defer ticker.Stop()
+	var wait rosterWait
 	for {
-		if err := current.Step(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
-			p.host.Log(ctx, "warn", "quota-cache refresh or persistence unavailable", nil)
+		// A roster that is not ready yet is expected for a few seconds on every
+		// CPA start, so it is not worth a warning unless it lasts. The status
+		// page's activity shows it while it lasts.
+		started := time.Now()
+		err := current.Step(ctx, started.UTC())
+		if ctx.Err() == nil {
+			if wait.observe(err, started) {
+				p.host.Log(ctx, "warn", "quota-cache is still waiting for CPA to load credentials; saved observations are kept but not refreshed", nil)
+			} else if err != nil && !errors.Is(err, cache.ErrRosterNotReady) {
+				p.host.Log(ctx, "warn", "quota-cache refresh or persistence unavailable", nil)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -209,6 +219,40 @@ func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct
 		}
 	}
 }
+
+// rosterWaitWarnAfter is how long CPA may go on listing credentials it has not
+// loaded before the wait is worth a warning. CPA attaches its auth manager
+// seconds after it starts. A roster still not ready this long after the first
+// one means it never will be, for example a host that never attaches the
+// manager, and the snapshot would otherwise stop updating with nothing in the
+// log. Polls only happen once per request spacing, so with a long spacing the
+// warning comes at the first poll past this.
+const rosterWaitWarnAfter = 5 * time.Minute
+
+// rosterWait tracks one unbroken run of not-ready rosters.
+type rosterWait struct {
+	since  time.Time
+	warned bool
+}
+
+// observe records one Step result and reports whether to warn now: once per
+// wait, at the first not-ready result rosterWaitWarnAfter or more after the
+// wait began. Any other result ends the wait.
+func (w *rosterWait) observe(err error, now time.Time) bool {
+	if !errors.Is(err, cache.ErrRosterNotReady) {
+		*w = rosterWait{}
+		return false
+	}
+	if w.since.IsZero() {
+		w.since = now
+	}
+	if w.warned || now.Sub(w.since) < rosterWaitWarnAfter {
+		return false
+	}
+	w.warned = true
+	return true
+}
+
 func (p *Plugin) stop(final bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -254,15 +298,32 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 		return nil, err
 	}
 	accounts := []cache.Account{}
+	unindexed := false
 	for _, entry := range roster {
 		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
 		if provider == "" {
 			provider = strings.ToLower(strings.TrimSpace(entry.Type))
 		}
-		if entry.AuthIndex == "" || entry.Disabled || entry.RuntimeOnly || !quota.Supported(provider) {
+		if entry.Disabled || entry.RuntimeOnly || !quota.Supported(provider) {
+			continue
+		}
+		if entry.AuthIndex == "" {
+			unindexed = true
 			continue
 		}
 		accounts = append(accounts, cache.Account{Provider: provider, AuthIndex: entry.AuthIndex})
+	}
+	// CPA sends plugin.register before its core auth manager exists, and until
+	// the manager is attached host.auth.list falls back to reading the auth
+	// directory (CPA internal/pluginhost/auth_callbacks.go,
+	// listAuthFilesFromDisk). Those entries name each file but carry no
+	// auth_index, the identity every snapshot entry is keyed by. Once the
+	// manager is attached, every file-backed entry carries one. So a roster
+	// whose usable credentials all lack it is CPA still starting, not CPA
+	// holding none of them, and the cache must wait rather than prune. A mixed
+	// roster is already authoritative; its index-less entries are skipped.
+	if unindexed && len(accounts) == 0 {
+		return nil, cache.ErrRosterNotReady
 	}
 	if key := f.openRouter(); key != "" {
 		accounts = append(accounts, cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)})

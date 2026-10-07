@@ -94,6 +94,15 @@ Confirm the OAuth credentials already work in CPA and inspect the authenticated 
 
 The plugin does not substitute five-hour, model-scoped, monthly, additional, code-review, credit, utilization, or plan signals. A healthy unknown account remains at the low end of the provider's healthy ranking and still counts in `N`.
 
+With `use-quota-cache: true`, `unknown` is expected for seconds to minutes after a CPA restart. Startup writes a provisional order. After each reconciliation the plugin re-reads the local snapshot at `+5s`, `+30s`, `+2m`, `+5m`, and `+15m`. It writes the corrected order once Quota Cache has fresh data for every account, or at the `+15m` step for the accounts confirmed by then, so an account can show `confirmed` while its priority is still the provisional one. Past the `+15m` step, measured from the latest reconciliation rather than from the restart, an account stays `unknown` until the next `reconcile-interval` pass whenever Quota Cache has no error-free entry for it observed within the last 30 minutes. Common causes:
+
+- the snapshot is missing, or Quota Cache writes it somewhere other than this plugin's `quota-cache-path`;
+- Quota Cache has not polled the account yet (a large pool after a long outage takes a while to refill);
+- the entry is failing or in backoff;
+- the entry is older than 30 minutes because Quota Cache is stopped, disabled, or in provider cooldown.
+
+It also stays `unknown` when the entry reports no weekly window. Check the account in Quota Cache's status. Shortening `reconcile-interval` is cheap in cache mode, but never shorten it in standalone mode, where each pass makes one provider request per account.
+
 Trigger the authenticated refresh route and inspect sanitized `last_error`.
 
 ## Reset state is `stale`

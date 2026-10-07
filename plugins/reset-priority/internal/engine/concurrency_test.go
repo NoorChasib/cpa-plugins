@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
@@ -636,4 +637,236 @@ func TestProviderOptOutInvalidatesRetriesAcrossRapidReenable(t *testing.T) {
 	if got := env.claude.callCount(token("a")); got != before {
 		t.Fatalf("pre-opt-out retry work made %d provider call(s) after re-enable, want 0", got-before)
 	}
+}
+
+// TestCacheRetryBlockedOnFetchSemaphoreCannotReachProviderAfterStandaloneSwitch
+// closes a time-of-check/time-of-use gap. A cache-mode first-confirmation wave
+// step selects an unconfirmed account, then its read waits for fetchSem. While
+// it waits, the operator switches to standalone mode; the reconfiguration's
+// reconcile has not run yet, so retrySeq is unchanged. When the read gets its
+// slot it must see that standalone mode has no first-confirmation reason,
+// rather than read credentials and make a provider request.
+//
+// synctest makes "blocked on fetchSem" observable: the engine, and so the
+// semaphore channel, is created inside the bubble, and synctest.Wait returns
+// only once the read goroutine is durably blocked on its send.
+func TestCacheRetryBlockedOnFetchSemaphoreCannotReachProviderAfterStandaloneSwitch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		env := newTestEnv(t, cacheConfig(t))
+		env.addAccount("claude", "a", day(1))
+		env.reconcile() // no snapshot: a stays unknown and the wave is armed
+
+		for i := 0; i < maxConcurrentFetches; i++ {
+			env.eng.fetchSem <- struct{}{}
+		}
+		done := make(chan struct{})
+		go func() {
+			env.clk.Advance(5 * time.Second) // fires the +5s wave step
+			close(done)
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("the +5s wave step did not wait on fetchSem; no first-confirmation wave was armed")
+		default:
+		}
+
+		env.host.mu.Lock()
+		getsBefore := len(env.host.getCalls)
+		env.host.mu.Unlock()
+		env.eng.Reconfigure(defaultConfig()) // its reconcile stays queued
+		for i := 0; i < maxConcurrentFetches; i++ {
+			<-env.eng.fetchSem
+		}
+		<-done
+
+		if got := env.claude.callCount(token("a")); got != 0 {
+			t.Fatalf("blocked cache-mode read made %d provider calls after the standalone switch, want 0", got)
+		}
+		env.host.mu.Lock()
+		gets := env.host.getCalls[getsBefore:]
+		env.host.mu.Unlock()
+		if len(gets) != 0 {
+			t.Fatalf("blocked cache-mode read fetched credentials %v after the standalone switch, want none", gets)
+		}
+	})
+}
+
+// blockWaveStep fills fetchSem, advances the clock by d on its own goroutine
+// to fire a wave step, and returns once that step's reads are blocked on
+// fetchSem. The
+// returned channel closes when the step finishes. It must run inside a
+// synctest bubble that created the engine.
+func blockWaveStep(t *testing.T, env *testEnv, d time.Duration) <-chan struct{} {
+	t.Helper()
+	for i := 0; i < maxConcurrentFetches; i++ {
+		env.eng.fetchSem <- struct{}{}
+	}
+	done := make(chan struct{})
+	go func() {
+		env.clk.Advance(d)
+		close(done)
+	}()
+	synctest.Wait()
+	select {
+	case <-done:
+		t.Fatalf("advancing %s fired no wave step that waits on fetchSem", d)
+	default:
+	}
+	return done
+}
+
+// releaseFetchSem empties fetchSem, unblocking every waiting read.
+func releaseFetchSem(env *testEnv) {
+	for i := 0; i < maxConcurrentFetches; i++ {
+		<-env.eng.fetchSem
+	}
+}
+
+// TestCacheWaveStepAfterStandaloneSwitchWritesNothing: a Reconfigure to
+// standalone mode lands while a wave step's reads wait on fetchSem, so every
+// read drops out. Whether a step observed anything must not depend on the
+// configuration: this step observed nothing and must not flush. In dry-run
+// mode a flush logs one "would set priority" line per mismatched account; the
+// queued reconciliation owns the next flush.
+func TestCacheWaveStepAfterStandaloneSwitchWritesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := cacheConfig(t)
+		cfg.DryRun = true
+		env := newTestEnv(t, cfg)
+		var mu sync.Mutex
+		proposals := 0
+		env.eng.logf = func(_, message string) {
+			if strings.Contains(message, "would set priority") {
+				mu.Lock()
+				proposals++
+				mu.Unlock()
+			}
+		}
+		env.addAccount("claude", "a", day(1))
+		env.addAccount("claude", "b", day(2))
+		env.reconcile() // no snapshot: both stay unknown and the wave is armed
+		mu.Lock()
+		startup := proposals
+		proposals = 0
+		mu.Unlock()
+		if startup == 0 {
+			t.Fatal("startup logged no dry-run proposals, so a flush would be invisible")
+		}
+
+		done := blockWaveStep(t, env, 5*time.Second)
+		standalone := defaultConfig()
+		standalone.DryRun = true
+		env.eng.Reconfigure(standalone) // its reconcile stays queued
+		releaseFetchSem(env)
+		<-done
+
+		mu.Lock()
+		defer mu.Unlock()
+		if proposals != 0 {
+			t.Fatalf("a wave step that observed nothing logged %d dry-run proposals, want 0", proposals)
+		}
+		if got := env.claude.callCount(token("a")) + env.claude.callCount(token("b")); got != 0 {
+			t.Fatalf("provider calls before the standalone reconcile ran = %d, want 0", got)
+		}
+	})
+}
+
+// TestCacheWaveStepSupersededByReconfigureWritesNothing: CPA re-sends an
+// unchanged configuration, still in quota-cache mode, while a wave step's
+// reads wait on fetchSem. The reads still confirm every account, but the
+// Reconfigure cancelled the wave and queued a reconciliation that writes the
+// corrected order itself. The superseded step must write nothing.
+func TestCacheWaveStepSupersededByReconfigureWritesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		env := newRestartEnv(t)
+		cfg := env.eng.cfg
+		writeCacheEntries(t, cfg.QuotaCachePath, restartEntries(baseTime.Add(-40*time.Minute)))
+		env.restart()
+		env.assertPhysical(restartFileOrder())
+		writeCacheEntries(t, cfg.QuotaCachePath, restartEntries(baseTime))
+		savesBefore := env.host.saveCount()
+
+		done := blockWaveStep(t, env, 5*time.Second)
+		env.eng.Reconfigure(cfg) // its reconcile stays queued
+		releaseFetchSem(env)
+		<-done
+		// The superseded step publishes nothing, so read engine state directly.
+		env.eng.mu.Lock()
+		for _, a := range restartPool {
+			if state := env.eng.accounts["idx-"+a.name].resetState; state != ResetConfirmed {
+				t.Errorf("%s reset_state after the step's reads = %s, want confirmed", a.name, state)
+			}
+		}
+		env.eng.mu.Unlock()
+		if got := env.host.saveCount() - savesBefore; got != 0 {
+			t.Fatalf("superseded wave step saved %d times, want 0", got)
+		}
+
+		env.async.drain()
+		env.assertPhysical(restartCorrect())
+		if got := env.host.saveCount() - savesBefore; got != len(restartPool) {
+			t.Fatalf("saves by the reconfiguration's reconcile = %d, want %d (one per account)", got, len(restartPool))
+		}
+		if got := env.restartProviderCalls(); got != 0 {
+			t.Fatalf("cache mode made %d provider calls, want 0", got)
+		}
+	})
+}
+
+// TestCacheWaveStepSupersededByReconcileWritesNothingMidPass: a reconciliation
+// that reserves while the last (+15m) wave step's reads wait on fetchSem
+// supersedes the step. Its reads drop out, and the pass removes c. The step
+// observed nothing and must not flush while the pass's own reads are still
+// pending: that would write a provisional ranking of the pass's new roster,
+// which the pass then rewrites. The last step is used because it is the one
+// that writes whatever it holds, even with accounts still unconfirmed.
+func TestCacheWaveStepSupersededByReconcileWritesNothingMidPass(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		env := newTestEnv(t, cacheConfig(t))
+		env.addAccount("claude", "a", day(3))
+		env.addAccount("claude", "b", day(1))
+		env.addAccount("claude", "c", day(2))
+		env.reconcile() // no snapshot: provisional a=300 b=200 c=100, wave armed
+		env.assertPhysical(map[string]int{"a": 300, "b": 200, "c": 100})
+		env.clk.Advance(14 * time.Minute) // the +5s to +5m steps all miss
+		savesBefore := env.host.saveCount()
+
+		writeCacheEntries(t, env.eng.cfg.QuotaCachePath, map[string]cacheEntry{
+			"a": {resetAt: day(3), observedAt: env.clk.Now()},
+			"b": {resetAt: day(1), observedAt: env.clk.Now()},
+		})
+		env.host.removeEntry("idx-c")
+
+		stepDone := blockWaveStep(t, env, time.Minute) // the +15m step
+		// fetchSem hands a freed slot to its longest-waiting sender. This plug
+		// queues behind the step's reads and takes the slot they free, so the
+		// reconciliation's reads stay blocked until the step has finished.
+		plug := make(chan struct{})
+		go func() {
+			env.eng.fetchSem <- struct{}{}
+			close(plug)
+		}()
+		synctest.Wait()
+		reconcileDone := make(chan struct{})
+		go func() {
+			env.eng.Reconcile(context.Background())
+			close(reconcileDone)
+		}()
+		synctest.Wait() // the pass reserved, dropped c, and queued its reads
+
+		<-env.eng.fetchSem // one slot: the step's reads drop out, then the plug takes it
+		<-plug
+		<-stepDone
+		if got := env.host.saveCount() - savesBefore; got != 0 {
+			t.Fatalf("superseded wave step saved %d times while the reconciliation's reads were pending, want 0", got)
+		}
+
+		releaseFetchSem(env)
+		<-reconcileDone
+		env.assertPhysical(map[string]int{"b": 200, "a": 100})
+		if got := env.host.saveCount() - savesBefore; got != 1 {
+			t.Fatalf("saves for the pass = %d, want 1 (a 300 -> 100)", got)
+		}
+	})
 }

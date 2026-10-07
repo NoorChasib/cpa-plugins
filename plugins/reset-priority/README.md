@@ -28,7 +28,7 @@ Inspect Reset Priority's status page after discovery. Confirm the expected accou
 
 CPA's `routing.strategy: fill-first` is recommended for this hard-priority policy. Keep your existing routing settings during migration; changing routing is a separate decision.
 
-This version reads provider quota endpoints directly. Its regular reconciliation interval does not govern every read: startup, account changes, reset deadlines, recovery, and manual refresh can also cause activity. Avoid repeated manual refreshes while investigating 429s.
+By default this version reads provider quota endpoints directly (see [Optional shared quota cache](#optional-shared-quota-cache)). Its regular reconciliation interval does not govern every read: startup, account changes, reset deadlines, recovery, and manual refresh can also cause activity. Avoid repeated manual refreshes while investigating 429s.
 
 Preserve the auth directory: written priority/quarantine values live in the physical credential files. Runtime scheduling state is rebuilt after restart.
 
@@ -40,7 +40,7 @@ Preserve the auth directory: written priority/quarantine values live in the phys
 
 ## Optional shared quota cache
 
-Version 0.1.7 works independently by default. Quota Cache is **not required**.
+Version 0.1.8 works independently by default. Quota Cache is **not required**.
 
 To share quota observations, install Quota Cache and enable **use-quota-cache** in this plugin's CPA config panel:
 
@@ -50,6 +50,6 @@ use-quota-cache: true
 # quota-cache-path: plugins/data/quota-cache/snapshot.json
 ```
 
-With the toggle on, missing, stale, or failed observations wait for fresh cache data; there is no direct-provider fallback. Set `use-quota-cache: false` to restore standalone polling. A path-only configuration from preview 1 still opts in until you explicitly set the toggle false.
+With the toggle on, missing, stale, or failed observations wait for fresh cache data; there is no direct-provider fallback. Right after a CPA restart, accounts may show `unknown` briefly; see [Restarting in quota-cache mode](REFERENCE.md#restarting-in-quota-cache-mode). Set `use-quota-cache: false` to restore standalone polling. A path-only configuration from preview 1 still opts in until you explicitly set the toggle false.
 
 Auto Baseline and Token Usage do not use Quota Cache. See [shared quota setup](../../docs/quota-cache-preview.md).

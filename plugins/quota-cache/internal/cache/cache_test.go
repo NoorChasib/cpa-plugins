@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,9 +23,16 @@ type fakeFetcher struct {
 	// account details each call was handed.
 	details *client.AccountDetails
 	known   []*client.AccountDetails
+	// listErr is returned by List in place of the accounts.
+	listErr error
 }
 
-func (f *fakeFetcher) List(context.Context) ([]Account, error) { return f.accounts, nil }
+func (f *fakeFetcher) List(context.Context) ([]Account, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.accounts, nil
+}
 func (f *fakeFetcher) Fetch(_ context.Context, _ Account, known *client.AccountDetails) (Observation, error) {
 	f.calls++
 	f.known = append(f.known, known)
@@ -150,6 +159,111 @@ func TestRemovedAccountIsNotServed(t *testing.T) {
 	}
 	if _, err := client.ReadFresh(opts.Path, "claude", "one", f.now.Add(time.Minute), time.Hour); err == nil {
 		t.Fatal("removed account retained")
+	}
+}
+
+// A host that is still starting lists no credentials it can name. That is not
+// every account being removed: the snapshot, its schedule and its file stay
+// exactly as they were, consumers keep reading them, and the first complete
+// roster carries on from where the cache left off.
+func TestRosterNotReadyLeavesTheSnapshotUntouched(t *testing.T) {
+	c, f, opts := fixture(t)
+	f.accounts = append(f.accounts, Account{"codex", "two"})
+	if err := c.Step(context.Background(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written.Entries) != 2 || f.calls != 1 {
+		t.Fatalf("setup: entries=%d calls=%d", len(written.Entries), f.calls)
+	}
+
+	// Past the request spacing, so only the roster stands between this Step
+	// and a provider request. Wrapped, as a host error may be.
+	at := f.now.Add(time.Minute)
+	f.listErr = fmt.Errorf("host: %w", ErrRosterNotReady)
+	if err := c.Step(context.Background(), at); !errors.Is(err, ErrRosterNotReady) {
+		t.Fatalf("err=%v; want ErrRosterNotReady", err)
+	}
+	after, err := os.ReadFile(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("a roster that was not ready rewrote the snapshot:\nbefore %s\nafter  %s", before, after)
+	}
+	if s, err := client.Load(opts.Path); err != nil || !s.WrittenAt.Equal(written.WrittenAt) {
+		t.Fatalf("written_at moved: %v err=%v", s.WrittenAt, err)
+	}
+	if entry, err := client.ReadFresh(opts.Path, "claude", "one", at, 30*time.Minute); err != nil || entry.Percent != 95 {
+		t.Fatalf("observation stopped being served: %+v err=%v", entry, err)
+	}
+	if a := c.Activity(); a.Error != ErrRosterNotReady.Error() || !a.Waiting || !a.LastScan.Equal(f.now) || a.Accounts != 2 {
+		t.Fatalf("activity=%+v; want the wait reported and the last real scan kept", a)
+	}
+	if f.calls != 1 {
+		t.Fatalf("provider requests=%d; want 1", f.calls)
+	}
+
+	// The real roster: the account still due is polled at once, since the
+	// wait admitted no request and moved no schedule.
+	f.listErr = nil
+	if err := c.Step(context.Background(), at); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatalf("provider requests=%d; want 2", f.calls)
+	}
+	s, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{client.Key("claude", "one"), client.Key("codex", "two")} {
+		if entry := s.Entries[key]; entry.ObservedAt.IsZero() || entry.LastError != "" {
+			t.Fatalf("%s=%+v", key, entry)
+		}
+	}
+	if a := c.Activity(); a.Error != "" || a.Waiting || !a.LastScan.Equal(at) || a.Accounts != 2 {
+		t.Fatalf("activity=%+v", a)
+	}
+}
+
+// A new install has no snapshot yet. Waiting for CPA's credentials still writes
+// the empty one a first scan would, so a consumer that checks the path while
+// CPA starts finds it, and writes it only once.
+func TestRosterNotReadyStillWritesTheFirstSnapshot(t *testing.T) {
+	c, f, opts := fixture(t)
+	f.listErr = ErrRosterNotReady
+	if _, err := os.Lstat(opts.Path); !os.IsNotExist(err) {
+		t.Fatalf("setup: snapshot already exists: %v", err)
+	}
+	if err := c.Step(context.Background(), f.now); !errors.Is(err, ErrRosterNotReady) {
+		t.Fatalf("err=%v; want ErrRosterNotReady", err)
+	}
+	written, err := client.Load(opts.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.Schema != 1 || len(written.Entries) != 0 || !written.WrittenAt.Equal(f.now) {
+		t.Fatalf("snapshot=%+v; want an empty schema-1 snapshot", written)
+	}
+	if a := c.Activity(); !a.Waiting || !a.LastScan.IsZero() || a.Accounts != 0 {
+		t.Fatalf("activity=%+v; want the wait reported and no scan", a)
+	}
+	if err := c.Step(context.Background(), f.now.Add(time.Minute)); !errors.Is(err, ErrRosterNotReady) {
+		t.Fatalf("err=%v; want ErrRosterNotReady", err)
+	}
+	if s, err := client.Load(opts.Path); err != nil || !s.WrittenAt.Equal(f.now) {
+		t.Fatalf("written_at=%v err=%v; want the first write only", s.WrittenAt, err)
+	}
+	if f.calls != 0 {
+		t.Fatalf("provider requests=%d; want 0", f.calls)
 	}
 }
 
