@@ -16,7 +16,7 @@ The promoted Claude tuple is always written in canonical CLI form (`claude-cli/2
 
 ## Requirements and platform support
 
-- A CLIProxyAPI build with native plugin ABI v1 (the plugin declares RPC schema 4). Verified on **CPA v8.0.4** (`d33f63f`) in both config layouts; its compiled defaults and layout rules were audited against that build. The ABI was first audited against `v7.2.146-3-g81e1b53`.
+- A CLIProxyAPI build with native plugin ABI v1 (the plugin declares RPC schema 4). Verified on **CPA v8.0.4** (`d33f63f`) in both config layouts; its compiled defaults and layout rules were audited against that build. The `upstream` paths CPA v8.0.11 made canonical were audited against **v8.0.13** (`d7914af`); the compiled defaults are unchanged through v8.0.16. The ABI was first audited against `v7.2.146-3-g81e1b53`.
 - CPA must be able to write its own `config.yaml` (it already does so for the management console and for hashing `management.secret-key`, legacy name `remote-management.secret-key`).
 - Persistent access to the plugin directory (the default `state-dir` lives inside it).
 - Go 1.26.0 and a native C toolchain only when building from source.
@@ -32,28 +32,28 @@ Release targets are: `linux_amd64`, `linux_arm64` (manylinux2014, GLIBC <= 2.17)
 
 Start with `dry-run: true`, watch the status page until the expected candidate reaches quorum, then switch to `dry-run: false`. A complete example is in [`config.example.yaml`](config.example.yaml).
 
-**Codex caveat.** A learned Codex user-agent has no effect until you set `oauth.providers.codex.disable-codex-cloaking: true` (legacy name `codex.disable-codex-cloaking`); CPA otherwise forces its compiled Codex UA on every outbound request. The status page warns while the flag is off and reports where the flag was read from.
+**Codex caveat.** A learned Codex user-agent has no effect until you set `disable-codex-cloaking: true`: `upstream.codex.disable-codex-cloaking` on CPA v8.0.11+, `oauth.providers.codex.disable-codex-cloaking` before that (legacy name `codex.disable-codex-cloaking`); CPA otherwise forces its compiled Codex UA on every outbound request. The status page warns while the flag is off and reports where the flag was read from.
 
 **Compiled defaults and CPA upgrades.** Only before the first promotion, while `config.yaml` has no baseline block, does the plugin have to assume what CPA is currently using; it assumes the compiled default of the audited CPA build, v8.0.4: `claude-cli/2.1.280 (external, cli)` / `0.112.1` / `v26.3.0` and `codex-tui/0.154.0 (...)` (shown as "Assumed CPA build" in status). After the first promotion the block exists, CPA reads it instead of its compiled constant, and the plugin compares against that on-disk value from then on. Upgrading the CPA image therefore never resets or lowers an already-promoted baseline, and no setting needs adjusting. In the rare case that a newer CPA build compiles in a default above your client's version while the block is still absent, the plugin writes your client's real tuple: that is a correction to what you actually run, not a downgrade. `claude-min-version` / `codex-min-version` are floors against spoofed ancient versions and can stay at their defaults; `require-explicit-baseline: true` is an optional stricter mode for operators who prefer to write the first baseline by hand.
 
 ## Config layouts (CPA v8)
 
-CPA v8 reads two `config.yaml` layouts, leaf by leaf. The plugin reads and writes these keys:
+CPA v8 reads two `config.yaml` layouts, leaf by leaf, and CPA v8.0.11 moved some v8 keys under a new `upstream` section. The plugin reads and writes these keys:
 
-| v8 layout (`config-version: 8`) | Legacy name (still read) |
-| --- | --- |
-| `oauth.providers.claude.header-defaults.{user-agent,package-version,runtime-version}` | `claude-header-defaults.{...}` |
-| `oauth.providers.codex.header-defaults.user-agent` | `codex-header-defaults.user-agent` |
-| `oauth.providers.codex.disable-codex-cloaking` (read only) | `codex.disable-codex-cloaking` |
-| `plugins.configs.auto-baseline` | same: plugin settings stay at the root in both layouts |
+| CPA v8.0.11+ canonical | v8 layout (`config-version: 8`; an alias from v8.0.11) | Legacy name (still read) |
+| --- | --- | --- |
+| `upstream.claude.header-defaults.{user-agent,package-version,runtime-version}` | `oauth.providers.claude.header-defaults.{...}` | `claude-header-defaults.{...}` |
+| not moved | `oauth.providers.codex.header-defaults.user-agent` | `codex-header-defaults.user-agent` |
+| `upstream.codex.disable-codex-cloaking` (read only) | `oauth.providers.codex.disable-codex-cloaking` (read only) | `codex.disable-codex-cloaking` |
+| not moved | `plugins.configs.auto-baseline` | same: plugin settings stay at the root in every layout |
 
-- **Precedence is per leaf.** A present v8 leaf wins over its legacy name, even when it is `false`, `0`, blank, or null (a blank or null value then means CPA's compiled default). A legacy leaf without a v8 counterpart still applies. The plugin resolves each value the same way (v8, then legacy, then the compiled default) and reports where each one came from.
-- **Where a promotion is written**, per provider: the existing v8 block; otherwise the existing legacy block; otherwise the v8 path if the file declares `config-version: 8`; otherwise the legacy path. The plugin never creates a legacy key beside its v8 counterpart, because CPA deletes such a key on its next load. When it writes a v8 block it also removes the legacy keys it superseded, which CPA would otherwise delete by rewriting the whole file.
+- **Precedence is per leaf.** A present leaf wins over every lower-precedence name of the same setting, even when it is `false`, `0`, blank, or null (a blank or null value then means CPA's compiled default): `upstream` first, then the v8 name, then the legacy name. A leaf without a higher-precedence counterpart still applies. The plugin resolves each value the same way and reports where each one came from (`upstream`, `v8`, `legacy`, or `default`).
+- **Where a promotion is written**, per provider: for Claude, `upstream.claude.header-defaults` whenever the file has an `upstream` section (only CPA v8.0.11+ writes one; the plugin cannot ask CPA for its version, so the file is the evidence). Otherwise the existing v8 block; otherwise the existing legacy block; otherwise the v8 path if the file declares `config-version: 8`; otherwise the legacy path. Codex is never written under `upstream`. The plugin never creates a key beside a higher-precedence counterpart, because CPA deletes such a key on its next load. When it writes a block it also removes the lower-precedence keys it superseded, and any mapping that leaves empty, which CPA would otherwise delete by rewriting the whole file. **After a CPA downgrade** to v8.0.10 or earlier, which ignore `upstream` silently, remove the `upstream` section (moving its Claude block back to `oauth.providers.claude.header-defaults`); otherwise the plugin keeps writing values that CPA does not apply.
 - **Loading never migrates**, and neither does `config-version: 8` on its own. On every load CPA only deletes legacy keys that conflict with a present v8 key, and then rewrites the file (4-space indentation, anchors and merge keys expanded). Saves through `/v0/management` keep the file's layout.
-- **Any write through `/v8/management` migrates the whole file** to the v8 layout, and CPA's Management Center panel only uses `/v8/management`. Saving anything in the panel, including installing or updating a plugin from the Plugin Store, moves `claude-header-defaults` to `oauth.providers.claude.header-defaults` and so on. auto-baseline 0.1.5 follows the move; 0.1.4 does not (see [upgrading from 0.1.4](docs/install-docker-compose.md#upgrading-from-014-to-015-cpa-v8)).
+- **Any write through `/v8/management` migrates the whole file** to the v8 layout, and CPA's Management Center panel only uses `/v8/management`. Saving anything in the panel, including installing, updating or uninstalling a plugin from the Plugin Store, moves `claude-header-defaults` to `oauth.providers.claude.header-defaults` and so on; on CPA v8.0.11+ it moves the Claude block on to `upstream.claude.header-defaults` and Codex cloaking to `upstream.codex.disable-codex-cloaking`. auto-baseline 0.1.6 follows both moves. 0.1.5 follows only the first: on CPA v8.0.11+ its Claude promotions pause as `promotion_not_effective` (see [troubleshooting](docs/troubleshooting.md#promotion_not_effective-right-after-a-panel-save-on-cpa-v8011)); 0.1.4 follows neither (see [upgrading from 0.1.4](docs/install-docker-compose.md#upgrading-from-014-to-015-cpa-v8)).
 - **Scope changes with the layout.** In the v8 layout, values under `oauth.providers.*` apply to OAuth credentials only. The header defaults and `disable-codex-cloaking` no longer reach API-key credentials (`api-keys.claude`, legacy `claude-api-key`), while the legacy root keys apply to both. This is CPA's behavior; the plugin does not work around it.
 
-Status reports, per provider, `effective_baseline.sources` (`v8`, `legacy`, or `default` for each value), `effective_baseline.write_target` (the dotted path a promotion writes), and for Codex `disable_codex_cloaking.{value,source}`. `config_file.layout` is `v8` or `legacy`, and each history entry records its `target`.
+Status reports, per provider, `effective_baseline.sources` (`upstream`, `v8`, `legacy`, or `default` for each value), `effective_baseline.write_target` (the dotted path a promotion writes), and for Codex `disable_codex_cloaking.{value,source}`. `config_file.layout` is `v8` or `legacy`, and each history entry records its `target`.
 
 **Loop guard.** Before writing, the plugin re-reads the rendered bytes with these rules; unless CPA would load exactly the promoted tuple, and nothing else the plugin reads changes, nothing is written (`promotion_not_effective`) and the provider pauses until `config.yaml` changes. After a write, a later read that shows a different tuple means the file was rewritten without the promotion (for example a panel save restoring an older value). The promotion is then recorded as not effective (`not_effective_at`), the provider shows `paused`, and status warns. The plugin does not retry: **Clear pending** (`POST .../reset`), a change to a write-affecting plugin setting such as `dry-run`, or restoring the promoted tuple by hand resumes it. The pause survives restarts.
 
@@ -71,7 +71,7 @@ All keys live under `plugins.configs.auto-baseline`.
 | `config-path` | discovered | Path of CPA's `config.yaml`. Default: the `-config` flag of the running CPA process (Linux, via `/proc/self/cmdline`), else `<cwd>/config.yaml` (`/CLIProxyAPI/config.yaml` in the official image). |
 | `state-dir` | `plugins/auto-baseline` | Directory for `state.json`; relative paths resolve against the CPA working directory. |
 | `backup-dir` | = `state-dir` | Directory that receives `config.yaml.auto-baseline.bak` before each write. Must be writable or nothing is promoted. |
-| `manage-claude` | `true` | Learn and promote the Claude header defaults (`oauth.providers.claude.header-defaults`, legacy `claude-header-defaults`). |
+| `manage-claude` | `true` | Learn and promote the Claude header defaults (`upstream.claude.header-defaults` on CPA v8.0.11+, `oauth.providers.claude.header-defaults`, legacy `claude-header-defaults`). |
 | `manage-codex` | `true` | Learn and promote the Codex header-defaults `user-agent` (`oauth.providers.codex.header-defaults`, legacy `codex-header-defaults`). |
 | `claude-entrypoints` | `[cli, sdk-cli, claude-vscode, sdk-ts, sdk-py]` | Entrypoints whose fingerprints may be learned. |
 | `require-claude-code-beta` | `true` | Require `claude-code-20250219` in `anthropic-beta`. The plugin sees the *inbound* header: a count_tokens or helper request that arrives without the beta is rejected under `claude_code_beta_missing` and does not count (CPA itself adds the beta on the *outbound* count_tokens request, `claude_executor_request.go:209-217,796`, which the plugin never sees). Requests that carry it count normally. |
@@ -203,11 +203,11 @@ Each layout gets a throwaway container published on `127.0.0.1` only, with `conf
 - [ ] Status shows `config_file.exists` and `config_file.writable` as `true` and the expected path.
 - [ ] With `dry-run: true`, a few real requests produce a pending candidate with the real client version, package-version and runtime-version.
 - [ ] After quorum, history shows a dry-run promotion with the expected tuple.
-- [ ] Status `effective_baseline.sources` and `write_target` match the layout of `config.yaml` (`v8` and `oauth.providers.claude.header-defaults` after any panel save).
+- [ ] Status `effective_baseline.sources` and `write_target` match the layout of `config.yaml` after any panel save: `upstream` and `upstream.claude.header-defaults` on CPA v8.0.11+, `v8` and `oauth.providers.claude.header-defaults` before that.
 - [ ] With `dry-run: false`, the promoted values appear in that block, CPA logs `config file changed, reloading`, and status shows the promotion confirmed (no `awaiting_reload`, no `paused`).
 - [ ] After any CPA upgrade, `claude-min-version` / `codex-min-version` are at least the new build's compiled defaults.
 - [ ] Requests for version-gated models now succeed.
-- [ ] For Codex, `oauth.providers.codex.disable-codex-cloaking: true` (legacy `codex.disable-codex-cloaking`) is set before expecting any effect.
+- [ ] For Codex, `disable-codex-cloaking: true` is set before expecting any effect (`upstream.codex.` on CPA v8.0.11+, `oauth.providers.codex.` before that, legacy `codex.`).
 - [ ] If Claude API-key credentials relied on the header defaults, they still receive them (v8-layout values apply to OAuth credentials only).
 
 ## License

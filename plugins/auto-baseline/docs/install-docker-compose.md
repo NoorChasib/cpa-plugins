@@ -41,9 +41,14 @@ plugins:
       dry-run: true
 ```
 
-Do not add a Claude header-defaults block unless you already have one; the plugin treats an absent block as the compiled default and creates it on first promotion, as `oauth.providers.claude.header-defaults` in a `config-version: 8` file and as `claude-header-defaults` otherwise. If you want Codex learning to have any effect, also set the cloaking flag, in the layout your file uses:
+Do not add a Claude header-defaults block unless you already have one; the plugin treats an absent block as the compiled default and creates it on first promotion: as `upstream.claude.header-defaults` in a file with an `upstream` section (CPA v8.0.11+), as `oauth.providers.claude.header-defaults` in another `config-version: 8` file, and as `claude-header-defaults` otherwise. If you want Codex learning to have any effect, also set the cloaking flag, in the layout your file uses:
 
 ```yaml
+# CPA v8.0.11+ (the file has an upstream section)
+upstream:
+  codex:
+    disable-codex-cloaking: true
+
 # v8 layout (config-version: 8)
 oauth:
   providers:
@@ -55,7 +60,7 @@ codex:
   disable-codex-cloaking: true
 ```
 
-Any save from CPA's Management Center panel, including a Plugin Store install, rewrites the whole file in the v8 layout; auto-baseline 0.1.5 reads and writes both (see [Config layouts](../REFERENCE.md#config-layouts-cpa-v8)).
+Any save from CPA's Management Center panel, including a Plugin Store install, rewrites the whole file in the v8 layout (on CPA v8.0.11+ with the Claude block under `upstream`); auto-baseline 0.1.6 reads and writes every layout (see [Config layouts](../REFERENCE.md#config-layouts-cpa-v8)).
 
 ## 3. Choose an installation method
 
@@ -73,7 +78,7 @@ docker exec <container> uname -m     # x86_64 -> linux_amd64, aarch64 -> linux_a
 ### Install a release archive
 
 ```bash
-VERSION=0.1.5          # release version without the leading v
+VERSION=0.1.6          # release version without the leading v
 PLATFORM=linux_amd64   # or linux_arm64
 curl --fail --silent --show-error --location --remote-name \
   "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v${VERSION}/auto-baseline_${VERSION}_${PLATFORM}.zip"
@@ -103,7 +108,7 @@ docker restart <container>
 docker logs <container> 2>&1 | grep -E "auto-baseline|pluginhost"
 # expect:
 #   pluginhost: plugin loaded plugin_id=auto-baseline ...
-#   pluginhost: plugin registered plugin_id=auto-baseline plugin_name=Auto Baseline version=0.1.5 ...
+#   pluginhost: plugin registered plugin_id=auto-baseline plugin_name=Auto Baseline version=0.1.6 ...
 #   auto-baseline started: learning enabled (dry-run=true, config=/CLIProxyAPI/config.yaml via cwd default)
 
 curl --fail --silent --show-error -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY}" \
@@ -124,6 +129,15 @@ curl --fail --silent --show-error -H "Authorization: Bearer ${CPA_MANAGEMENT_KEY
 ## Manual update
 
 Copy the new `auto-baseline.so` over the old one and restart the container. A same-path reload without a restart is refused by design (see troubleshooting).
+
+## Upgrading from 0.1.5 to 0.1.6 (CPA v8.0.11+)
+
+On CPA v8.0.11 and later, once a panel save has moved the Claude block to `upstream.claude.header-defaults`, 0.1.5 writes a path CPA ignores and deletes, and pauses Claude with `promotion_not_effective` (see [troubleshooting](troubleshooting.md#promotion_not_effective-right-after-a-panel-save-on-cpa-v8011)). It never writes in a loop, so no dry-run step is needed:
+
+1. **Update the plugin** to 0.1.6 (Plugin Store **Update**, or replace the library as above and restart CPA).
+2. **Check status:** `version` is `0.1.6`, Claude's `sources` are `upstream` and its `effective_baseline` shows the version CPA actually serves, `write_target` is `upstream.claude.header-defaults`, and `disable_codex_cloaking` shows source `upstream` if you set it there.
+   The pause warning left by 0.1.5 still names `oauth.providers.claude.header-defaults` and "2.1.280 from default"; that text is 0.1.5's misreading and is expected until the next step.
+3. **Resume Claude:** press **Clear pending** (or change a plugin setting such as `dry-run`) once to lift the pause left by 0.1.5. Do this only after the update: pressed while 0.1.5 is still installed, it writes the alias path again and pauses again. The next promotion is written to the upstream block and shows as confirmed after CPA's reload, with no second config write in CPA's log.
 
 ## Upgrading from 0.1.4 to 0.1.5 (CPA v8)
 
@@ -149,4 +163,4 @@ If Claude API-key credentials relied on the header defaults, note that after the
 2. Delete `/CLIProxyAPI/plugins/auto-baseline.so` and, optionally, `/CLIProxyAPI/plugins/auto-baseline/` (state and backup).
 3. Restart the container.
 
-The promoted header-defaults values stay in `config.yaml` (under `oauth.providers.*.header-defaults` or the legacy `claude-header-defaults` / `codex-header-defaults`); remove or edit them by hand if you want CPA's compiled defaults back.
+The promoted header-defaults values stay in `config.yaml` (under `upstream.claude.header-defaults`, `oauth.providers.*.header-defaults`, or the legacy `claude-header-defaults` / `codex-header-defaults`); remove or edit them by hand if you want CPA's compiled defaults back.

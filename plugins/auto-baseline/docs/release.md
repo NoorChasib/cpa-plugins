@@ -6,8 +6,8 @@ From the repository root, after committing the version bump and required changes
 
 ```sh
 git push origin main
-git tag auto-baseline/v0.1.5
-git push origin auto-baseline/v0.1.5
+git tag auto-baseline/v0.1.6
+git push origin auto-baseline/v0.1.6
 ```
 
 Use a fresh version for each release, and add `docs/release-notes-<version>.md` describing it. The workflow builds and tests only this candidate with the other published plugins, publishes its Linux amd64 ZIP plus checksums and release metadata, and updates only its entry in both combined catalogs. A normal branch push runs CI without publishing.
