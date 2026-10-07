@@ -46,16 +46,16 @@
         "Claude",
         "Codex"
       ],
-      "version": "0.1.5",
+      "version": "0.1.6",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v0.1.5/auto-baseline_0.1.5_linux_amd64.zip",
-            "sha256": "43024ca020cd58fce645dbbd05171d28d47ef9a12193803cee26735fd9ceffe4",
-            "size": 4294281
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/auto-baseline/v0.1.6/auto-baseline_0.1.6_linux_amd64.zip",
+            "sha256": "48ac202bae898a020203f34adecef3a9d3ea361081a5471f687c201905f5bbf2",
+            "size": 4298326
           }
         ]
       }
