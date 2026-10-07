@@ -146,16 +146,16 @@
         "Claude",
         "Codex"
       ],
-      "version": "0.1.7",
+      "version": "0.1.8",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/reset-priority/v0.1.7/reset-priority_0.1.7_linux_amd64.zip",
-            "sha256": "12377308da0362dfe23a211c1db268508e9a5dfe56db89b873028110d8eebb09",
-            "size": 4193547
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/reset-priority/v0.1.8/reset-priority_0.1.8_linux_amd64.zip",
+            "sha256": "cb6ef405ea2e9ed844617f5fbaa89b00f03eb9b66b4de3cae6d761d449eeab94",
+            "size": 4206686
           }
         ]
       }
