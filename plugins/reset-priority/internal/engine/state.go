@@ -135,6 +135,15 @@ func (a *account) hasFutureReset(now time.Time) bool {
 	return a.resetAt.After(now)
 }
 
+// knownResetPassed reports whether a healthy account's known (confirmed or
+// stale) reset has passed, so the account must be demoted to
+// awaiting_new_window.
+func (a *account) knownResetPassed(now time.Time) bool {
+	return a.health == HealthHealthy &&
+		(a.resetState == ResetConfirmed || a.resetState == ResetStale) &&
+		!a.resetAt.After(now)
+}
+
 // hasPostSentinelRecoveryEvidence distinguishes genuine CPA/operator recovery
 // from the audited host.auth.save side effect that rebuilds a just-quarantined
 // runtime record as active. A plugin-written sentinel records its completion

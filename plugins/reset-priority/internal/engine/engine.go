@@ -38,9 +38,19 @@ const (
 	ReconcileResultError ReconcileResult = "error"
 )
 
-// resetRetryDelays is the bounded reset-specific / recovery retry schedule
-// (offsets from the triggering event). After the last attempt the normal
-// reconciliation interval takes over (spec sections 6A.5 and 10).
+// resetRetryDelays is the bounded retry schedule (offsets from the triggering
+// event). It serves three cases, all decided by retryReasonLocked:
+//   - awaiting_new_window after a known reset expired (spec section 10);
+//   - recovering accounts that still need a fresh post-recovery reset
+//     (spec section 6A.5);
+//   - in quota-cache mode only, first confirmation of healthy accounts this
+//     process has never observed (after a restart, or when an account is
+//     added). This case runs as one engine-wide wave rather than a ladder per
+//     account (see scheduleConfirmWaveLocked). Each attempt is a local
+//     snapshot read, never a provider request, and an account leaves the wave
+//     at its first observation.
+//
+// After the last attempt the normal reconciliation interval takes over.
 var resetRetryDelays = []time.Duration{
 	5 * time.Second,
 	30 * time.Second,
@@ -118,6 +128,11 @@ type Engine struct {
 	// waits for already-admitted calls and no stale call can begin afterward.
 	// The read side preserves the normal four-way provider concurrency.
 	providerCallMu sync.RWMutex
+	// confirmMu serializes the steps of the first-confirmation wave, so a step
+	// never overlaps another one (see confirmWaveStep). A step takes it before
+	// any other lock and holds it through its reads and flush; nothing else
+	// takes it.
+	confirmMu sync.Mutex
 
 	cfg       config.Config
 	configSeq uint64
@@ -138,6 +153,14 @@ type Engine struct {
 	deadlineSeq     uint64
 	healthPollTimer clock.Timer
 	healthPollSeq   uint64
+	// confirmTimers, confirmSeq and confirmHeld drive the quota-cache
+	// first-confirmation wave (see scheduleConfirmWaveLocked). confirmSeq
+	// invalidates the steps of a cancelled or superseded wave. confirmHeld
+	// records that a step confirmed an account whose ranking the wave has not
+	// written yet.
+	confirmTimers []clock.Timer
+	confirmSeq    uint64
+	confirmHeld   bool
 
 	lastRosterError string
 	status          Snapshot
@@ -219,6 +242,7 @@ func (e *Engine) stopLocked() {
 		e.healthPollTimer.Stop()
 		e.healthPollTimer = nil
 	}
+	e.cancelConfirmWaveLocked()
 	for _, acct := range e.accounts {
 		acct.cancelRetriesLocked()
 	}
@@ -279,6 +303,12 @@ func (e *Engine) Reconfigure(cfg config.Config) {
 	e.configSeq++
 	configSeq := e.configSeq
 	e.stopped = !cfg.Enabled
+	// The first-confirmation wave belongs to the configuration that armed it
+	// (quota-cache mode and the managed providers). The reconciliation queued
+	// below persists anything a running step already applied and re-arms the
+	// wave if an account is still unconfirmed, so no step of the old wave may
+	// write in between.
+	e.cancelConfirmWaveLocked()
 	// Invalidate retry work as soon as a provider is opted out, rather than
 	// waiting for the asynchronously scheduled reconciliation to prune retained
 	// state. A rapid opt-in must not revive callbacks scheduled before opt-out.
@@ -345,6 +375,11 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 	}
 	reservedTargets := e.reconcileFetchTargetsLocked()
 	e.reserveReconcileFetchesLocked(reservedTargets)
+	// This pass reads every account itself, so it replaces any first-confirmation
+	// wave, just as the reservation replaces per-account ladders. The tail below
+	// arms a new wave if an account is still unconfirmed, on success and on a
+	// deferred roster alike.
+	e.cancelConfirmWaveLocked()
 	e.mu.Unlock()
 	reservationsHeld := true
 	defer func() {
@@ -437,6 +472,7 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 		return ReconcileResultNoOp
 	}
 	e.scheduleRecoveryRetriesLocked()
+	e.scheduleConfirmWaveLocked()
 	e.scheduleNextReconcileLocked()
 	e.scheduleHealthPollLocked()
 	e.publishStatusLocked(e.clk.Now())
@@ -813,9 +849,16 @@ func (e *Engine) fetchOneInternal(
 	for {
 		e.mu.Lock()
 		acct := e.accounts[authIndex]
+		// A retry or first-confirmation wave attempt re-checks its reason here,
+		// after any wait on fetchSem. Its caller checked it before that wait, but a
+		// Reconfigure to standalone mode can land in between without bumping
+		// retrySeq. Without this check, a cache-mode first-confirmation read would
+		// then read credentials and make a provider request that no standalone
+		// retry reason justifies.
 		if acct == nil || e.stopped || !e.cfg.Manages(acct.provider) ||
 			acct.health == HealthQuarantined || e.recoverySentinelPendingLocked(acct) ||
-			(expectedRetrySeq != noRetrySequence && acct.retrySeq != expectedRetrySeq) {
+			(expectedRetrySeq != noRetrySequence &&
+				(acct.retrySeq != expectedRetrySeq || !e.retryReasonLocked(acct))) {
 			e.mu.Unlock()
 			return
 		}
@@ -1175,20 +1218,22 @@ func (e *Engine) flushInternal(ctx context.Context, retryMode awaitingRetryMode)
 func (e *Engine) demoteExpiredLocked(now time.Time) bool {
 	changed := false
 	for _, acct := range e.accounts {
-		if acct.health != HealthHealthy {
-			continue
-		}
-		if acct.resetState != ResetConfirmed && acct.resetState != ResetStale {
-			continue
-		}
-		if acct.resetAt.After(now) {
-			continue
-		}
-		if e.enterAwaitingNewWindowLocked(acct) {
+		if acct.knownResetPassed(now) && e.enterAwaitingNewWindowLocked(acct) {
 			changed = true
 		}
 	}
 	return changed
+}
+
+// knownResetPassedLocked reports whether demoteExpiredLocked would demote any
+// account now. Caller holds e.mu.
+func (e *Engine) knownResetPassedLocked(now time.Time) bool {
+	for _, acct := range e.accounts {
+		if acct.knownResetPassed(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) collectAwaitingRetriesLocked() []retrySchedule {
@@ -1267,10 +1312,198 @@ func (e *Engine) scheduleRecoveryRetriesLocked() {
 	}
 }
 
+// unconfirmedCacheAccountLocked reports whether acct awaits first confirmation
+// from the quota cache: quota-cache mode, a managed provider, healthy, reset
+// state unknown, and never observed by this process. That is every account
+// after a CPA restart and any newly added account whose cache entry was
+// missing, stale, or failed. Standalone mode has no such accounts, because
+// there each attempt would be a provider request. Caller holds e.mu.
+//
+// Recovering and awaiting_new_window accounts are excluded: their own
+// per-account ladders cover them. The observedAt check excludes an account
+// whose cache entry was fresh but had no weekly window (zero reset_at):
+// HasWeekly is false, so the state stays unknown, but observedAt is set.
+// Re-reading that same answer after every reconciliation adds churn and no
+// information.
+func (e *Engine) unconfirmedCacheAccountLocked(acct *account) bool {
+	return e.cfg.QuotaCachePath != "" && e.cfg.Manages(acct.provider) &&
+		acct.health == HealthHealthy && acct.resetState == ResetUnknown && acct.observedAt.IsZero()
+}
+
+// cancelConfirmWaveLocked stops the first-confirmation wave and invalidates any
+// step callback that already fired. A held ranking is dropped from the wave's
+// bookkeeping only: it stays in account state, and every caller that cancels a
+// wave with something held either flushes live state next (a reconciliation,
+// including the one a Reconfigure queues) or stops the engine. Caller holds
+// e.mu.
+func (e *Engine) cancelConfirmWaveLocked() {
+	e.confirmSeq++
+	e.confirmHeld = false
+	for _, t := range e.confirmTimers {
+		t.Stop()
+	}
+	e.confirmTimers = nil
+}
+
+// scheduleConfirmWaveLocked arms the first-confirmation wave after a
+// reconciliation, in quota-cache mode only, when any account is still
+// unconfirmed (see unconfirmedCacheAccountLocked). Without it nothing re-reads
+// the cache for those accounts until reconcile-interval. Caller holds e.mu.
+//
+// The wave is one engine-wide schedule at the resetRetryDelays offsets, not a
+// ladder per account. Each step re-reads every still-unconfirmed account, and
+// the wave writes the resulting order once: when no account is left
+// unconfirmed, or at its last step (see confirmWaveStep). Per-account ladders,
+// or a write after every step, would persist each partial ranking on the way:
+// up to N squared whole-document saves for per-account ladders, and up to one
+// full reshuffle per step for the wave, even when the final order equals the
+// physical one.
+//
+// It is called after this pass's fetches, so the wave has no immediate step.
+// It never touches per-account ladders, so the awaiting_new_window and
+// recovery ladders that flushAfterFetch and scheduleRecoveryRetriesLocked just
+// armed, including an awaiting account's immediate attempt, are left alone.
+func (e *Engine) scheduleConfirmWaveLocked() {
+	e.cancelConfirmWaveLocked()
+	if e.stopped || !e.anyUnconfirmedCacheAccountLocked() {
+		return
+	}
+	seq := e.confirmSeq
+	for i, delay := range resetRetryDelays {
+		last := i == len(resetRetryDelays)-1
+		e.confirmTimers = append(e.confirmTimers, e.afterFunc(delay, func() { e.confirmWaveStep(seq, last) }))
+	}
+}
+
+func (e *Engine) anyUnconfirmedCacheAccountLocked() bool {
+	for _, acct := range e.accounts {
+		if e.unconfirmedCacheAccountLocked(acct) {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmWaveStep runs one step of first-confirmation wave seq; last marks its
+// final (+15m) step. It snapshots every still-unconfirmed account with its
+// retry generation and reads them all, bounded by fetchSem like any fetch.
+// Each read goes through fetchOneInternal as a retry attempt, so it is dropped
+// if a full pass or another ladder took the account over (retrySeq changed) or
+// the account no longer qualifies, for example after a Reconfigure to
+// standalone mode. There is no pre-fetch flush: that exists only to verify a
+// recovering account's sentinel, and these accounts are healthy.
+//
+// The wave writes once. A step that confirms an account holds the new ranking
+// in account state instead of writing it, and the wave flushes when no account
+// is left unconfirmed, or at its last step. Quota Cache refills its snapshot
+// over minutes after a restart, so a write after every step would persist one
+// partial ranking per step, each with the confirmed accounts above every
+// unconfirmed one. Any other flush in the meantime (a deadline, a retry, a
+// reconciliation) writes the held ranking too, because it writes live state.
+//
+// A held confirmation still needs its exact-deadline timer, so holding re-arms
+// it. That is safe only while no known reset has passed: re-arming considers
+// future resets only, so it would cancel a deadline timer that is due without
+// demoting that account. When a reset has passed, the step flushes instead,
+// which demotes and writes it.
+//
+// A step that observed nothing writes nothing. Neither does a step superseded
+// during its reads: a reconciliation, a Reconfigure (which queues one), or Stop
+// cancelled the wave. A reconciliation flushes after its reservation, so it
+// persists anything the step applied before then, and the reservation makes
+// the step's later reads discard their results.
+//
+// confirmMu keeps steps from overlapping. Without it, a step's own
+// cancellation once nothing is left unconfirmed would look like a supersede to
+// an older step still finishing its reads, and the only flush could be lost.
+func (e *Engine) confirmWaveStep(seq uint64, last bool) {
+	e.confirmMu.Lock()
+	defer e.confirmMu.Unlock()
+
+	ctx := context.Background()
+	type target struct {
+		authIndex string
+		retrySeq  int
+	}
+	e.mu.Lock()
+	if e.stopped || seq != e.confirmSeq {
+		e.mu.Unlock()
+		return
+	}
+	var targets []target
+	for authIndex, acct := range e.accounts {
+		if e.unconfirmedCacheAccountLocked(acct) {
+			targets = append(targets, target{authIndex: authIndex, retrySeq: acct.retrySeq})
+		}
+	}
+	e.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.fetchOneInternal(ctx, t.authIndex, false, t.retrySeq)
+		}()
+	}
+	wg.Wait()
+
+	e.mu.Lock()
+	if e.stopped || seq != e.confirmSeq {
+		e.mu.Unlock()
+		return
+	}
+	// Every applied cache answer sets observedAt, including a fresh entry with
+	// no weekly window. Unlike unconfirmedCacheAccountLocked, this does not
+	// depend on the configuration or on health.
+	for _, t := range targets {
+		if acct := e.accounts[t.authIndex]; acct != nil && !acct.observedAt.IsZero() {
+			e.confirmHeld = true
+			break
+		}
+	}
+	now := e.clk.Now()
+	done := !e.anyUnconfirmedCacheAccountLocked()
+	if !e.confirmHeld || (!done && !last && !e.knownResetPassedLocked(now)) {
+		if e.confirmHeld {
+			e.rescheduleDeadlineLocked(now)
+		}
+		if done || last {
+			e.cancelConfirmWaveLocked()
+		}
+		// Publish the attempts' last_error and any held confirmations.
+		e.publishStatusLocked(now)
+		e.mu.Unlock()
+		return
+	}
+	e.confirmHeld = false
+	e.mu.Unlock()
+
+	e.flushAfterFetch(ctx)
+
+	e.mu.Lock()
+	if !e.stopped && seq == e.confirmSeq && (last || !e.anyUnconfirmedCacheAccountLocked()) {
+		e.cancelConfirmWaveLocked()
+	}
+	e.mu.Unlock()
+}
+
+// retryReasonLocked reports whether an account still has a reason for a
+// bounded retry attempt: recovery or a new window after an expired reset (the
+// per-account ladders), or first confirmation from the quota cache (the
+// engine-wide wave, see unconfirmedCacheAccountLocked). Caller holds e.mu.
+func (e *Engine) retryReasonLocked(acct *account) bool {
+	return acct.health == HealthRecovering ||
+		acct.resetState == ResetAwaitingNewWindow ||
+		e.unconfirmedCacheAccountLocked(acct)
+}
+
 // startRetrySequenceLocked schedules the bounded +5s/+30s/+2m/+5m/+15m retry
 // sequence for one account, optionally with an immediate asynchronous first
-// attempt (used at reset deadlines). Retries only ever try to obtain a fresh
-// observation; they never re-promote with stale data.
+// attempt (used at reset deadlines). Callers arm it for awaiting_new_window
+// and recovering accounts; each attempt re-checks retryReasonLocked, so the
+// ladder goes quiet once its reason is gone. Retries only ever try to obtain a
+// fresh observation; they never re-promote with stale data.
 func (e *Engine) startRetrySequenceLocked(acct *account, immediate bool) {
 	acct.cancelRetriesLocked()
 	seq := acct.retrySeq
@@ -1301,12 +1534,14 @@ func (e *Engine) retryFetch(authIndex string, seq int) {
 	e.flushAfterFetch(ctx)
 }
 
+// retryStillNeeded reports whether retry generation seq is still current and
+// the account still has a retry reason (see retryReasonLocked).
 func (e *Engine) retryStillNeeded(authIndex string, seq int) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	acct := e.accounts[authIndex]
 	return acct != nil && !e.stopped && e.cfg.Manages(acct.provider) && seq == acct.retrySeq &&
-		(acct.health == HealthRecovering || acct.resetState == ResetAwaitingNewWindow)
+		e.retryReasonLocked(acct)
 }
 
 // onDeadline handles one exact reset timer generation. A callback that fired

@@ -41,6 +41,13 @@ type Fetcher interface {
 	Fetch(ctx context.Context, account Account, known *client.AccountDetails) (Observation, error)
 }
 
+// ErrRosterNotReady is returned by a Fetcher's List when the host's auth
+// roster is not yet authoritative: the host is still starting and cannot yet
+// say which credentials exist. Step must not change any entry or schedule on
+// it. An account missing from such a roster has not been removed, so pruning
+// on it would discard every saved observation, backoff and account detail.
+var ErrRosterNotReady = errors.New("waiting for CPA to load credentials")
+
 type RateLimited struct{ RetryAfter time.Time }
 
 func (RateLimited) Error() string { return "provider rate limited" }
@@ -67,6 +74,9 @@ type Activity struct {
 	LastScan time.Time `json:"last_scan"`
 	Accounts int       `json:"accounts"`
 	Error    string    `json:"error,omitempty"`
+	// Waiting marks Error as ErrRosterNotReady: an expected wait while the
+	// host starts, not a failed check.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 // Activity stays responsive while Step is inside a provider callback. The
@@ -175,9 +185,10 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	defer func() {
 		c.activityMu.Lock()
 		defer c.activityMu.Unlock()
-		c.activity.Error = ""
+		c.activity.Error, c.activity.Waiting = "", false
 		if result != nil && ctx.Err() == nil {
 			c.activity.Error = result.Error()
+			c.activity.Waiting = errors.Is(result, ErrRosterNotReady)
 		}
 	}()
 	if c.closed {
@@ -193,6 +204,19 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		return nil
 	}
 	accounts, err := c.fetcher.List(ctx)
+	if errors.Is(err, ErrRosterNotReady) {
+		// Nothing is created, pruned or scheduled. The next Step asks again,
+		// and activity reports the wait until it ends. A cache that has never
+		// been written still writes its snapshot, as a first scan would, so a
+		// consumer that checks the path while CPA starts finds it. That write
+		// changes no entry.
+		if c.data.WrittenAt.IsZero() {
+			if err := c.save(now); err != nil {
+				return err
+			}
+		}
+		return ErrRosterNotReady
+	}
 	if err != nil {
 		return errors.New("credential discovery failed")
 	}
