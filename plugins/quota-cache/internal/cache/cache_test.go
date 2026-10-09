@@ -54,7 +54,7 @@ func (f *fakeFetcher) Fetch(_ context.Context, a Account, known *client.AccountD
 func fixture(t *testing.T) (*Cache, *fakeFetcher, Options) {
 	t.Helper()
 	opts := Options{Path: filepath.Join(t.TempDir(), "cache", "snapshot.json"), Interval: 15 * time.Minute, Spacing: 10 * time.Second}
-	f := &fakeFetcher{accounts: []Account{{"claude", "one"}}, now: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)}
+	f := &fakeFetcher{accounts: []Account{{Provider: "claude", AuthIndex: "one"}}, now: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)}
 	c, err := Open(opts, f)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestConcurrentRequestsAndRepeatedConsumerReadsMakeOneProviderCall(t *testin
 }
 func TestRateLimitPausesSiblingAccountsAndSurvivesRestart(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = append(f.accounts, Account{"claude", "two"}, Account{"codex", "three"})
+	f.accounts = append(f.accounts, Account{Provider: "claude", AuthIndex: "two"}, Account{Provider: "codex", AuthIndex: "three"})
 	f.failure = RateLimited{RetryAfter: f.now.Add(time.Hour)}
 	if err := c.Step(context.Background(), f.now); err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestRemovedAccountIsNotServed(t *testing.T) {
 // roster carries on from where the cache left off.
 func TestRosterNotReadyLeavesTheSnapshotUntouched(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = append(f.accounts, Account{"codex", "two"})
+	f.accounts = append(f.accounts, Account{Provider: "codex", AuthIndex: "two"})
 	if err := c.Step(context.Background(), f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestPollingHistoryIsBoundedRedactedAndPreservedOnRestart(t *testing.T) {
 type blockingFetcher struct{ entered, finish chan struct{} }
 
 func (f *blockingFetcher) List(context.Context) ([]Account, error) {
-	return []Account{{"claude", "one"}}, nil
+	return []Account{{Provider: "claude", AuthIndex: "one"}}, nil
 }
 func (f *blockingFetcher) Fetch(context.Context, Account, *client.AccountDetails) (Observation, error) {
 	close(f.entered)
@@ -410,7 +410,7 @@ func TestScheduleChangesPreserveHistoryAndCooldowns(t *testing.T) {
 
 func TestIncreasingScheduleDefersAdmission(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = append(f.accounts, Account{"codex", "two"})
+	f.accounts = append(f.accounts, Account{Provider: "codex", AuthIndex: "two"})
 	if err := c.Step(context.Background(), f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func (f *windowFetcher) Fetch(context.Context, Account, *client.AccountDetails) 
 // unstable order would rewrite the file on every poll.
 func TestCanonicalWindowsAndPlanSurviveTheWriteAndReload(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-	f := &windowFetcher{accounts: []Account{{"claude", "one"}}, now: now, windows: []client.EntryWindow{
+	f := &windowFetcher{accounts: []Account{{Provider: "claude", AuthIndex: "one"}}, now: now, windows: []client.EntryWindow{
 		{Key: client.WindowSession, Title: "Session", UsedPercent: 31, ResetAt: now.Add(75 * time.Minute), ObservedAt: now},
 		{Key: client.WindowWeekly, Title: "Weekly", UsedPercent: 76, ResetAt: now.Add(62 * time.Hour), ObservedAt: now},
 		{Key: client.WindowWeeklyFable, UsedPercent: 100, ResetAt: now.Add(61 * time.Hour), ObservedAt: now},
