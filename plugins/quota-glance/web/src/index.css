@@ -1242,6 +1242,566 @@
     display: none;
   }
 
+  /* A figure that is only a bound, and how far spend passed the credit,
+   * beside the row's figures. */
+  .qg-cmark {
+    color: var(--color-ink-3);
+  }
+
+  .qg-cpast {
+    display: block;
+    font-size: 10.5px;
+    color: var(--color-crit);
+    white-space: normal;
+  }
+
+  /* Out: Anthropic refused it for low credit. An empty bar on a red track,
+   * plain where an overage's is striped. */
+  .qg-abar.is-out {
+    background: color-mix(in srgb, var(--color-crit) 22%, var(--color-track));
+  }
+
+  /* The pool's ≈ (an estimate) or ≤ (at most): smaller than the figure, in
+   * the figure's own line. */
+  .qg-approx {
+    margin-right: 2px;
+    font-family: var(--font-num);
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--color-ink-3);
+  }
+
+  .qg-cnote .qg-elink {
+    margin-left: 2px;
+  }
+
+  /* ---------- editing: the open list as a form (option A) ---------- */
+
+  /* "Set here": a value typed on the dashboard, not read from config. */
+  .qg-mk {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    vertical-align: 2px;
+  }
+
+  .qg-mk.is-lead {
+    margin: 0 6px 0 0;
+    vertical-align: 1px;
+  }
+
+  /* A card's foot at rest: who sets what, then the Edit button. */
+  .qg-afoot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 0 6px;
+    border-top: 1px solid var(--color-rule);
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  .qg-afoot > span {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  .qg-afoot b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-btn.qg-fbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .qg-btn.qg-fbtn svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  /* Saved: what changed, with a tick, where the foot's words were. */
+  .qg-eok {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    color: var(--color-ink-2);
+  }
+
+  .qg-eok svg {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    margin-top: 2px;
+    color: var(--color-good);
+  }
+
+  .qg-estate {
+    color: #80b1ef;
+  }
+
+  .qg-estate.is-bad {
+    color: #f29393;
+  }
+
+  .qg-ehead,
+  .qg-arow.qg-erow {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "who credit date";
+    column-gap: 14px;
+  }
+
+  .qg-ehead {
+    align-items: end;
+    padding: 8px 0 7px;
+    border-bottom: 1px solid var(--color-rule);
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ehead > span:nth-child(1) {
+    grid-area: who;
+  }
+
+  .qg-ehead > span:nth-child(2) {
+    grid-area: credit;
+  }
+
+  .qg-ehead > span:nth-child(3) {
+    grid-area: date;
+  }
+
+  .qg-arow.qg-erow {
+    grid-template-areas:
+      "who credit date"
+      ". read read";
+    align-items: start;
+    row-gap: 8px;
+    padding: 10px 0 9px;
+  }
+
+  .qg-erow > .qg-awho {
+    grid-area: who;
+    min-height: 30px;
+  }
+
+  /* A row that cannot be edited says why where its fields would be. */
+  .qg-arow.qg-erow.is-locked {
+    grid-template-areas: "who lock lock";
+    align-items: center;
+  }
+
+  .qg-erow.is-locked > .qg-awho {
+    min-height: 0;
+  }
+
+  .qg-elock {
+    grid-area: lock;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  .qg-efield {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .qg-efield.is-credit {
+    grid-area: credit;
+  }
+
+  .qg-efield.is-date {
+    grid-area: date;
+  }
+
+  /* A field: the sign-in input's look — mono, 8px corners, the line, the
+   * accent on focus. */
+  .qg-ebox {
+    display: flex;
+    align-items: center;
+    width: 136px;
+    max-width: 100%;
+    height: 30px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-band);
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+
+  .qg-efield.is-date .qg-ebox {
+    width: 156px;
+  }
+
+  .qg-ebox input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 10px;
+    background: transparent;
+    font-family: var(--font-num);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-ink);
+    outline: none;
+  }
+
+  .qg-ebox input::placeholder {
+    color: var(--color-ink-4);
+  }
+
+  .qg-ebox input::-webkit-calendar-picker-indicator {
+    filter: invert(0.6);
+    cursor: pointer;
+  }
+
+  .qg-epre {
+    flex: none;
+    margin-right: -6px;
+    padding-left: 10px;
+    font-family: var(--font-num);
+    font-size: 12.5px;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ebox:hover {
+    border-color: var(--color-ink-4);
+  }
+
+  .qg-ebox.is-dirty {
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-line));
+    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-band));
+  }
+
+  .qg-ebox.is-back {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-line));
+  }
+
+  .qg-ebox.is-back input {
+    color: var(--color-ink-2);
+  }
+
+  .qg-ebox:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  }
+
+  .qg-ebox.is-bad {
+    border-color: color-mix(in srgb, var(--color-crit) 75%, transparent);
+    background: color-mix(in srgb, var(--color-crit) 8%, var(--color-band));
+  }
+
+  .qg-ebox.is-bad:focus-within {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-crit) 20%, transparent);
+  }
+
+  .qg-ebox.is-busy {
+    opacity: 0.5;
+  }
+
+  /* Under a field: where its value comes from, or what is about to happen
+   * to it. */
+  .qg-ecap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 1px 5px;
+    min-height: 15px;
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ecap .num {
+    font-size: 10.5px;
+    color: var(--color-ink-2);
+  }
+
+  .qg-ecap b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-esrc {
+    display: inline;
+    white-space: nowrap;
+  }
+
+  .qg-esrc.is-dirty {
+    color: #80b1ef;
+  }
+
+  .qg-edot {
+    color: var(--color-ink-4);
+  }
+
+  .qg-ecap.is-bad,
+  .qg-ecap.is-warn {
+    display: block;
+    color: #f29393;
+  }
+
+  .qg-ecap.is-warn {
+    color: #f5c862;
+  }
+
+  .qg-ecap.is-bad::before,
+  .qg-ecap.is-warn::before {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--color-crit);
+    content: "";
+    vertical-align: 1px;
+  }
+
+  .qg-ecap.is-warn::before {
+    background: var(--color-warn);
+  }
+
+  .qg-elink {
+    color: #80b1ef;
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, #80b1ef 35%, transparent);
+    text-underline-offset: 3px;
+  }
+
+  .qg-elink:hover:not(:disabled) {
+    color: #cfe1fa;
+    text-decoration-color: currentColor;
+  }
+
+  .qg-elink:disabled {
+    color: var(--color-ink-3);
+    cursor: default;
+  }
+
+  .qg-elink:focus-visible {
+    border-radius: 3px;
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .qg-ecap.is-bad .qg-elink {
+    font-family: var(--font-num);
+  }
+
+  .qg-ehint {
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--color-ink-2);
+  }
+
+  .qg-elabel {
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  /* A row's Console reading, under its two fields. */
+  .qg-eread {
+    display: flex;
+    flex-direction: column;
+    grid-area: read;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .qg-eread-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 6px 12px;
+  }
+
+  .qg-eread-fields .qg-efield {
+    gap: 3px;
+  }
+
+  .qg-eread-fields input[type="datetime-local"] {
+    padding-right: 6px;
+  }
+
+  .qg-eread-fields label:nth-child(2) .qg-ebox {
+    width: 240px;
+  }
+
+  .qg-eread-utc {
+    min-height: 30px;
+    align-items: center;
+  }
+
+  /* The editor's last lines: values kept for something no longer listed. */
+  .qg-eorphan {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 5px;
+    padding: 9px 0;
+    border-top: 1px solid var(--color-rule);
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  /* The foot while a list is a form: what a date means, then the change
+   * count, Cancel and Save. Pinned to the bottom of the viewport so Save
+   * stays in reach in the 400×620 popover (must-fix 1). */
+  .qg-efoot {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin: 0 -18px;
+    padding: 0 18px;
+    border-top: 1px solid var(--color-rule);
+    border-radius: 0 0 14px 14px;
+    background: var(--color-card);
+  }
+
+  .qg-efoot-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 14px;
+    padding: 11px 0 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ehelp {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  .qg-eacts {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .qg-eacts .qg-btn {
+    padding: 6px 13px;
+  }
+
+  .qg-esave {
+    min-width: 64px;
+    font-weight: 550;
+  }
+
+  /* Off, Save takes the muted look of an unavailable Use one rather than a
+   * fade, which on the dark card reads almost as on (must-fix 7). */
+  .qg-btn.qg-esave:disabled {
+    border-color: var(--color-line);
+    background: transparent;
+    color: var(--color-ink-3);
+    opacity: 1;
+  }
+
+  .qg-ecount {
+    margin-right: 4px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ecount.is-bad {
+    color: #f29393;
+  }
+
+  .qg-espin {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin: 0 7px -1px 0;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: qg-espin 0.8s linear infinite;
+  }
+
+  @keyframes qg-espin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Save failed: said above the buttons, nothing taken away. */
+  .qg-notice.qg-efail {
+    margin: 10px 0 0;
+  }
+
+  /* Accounts: one date per subscription. */
+  .qg-eahead,
+  .qg-arow.qg-earow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-areas: "who date";
+    column-gap: 14px;
+  }
+
+  .qg-eahead {
+    padding: 8px 0 7px;
+    border-bottom: 1px solid var(--color-rule);
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-arow.qg-earow {
+    align-items: start;
+    padding: 9px 0;
+  }
+
+  .qg-earow > .qg-awho {
+    min-height: 30px;
+  }
+
+  .qg-earow.is-locked {
+    align-items: center;
+  }
+
+  .qg-earow.is-locked > .qg-awho {
+    min-height: 0;
+  }
+
+  .qg-earow .qg-efield {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  .qg-earow .qg-ecap {
+    flex: 1 1 160px;
+    min-height: 0;
+  }
+
+  .qg-earow.is-locked > .qg-asub {
+    grid-area: date;
+    text-align: left;
+  }
+
   /* ---------- the page foot ---------- */
 
   .qg-foot {
@@ -1461,6 +2021,12 @@
       padding: 12px 14px;
     }
 
+    .qg-efoot {
+      margin: 0 -14px;
+      padding: 0 14px;
+      border-radius: 0 0 13px 13px;
+    }
+
     /* Under 640px the figure line is about 340px and the ring would leave the
      * age beside it too narrow to finish "1h 54m ago" — the half of that line
      * the strip cannot say for itself. A pixel off each block and its gap
@@ -1525,6 +2091,16 @@
         "who left left"
         "bar spent rnw";
       column-gap: 10px;
+    }
+
+    /* State chips must not reduce a short label to two letters. They wrap
+     * under the name before the amount or refill column gives up space. */
+    .qg-crow > .qg-awho {
+      flex-wrap: wrap;
+    }
+
+    .qg-crow .qg-aname {
+      flex: 1 0 60px;
     }
 
     .qg-cspent,
@@ -1604,6 +2180,84 @@
 
     .qg-bst {
       font-size: 11px;
+    }
+
+    /* The editor: who on its own line, then the two fields side by side
+     * under the column heads, which stay as the fields' labels; then the
+     * reading. */
+    .qg-ehead,
+    .qg-arow.qg-erow {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "credit date";
+      column-gap: 10px;
+    }
+
+    .qg-ehead > span:nth-child(1) {
+      display: none;
+    }
+
+    .qg-arow.qg-erow {
+      grid-template-areas:
+        "who who"
+        "credit date"
+        "read read";
+      row-gap: 7px;
+    }
+
+    .qg-arow.qg-erow.is-locked {
+      grid-template-areas:
+        "who who"
+        "lock lock";
+    }
+
+    .qg-erow > .qg-awho {
+      min-height: 0;
+    }
+
+    .qg-ebox,
+    .qg-efield.is-date .qg-ebox,
+    .qg-eread-fields label:nth-child(2) .qg-ebox {
+      width: 100%;
+    }
+
+    .qg-eread-fields label {
+      flex: 1 1 140px;
+    }
+
+    /* A localized date and time, including AM/PM, does not fit half of a
+     * popover. Give the picker its own line instead of hiding its minutes. */
+    .qg-eread-fields label:nth-child(2) {
+      flex: 1 1 100%;
+    }
+
+    .qg-efoot {
+      margin: 0 -14px;
+      padding: 0 14px;
+      border-radius: 0 0 13px 13px;
+    }
+
+    .qg-ehelp {
+      flex-basis: 100%;
+    }
+
+    .qg-eahead {
+      display: none;
+    }
+
+    .qg-arow.qg-earow {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "who"
+        "date";
+      row-gap: 7px;
+    }
+
+    .qg-earow > .qg-awho {
+      min-height: 0;
+    }
+
+    .qg-earow.is-locked > .qg-asub {
+      text-align: left;
     }
   }
 }

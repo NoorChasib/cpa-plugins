@@ -15,6 +15,8 @@ Every plugin keeps its own version. Releases currently target **Linux amd64 only
 
 Push each release tag separately; GitHub does not generate push events when more than three tags are pushed together.
 
+When one plugin's release needs another's newer version, release the other first and wait for its catalog commit: Quota Glance 0.7.0's API credit card needs Quota Cache 0.1.14, so tag `quota-cache/v0.1.14` alone, then `quota-glance/v0.7.0` once 0.1.14 is in `registry.json`, so the verification below loads it.
+
 Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `codex-catalog-filter`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
 
 The root **Release one plugin** workflow automatically:

@@ -1,27 +1,115 @@
 package aggregate
 
 import (
+	"sort"
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
 
-// renewalFor is the credential's renewal instant and whether it is an
-// estimate.
+// Where a credential's renewal date comes from.
+const (
+	renewalReported  = "reported"
+	renewalDashboard = "dashboard"
+	renewalEstimated = "estimated"
+)
+
+// renewalFor is the credential's renewal instant and where it comes from, or
+// nil for both when there is none.
 //
-// A renewal the provider reports always wins, and is never marked estimated:
-// Codex says when its subscription is paid up to, and a guess laid over that
-// would only be a worse copy of it. Only where there is no such date — Claude,
-// whose provider reports none at all — is one estimated, from when the
-// subscription began.
-func renewalFor(r record, now time.Time) (epoch *int64, estimated bool) {
+// A renewal the provider reports always wins: Codex says when its
+// subscription is paid up to, and anything laid over that would only be a
+// worse copy of it. Claude reports none at all, so a date the operator set on
+// the dashboard comes next, read off claude.ai's billing page; and only
+// without one is a date estimated, from when the subscription began.
+func renewalFor(r record, setting *overrides.Renewal, now time.Time) (epoch *int64, source *string) {
+	named := func(epoch *int64, name string) (*int64, *string) { return epoch, &name }
 	if reported := renewalOf(r, now); reported != nil {
-		return reported, false
+		return named(reported, renewalReported)
+	}
+	if set := dashboardRenewalOf(r, setting, now); set != nil {
+		return named(set, renewalDashboard)
 	}
 	if guess := estimatedRenewalOf(r, now); guess != nil {
-		return guess, true
+		return named(guess, renewalEstimated)
 	}
-	return nil, false
+	return nil, nil
+}
+
+// dashboardRenewalOf is the next renewal on the date the operator set: that
+// date at 00:00 UTC while it is ahead, and once it has come the next one on
+// the same day of the month, or of the year on an annual plan, strictly after
+// now. On the renewal day itself that is next month's, so the page never
+// counts down past zero, as with an estimate. Codex never takes one: it
+// reports its own.
+func dashboardRenewalOf(r record, setting *overrides.Renewal, now time.Time) *int64 {
+	if setting == nil || r.identity.Provider != "claude" {
+		return nil
+	}
+	day, ok := overrides.ParseDate(setting.Date)
+	if !ok {
+		return nil
+	}
+	if !day.After(now) {
+		if day, ok = nextAnniversary(day, billingMonthsOf(r), now); !ok {
+			return nil
+		}
+	}
+	epoch := day.Unix()
+	return &epoch
+}
+
+// renewalEditable reports whether the page may set this credential's renewal
+// date: a Claude subscription, whose provider reports none, under a CPA auth
+// index settings.json can key it by.
+func renewalEditable(id Identity) bool {
+	return id.Provider == "claude" && overrides.ValidRenewalID(id.AuthIndex)
+}
+
+func renewalSettingOf(setting *overrides.Renewal) *RenewalSetting {
+	if setting == nil {
+		return nil
+	}
+	return &RenewalSetting{Date: setting.Date, Revision: overrides.RevisionText(setting.Rev), UpdatedAtEpoch: setting.UpdatedAt.Unix()}
+}
+
+// renewalOrphansOf is every stored renewal date whose credential the roster
+// does not list, oldest first. Without a roster to compare against there is
+// no telling an orphan from a credential the host failed to report, so none
+// are offered for removal.
+func renewalOrphansOf(in Input) []RenewalOrphan {
+	out := []RenewalOrphan{}
+	if in.SourceReason != "" {
+		return out
+	}
+	listed := map[string]bool{}
+	for _, identity := range in.Identities {
+		listed[identity.AuthIndex] = true
+	}
+	for id, setting := range in.Overrides.Renewals {
+		if !listed[id] {
+			out = append(out, RenewalOrphan{
+				ID: id, Date: setting.Date, Revision: overrides.RevisionText(setting.Rev), UpdatedAtEpoch: setting.UpdatedAt.Unix(),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAtEpoch != out[j].UpdatedAtEpoch {
+			return out[i].UpdatedAtEpoch < out[j].UpdatedAtEpoch
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// billingMonthsOf is the subscription's billing period in months, read off the
+// last observation: 12 on an annual plan, else 1.
+func billingMonthsOf(r record) int {
+	if r.entry.Quota != nil && r.entry.Quota.BillingPeriod == qc.BillingAnnual {
+		return 12
+	}
+	return 1
 }
 
 // renewalOf is the subscription's renewal instant, when quota-cache read one.
@@ -57,11 +145,7 @@ func estimatedRenewalOf(r record, now time.Time) *int64 {
 	if !r.hasEntry || r.entry.AccountDetails == nil || r.entry.AccountDetails.SubscriptionStartedAt == nil {
 		return nil
 	}
-	months := 1
-	if r.entry.Quota != nil && r.entry.Quota.BillingPeriod == qc.BillingAnnual {
-		months = 12
-	}
-	at, ok := nextAnniversary(*r.entry.AccountDetails.SubscriptionStartedAt, months, now)
+	at, ok := nextAnniversary(*r.entry.AccountDetails.SubscriptionStartedAt, billingMonthsOf(r), now)
 	if !ok {
 		return nil
 	}

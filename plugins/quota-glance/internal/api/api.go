@@ -53,16 +53,37 @@ type WatcherState struct {
 
 // Health is what the management health route reports.
 type Health struct {
-	Version             string       `json:"version"`
-	CachePath           string       `json:"cache_path"`
-	StaleAfter          string       `json:"stale_after"`
-	SnapshotWrittenAt   time.Time    `json:"snapshot_written_at"`
-	SnapshotNextRequest time.Time    `json:"snapshot_next_request"`
-	BuiltAt             time.Time    `json:"built_at"`
-	Stale               bool         `json:"stale"`
-	StaleReason         string       `json:"stale_reason,omitempty"`
-	LastError           string       `json:"last_error,omitempty"`
-	Watcher             WatcherState `json:"watcher"`
+	Version             string         `json:"version"`
+	CachePath           string         `json:"cache_path"`
+	StaleAfter          string         `json:"stale_after"`
+	SnapshotWrittenAt   time.Time      `json:"snapshot_written_at"`
+	SnapshotNextRequest time.Time      `json:"snapshot_next_request"`
+	BuiltAt             time.Time      `json:"built_at"`
+	Stale               bool           `json:"stale"`
+	StaleReason         string         `json:"stale_reason,omitempty"`
+	LastError           string         `json:"last_error,omitempty"`
+	Watcher             WatcherState   `json:"watcher"`
+	Settings            SettingsHealth `json:"settings"`
+	Meter               MeterHealth    `json:"meter"`
+}
+
+// SettingsHealth is settings.json as the last rebuild found it. LastError is
+// "" or "unreadable": a file that fails a shape rule, which nothing is applied
+// from and nothing is saved over until it is moved aside.
+type SettingsHealth struct {
+	Path             string `json:"path"`
+	Revision         uint64 `json:"revision"`
+	APICreditEntries int    `json:"api_credit_entries"`
+	RenewalEntries   int    `json:"renewal_entries"`
+	LastError        string `json:"last_error"`
+}
+
+// MeterHealth is quota-cache's API meter as the last rebuild read it.
+// LastError is "", "missing" or "unreadable".
+type MeterHealth struct {
+	Path      string    `json:"path"`
+	FlushedAt time.Time `json:"flushed_at"`
+	LastError string    `json:"last_error"`
 }
 
 type API struct {
@@ -86,6 +107,9 @@ type API struct {
 	// ledger remembers how each press was answered, so a second copy of one
 	// press is told the same thing instead of spending again. See ledger.go.
 	ledger *ledger
+	// saver is nil unless allow-edit is on, which closes both settings doors
+	// the way a nil redeemer closes the redeem ones. See settings.go.
+	saver Saver
 }
 
 // Redeemer is the one action this API can take on the world. It is an interface
@@ -197,17 +221,19 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	if disabled {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "disabled"})
 	}
-	// Two paths write. /redeem accepts only POST, on both trees. /spend accepts
+	// Four paths write. /redeem accepts only POST, on both trees, and so does
+	// /settings, on the management tree only. /spend and /save-settings accept
 	// only GET, on the resource tree only, because CPA dispatches nothing else
-	// there (pluginhost/management.go:295-297). It acts only with the web
-	// token, an explicit confirmation and a single-use press id, all carried in
-	// headers. No path both reads and writes.
+	// there (pluginhost/management.go:295-297). They act only with the web
+	// token and a body carried in a header. No path both reads and writes.
 	if req.Method == http.MethodPost {
 		switch req.Path {
 		case a.managementPath("/redeem"):
 			return a.redeemResponse(req, now, false)
 		case a.resourcePath("/redeem"):
 			return a.redeemResponse(req, now, true)
+		case a.managementPath("/settings"):
+			return a.settingsResponse(req, now)
 		}
 		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 	}
@@ -235,6 +261,8 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 		return a.tokenSummaryResponse(req, now)
 	case a.resourcePath("/spend"):
 		return a.spendResponse(req, now)
+	case a.resourcePath("/save-settings"):
+		return a.saveSettingsResponse(req, now)
 	case a.managementPath("/health"):
 		return a.healthResponse()
 	case a.managementPath("/windows"):

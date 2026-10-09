@@ -15,6 +15,12 @@
 // web token — and on no timer, so the rebuild path below is as free of provider
 // contact as it ever was. Set allow-redeem to false and the capability is never
 // constructed.
+//
+// The dashboard also saves settings — an API credit's amount, refill date and
+// Console reading, and a Claude renewal date — to settings.json in data-dir,
+// through internal/overrides. That writes one local file and contacts nothing.
+// Set allow-edit to false and the saver is never installed; stored values still
+// apply.
 package plugin
 
 import (
@@ -28,11 +34,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/api"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
@@ -73,7 +81,10 @@ type settings struct {
 	// allowRedeem gates the whole redeem path. When false the redeemer is never
 	// built and the route 404s, so the plugin cannot reach a provider at all.
 	allowRedeem bool
-	warnBelow   float64
+	// allowEdit gates the two settings doors the same way. What is stored
+	// applies either way.
+	allowEdit bool
+	warnBelow float64
 }
 
 // dollars is a money amount from configuration. The configuration panel saves
@@ -120,16 +131,27 @@ type Plugin struct {
 	watcher  *watch.Watcher
 	store    *store.Store
 	settings settings
+	// overrides is settings.json. It is kept across reconfigures, so its write
+	// limit and its values outlive a saved panel, and reopened when data-dir
+	// moves or when the file it holds could not be read: moving that file
+	// aside and saving the configuration is how editing comes back.
+	overrides *overrides.Store
+
+	// meter is the API meter the last rebuild read successfully. A save reads
+	// it, without a lock, for a new Console reading's baseline.
+	meter atomic.Pointer[qc.APIMeter]
 
 	// lastGood is the most recent document built from a readable snapshot. It
 	// is what gets re-served, marked stale, when the snapshot goes away: an
 	// empty response is indistinguishable from a broken install.
-	stateMu   sync.Mutex
-	lastGood  *aggregate.Document
-	lastError string
-	builtAt   time.Time
-	written   time.Time
-	nextReq   time.Time
+	stateMu    sync.Mutex
+	lastGood   *aggregate.Document
+	lastError  string
+	builtAt    time.Time
+	written    time.Time
+	nextReq    time.Time
+	meterError string
+	flushedAt  time.Time
 
 	// redeemer is built the first time redemption is configured on and kept
 	// for the life of this Plugin, guarded by mu. Its journal holds the claims
@@ -164,6 +186,10 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				// rate-limit reset, which is irreversible, and it refuses any
 				// body that does not carry an explicit confirmation.
 				{Method: "POST", Path: "/plugins/" + ID + "/redeem", Description: "Spend one banked Codex or Claude rate-limit reset for a credential"},
+				// Writes settings.json in data-dir and nothing else. Like
+				// /redeem, CPA's middleware has checked the management key,
+				// which it takes only in a header, before it is dispatched.
+				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: "Save API credit amounts, refill dates, Console readings and Claude renewal dates set on the dashboard"},
 			},
 			// The page, the document down its fallback path, and the press
 			// for readers arriving without a console session. CPA
@@ -185,6 +211,10 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				// the token, the confirmation and a single-use press id all
 				// travel in headers. See api.spendResponse.
 				{Path: "/spend", Description: "Spend one banked Codex or Claude rate-limit reset by GET for a reader signed in with the web token; CPA dispatches only GET to resource routes"},
+				// The same save as POST .../settings, as a GET, for the same
+				// reason as /spend, and fenced the same way: the batch and
+				// the token travel in headers, never in the URL.
+				{Path: "/save-settings", Description: "Save dashboard settings by GET for a reader signed in with the web token; CPA dispatches only GET to resource routes"},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -214,6 +244,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		StaleAfter  string            `yaml:"stale-after"`
 		PlanLabels  map[string]string `yaml:"plan-labels"`
 		AllowRedeem *bool             `yaml:"allow-redeem"`
+		AllowEdit   *bool             `yaml:"allow-edit"`
 		WarnBelow   dollars           `yaml:"openrouter-warn-below"`
 		Priority    *int              `yaml:"priority"`
 		Store       map[string]any    `yaml:"store"`
@@ -285,13 +316,21 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if err != nil {
 		return protocol.Registration{}, err
 	}
+	p.configMu.RLock()
+	kept := p.overrides
+	p.configMu.RUnlock()
+	if kept == nil || kept.Dir() != dataDir || kept.Current().Unreadable {
+		kept = overrides.Open(dataDir)
+	}
 	p.configMu.Lock()
 	p.store = current
+	p.overrides = kept
 	allowRedeem := cfg.AllowRedeem == nil || *cfg.AllowRedeem
+	allowEdit := cfg.AllowEdit == nil || *cfg.AllowEdit
 	p.settings = settings{
 		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
 		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels), allowRedeem: allowRedeem,
-		warnBelow: warnBelow,
+		allowEdit: allowEdit, warnBelow: warnBelow,
 	}
 	served := p.api
 	p.configMu.Unlock()
@@ -313,6 +352,12 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	} else {
 		served.SetRedeemer(nil)
 	}
+	// Nil when editing is off, which closes both settings doors the same way.
+	if allowEdit {
+		served.SetSaver(saver{p: p, store: kept})
+	} else {
+		served.SetSaver(nil)
+	}
 	if generated {
 		// Logged once, when it is first minted, because the operator has no
 		// other way to learn it. It is persisted, so a restart reuses it.
@@ -320,9 +365,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 
 	watcher, err := watch.Start(watch.Options{
-		Path:     cachePath,
-		OnChange: p.Rebuild,
-		Logf:     func(message string) { p.log("warn", message, nil) },
+		Path:      cachePath,
+		MeterPath: qc.MeterPath(cachePath),
+		OnChange:  p.Rebuild,
+		Logf:      func(message string) { p.log("warn", message, nil) },
 	})
 	if err != nil {
 		return protocol.Registration{}, err
@@ -357,6 +403,7 @@ func registration() protocol.Registration {
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
 				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex or Claude rate-limit reset from the dashboard; default true. Set false to show the count without a button; governs both the console and the dashboard-password doors"},
+				{Name: "allow-edit", Type: "boolean", Description: "Allow setting API credit amounts, refill dates, Console readings and Claude renewal dates from the dashboard; default true. Values are kept in data-dir."},
 				{Name: "openrouter-warn-below", Type: "number", Description: "OpenRouter balance in dollars below which its card turns amber; default 5. It turns red at $0. Needs an OpenRouter management key in Quota Cache"},
 			},
 		},
@@ -365,18 +412,25 @@ func registration() protocol.Registration {
 }
 
 // Rebuild reads the snapshot and republishes. It runs on the watcher's
-// goroutine and on the startup read.
+// goroutine, on the startup read, and after a committed save, on the request
+// goroutine that made it.
 func (p *Plugin) Rebuild() {
 	p.configMu.RLock()
-	settings, current, watcher, served := p.settings, p.store, p.watcher, p.api
+	settings, current, kept, watcher, served := p.settings, p.store, p.overrides, p.watcher, p.api
 	p.configMu.RUnlock()
-	if settings.cachePath == "" || current == nil {
+	if settings.cachePath == "" || current == nil || kept == nil {
 		return
 	}
 	now := time.Now().UTC()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result := source.Read(ctx, hostSource{p.host}, settings.cachePath)
+	if result.Meter != nil {
+		p.meter.Store(result.Meter)
+	}
+	// Read before stateMu, never under it: the store's lock is a leaf, and a
+	// save holding it must never wait for this rebuild.
+	values := kept.Current()
 
 	p.stateMu.Lock()
 	defer p.stateMu.Unlock()
@@ -402,6 +456,9 @@ func (p *Plugin) Rebuild() {
 			// Read on every rebuild, so a threshold changed in the panel
 			// applies at the next one rather than at the next snapshot write.
 			BalanceWarnBelow: settings.warnBelow,
+			Meter:            result.Meter,
+			Overrides:        values,
+			AllowEdit:        settings.allowEdit,
 		}, now)
 		if result.Reason == "" {
 			good := doc
@@ -419,6 +476,10 @@ func (p *Plugin) Rebuild() {
 		}
 	}
 	p.builtAt = now
+	p.meterError = result.MeterError
+	if result.Meter != nil {
+		p.flushedAt = result.Meter.FlushedAt
+	}
 	switch {
 	case result.Reason != "":
 		p.lastError = result.Reason
@@ -438,6 +499,12 @@ func (p *Plugin) Rebuild() {
 		SnapshotNextRequest: p.nextReq,
 		BuiltAt:             p.builtAt,
 		LastError:           p.lastError,
+		Settings: api.SettingsHealth{
+			Path: kept.Path(), Revision: values.Revision,
+			APICreditEntries: len(values.APICredits), RenewalEntries: len(values.Renewals),
+			LastError: kept.LastError(),
+		},
+		Meter: api.MeterHealth{Path: qc.MeterPath(settings.cachePath), FlushedAt: p.flushedAt, LastError: p.meterError},
 	}
 	if watcher != nil {
 		state := watcher.State()
@@ -536,6 +603,30 @@ func (h hostRedeem) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest
 		return protocol.HostHTTPResponse{}, errors.New("host unavailable")
 	}
 	return h.host.HTTPDo(ctx, request)
+}
+
+// saver is what the settings doors write through: the store, and the rebuild
+// that makes a committed save the document the page reads next. The store
+// releases its lock before Apply returns, so the rebuild below, and any
+// watcher rebuild running beside it, never waits on a save.
+type saver struct {
+	p     *Plugin
+	store *overrides.Store
+}
+
+func (s saver) Current() overrides.Values { return s.store.Current() }
+
+func (s saver) Save(batch overrides.Batch, now time.Time) (overrides.Result, error) {
+	result, err := s.store.Apply(batch, s.p.meter.Load(), now)
+	if err != nil || result.Unchanged {
+		return result, err
+	}
+	// Names only: amounts and dates are not secret, but they are not logged.
+	s.p.log("info", "quota-glance settings changed", map[string]any{
+		"kind": batch.Kind, "door": batch.Door, "ids": result.IDs, "fields": result.Fields,
+	})
+	s.p.Rebuild()
+	return result, nil
 }
 
 // hostSource adapts the plugin host to the narrower callback the source needs.

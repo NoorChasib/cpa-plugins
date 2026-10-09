@@ -4,7 +4,8 @@
 // the way CPA and the plugin refuse — the page's classifier is keyed on those
 // exact answers — and it has to answer every press itself. I13: no spend or
 // redeem path is ever passed on, whatever the method, so nothing pressed
-// against the dev server can reach the CPA QUOTA_GLANCE_PROXY points at.
+// against the dev server can reach the CPA QUOTA_GLANCE_PROXY points at; and
+// the same for both settings paths, which it answers from a store of its own.
 //
 // node:http rather than fetch, so no client adds headers of its own: the
 // fetch-metadata gate reads exactly the ones a test sends.
@@ -15,8 +16,8 @@ import { createServer, type IncomingMessage, request, type Server, type ServerRe
 import type { AddressInfo } from "node:net"
 import { after, before, describe, test } from "node:test"
 
-import { EPOCH_FIELDS, goldenFixtureRoute, PRESS_PATHS } from "../dev/fixture-route.ts"
-import { classifyRefusal, encodeSpendHeader } from "../src/lib/access.ts"
+import { EPOCH_FIELDS, goldenFixtureRoute, PRESS_PATHS, SETTINGS_PATHS } from "../dev/fixture-route.ts"
+import { classifyRefusal, encodeSettingsHeader, encodeSpendHeader, type SettingsBatch } from "../src/lib/access.ts"
 import type { APICredits, RowEntry, Summary } from "../src/lib/types.ts"
 
 type Middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
@@ -116,6 +117,165 @@ describe("I13: every press path is answered here", () => {
 
   test("everything else is passed on", async () => {
     assert.equal((await call("GET", "/v0/management/config")).status, PASSED_THROUGH)
+  })
+})
+
+describe("every settings path is answered here (E.9)", () => {
+  const { call } = serve()
+
+  for (const path of SETTINGS_PATHS) {
+    for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]) {
+      test(`${method} ${path}`, async () => {
+        const reply = await call(method, path, { ...TOKEN, Authorization: "Bearer dev-token" })
+        assert.notEqual(reply.status, PASSED_THROUGH)
+      })
+    }
+  }
+
+  test("a query string does not change that", async () => {
+    for (const path of SETTINGS_PATHS) {
+      assert.notEqual((await call("POST", `${path}?save=saved&scenario=degraded`)).status, PASSED_THROUGH)
+    }
+  })
+})
+
+describe("saving settings", () => {
+  const { call } = serve()
+  const SAVE = "/v0/resource/plugins/quota-glance/save-settings"
+  const CONSOLE = "/v0/management/plugins/quota-glance/settings"
+  const KEY = { Authorization: "Bearer dev", "Content-Type": "application/json" }
+  const saveHeaders = (batch: SettingsBatch) => ({ ...TOKEN, "X-Quota-Glance-Settings": encodeSettingsHeader(batch) })
+  const credit = (base: string, monthlyUsd: string | null): SettingsBatch => ({
+    kind: "apiCredits",
+    items: [{ id: "org-11e594f48195", baseRevision: base, monthlyUsd, renews: null, reading: null }],
+  })
+  const summary = async (scenario = "golden") =>
+    JSON.parse((await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)).body) as Summary
+  const alpha = (doc: Summary) => doc.apiCredits!.accounts.find((account) => account.label === "alpha")!
+
+  test("the token door saves, the summary shows it, and a resend changes nothing", async () => {
+    const first = await call("GET", SAVE, saveHeaders(credit("", "300")))
+    assert.equal(first.status, 200, first.body)
+    const body = JSON.parse(first.body) as { ok: boolean; unchanged: boolean; revision: string; settings: Record<string, { monthlyUsd: string }> }
+    assert.deepEqual([body.ok, body.unchanged], [true, false])
+    assert.equal(body.settings["org-11e594f48195"]!.monthlyUsd, "300")
+
+    const after = alpha(await summary())
+    assert.deepEqual([after.settings.monthlyUsd, after.monthlyCreditSource, after.monthlyCreditText], ["300", "dashboard", "$300.00"])
+
+    const again = await call("GET", SAVE, saveHeaders(credit("", "300")))
+    assert.deepEqual(JSON.parse(again.body), { ok: true, unchanged: true, revision: body.revision })
+  })
+
+  test("a credit edit keeps an unchanged reading's time and metered spend after rebasing", async () => {
+    const doc = await summary()
+    const bravo = doc.apiCredits!.accounts.find((account) => account.label === "bravo")!
+    const reading = bravo.settings.reading!
+    const batch: SettingsBatch = { kind: "apiCredits", items: [{
+      id: bravo.id, baseRevision: bravo.settings.revision, monthlyUsd: "300", renews: bravo.settings.renews || null,
+      reading: { remainingUsd: reading.remainingUsd, at: new Date(reading.atEpoch * 1000).toISOString().replace(".000Z", "Z") },
+    }] }
+    const saved = await call("GET", SAVE, saveHeaders(batch))
+    assert.equal(saved.status, 200, saved.body)
+    const after = (await summary()).apiCredits!.accounts.find((account) => account.id === bravo.id)!
+    assert.equal(after.settings.reading!.atEpoch, reading.atEpoch)
+    assert.equal(after.settings.reading!.enteredAtEpoch, reading.enteredAtEpoch)
+    assert.equal(after.reading!.spentSince, bravo.reading!.spentSince)
+    assert.equal(after.left, bravo.left)
+  })
+
+  test("a row saved elsewhere since it was opened is a conflict, with what it holds now", async () => {
+    const reply = await call("GET", SAVE, saveHeaders(credit("", "310")))
+    assert.equal(reply.status, 409)
+    const body = JSON.parse(reply.body) as { error: string; conflicts: string[]; current: Record<string, { monthlyUsd: string }> }
+    assert.equal(body.error, "conflict")
+    assert.deepEqual(body.conflicts, ["org-11e594f48195"])
+    assert.equal(body.current["org-11e594f48195"]!.monthlyUsd, "300")
+  })
+
+  test("one invalid row saves none of the batch", async () => {
+    const doc = await summary()
+    const first = alpha(doc)
+    const second = doc.apiCredits!.accounts.find((account) => account.label === "bravo")!
+    const batch: SettingsBatch = { kind: "apiCredits", items: [
+      { id: first.id, baseRevision: first.settings.revision, monthlyUsd: "500", renews: null, reading: null },
+      { id: second.id, baseRevision: second.settings.revision, monthlyUsd: "12,50", renews: null, reading: null },
+    ] }
+    const saved = await call("GET", SAVE, saveHeaders(batch))
+    assert.equal(saved.status, 400)
+    assert.equal(alpha(await summary()).settings.monthlyUsd, first.settings.monthlyUsd)
+  })
+
+  test("a saved renewal orphan can be removed when no credentials remain", async () => {
+    const path = "?scenario=renewal-orphans"
+    const batch: SettingsBatch = { kind: "renewals", items: [{ id: "0123456789abcdef", baseRevision: "1", date: null }] }
+    const saved = await call("GET", `${SAVE}${path}`, saveHeaders(batch))
+    assert.equal(saved.status, 200, saved.body)
+    assert.deepEqual((await summary("renewal-orphans")).renewalOrphans, [])
+  })
+
+  test("the console door: CPA's sign-in, POST only, JSON only", async () => {
+    const revision = alpha(await summary()).settings.revision
+    const saved = await call("POST", CONSOLE, KEY, JSON.stringify(credit(revision, null)))
+    assert.equal(saved.status, 200, saved.body)
+    assert.equal(alpha(await summary()).monthlyCreditSource, "config")
+    assert.equal((await call("POST", CONSOLE, { "Content-Type": "application/json" }, "{}")).status, 401)
+    assert.equal((await call("GET", CONSOLE, KEY)).status, 404)
+    assert.equal((await call("POST", CONSOLE, { ...KEY, "Content-Type": "text/plain" }, "{}")).status, 415)
+  })
+
+  test("the token door is GET only, fenced as /spend is", async () => {
+    assert.equal((await call("POST", SAVE, saveHeaders(credit("", "1")))).status, 404)
+    assert.equal((await call("GET", SAVE, { ...saveHeaders(credit("", "1")), "Sec-Fetch-Site": "cross-site" })).status, 403)
+    assert.equal((await call("GET", SAVE, { ...saveHeaders(credit("", "1")), "Early-Data": "1" })).status, 425)
+    assert.equal((await call("GET", SAVE, { "X-Quota-Glance-Settings": encodeSettingsHeader(credit("", "1")) })).status, 401)
+    assert.equal((await call("GET", SAVE, { ...TOKEN, "X-Quota-Glance-Settings": "not base64url!" })).status, 400)
+  })
+
+  test("values, shape and editability are checked in the plugin's order", async () => {
+    const error = async (batch: unknown) =>
+      JSON.parse((await call("GET", SAVE, saveHeaders(batch as SettingsBatch))).body) as Record<string, unknown>
+    assert.deepEqual(await error(credit("", "12,50")), { error: "invalid_monthly_usd", id: "org-11e594f48195", field: "monthlyUsd" })
+    assert.equal((await error({ kind: "apiCredits", items: [{ id: "x" }] })).error, "invalid_request")
+    assert.deepEqual(await error({ kind: "renewals", items: [{ id: "claude-agency@example.com.json", baseRevision: "", date: "2026-10-27" }] }), {
+      error: "not_editable",
+      ids: ["claude-agency@example.com.json"],
+    })
+  })
+
+  test("editing switched off is a 404; settings.json unreadable a 503", async () => {
+    const off = await call("GET", `${SAVE}?scenario=degraded`, saveHeaders(credit("", "1")))
+    assert.deepEqual([off.status, JSON.parse(off.body).error], [404, "not_found"])
+    const unreadable = await call("GET", `${SAVE}?scenario=settings-unreadable`, saveHeaders(credit("", "1")))
+    assert.deepEqual([unreadable.status, JSON.parse(unreadable.body).error], [503, "settings_unavailable"])
+  })
+
+  test("unreadable settings apply no stored values in the fixture", async () => {
+    const doc = await summary("settings-unreadable")
+    const bravo = doc.apiCredits!.accounts.find((account) => account.label === "bravo")!
+    assert.equal(bravo.monthlyCreditSource, "config")
+    assert.equal(bravo.settings.monthlyUsd, "")
+    assert.equal(bravo.settings.reading, null)
+    assert.equal(bravo.settings.editable, false)
+    assert.equal(doc.credentials.find((one) => one.id === "5f2b8c41d09e7a36")!.renewalSetting, null)
+  })
+
+  test("serves every ending the page has copy for", async () => {
+    const endings: [string, number, string][] = [
+      ["unwritable", 503, "settings_unwritable"],
+      ["full", 409, "settings_full"],
+      ["throttled", 429, "too_many_writes"],
+      ["not-editable", 409, "not_editable"],
+      ["unavailable", 503, "settings_unavailable"],
+      ["switched-off", 404, "not_found"],
+    ]
+    for (const [ending, status, code] of endings) {
+      const reply = await call("GET", `${SAVE}?scenario=api-states&save=${ending}`, saveHeaders(credit("", "123")))
+      assert.equal(reply.status, status, ending)
+      assert.equal(JSON.parse(reply.body).error, code, ending)
+    }
+    const gateway = await call("GET", `${SAVE}?scenario=api-states&save=gateway`, saveHeaders(credit("", "124")))
+    assert.equal(gateway.status, 504)
   })
 })
 
@@ -380,6 +540,14 @@ describe("rebasing", () => {
   test("moves every epoch field either golden document carries", () => {
     for (const name of ["summary", "summary-degraded"]) {
       for (const key of epochKeys(golden(name))) assert.ok(EPOCH_FIELDS.has(key), `${name}: ${key} is not rebased`)
+    }
+  })
+
+  test("and every one each scenario carries", async () => {
+    for (const scenario of ["api-states", "meter-stopped", "no-meter", "settings-unreadable", "degraded-editable", "single-claude", "renewal-orphans", "renewals-editable"]) {
+      const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)
+      assert.equal(reply.status, 200, scenario)
+      for (const key of epochKeys(JSON.parse(reply.body))) assert.ok(EPOCH_FIELDS.has(key), `${scenario}: ${key} is not rebased`)
     }
   })
 

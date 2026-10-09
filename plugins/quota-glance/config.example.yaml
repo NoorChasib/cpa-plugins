@@ -34,6 +34,12 @@ plugins:
       # Set false to keep the count and the expiry on the card and remove the
       # button. The plugin then has no code path to a provider at all.
       allow-redeem: true
+      # Setting API credit amounts, refill dates, Console readings and Claude
+      # renewal dates from the dashboard. Default true. What you set is kept
+      # in data-dir/settings.json, wins over quota-cache's configuration, and
+      # contacts nothing. It governs both ways in, like allow-redeem. Set false
+      # to remove the editor; values already saved still apply.
+      allow-edit: true
       # The OpenRouter balance, in dollars, below which its card turns amber.
       # Default 5; the card turns red once nothing is left whatever this says,
       # and 0 keeps it green until then. The card appears only when

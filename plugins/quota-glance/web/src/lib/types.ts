@@ -64,12 +64,35 @@ export interface Credential {
    */
   renewalEstimated?: boolean
   /**
+   * Where `renewalAtEpoch` comes from: the provider's own date, one set on
+   * the dashboard, or the estimate; null with no renewal. Optional because an
+   * older plugin sends none.
+   */
+  renewalSource?: "reported" | "dashboard" | "estimated" | (string & {}) | null
+  /** The page may set this credential's renewal date: a Claude credential, while editing is available. */
+  renewalEditable?: boolean
+  /** The renewal date stored on the dashboard, used or not; null when none. */
+  renewalSetting?: RenewalSetting | null
+  /**
    * The credit balance the provider reports for this account, or null when it
    * reports none. Codex accounts carry ChatGPT credits and Grok accounts a
    * prepaid dollar balance. A figure to print, never a bar: there is no
    * allowance for it to be a fraction of.
    */
   credits: Credits | null
+}
+
+/** A renewal date set on the dashboard. `revision` is what a save sends back as `baseRevision`. */
+export interface RenewalSetting {
+  /** YYYY-MM-DD. */
+  date: string
+  revision: string
+  updatedAtEpoch: number
+}
+
+/** A renewal date stored for a credential CPA no longer lists. */
+export interface RenewalOrphan extends RenewalSetting {
+  id: string
 }
 
 /**
@@ -318,25 +341,62 @@ export interface Summary {
    * `claude-api-credits` configured; absent from a proxied older plugin.
    */
   apiCredits?: APICredits | null
+  /** Renewal dates stored for credentials no longer listed, oldest first. Absent from an older plugin. */
+  renewalOrphans?: RenewalOrphan[]
 }
 
-export type APICreditState = Open<"ok" | "stale" | "error" | "pending" | "misconfigured" | "duplicate">
+export type APICreditState = Open<
+  "ok" | "stale" | "out" | "pending" | "needsSettings" | "misconfigured" | "cacheTooOld"
+>
 
-/** One UTC day of an organization's spend. */
-export interface APICreditDay {
-  /**
-   * 00:00 UTC of the day. In the dev server every epoch is shifted by an
-   * arbitrary offset (see EPOCH_FIELDS in web/dev/fixture-route.ts), so label
-   * a day by its position from `cycleStartEpoch`, never by assuming midnight.
-   */
-  dayStartEpoch: number
-  spent: number
-  spentText: string
+/** Where an account's monthly credit or refill date comes from. */
+export type APICreditSource = Open<"dashboard" | "config" | "none">
+
+/** The price table every amount was computed at. */
+export interface APICreditPricing {
+  /** The day the table was read, "2026-10-09". */
+  asOf: string
+  source: string
+  /** "5m": every cache write is priced at the 5-minute rate. */
+  cacheWrites: string
 }
 
-/** The soonest renewal that restores anything to the pool. */
+/** A stretch the meter was not counting, under 5 minutes never listed. */
+export interface APICreditGap {
+  fromEpoch: number
+  toEpoch: number
+  reason: string
+}
+
+/** Quota Cache's usage meter, as the last read found it. */
+export interface APICreditMeter {
+  sinceEpoch: number
+  /** When the meter last saved its figures. */
+  updatedAtEpoch: number
+  stale: boolean
+  stoppedAtEpoch: number | null
+  /** "" while counting, else why it stopped. */
+  stopReason: string
+  dropped: number
+  lastDroppedEpoch: number | null
+  unattributed: number
+  lastUnattributedEpoch: number | null
+  rejected: number
+  lastRejectedEpoch: number | null
+  foreign: number
+  /** Oldest first. Only gaps of 5 minutes or more. */
+  gaps: APICreditGap[]
+}
+
+/** Whether the page may offer the editor, and why not. */
+export interface APICreditEditing {
+  available: boolean
+  reason: Open<"" | "disabled" | "settingsUnreadable">
+}
+
+/** The soonest refill that restores anything to the pool. */
 export interface APICreditRefill {
-  /** Every counted account renewing at this instant, in account order. */
+  /** Every counted account refilling at this instant, in account order. */
   accountIds: string[]
   refillAtEpoch: number
   refillInSeconds: number
@@ -348,20 +408,19 @@ export interface APICreditRefill {
 }
 
 /**
- * The counted accounts summed. `left` is the sum of each account's own left,
- * so one account's overage never eats another's credit: `spent - creditUsed
- * == overage`, while `monthlyCredit - spent` is generally not `left`.
+ * The counted accounts summed: those in state ok, stale or out. `left` is the
+ * sum of each account's own left, so one account's overage never eats
+ * another's credit.
  */
 export interface APICreditPool {
   /** False when nothing is counted: amounts are 0 with "" text and `level` is "". */
-  hasReading: boolean
+  hasEstimate: boolean
+  /** Some counted account may have spent more than it shows: `used` is at least, `left` at most. */
+  lowerBound: boolean
   monthlyCredit: number
   monthlyCreditText: string
-  /** Gross spend this cycle, paid from the credit and purchased credit alike. */
-  spent: number
-  spentText: string
-  creditUsed: number
-  creditUsedText: string
+  used: number
+  usedText: string
   left: number
   leftText: string
   overage: number
@@ -372,36 +431,100 @@ export interface APICreditPool {
   nextRefill: APICreditRefill | null
   fullAtEpoch: number | null
   fullInSeconds: number | null
-  /** `accountCount == countedCount + missingCount + duplicateCount`. */
+  /** `accountCount == countedCount + missingCount`. */
   accountCount: number
   countedCount: number
   missingCount: number
-  duplicateCount: number
 }
 
-/** One Claude Console organization's credit this cycle. */
+/** The Console reading an account's estimate starts from. */
+export interface APICreditReading {
+  remaining: number
+  remainingText: string
+  /** When Console showed it. */
+  atEpoch: number
+  enteredAtEpoch: number
+  /** Metered since the reading. */
+  spentSince: number
+  spentSinceText: string
+}
+
+export interface APICreditRefusals {
+  total: number
+  lastAtEpoch: number | null
+  claudeCodeTotal: number
+  claudeCodeLastAtEpoch: number | null
+}
+
+/** A model with no listed price, and its tokens in the priced window. */
+export interface APICreditUnpriced {
+  model: string
+  tokens: number
+}
+
+/** A Console reading as it was saved, used or not. */
+export interface StoredReading {
+  /** As saved, "143.20". */
+  remainingUsd: string
+  atEpoch: number
+  enteredAtEpoch: number
+}
+
+/**
+ * What the editor works from: the values set on the dashboard, the config's
+ * beside them, and the revision a save sends back as its `baseRevision`.
+ */
+export interface APICreditSettings {
+  editable: boolean
+  notEditableReason: Open<
+    "" | "noOrganization" | "duplicateOrganization" | "overLimit" | "cacheTooOld" | "disabled" | "settingsUnreadable"
+  >
+  /** "" with nothing stored. */
+  revision: string
+  /** The dashboard value, "" when none. */
+  monthlyUsd: string
+  configMonthlyUsd: string
+  configMonthlyUsdInvalid: boolean
+  /** The dashboard date, YYYY-MM-DD, "" when none. */
+  renews: string
+  configRenews: string
+  configRenewsInvalid: boolean
+  reading: StoredReading | null
+  readingUnusedReason: Open<"" | "beforeRefill" | "otherOrganization" | "tooOld" | "future">
+  updatedAtEpoch: number | null
+}
+
+/** One Claude Console organization's credit this cycle, estimated from CPA traffic. */
 export interface APICreditAccount {
-  /** Quota Cache's id: "label-<hex>", or "item-<n>" without a usable label. */
+  /** "org-<12 hex>" for a linked organization, "item-<n>" otherwise. */
   id: string
   /** "" when the item has no usable label. */
   label: string
   order: number
+  /** "" when missing or invalid. */
   organizationId: string
-  /**
-   * False without a current, counted reading. Every amount but
-   * `monthlyCredit` is then 0 with "" text, `level` is "", and `dailySpend`
-   * is empty: print a dash, never $0.00.
-   */
-  hasReading: boolean
-  /** Configured, so present whenever it is valid, reading or not. */
+  state: APICreditState
+  /** In the pool's sums: ok, stale or out. */
+  counted: boolean
+  /** `left` and `used` mean something. */
+  hasEstimate: boolean
+  basis: Open<"reading" | "credit" | "">
+  /** `used` is at least what is printed, `left` at most. */
+  lowerBound: boolean
   monthlyCredit: number
+  /** "" when the credit is not known. */
   monthlyCreditText: string
+  monthlyCreditSource: APICreditSource
   spent: number
   spentText: string
-  creditUsed: number
-  creditUsedText: string
+  /** What `spent` counts from, or null when it counts from nothing. */
+  spentSinceEpoch: number | null
+  used: number
+  usedText: string
   left: number
   leftText: string
+  /** What the estimate had left before a refusal made the account out; "" otherwise. */
+  estimateLeftText: string
   overage: number
   overageText: string
   remainingFraction: number
@@ -410,21 +533,54 @@ export interface APICreditAccount {
   cycleStartEpoch: number | null
   renewsAtEpoch: number | null
   renewsInSeconds: number | null
-  /** The days of this cycle Anthropic reported, oldest first. A day not yet reported is absent, not 0. */
-  dailySpend: APICreditDay[]
-  observedAtEpoch: number | null
-  nextAttemptEpoch: number | null
-  state: APICreditState
+  renewsSource: APICreditSource
+  /** The reading in use, else null. */
+  reading: APICreditReading | null
+  cacheWriteExtra: number
+  /** Money text, "" below $0.01; the page writes the sentence. */
+  cacheWriteExtraText: string
+  unpriced: APICreditUnpriced[]
+  refusals: APICreditRefusals
+  meterSinceEpoch: number | null
+  lastSeenEpoch: number | null
   dataIssues: string[]
-  /** One sentence, already written; "" when there is nothing to say. */
+  /** One sentence, already written, for the first issue; "" when there is nothing to say. */
   issue: string
+  settings: APICreditSettings
+}
+
+/** A Console organization CPA sent traffic from that no counted item names. */
+export interface APICreditUnlinked {
+  organizationId: string
+  firstSeenEpoch: number
+  lastSeenEpoch: number
+  requests: number
+  reason: Open<"notConfigured" | "overLimit">
+}
+
+/** API credit values stored for an account Quota Cache no longer lists. */
+export interface APICreditOrphan {
+  id: string
+  /** "" when none. */
+  monthlyUsd: string
+  /** "" when none. */
+  renews: string
+  hasReading: boolean
+  revision: string
+  updatedAtEpoch: number
 }
 
 /** The monthly Claude API credit across every configured Console organization. */
 export interface APICredits {
   title: string
   currency: string
+  pricing: APICreditPricing
+  /** Null without a readable meter file. */
+  meter: APICreditMeter | null
+  editing: APICreditEditing
   pool: APICreditPool
   /** Pre-sorted by configured order; do not re-sort. */
   accounts: APICreditAccount[]
+  unlinked: APICreditUnlinked[]
+  orphans: APICreditOrphan[]
 }
