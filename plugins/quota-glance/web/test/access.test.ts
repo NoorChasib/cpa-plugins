@@ -864,6 +864,9 @@ describe("other documents", () => {
     }
     assert.equal(rereadAfter(null, null), true, "the whole of storage cleared")
     assert.equal(rereadAfter("quota-glance.collapsed", "[]"), false)
+    // Which cards are open, and the old folded list being removed on load.
+    assert.equal(rereadAfter("quota-glance.opened", "[]"), false)
+    assert.equal(rereadAfter("quota-glance.collapsed", null), false)
   })
 })
 

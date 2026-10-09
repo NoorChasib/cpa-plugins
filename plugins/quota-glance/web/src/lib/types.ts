@@ -313,4 +313,118 @@ export interface Summary {
   providers: Provider[]
   /** Always an array from this plugin; optional for a proxied older one. */
   balances?: Balance[]
+  /**
+   * The pooled monthly Claude API credit. `null` when Quota Cache has no
+   * `claude-api-credits` configured; absent from a proxied older plugin.
+   */
+  apiCredits?: APICredits | null
+}
+
+export type APICreditState = Open<"ok" | "stale" | "error" | "pending" | "misconfigured" | "duplicate">
+
+/** One UTC day of an organization's spend. */
+export interface APICreditDay {
+  /**
+   * 00:00 UTC of the day. In the dev server every epoch is shifted by an
+   * arbitrary offset (see EPOCH_FIELDS in web/dev/fixture-route.ts), so label
+   * a day by its position from `cycleStartEpoch`, never by assuming midnight.
+   */
+  dayStartEpoch: number
+  spent: number
+  spentText: string
+}
+
+/** The soonest renewal that restores anything to the pool. */
+export interface APICreditRefill {
+  /** Every counted account renewing at this instant, in account order. */
+  accountIds: string[]
+  refillAtEpoch: number
+  refillInSeconds: number
+  gain: number
+  gainText: string
+  /** `gain` on the pool's 0-1 scale; `gainPercent` is the same, printed. */
+  gainFraction: number
+  gainPercent: number
+}
+
+/**
+ * The counted accounts summed. `left` is the sum of each account's own left,
+ * so one account's overage never eats another's credit: `spent - creditUsed
+ * == overage`, while `monthlyCredit - spent` is generally not `left`.
+ */
+export interface APICreditPool {
+  /** False when nothing is counted: amounts are 0 with "" text and `level` is "". */
+  hasReading: boolean
+  monthlyCredit: number
+  monthlyCreditText: string
+  /** Gross spend this cycle, paid from the credit and purchased credit alike. */
+  spent: number
+  spentText: string
+  creditUsed: number
+  creditUsedText: string
+  left: number
+  leftText: string
+  overage: number
+  overageText: string
+  remainingFraction: number
+  remainingPercent: number
+  level: Level
+  nextRefill: APICreditRefill | null
+  fullAtEpoch: number | null
+  fullInSeconds: number | null
+  /** `accountCount == countedCount + missingCount + duplicateCount`. */
+  accountCount: number
+  countedCount: number
+  missingCount: number
+  duplicateCount: number
+}
+
+/** One Claude Console organization's credit this cycle. */
+export interface APICreditAccount {
+  /** Quota Cache's id: "label-<hex>", or "item-<n>" without a usable label. */
+  id: string
+  /** "" when the item has no usable label. */
+  label: string
+  order: number
+  organizationId: string
+  /**
+   * False without a current, counted reading. Every amount but
+   * `monthlyCredit` is then 0 with "" text, `level` is "", and `dailySpend`
+   * is empty: print a dash, never $0.00.
+   */
+  hasReading: boolean
+  /** Configured, so present whenever it is valid, reading or not. */
+  monthlyCredit: number
+  monthlyCreditText: string
+  spent: number
+  spentText: string
+  creditUsed: number
+  creditUsedText: string
+  left: number
+  leftText: string
+  overage: number
+  overageText: string
+  remainingFraction: number
+  remainingPercent: number
+  level: Level
+  cycleStartEpoch: number | null
+  renewsAtEpoch: number | null
+  renewsInSeconds: number | null
+  /** The days of this cycle Anthropic reported, oldest first. A day not yet reported is absent, not 0. */
+  dailySpend: APICreditDay[]
+  observedAtEpoch: number | null
+  nextAttemptEpoch: number | null
+  state: APICreditState
+  dataIssues: string[]
+  /** One sentence, already written; "" when there is nothing to say. */
+  issue: string
+}
+
+/** The monthly Claude API credit across every configured Console organization. */
+export interface APICredits {
+  title: string
+  currency: string
+  pool: APICreditPool
+  /** Pre-sorted by configured order; do not re-sort. */
+  accounts: APICreditAccount[]
 }

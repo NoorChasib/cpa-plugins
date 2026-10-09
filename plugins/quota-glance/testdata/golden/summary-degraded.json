@@ -1233,5 +1233,518 @@
       ],
       "state": "error"
     }
-  ]
+  ],
+  "apiCredits": {
+    "title": "Claude API credits",
+    "currency": "USD",
+    "pool": {
+      "hasReading": true,
+      "monthlyCredit": 500,
+      "monthlyCreditText": "$500.00",
+      "spent": 275.255,
+      "spentText": "$275.26",
+      "creditUsed": 275.255,
+      "creditUsedText": "$275.26",
+      "left": 224.745,
+      "leftText": "$224.75",
+      "overage": 0,
+      "overageText": "$0.00",
+      "remainingFraction": 0.44949,
+      "remainingPercent": 45,
+      "level": "ok",
+      "nextRefill": {
+        "accountIds": [
+          "label-5c98d8bed25e"
+        ],
+        "refillAtEpoch": 1789862400,
+        "refillInSeconds": 849600,
+        "gain": 93,
+        "gainText": "$93.00",
+        "gainFraction": 0.186,
+        "gainPercent": 19
+      },
+      "fullAtEpoch": 1790640000,
+      "fullInSeconds": 1627200,
+      "accountCount": 7,
+      "countedCount": 3,
+      "missingCount": 3,
+      "duplicateCount": 1
+    },
+    "accounts": [
+      {
+        "id": "label-9611d9ba844a",
+        "label": "siphorchannel",
+        "order": 0,
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "hasReading": true,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "spent": 130.005,
+        "spentText": "$130.01",
+        "creditUsed": 130.005,
+        "creditUsedText": "$130.01",
+        "left": 69.995,
+        "leftText": "$70.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.349975,
+        "remainingPercent": 35,
+        "level": "low",
+        "cycleStartEpoch": 1787961600,
+        "renewsAtEpoch": 1790640000,
+        "renewsInSeconds": 1627200,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 40,
+            "spentText": "$40.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 50,
+            "spentText": "$50.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 40.005,
+            "spentText": "$40.01"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 0,
+            "spentText": "$0.00"
+          }
+        ],
+        "observedAtEpoch": 1789005600,
+        "nextAttemptEpoch": 1789006500,
+        "state": "stale",
+        "dataIssues": [
+          "stale"
+        ],
+        "issue": "This reading is out of date; Quota Cache has not refreshed it."
+      },
+      {
+        "id": "label-5c98d8bed25e",
+        "label": "chasibnoor",
+        "order": 1,
+        "organizationId": "00000000-0000-4000-8000-000000000002",
+        "hasReading": true,
+        "monthlyCredit": 100,
+        "monthlyCreditText": "$100.00",
+        "spent": 93,
+        "spentText": "$93.00",
+        "creditUsed": 93,
+        "creditUsedText": "$93.00",
+        "left": 7,
+        "leftText": "$7.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.07,
+        "remainingPercent": 7,
+        "level": "critical",
+        "cycleStartEpoch": 1787184000,
+        "renewsAtEpoch": 1789862400,
+        "renewsInSeconds": 849600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787184000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787270400,
+            "spent": 30,
+            "spentText": "$30.00"
+          },
+          {
+            "dayStartEpoch": 1787356800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787443200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787529600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787616000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787702400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787788800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787875200,
+            "spent": 41,
+            "spentText": "$41.00"
+          },
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 22,
+            "spentText": "$22.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 0,
+            "spentText": "$0.00"
+          }
+        ],
+        "observedAtEpoch": 1789010400,
+        "nextAttemptEpoch": 1789014000,
+        "state": "error",
+        "dataIssues": [
+          "observeError"
+        ],
+        "issue": "The last read failed; Quota Cache will retry."
+      },
+      {
+        "id": "label-92a70799e19d",
+        "label": "noor",
+        "order": 2,
+        "organizationId": "00000000-0000-4000-8000-000000000003",
+        "hasReading": false,
+        "monthlyCredit": 100,
+        "monthlyCreditText": "$100.00",
+        "spent": 0,
+        "spentText": "",
+        "creditUsed": 0,
+        "creditUsedText": "",
+        "left": 0,
+        "leftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": 1788825600,
+        "renewsAtEpoch": 1791417600,
+        "renewsInSeconds": 2404800,
+        "dailySpend": [],
+        "observedAtEpoch": 1788818400,
+        "nextAttemptEpoch": 1789018200,
+        "state": "error",
+        "dataIssues": [
+          "observeError",
+          "keyRejected"
+        ],
+        "issue": "Anthropic rejected this admin key. It may be revoked or expired; create a new one in Console under Settings \u003e Admin keys."
+      },
+      {
+        "id": "label-72fc76109558",
+        "label": "noorchasib",
+        "order": 3,
+        "organizationId": "00000000-0000-4000-8000-000000000004",
+        "hasReading": true,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "spent": 52.25,
+        "spentText": "$52.25",
+        "creditUsed": 52.25,
+        "creditUsedText": "$52.25",
+        "left": 147.75,
+        "leftText": "$147.75",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.73875,
+        "remainingPercent": 74,
+        "level": "ok",
+        "cycleStartEpoch": 1787616000,
+        "renewsAtEpoch": 1790294400,
+        "renewsInSeconds": 1281600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787616000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787702400,
+            "spent": 25,
+            "spentText": "$25.00"
+          },
+          {
+            "dayStartEpoch": 1787788800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787875200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 27.25,
+            "spentText": "$27.25"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 0,
+            "spentText": "$0.00"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [
+          "todayNotReported"
+        ],
+        "issue": "Anthropic has not reported today's spend yet; spent covers the cycle through yesterday."
+      },
+      {
+        "id": "label-aa6943c97255",
+        "label": "agency-team",
+        "order": 4,
+        "organizationId": "",
+        "hasReading": false,
+        "monthlyCredit": 500,
+        "monthlyCreditText": "$500.00",
+        "spent": 0,
+        "spentText": "",
+        "creditUsed": 0,
+        "creditUsedText": "",
+        "left": 0,
+        "leftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": null,
+        "renewsAtEpoch": null,
+        "renewsInSeconds": null,
+        "dailySpend": [],
+        "observedAtEpoch": null,
+        "nextAttemptEpoch": null,
+        "state": "misconfigured",
+        "dataIssues": [
+          "misconfigured"
+        ],
+        "issue": "renews must be a date like \"2026-10-29\"."
+      },
+      {
+        "id": "label-a5c78d07b308",
+        "label": "siphorchannel-2",
+        "order": 5,
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "hasReading": false,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "spent": 0,
+        "spentText": "",
+        "creditUsed": 0,
+        "creditUsedText": "",
+        "left": 0,
+        "leftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": 1787961600,
+        "renewsAtEpoch": 1790640000,
+        "renewsInSeconds": 1627200,
+        "dailySpend": [],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "duplicate",
+        "dataIssues": [
+          "duplicateOrganization"
+        ],
+        "issue": "Same Console organization as siphorchannel; counted there."
+      },
+      {
+        "id": "label-1babf40d9c04",
+        "label": "new-org",
+        "order": 6,
+        "organizationId": "",
+        "hasReading": false,
+        "monthlyCredit": 50,
+        "monthlyCreditText": "$50.00",
+        "spent": 0,
+        "spentText": "",
+        "creditUsed": 0,
+        "creditUsedText": "",
+        "left": 0,
+        "leftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": 1787011200,
+        "renewsAtEpoch": 1789689600,
+        "renewsInSeconds": 676800,
+        "dailySpend": [],
+        "observedAtEpoch": null,
+        "nextAttemptEpoch": 1789013100,
+        "state": "pending",
+        "dataIssues": [],
+        "issue": "Waiting for the first reading."
+      }
+    ]
+  }
 }

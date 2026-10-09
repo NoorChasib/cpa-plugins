@@ -391,6 +391,7 @@ func Build(in Input, now time.Time) Document {
 		Credentials:      []Credential{},
 		Providers:        []Provider{},
 		Balances:         balancesOf(in, now),
+		APICredits:       apiCreditsOf(in, now),
 	}
 
 	records := make([]record, 0, len(in.Identities))

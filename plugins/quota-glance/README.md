@@ -19,6 +19,11 @@ that one request and on no timer — see [Banked resets](#banked-resets), or set
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
+- Quota Cache **0.1.13 or newer**, with `claude-api-credits` configured, for
+  the [Monthly API Credit](#claude-api-credits). Update Quota Cache before
+  adding `claude-api-credits`: older versions reject the setting and stop
+  polling. Against an older Quota Cache, or without the setting, `apiCredits`
+  is `null`, the card is absent and nothing else changes.
 - Quota Cache **0.1.10 or newer** for banked Claude resets, Claude plan names,
   Claude's estimated renewal date, Grok's subscription display name, and
   Codex's subscription renewal date.
@@ -180,11 +185,15 @@ Claude's alone; rename Claude's with `claude:`.
 Where the provider reports them, a credential also carries its **credit
 balance** — Codex credits, or Grok's prepaid dollars — and its **renewal date**,
 which Codex reports. Anthropic reports no renewal date, so a Claude account
-shows an estimate, `renews ~Oct 29 (est.)`, taken from when its subscription
-started ([how](docs/summary-contract.md#renewalestimated--whether-that-renewal-is-an-estimate)).
+shows an estimate, `renews ~Oct 29`, taken from when its subscription started
+([how](docs/summary-contract.md#renewalestimated--whether-that-renewal-is-an-estimate));
+the `~` marks it as one. Both are shown once per account, in the provider's
+**Accounts** card, rather than on every window card.
 
 Each credential also carries **which of them CPA is actually routing to**, as a
-strip of request counts under its address. A credential sitting at 100% is
+strip of request counts beside its address in the **Accounts** card, whose shut
+line names any account whose requests are failing ("siphorchannel 2 failed ·
+11m ago") or that CPA has parked ("off", "cooldown"). A credential sitting at 100% is
 either keeping up with the traffic or taking none of it, and those are opposite
 facts that look identical on a capacity bar. The counts are CPA's own — 20
 buckets of 10 minutes, the last 3h20m, read from the credential roster the
@@ -201,9 +210,10 @@ stale reason — is in [docs/summary-contract.md](docs/summary-contract.md).
 
 Codex and Claude both bank **rate-limit resets**: entitlements already granted
 to your account that clear its current windows when you spend one. Each account
-holding at least one gets a tile under **Banked resets**, at the top of its
-provider's section, with the count and when the soonest one lapses. An account
-holding none shows nothing at all — no tile, no zero, no empty row.
+holding at least one gets a row in its provider's **Banked resets** card, which
+is always the last card in the section, with the count and when the soonest one
+lapses. An account holding none shows nothing at all — no row, no zero — and a
+provider where none does has no such card.
 
 Both halves cost what they should. The count rides along on the usage response
 Quota Cache already fetches, so knowing it costs no request. A Claude grant's
@@ -215,11 +225,11 @@ people lose: a Codex reset expires thirty days after it is granted, a Claude
 grant on its own end date, and a count with no date beside it is the shape in
 which they quietly lapse.
 
-**Every account holding one gets its own Use one button** — the tile itself —
-so you choose which account to spend on, including an account CPA has put in a
+**Every account holding one gets its own Use one button**, on its row, so you
+choose which account to spend on, including an account CPA has put in a
 cooldown, which is usually exactly when you want one. Claude only spends a reset
 on an account that is at a limit and not in its own cooldown after the last
-one; where the last poll saw either, the reason is printed on the tile, but the
+one; where the last poll saw either, the reason is printed on the row, but the
 button stays, because the plugin checks with Claude afresh before spending
 anything.
 
@@ -255,7 +265,7 @@ A few things the design refuses to guess about:
 
 The button is absent — not greyed out — whenever it cannot work: with
 `allow-redeem: false`, on a credential you have disabled in CPA, and in a
-browser whose every way in was refused, where the band says to sign in again
+browser whose every way in was refused, where the card says to sign in again
 instead. The count still shows in each case. A press takes at most 55 seconds.
 
 **Use one works wherever the page loads** — the CPA sidebar, a browser tab, a
@@ -290,6 +300,30 @@ nothing about whether your next request will be paid for. Like every other
 figure here it comes from the snapshot: Quota Glance makes no OpenRouter
 request of its own, and the card says when a figure is stale or the last poll
 failed. See [docs/summary-contract.md](docs/summary-contract.md#balances--prepaid-accounts)
+for the fields.
+
+## Claude API credits
+
+When Quota Cache has `claude-api-credits` configured, as described in
+[its README](../quota-cache/README.md#claude-api-credits-optional), the summary
+document carries the monthly Claude API credit of each Console organization
+and the pool across them: credit, spent, left, overage, and the next refill.
+The credit and renewal date are the ones you configure, because Anthropic
+reports neither; the spend is Anthropic's cost report, exact to the UTC day,
+and nothing is estimated. Without that configuration `apiCredits` is `null` and
+nothing else changes. Quota Glance 0.7.0 added it, and it needs Quota Cache
+0.1.13 or newer.
+
+The dashboard shows it as the **Monthly API Credit** card in the Claude
+section, after the Claude windows: the pooled dollars left, a bar whose hatched
+stretch is what the next refill restores, who refills next and when, what was
+spent of the total this cycle, and when everything has refilled. Its shut line
+names any organization that is low, out, over its credit, reading old figures,
+refused by Anthropic, or misconfigured (a duplicate organization or one not
+read yet is said in the pool's line instead); opened, it lists each one with its own bar, what is
+left, what it spent, and when its credit refills (the configured date, in UTC),
+and says what to fix for one that cannot be read. See
+[docs/summary-contract.md](docs/summary-contract.md#api-credits--claude-console-organizations)
 for the fields.
 
 ## The dashboard
@@ -331,30 +365,40 @@ empty track after that is capacity no scheduled reset is about to return.
 Under the bar are the pool's "% left", who resets next and when, and when it is
 full again if that is later. Each account's own figure is in its row below,
 with a note when the pool counts it as less, as a spent or capping weekly does
-on Claude.
+on Claude. A hatched stretch means the same on every bar — back at the next
+reset or refill — and the page's foot says so once.
 
-**Cards fold.** Click the **N accounts** line under a card and its per-account
-rows fold away, leaving the bar, the big percentage, the recovery line, when it
-is full again, and the **N accounts** line itself, which says how many accounts
-the pool leaves out and why (for example "5 accounts · 2 weekly spent · 1
-without a reading"). That is deliberate: folding a card should hide the detail,
-not the headline, so a folded page still answers "how much is left and when
-does more arrive" at a glance.
+Each section is a provider's name and its cards, in this order: its windows,
+on Claude the **Monthly API Credit**, its **Accounts** (plan, renewal, credit
+and requests, said once per account), and its **Banked resets** last. A
+provider with one account shows that account as a single line instead of an
+Accounts card, and its window cards have no account list at all.
 
-Which cards you folded is remembered in that browser, under
-`quota-glance.collapsed` in local storage. It is a preference about how one
-person reads the page rather than a fact about anyone's quota, so it never
-enters the document — the plugin still serves the same bytes to every reader.
-Cards are keyed by provider and row, so folding Claude's **Session** leaves
-Codex's alone.
+**Cards start shut.** A window card's account list sits behind its **N
+accounts** line, which stays visible with the bar, the big percentage, the
+recovery line and when it is full again. Shut, that line says how many accounts
+the pool leaves out and why ("5 accounts · 2 weekly spent · 1 without a
+reading", or "2 capped by weekly" on Fable) and names the accounts worth
+opening it for, with the level in words ("chasibnoor 24% low", "siphorchannel
+0% out"). Click it to see one line per account.
+
+Which cards you opened is remembered in that browser, under
+`quota-glance.opened` in local storage; the older `quota-glance.collapsed`
+entry is removed, so everyone starts from shut cards. It is a preference about
+how one person reads the page rather than a fact about anyone's quota, so it
+never enters the document — the plugin still serves the same bytes to every
+reader. Cards are keyed by provider and card, so opening Claude's **Session**
+leaves Codex's alone.
 
 Everything the page shows is precomputed here: percentages, levels, ordering,
 trend, every width in the pooled bar, the ink level of every block in an
 activity strip, and the wording of each card's subtitle. The browser's only
 arithmetic is subtracting an instant from now — to tick the countdowns, and to
-age the last request under an address — and one subtraction of counts: the
-fold line takes `heldOutCount` from `excludedCount` to say how many accounts
-have no reading.
+age the last request — one step back from the newest request by whole buckets,
+to date the newest failure, and counting: the fold line takes `heldOutCount`
+from `excludedCount` to say how many accounts have no reading, and counts the
+accounts the pool caps at their weekly. Money is never computed in the
+browser; every amount is the server's text.
 
 ## Development
 

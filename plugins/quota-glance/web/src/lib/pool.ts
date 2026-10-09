@@ -122,3 +122,61 @@ export function foldNotes(aggregate: Pick<Aggregate, "excludedCount" | "heldOutC
   if (missing > 0) notes.push(`${missing} without a reading`)
   return notes
 }
+
+/**
+ * How many accounts a row's mean counts at their weekly rather than their own
+ * figure — on Claude's Fable row, every account whose weekly has less left
+ * than its Fable. Zero on every other row, and from a plugin that predates
+ * `pooledPercent`.
+ */
+export function cappedByWeekly(entries: Pick<RowEntry, "remainingPercent" | "heldOut" | "pooledPercent">[]): number {
+  return entries.filter(
+    (entry) =>
+      entry.heldOut !== true && typeof entry.pooledPercent === "number" && entry.pooledPercent < entry.remainingPercent,
+  ).length
+}
+
+/**
+ * One account a shut fold names, because it is the reason to open it: its
+ * figure and what that figure means in a word — "24% low", "0% out" — so
+ * colour is never the only thing saying it. `tone` picks the chip's colour.
+ */
+export type FoldFlag = { id: string; name: string; figure: string; word: string; tone: "low" | "critical" | "" }
+
+/** The reading's state, as a fold chip says it. */
+const FLAG_STATE: Record<string, string> = { error: "failed", stale: "stale" }
+
+/**
+ * The accounts a shut window card names on its fold line, in entry order:
+ * those running low or out, by their own reading, and those whose reading the
+ * server no longer vouches for. An account with no reading is not named — the
+ * fold already counts those (foldNotes) — and nor is a healthy one, so a card
+ * whose accounts are all fine has a fold line that is just its count.
+ *
+ * `names` runs parallel to `entries`.
+ */
+export function foldFlags(
+  entries: Pick<RowEntry, "credentialId" | "hasReading" | "remainingPercent" | "level" | "state">[],
+  names: string[],
+): FoldFlag[] {
+  const flags: FoldFlag[] = []
+  entries.forEach((entry, index) => {
+    if (!entry.hasReading) return
+    const name = names[index] ?? entry.credentialId
+    const state = FLAG_STATE[entry.state]
+    const level = entry.level === "low" ? "low" : entry.level === "critical" ? "critical" : null
+    if (level) {
+      const word = entry.remainingPercent === 0 ? "out" : level
+      flags.push({
+        id: entry.credentialId,
+        name,
+        figure: `${entry.remainingPercent}%`,
+        word: state ? `${word} · ${state}` : word,
+        tone: level,
+      })
+    } else if (state) {
+      flags.push({ id: entry.credentialId, name, figure: "", word: state, tone: "" })
+    }
+  })
+  return flags
+}

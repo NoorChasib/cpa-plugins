@@ -10,13 +10,14 @@
 // fetch-metadata gate reads exactly the ones a test sends.
 
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { createServer, type IncomingMessage, request, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, test } from "node:test"
 
-import { goldenFixtureRoute, PRESS_PATHS } from "../dev/fixture-route.ts"
+import { EPOCH_FIELDS, goldenFixtureRoute, PRESS_PATHS } from "../dev/fixture-route.ts"
 import { classifyRefusal, encodeSpendHeader } from "../src/lib/access.ts"
-import type { RowEntry, Summary } from "../src/lib/types.ts"
+import type { APICredits, RowEntry, Summary } from "../src/lib/types.ts"
 
 type Middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
 
@@ -354,5 +355,50 @@ describe("the weekly-spent scenario", () => {
     assert.ok(session.entries.filter((entry) => entry.hasReading).every((entry) => entry.heldOut === true))
     assert.equal(row("weekly").aggregate.remainingPercent, 0)
     assert.equal(row("weekly_fable").aggregate.remainingPercent, 0)
+  })
+})
+
+describe("rebasing", () => {
+  const { call } = serve()
+  const golden = (name: string): unknown =>
+    JSON.parse(readFileSync(new URL(`../../testdata/golden/${name}.json`, import.meta.url), "utf8"))
+
+  /** Every key ending in Epoch, anywhere in the document. */
+  const epochKeys = (value: unknown, into = new Set<string>()): Set<string> => {
+    if (Array.isArray(value)) for (const item of value) epochKeys(item, into)
+    else if (value && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        if (key.endsWith("Epoch")) into.add(key)
+        epochKeys(item, into)
+      }
+    }
+    return into
+  }
+
+  // A name missing from EPOCH_FIELDS fails nothing else: the field is simply
+  // left at the fixture's frozen instant, and its countdown reads long past.
+  test("moves every epoch field either golden document carries", () => {
+    for (const name of ["summary", "summary-degraded"]) {
+      for (const key of epochKeys(golden(name))) assert.ok(EPOCH_FIELDS.has(key), `${name}: ${key} is not rebased`)
+    }
+  })
+
+  test("keeps every API credit countdown in step with its instant", async () => {
+    for (const scenario of ["golden", "degraded"]) {
+      const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)
+      assert.equal(reply.status, 200)
+      const doc = JSON.parse(reply.body) as Summary
+      const credits = doc.apiCredits as APICredits
+      assert.ok(credits, scenario)
+      const now = doc.generatedAtEpoch
+      for (const account of credits.accounts) {
+        if (account.renewsAtEpoch === null) continue
+        assert.equal(now + (account.renewsInSeconds ?? 0), account.renewsAtEpoch, account.id)
+      }
+      const { nextRefill, fullAtEpoch, fullInSeconds } = credits.pool
+      assert.ok(nextRefill && fullAtEpoch !== null, scenario)
+      assert.equal(now + nextRefill.refillInSeconds, nextRefill.refillAtEpoch)
+      assert.equal(now + (fullInSeconds ?? 0), fullAtEpoch)
+    }
   })
 })

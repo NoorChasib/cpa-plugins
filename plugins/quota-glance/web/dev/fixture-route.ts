@@ -48,8 +48,11 @@ export const DEV_TOKEN = "dev-token"
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`../../testdata/golden/${name}.json`, import.meta.url))
 
-/** Every epoch field in the document, so rebasing touches those and nothing else. */
-const EPOCH_FIELDS = new Set([
+/**
+ * Every epoch field in the document, so rebasing touches those and nothing else.
+ * A test walks both golden documents and fails on any `*Epoch` key missing here.
+ */
+export const EPOCH_FIELDS: ReadonlySet<string> = new Set([
   "generatedAtEpoch",
   "observedAtEpoch",
   "nextAttemptEpoch",
@@ -72,6 +75,18 @@ const EPOCH_FIELDS = new Set([
   // When a card's pool is full again, which the card counts down to beside
   // its legend.
   "fullAtEpoch",
+  // Claude API credits: each organization's cycle, its next renewal, the
+  // pool's next refill, and the day each bar of the spend sparkline stands
+  // for. These are 00:00 UTC in the document, and the rebase offset is an
+  // arbitrary number of seconds, so here they are not: a label derived from
+  // one, such as a sparkline's date, can read a day off. Label days by their
+  // position in dailySpend from cycleStartEpoch, never assert midnight, and
+  // use ?rebase=0 to review dates exactly. Rounding the offset to whole days
+  // instead would move every countdown on the page by up to 23 hours.
+  "cycleStartEpoch",
+  "renewsAtEpoch",
+  "refillAtEpoch",
+  "dayStartEpoch",
 ])
 
 type Doc = Record<string, unknown>

@@ -345,6 +345,632 @@
           }
         }
       }
+    },
+    "anthropic-api:label-9611d9ba844a": {
+      "provider": "anthropic-api",
+      "auth_index": "label-9611d9ba844a",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T02:00:00Z",
+      "next_attempt": "2026-09-10T02:15:00Z",
+      "failures": 0,
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T02:00:00Z",
+        "cost_report": {
+          "organization_id": "00000000-0000-4000-8000-000000000001",
+          "key_fingerprint": "key-000000000001",
+          "starting_at": "2026-08-29T00:00:00Z",
+          "ending_at": "2026-09-11T00:00:00Z",
+          "days": [
+            {
+              "starting_at": "2026-08-29T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "4000",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-30T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-31T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-01T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-02T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "5000",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-03T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-04T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-05T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-06T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-07T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-08T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-09T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "4000.5",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-10T00:00:00Z",
+              "amounts": []
+            }
+          ]
+        }
+      },
+      "api_credit": {
+        "label": "siphorchannel",
+        "position": 0,
+        "monthly_usd": "200",
+        "renews": "2026-09-29",
+        "key_fingerprint": "key-000000000001"
+      }
+    },
+    "anthropic-api:label-5c98d8bed25e": {
+      "provider": "anthropic-api",
+      "auth_index": "label-5c98d8bed25e",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:50:00Z",
+      "next_attempt": "2026-09-10T04:20:00Z",
+      "failures": 2,
+      "last_error": "anthropic server error",
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:20:00Z",
+        "cost_report": {
+          "organization_id": "00000000-0000-4000-8000-000000000002",
+          "key_fingerprint": "key-000000000002",
+          "starting_at": "2026-08-20T00:00:00Z",
+          "ending_at": "2026-09-11T00:00:00Z",
+          "days": [
+            {
+              "starting_at": "2026-08-20T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-21T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "3000",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-22T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-23T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-24T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-25T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-26T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-27T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-28T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "4100",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-29T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-30T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-31T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-01T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-02T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-03T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-04T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-05T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-06T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "2200",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-07T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-08T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-09T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-10T00:00:00Z",
+              "amounts": []
+            }
+          ]
+        }
+      },
+      "api_credit": {
+        "label": "chasibnoor",
+        "position": 1,
+        "monthly_usd": "100",
+        "renews": "2026-09-20",
+        "key_fingerprint": "key-000000000002"
+      }
+    },
+    "anthropic-api:label-92a70799e19d": {
+      "provider": "anthropic-api",
+      "auth_index": "label-92a70799e19d",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:30:00Z",
+      "next_attempt": "2026-09-10T05:30:00Z",
+      "failures": 3,
+      "last_error": "admin key rejected",
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-07T22:00:00Z",
+        "cost_report": {
+          "organization_id": "00000000-0000-4000-8000-000000000003",
+          "key_fingerprint": "key-000000000003",
+          "starting_at": "2026-08-08T00:00:00Z",
+          "ending_at": "2026-09-08T00:00:00Z",
+          "days": [
+            {
+              "starting_at": "2026-08-08T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-09T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-10T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-11T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-12T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "1500",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-13T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-14T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-15T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-16T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-17T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-18T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-19T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-20T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-21T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-22T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-23T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-24T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-25T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-26T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-27T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-28T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-29T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-30T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-31T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-01T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "900",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-02T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-03T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-04T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-05T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-06T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-07T00:00:00Z",
+              "amounts": []
+            }
+          ]
+        }
+      },
+      "api_credit": {
+        "label": "noor",
+        "position": 2,
+        "monthly_usd": "100",
+        "renews": "2026-09-08",
+        "key_fingerprint": "key-000000000003"
+      }
+    },
+    "anthropic-api:label-72fc76109558": {
+      "provider": "anthropic-api",
+      "auth_index": "label-72fc76109558",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "cost_report": {
+          "organization_id": "00000000-0000-4000-8000-000000000004",
+          "key_fingerprint": "key-000000000004",
+          "starting_at": "2026-08-25T00:00:00Z",
+          "ending_at": "2026-09-11T00:00:00Z",
+          "days": [
+            {
+              "starting_at": "2026-08-25T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-26T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "2500",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-27T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-28T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-29T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-30T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-31T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-01T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-02T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-03T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "2725",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-04T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-05T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-06T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-07T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-08T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-09T00:00:00Z",
+              "amounts": []
+            }
+          ]
+        }
+      },
+      "api_credit": {
+        "label": "noorchasib",
+        "position": 3,
+        "monthly_usd": "200",
+        "renews": "2026-09-25",
+        "key_fingerprint": "key-000000000004"
+      }
+    },
+    "anthropic-api:label-aa6943c97255": {
+      "provider": "anthropic-api",
+      "auth_index": "label-aa6943c97255",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-09T20:00:00Z",
+      "next_attempt": "2026-09-10T04:05:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "agency-team",
+        "position": 4,
+        "monthly_usd": "500",
+        "key_fingerprint": "key-000000000005",
+        "problem": "renews_invalid"
+      }
+    },
+    "anthropic-api:label-a5c78d07b308": {
+      "provider": "anthropic-api",
+      "auth_index": "label-a5c78d07b308",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "cost_report": {
+          "organization_id": "00000000-0000-4000-8000-000000000001",
+          "key_fingerprint": "key-000000000006",
+          "starting_at": "2026-08-29T00:00:00Z",
+          "ending_at": "2026-09-11T00:00:00Z",
+          "days": [
+            {
+              "starting_at": "2026-08-29T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "4000",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-08-30T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-08-31T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-01T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-02T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "5000",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-03T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-04T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-05T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-06T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-07T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-08T00:00:00Z",
+              "amounts": []
+            },
+            {
+              "starting_at": "2026-09-09T00:00:00Z",
+              "amounts": [
+                {
+                  "amount": "4000.5",
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "starting_at": "2026-09-10T00:00:00Z",
+              "amounts": []
+            }
+          ]
+        }
+      },
+      "api_credit": {
+        "label": "siphorchannel-2",
+        "position": 5,
+        "monthly_usd": "200",
+        "renews": "2026-09-29",
+        "key_fingerprint": "key-000000000006"
+      }
+    },
+    "anthropic-api:label-1babf40d9c04": {
+      "provider": "anthropic-api",
+      "auth_index": "label-1babf40d9c04",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "2026-09-10T04:05:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "new-org",
+        "position": 6,
+        "monthly_usd": "50",
+        "renews": "2026-09-18",
+        "key_fingerprint": "key-000000000007"
+      }
     }
   }
 }

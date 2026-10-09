@@ -12,8 +12,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. |
+| `summary.json` | Seven healthy credentials, an OpenRouter balance, and five Claude API credit organizations: healthy, low, out (spent exactly the credit), overspent, and renewed at midnight, with a fractional-cent day. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state: stale, a failing poll whose reading stays counted, a rejected key with only a previous cycle's reading, today not yet reported, misconfigured (with a leftover next attempt that is not promised), a duplicate organization, and never read. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -907,3 +907,161 @@ describe the roster. Each balance carries its own instants and state instead.
 **It is never a bar.** OpenRouter reports lifetime totals, so a fraction would
 be a share of everything ever bought, which says nothing about whether the next
 request will be paid for. The amount is the headline, coloured by `level`.
+
+## API credits — Claude Console organizations
+
+`apiCredits` is the monthly Claude API credit that a Max or Team plan deposits
+into its linked Claude Console organization, pooled across every organization
+quota-cache reads with an admin key from its own `claude-api-credits`
+configuration. It is an object, or **`null` when the snapshot has no
+`anthropic-api` entry**, which is every snapshot until that list is configured.
+It is never omitted, and `null` and an object with nothing counted are
+different facts: the first means "not configured", the second "configured,
+nothing read yet".
+
+Like `balances`, it is not a credential and takes part in nothing above: it is
+not in `credentials[]` or `providers[]`, not counted in `counters`, and does not
+move `observedAtEpoch`, `nextAttemptEpoch`, or `staleReason`. Each account
+carries its own instants and state. Adding it did not bump `schemaVersion`.
+
+`apiCredits` arrived in 0.7.0. An older plugin omits the key, so a client reads
+a missing `apiCredits` as `null`. It is also `null` against Quota Cache 0.1.12
+or older, which never writes an `anthropic-api` entry; Quota Cache 0.1.13 added
+them.
+
+**Nothing in it is estimated.** Anthropic reports neither the credit's amount
+nor its renewal date, so both are what the operator configured
+(`monthly-usd`, `renews`), and the next deposit is assumed to equal the
+configured amount. The spend is the organization's cost report, summed exactly
+to the UTC day. An organization without a current, complete reading is listed
+and left out of the pool; its spend is never guessed, and a day Anthropic has
+not reported is never filled in as $0.
+
+### Money and units
+
+Every amount is in US dollars (`currency: "USD"`). The cost report states
+amounts in **cents**, as decimal strings with fractions of a cent
+(`"912.125"` is $9.12125); `monthly-usd` is configured in **dollars**. Both are
+parsed exactly and every sum, difference, clamp, and ratio is done on exact
+rationals; nothing is computed in floating point. Each amount is then emitted
+twice, as for a balance: a JSON number, converted once at the end, and the text
+the dashboard prints (`$1,234.56`, rounded to the cent half away from zero, and
+never `-$0.00`). Print the text; size bars from the fractions.
+
+The spend is **gross**: everything the organization was charged this cycle,
+paid from the credit or from purchased credit alike. Anthropic's cost report
+excludes Priority Tier, and counts usage the credit does not cover (Claude Code
+billed to an API key in that organization, for one) the same as usage it does.
+quota-cache's [cache format](../../quota-cache/docs/cache-format.md) describes
+the reading itself.
+
+### The cycle
+
+Each organization's cycle comes from its configured renewal day through
+quota-cache's `client.CreditCycleAt`, the one rule both plugins use. It starts
+at 00:00 UTC on the most recent occurrence of the renewal day of the month and
+ends at the next, the day clamped to each month's length (a renewal on the 31st
+falls on Feb 28, then Mar 31). The whole renewal day counts toward the new
+cycle, because the cost report resolves only to UTC days; spend that day before
+the credit is deposited is counted against the new credit, which can overstate
+the new cycle's spend by part of a day.
+
+### `pool`
+
+The counted accounts summed. An account is counted when it has `hasReading`;
+that is every account in state `ok`, `stale`, or `error` with a current
+reading, and never a `pending`, `misconfigured`, or `duplicate` one.
+
+| Field | Meaning |
+| --- | --- |
+| `hasReading` | `false` when nothing is counted. Every amount is then `0` with `""` text, `level` is `""`, and `nextRefill` and `fullAtEpoch` are `null`. |
+| `monthlyCredit` | The counted accounts' configured credit. |
+| `spent` | Their gross spend this cycle. |
+| `creditUsed` | The part of `spent` the credits paid for: each account's spend clamped to `[0, its credit]`, summed. |
+| `left` | Each account's own credit left, summed. |
+| `overage` | Each account's spend beyond its credit, summed. |
+| `remainingFraction`, `remainingPercent`, `level` | `left / monthlyCredit` (0 when that is 0), the rounded percent, and the usual `level` judged on it. |
+| `nextRefill` | The soonest renewal among counted accounts that have used any credit, or `null` when none has. See below. |
+| `fullAtEpoch`, `fullInSeconds` | The latest renewal among those same accounts: when the pool reads full again if nothing more is spent. `null` when no counted account has used anything. |
+| `accountCount` | `accounts.length`. |
+| `countedCount`, `missingCount`, `duplicateCount` | Always sum to `accountCount`. Missing is every account without a counted reading, misconfigured ones included. |
+
+`left` is the sum of each account's own left, so one organization's overage
+never consumes another's credit. `spent - creditUsed == overage` always holds;
+`monthlyCredit - spent` is generally **not** `left`. A pool can therefore read
+`low` while one organization is `ok` and another is out and over.
+
+`nextRefill` is `{accountIds, refillAtEpoch, refillInSeconds, gain, gainText,
+gainFraction, gainPercent}`. `accountIds` is every counted account renewing at
+that exact second, in account order, and `gain` the credit they have used,
+which the renewal restores. `gainFraction` is `gain` on the pool's 0-1 scale (0
+when the pool's credit is 0), and `gainPercent` the same figure printed. An
+account that has used none of its credit renews to where it already is, so it
+is never a refill.
+
+### `accounts[]`
+
+Every configured organization, counted or not, sorted by `order`, then
+`label`, then `id`. Do not re-sort.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | quota-cache's name for the item: `label-<hex>` from its label, or `item-<n>` for an item with no usable label. It survives an admin-key rotation; renaming the label starts a new account. |
+| `label` | The configured label; `""` when it is missing or invalid. |
+| `order` | The item's position in `claude-api-credits`. |
+| `organizationId` | The Console organization the current key read, `""` when no reading was made with it. |
+| `hasReading` | `true` for a current-cycle reading that is counted. Without one every amount but `monthlyCredit` is `0` with `""` text, `level` is `""`, and `dailySpend` is `[]`: render a dash, never `$0.00`. |
+| `monthlyCredit`, `monthlyCreditText` | The configured `monthly-usd`, present whenever it is valid, reading or not. `""` text when it is not. |
+| `spent`, `creditUsed`, `left`, `overage` | As in the pool, for this account. `spent` can exceed the credit, and would go below zero if Anthropic ever reported a refund as a negative cost; `creditUsed` never does. |
+| `remainingFraction`, `remainingPercent`, `level` | `left / monthlyCredit`. A credit of `0` reads `0` and `critical`: there is nothing to spend. Spent exactly or overspent is `critical` too. |
+| `cycleStartEpoch`, `renewsAtEpoch`, `renewsInSeconds` | The cycle containing the build instant. `renewsAtEpoch` is when this credit expires and the next is deposited. `null` when `renews` is unusable. |
+| `dailySpend` | `[{dayStartEpoch, spent, spentText}]`, one per day of this cycle the report covered, oldest first. A day Anthropic reported with no spend is `0`. A day it has not reported is **absent**: when today was not reported, the series ends at yesterday. `dayStartEpoch` is 00:00 UTC. |
+| `observedAtEpoch` | When the stored reading was taken, counted or not; `null` when there is none. |
+| `nextAttemptEpoch` | quota-cache's next scheduled poll; `null` when there is none, and always `null` for a misconfigured item, which quota-cache never polls. |
+| `state` | See below. |
+| `dataIssues` | Always an array. See below. |
+| `issue` | One sentence about the account, already written; `""` when there is nothing to say. |
+
+### `accounts[].state` — the first rule that matches
+
+| # | When | `state` | Counted | `dataIssues` |
+| --- | --- | --- | --- | --- |
+| 1 | The item has a configuration problem, so quota-cache never polls it. | `misconfigured` | missing | `misconfigured` |
+| 2 | It reads the same organization as an item listed before it. | `duplicate` | duplicate | `duplicateOrganization` |
+| 3 | The last poll failed. The last good reading stays counted if it is current. | `error` | counted if it has a reading | `observeError`, plus `keyRejected`, `keyForbidden`, `costReportUnavailable`, or `rateLimited` |
+| 4 | The report could not be read as dollars: a currency other than `USD`, or an amount that is not a number. Not a wait: the next poll reads the same. | `error` | missing | `unsupportedCurrency` or `amountInvalid` |
+| 5 | No current reading. | `pending` | missing | `previousCycle`, `keyChanged`, or `incompleteCycle` when one applies |
+| 6 | The reading is older than `stale-after`. | `stale` | counted | `stale` |
+| 7 | Otherwise. | `ok` | counted | none |
+
+Two issues ride on any state without changing it: `refreshPending` while a
+poll is in flight, and `todayNotReported` on a counted account whose reading
+did not include today's bucket.
+
+| `dataIssues` value | Meaning |
+| --- | --- |
+| `misconfigured` | quota-cache found a problem in the item's configuration; `issue` says which. |
+| `duplicateOrganization` | Same organization as an earlier item, which is the one counted. Its figures are zeroed here. |
+| `observeError` | The last poll failed. |
+| `keyRejected` | Anthropic rejected the admin key (401): revoked, expired, or mistyped. |
+| `keyForbidden` | The key may not read the cost report (403). |
+| `costReportUnavailable` | Anthropic has no cost report for the organization (404). |
+| `rateLimited` | Anthropic is rate limiting these reads; quota-cache retries. |
+| `previousCycle` | The stored reading is from before the latest renewal. Clears at the first poll of the new cycle, which quota-cache schedules for the renewal instant. |
+| `keyChanged` | The stored reading was made with a key since replaced, possibly for another organization, so it is not used. |
+| `incompleteCycle` | The stored reading does not cover the whole cycle, typically just after `renews` was moved earlier. |
+| `unsupportedCurrency`, `amountInvalid` | See rule 4. |
+| `todayNotReported` | Every complete day is counted, but Anthropic had not reported today's bucket at the last poll, so `spent` covers the cycle through yesterday. Normal in the first minutes after 00:00 UTC. |
+| `stale`, `refreshPending` | As for a row entry. |
+
+### Edge cases
+
+| Case | What the document says |
+| --- | --- |
+| Renews today | The cycle began at 00:00 UTC; `spent` covers today alone. A poll at the renewal instant can find no bucket yet, which reads as a counted `$0.00` with `todayNotReported`. |
+| Overspent | `left` is `0`, `creditUsed` is the credit, `overage` is the rest, `level` is `critical`. |
+| Zero credit | Valid. `left` is `0`, all spend is overage, the fraction is `0`, `level` is `critical`, and it adds nothing to the pool's credit. |
+| Stale | Counted, `state: "stale"`, until the cycle rolls over; then `previousCycle` and missing until the next poll. |
+| Two items, one organization | Counted once, under the first by position; the other is `duplicate`. Only a reading made with an item's current key identifies its organization. |
+| Fractional cents | Summed exactly and rounded only when printed: `"912.125"` cents is `9.12125` and `$9.12`. |
+| Key rotated | `keyChanged` until the next poll, which quota-cache moves to the next free slot. The account's `id` does not change. |

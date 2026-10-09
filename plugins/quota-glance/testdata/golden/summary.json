@@ -1376,5 +1376,594 @@
       "dataIssues": [],
       "state": "ok"
     }
-  ]
+  ],
+  "apiCredits": {
+    "title": "Claude API credits",
+    "currency": "USD",
+    "pool": {
+      "hasReading": true,
+      "monthlyCredit": 1100,
+      "monthlyCreditText": "$1,100.00",
+      "spent": 462.75125,
+      "spentText": "$462.75",
+      "creditUsed": 426.35125,
+      "creditUsedText": "$426.35",
+      "left": 673.64875,
+      "leftText": "$673.65",
+      "overage": 36.4,
+      "overageText": "$36.40",
+      "remainingFraction": 0.6124079545454545,
+      "remainingPercent": 61,
+      "level": "ok",
+      "nextRefill": {
+        "accountIds": [
+          "label-92a70799e19d"
+        ],
+        "refillAtEpoch": 1789430400,
+        "refillInSeconds": 417600,
+        "gain": 100,
+        "gainText": "$100.00",
+        "gainFraction": 0.09090909090909091,
+        "gainPercent": 9
+      },
+      "fullAtEpoch": 1791590400,
+      "fullInSeconds": 2577600,
+      "accountCount": 5,
+      "countedCount": 5,
+      "missingCount": 0,
+      "duplicateCount": 0
+    },
+    "accounts": [
+      {
+        "id": "label-9611d9ba844a",
+        "label": "siphorchannel",
+        "order": 0,
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "hasReading": true,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "spent": 40.00375,
+        "spentText": "$40.00",
+        "creditUsed": 40.00375,
+        "creditUsedText": "$40.00",
+        "left": 159.99625,
+        "leftText": "$160.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.79998125,
+        "remainingPercent": 80,
+        "level": "ok",
+        "cycleStartEpoch": 1787961600,
+        "renewsAtEpoch": 1790640000,
+        "renewsInSeconds": 1627200,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 12.5,
+            "spentText": "$12.50"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 4.625,
+            "spentText": "$4.63"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 9.12125,
+            "spentText": "$9.12"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 6.4,
+            "spentText": "$6.40"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 3.1075,
+            "spentText": "$3.11"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 4.25,
+            "spentText": "$4.25"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [],
+        "issue": ""
+      },
+      {
+        "id": "label-5c98d8bed25e",
+        "label": "chasibnoor",
+        "order": 1,
+        "organizationId": "00000000-0000-4000-8000-000000000002",
+        "hasReading": true,
+        "monthlyCredit": 100,
+        "monthlyCreditText": "$100.00",
+        "spent": 68,
+        "spentText": "$68.00",
+        "creditUsed": 68,
+        "creditUsedText": "$68.00",
+        "left": 32,
+        "leftText": "$32.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.32,
+        "remainingPercent": 32,
+        "level": "low",
+        "cycleStartEpoch": 1787184000,
+        "renewsAtEpoch": 1789862400,
+        "renewsInSeconds": 849600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787184000,
+            "spent": 8,
+            "spentText": "$8.00"
+          },
+          {
+            "dayStartEpoch": 1787270400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787356800,
+            "spent": 12,
+            "spentText": "$12.00"
+          },
+          {
+            "dayStartEpoch": 1787443200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787529600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787616000,
+            "spent": 9.5,
+            "spentText": "$9.50"
+          },
+          {
+            "dayStartEpoch": 1787702400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787788800,
+            "spent": 15,
+            "spentText": "$15.00"
+          },
+          {
+            "dayStartEpoch": 1787875200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 11,
+            "spentText": "$11.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 7.25,
+            "spentText": "$7.25"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 4.8,
+            "spentText": "$4.80"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 0.45,
+            "spentText": "$0.45"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [],
+        "issue": ""
+      },
+      {
+        "id": "label-92a70799e19d",
+        "label": "noor",
+        "order": 2,
+        "organizationId": "00000000-0000-4000-8000-000000000003",
+        "hasReading": true,
+        "monthlyCredit": 100,
+        "monthlyCreditText": "$100.00",
+        "spent": 100,
+        "spentText": "$100.00",
+        "creditUsed": 100,
+        "creditUsedText": "$100.00",
+        "left": 0,
+        "leftText": "$0.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "critical",
+        "cycleStartEpoch": 1786752000,
+        "renewsAtEpoch": 1789430400,
+        "renewsInSeconds": 417600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1786752000,
+            "spent": 25,
+            "spentText": "$25.00"
+          },
+          {
+            "dayStartEpoch": 1786838400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1786924800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787011200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787097600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787184000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787270400,
+            "spent": 30,
+            "spentText": "$30.00"
+          },
+          {
+            "dayStartEpoch": 1787356800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787443200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787529600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787616000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787702400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787788800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787875200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 27.5,
+            "spentText": "$27.50"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 17.5,
+            "spentText": "$17.50"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 0,
+            "spentText": "$0.00"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [],
+        "issue": ""
+      },
+      {
+        "id": "label-72fc76109558",
+        "label": "noorchasib",
+        "order": 3,
+        "organizationId": "00000000-0000-4000-8000-000000000004",
+        "hasReading": true,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "spent": 236.4,
+        "spentText": "$236.40",
+        "creditUsed": 200,
+        "creditUsedText": "$200.00",
+        "left": 0,
+        "leftText": "$0.00",
+        "overage": 36.4,
+        "overageText": "$36.40",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "critical",
+        "cycleStartEpoch": 1787616000,
+        "renewsAtEpoch": 1790294400,
+        "renewsInSeconds": 1281600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1787616000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787702400,
+            "spent": 80,
+            "spentText": "$80.00"
+          },
+          {
+            "dayStartEpoch": 1787788800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787875200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1787961600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788048000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788134400,
+            "spent": 65,
+            "spentText": "$65.00"
+          },
+          {
+            "dayStartEpoch": 1788220800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788307200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788393600,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788480000,
+            "spent": 51.4,
+            "spentText": "$51.40"
+          },
+          {
+            "dayStartEpoch": 1788566400,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788652800,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788739200,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788825600,
+            "spent": 40,
+            "spentText": "$40.00"
+          },
+          {
+            "dayStartEpoch": 1788912000,
+            "spent": 0,
+            "spentText": "$0.00"
+          },
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 0,
+            "spentText": "$0.00"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [],
+        "issue": ""
+      },
+      {
+        "id": "label-aa6943c97255",
+        "label": "agency-team",
+        "order": 4,
+        "organizationId": "00000000-0000-4000-8000-000000000005",
+        "hasReading": true,
+        "monthlyCredit": 500,
+        "monthlyCreditText": "$500.00",
+        "spent": 18.3475,
+        "spentText": "$18.35",
+        "creditUsed": 18.3475,
+        "creditUsedText": "$18.35",
+        "left": 481.6525,
+        "leftText": "$481.65",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.963305,
+        "remainingPercent": 96,
+        "level": "ok",
+        "cycleStartEpoch": 1788998400,
+        "renewsAtEpoch": 1791590400,
+        "renewsInSeconds": 2577600,
+        "dailySpend": [
+          {
+            "dayStartEpoch": 1788998400,
+            "spent": 18.3475,
+            "spentText": "$18.35"
+          }
+        ],
+        "observedAtEpoch": 1789012500,
+        "nextAttemptEpoch": 1789013400,
+        "state": "ok",
+        "dataIssues": [],
+        "issue": ""
+      }
+    ]
+  }
 }
