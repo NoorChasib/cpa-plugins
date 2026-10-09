@@ -12,10 +12,10 @@ import (
 func manyAccounts() []Account {
 	var accounts []Account
 	for i := 0; i < 6; i++ {
-		accounts = append(accounts, Account{"claude", "claude-" + strconv.Itoa(i)})
+		accounts = append(accounts, Account{Provider: "claude", AuthIndex: "claude-" + strconv.Itoa(i)})
 	}
-	return append(accounts, Account{"codex", "codex-0"}, Account{"codex", "codex-1"},
-		Account{"xai", "xai-0"}, Account{"openrouter", "key-0"})
+	return append(accounts, Account{Provider: "codex", AuthIndex: "codex-0"}, Account{Provider: "codex", AuthIndex: "codex-1"},
+		Account{Provider: "xai", AuthIndex: "xai-0"}, Account{Provider: "openrouter", AuthIndex: "key-0"})
 }
 
 // The poller ticks once per request spacing, and no tick wakes at quite the

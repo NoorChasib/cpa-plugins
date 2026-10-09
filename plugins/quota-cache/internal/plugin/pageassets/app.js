@@ -1,8 +1,12 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter'};
-  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits'};
+  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter', 'anthropic-api': 'Claude API credits'};
+  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits', 'anthropic-api': 'api.anthropic.com/v1/organizations/cost_report'};
+  // Providers with no weekly window: their observation is dated by the nested
+  // quota.observed_at, and the weekly observed_at stays empty.
+  const noWeekly = ['openrouter', 'anthropic-api'];
+  const EMPTY = 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add Claude API credits (claude-api-credits) to this plugin’s configuration; the next scheduled scan will discover it.';
 
   // Status is read with the management key the CPA console remembers, and CPA
   // locks an address out of its management API for 30 minutes after five failed
@@ -205,7 +209,8 @@
   function account(item) {
     const cell = node('td', providers[item.provider] || 'Unknown provider', 'account');
     const id = String(item.auth_index || '');
-    cell.append(node('span', id.length > 12 ? '…' + id.slice(-12) : id, 'secondary'));
+    const label = item.api_credit && typeof item.api_credit.label === 'string' ? item.api_credit.label : '';
+    cell.append(node('span', label || (id.length > 12 ? '…' + id.slice(-12) : id), 'secondary'));
     cell.title = id;
     return cell;
   }
@@ -220,16 +225,55 @@
     const reset = date(e.reset_at);
     return observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error && (!reset || reset > now) && Number.isFinite(e.used_percent) && e.used_percent >= 0 && e.used_percent <= 100;
   }
-  // OpenRouter reports a balance and no weekly window, so its freshness is the
-  // nested observation's rather than the weekly observed_at, which stays empty.
+  // OpenRouter and Claude API credits have no weekly window, so their
+  // freshness is the nested observation's rather than the weekly observed_at,
+  // which stays empty.
   function freshBalance(e, now) {
     const observed = date(e.quota && e.quota.observed_at);
-    return e.provider === 'openrouter' && observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error;
+    return noWeekly.includes(e.provider) && observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error;
   }
+  // The configuration problem of a Claude API credit item, if any. Such an
+  // item is listed but never polled.
+  const notPolled = e => (e.api_credit && e.api_credit.problem) || '';
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
   }
+  const utcDay = value => date(value) ? new Date(date(value)).toISOString().slice(0, 10) : '';
+  // A Claude API credit entry prints what was configured and what Anthropic
+  // reported, verbatim. Amounts are cents as Anthropic sent them; nothing is
+  // added up here, which is Quota Glance's job.
+  function creditDetails(entry, now) {
+    const c = entry.api_credit || {};
+    const details = node('details');
+    details.className = 'quota-details';
+    details.append(node('summary', 'Configured credit and daily spend'));
+    details.append(node('p', 'Monthly credit: ' + (c.monthly_usd ? c.monthly_usd + ' USD' : 'not set') + ' (configured)'));
+    details.append(node('p', 'Renews: ' + (c.renews || 'not set') + ' (configured)'));
+    if (c.key_fingerprint) details.append(node('p', 'Key: ' + c.key_fingerprint));
+    if (c.problem) details.append(node('p', 'Configuration problem: ' + c.problem + '. This item is not polled.', 'secondary'));
+    const q = entry.quota;
+    const r = q && q.schema === 1 ? q.cost_report : null;
+    if (!r) { details.append(node('p', c.problem ? 'No reading.' : 'Spend arrives after the next successful poll', 'secondary')); return details; }
+    const observed = date(q.observed_at);
+    details.append(node('p', entry.last_error || !observed || observed > now || now - observed > 30 * 60000 ? 'Last known response — not fresh' : 'Latest successful response', 'secondary'));
+    details.append(time(q.observed_at, now));
+    if (r.organization_id) details.append(node('p', 'Organization: ' + r.organization_id));
+    if (r.key_fingerprint && c.key_fingerprint && r.key_fingerprint !== c.key_fingerprint) details.append(node('p', 'Read with an earlier key (' + r.key_fingerprint + ')', 'secondary'));
+    details.append(node('p', 'Asked: ' + (r.starting_at || '—') + ' to ' + (r.ending_at || '—')));
+    const days = Array.isArray(r.days) ? r.days : [];
+    details.append(node('p', 'Days read: ' + days.length));
+    const last = days.length ? utcDay(days[days.length - 1].starting_at) : '';
+    if (!last || last < utcDay(q.observed_at)) details.append(node('p', 'Today not reported yet', 'secondary'));
+    const list = node('ul');
+    for (const day of days) {
+      const amounts = Array.isArray(day.amounts) ? day.amounts : [];
+      list.append(node('li', utcDay(day.starting_at) + ': ' + (amounts.length ? amounts.map(a => a.amount + ' ' + a.currency).join(', ') + ' (lowest units)' : 'no cost')));
+    }
+    details.append(list);
+    return details;
+  }
   function extendedQuota(entry, now) {
+    if (entry.provider === 'anthropic-api') return creditDetails(entry, now);
     const q = entry.quota;
     if (!q || q.schema !== 1) return node('span', 'Additional fields arrive after the next successful poll', 'secondary');
     const details = node('details');
@@ -290,8 +334,11 @@
     const last = calls[calls.length - 1];
     $('last-call').replaceChildren(last ? time(last.started_at, now) : node('span', 'Not recorded yet'));
     $('last-call-detail').textContent = last ? (providers[last.provider] || last.provider) + ' · ' + (last.http_status ? 'HTTP ' + last.http_status : 'No HTTP response') : 'History begins with the next completed poll';
-    const due = all.length ? Math.min(...all.map(e => next(e, s, now))) : 0;
-    $('next-call').replaceChildren(due ? time(new Date(due).toISOString(), now) : node('span', 'Waiting for accounts'));
+    // A misconfigured credit item is never polled, so it has no next poll and
+    // must not make the header read as due now.
+    const polled = all.filter(e => !notPolled(e));
+    const due = polled.length ? Math.min(...polled.map(e => next(e, s, now))) : 0;
+    $('next-call').replaceChildren(due ? time(new Date(due).toISOString(), now) : node('span', all.length ? 'Nothing to poll' : 'Waiting for accounts'));
     $('cooldowns').replaceChildren();
     for (const [provider, until] of cooldowns) {
       const p = node('p', (providers[provider] || provider) + ' requests are paused after a rate limit. Eligible again ');
@@ -321,15 +368,17 @@
       quotaCell.append(extendedQuota(e, now));
       addCell(row, time(e.observed_at, now));
       addCell(row, time(e.last_attempt, now));
-      addCell(row, time(new Date(next(e,s,now)).toISOString(), now));
+      const problem = notPolled(e);
+      addCell(row, problem ? node('span', 'Not polled', 'secondary') : time(new Date(next(e,s,now)).toISOString(), now));
       const cooling = date((s.provider_cooldown || {})[e.provider]) > now;
-      const label = cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (e.provider === 'openrouter' && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
-      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' ? 'ok' : label === 'Failed' ? 'error' : 'warn')));
-      if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
+      const label = problem ? 'Not polled' : cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (noWeekly.includes(e.provider) && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
+      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' ? 'ok' : label === 'Failed' || label === 'Not polled' ? 'error' : 'warn')));
+      if (problem) status.append(node('span', problem, 'secondary'));
+      else if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
       $('accounts').append(row);
     }
     $('accounts-empty').hidden = entries.length > 0;
-    $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration; the next scheduled scan will discover it.';
+    $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : EMPTY;
     const history = (s.history || []).filter(p => selected === 'all' || p.provider === selected).slice().reverse();
     $('history').replaceChildren();
     $('history-count').textContent = history.length + ' recorded';

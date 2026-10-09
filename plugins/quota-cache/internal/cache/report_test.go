@@ -14,7 +14,7 @@ import (
 // poll reports nothing.
 func TestEveryFailedPollIsReportedWithTheScheduleItEarned(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = append(f.accounts, Account{"codex", "two"})
+	f.accounts = append(f.accounts, Account{Provider: "codex", AuthIndex: "two"})
 	same := func(got, want Failure) bool {
 		return got.Provider == want.Provider && got.AuthIndex == want.AuthIndex && got.HTTPStatus == want.HTTPStatus &&
 			got.RateLimited == want.RateLimited && got.RetryAfter.Equal(want.RetryAfter) &&

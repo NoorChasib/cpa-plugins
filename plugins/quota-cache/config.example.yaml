@@ -12,6 +12,23 @@ plugins:
       # https://openrouter.ai/settings/management-keys and give it an expiry:
       # it can also create and delete your API keys. Empty disables it.
       # openrouter-management-key: sk-or-v1-...
+      # Optional, and only in this file: the CPA plugin panel cannot edit it.
+      # Claude API credits, one item per Claude Console organization that
+      # receives a Max or Team plan's monthly credit. Two Team seats share one
+      # organization, so they are one item. Quote monthly-usd and renews.
+      # claude-api-credits:
+      #   - label: siphorchannel            # your name for it; unique
+      #     admin-key: sk-ant-admin01-...   # that organization's Admin API key; give it an expiry
+      #     monthly-usd: "200"              # the monthly credit, in dollars
+      #     # The day the next credit arrives: the date your claude.ai plan
+      #     # renews (Settings > Billing), as a UTC date. Console's expiry date
+      #     # for the current credit may be the day before; if so, use the
+      #     # claude.ai date. Only the day of the month is used.
+      #     renews: "2026-10-29"
+      #   - label: agency-team
+      #     admin-key: sk-ant-admin01-...
+      #     monthly-usd: "260"
+      #     renews: "2026-10-03"
     account-health-pushover:
       # Requires the updated consumer binary; old published releases do not use this option.
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
