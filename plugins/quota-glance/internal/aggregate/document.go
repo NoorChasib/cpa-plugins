@@ -140,6 +140,153 @@ type Document struct {
 	// the header instants, the counters, or staleReason above, which all
 	// describe credentials: each balance carries its own.
 	Balances []Balance `json:"balances"`
+	// APICredits is the monthly Claude API credit of the Console organizations
+	// quota-cache reads with admin keys of its own, pooled. Null when the
+	// snapshot has none, which is every snapshot until claude-api-credits is
+	// configured. Like Balances it takes no part in the header instants, the
+	// counters, or staleReason; each account carries its own.
+	APICredits *APICredits `json:"apiCredits"`
+}
+
+// APICredits is the pooled monthly Claude API credit across every configured
+// Console organization, and each organization beside it.
+//
+// Nothing in it is estimated. The credit and its renewal date are what the
+// operator configured, because Anthropic reports neither, and the spend is the
+// organization's cost report summed exactly to the UTC day. An organization
+// without a current, complete reading is listed and left out of the pool, never
+// counted at a guess.
+type APICredits struct {
+	Title string `json:"title"`
+	// Currency is ISO 4217; every amount below is in it.
+	Currency string        `json:"currency"`
+	Pool     APICreditPool `json:"pool"`
+	// Accounts lists every configured organization, counted or not, sorted by
+	// order, then label, then id. Do not re-sort.
+	Accounts []APICreditAccount `json:"accounts"`
+}
+
+// APICreditPool sums the counted accounts. Left is the sum of each account's
+// own left, so one organization's overage never consumes another's credit:
+// Spent - CreditUsed == Overage, while MonthlyCredit - Spent is generally not
+// Left.
+type APICreditPool struct {
+	// HasReading is false when no account is counted. Every amount is then zero
+	// with "" text, Level is "", and NextRefill and FullAtEpoch are null.
+	HasReading        bool    `json:"hasReading"`
+	MonthlyCredit     float64 `json:"monthlyCredit"`
+	MonthlyCreditText string  `json:"monthlyCreditText"`
+	// Spent is gross: everything the counted organizations were charged this
+	// cycle, from the credit and from purchased credit alike.
+	Spent     float64 `json:"spent"`
+	SpentText string  `json:"spentText"`
+	// CreditUsed is the part of Spent the credits paid for: MonthlyCredit -
+	// Left.
+	CreditUsed        float64 `json:"creditUsed"`
+	CreditUsedText    string  `json:"creditUsedText"`
+	Left              float64 `json:"left"`
+	LeftText          string  `json:"leftText"`
+	Overage           float64 `json:"overage"`
+	OverageText       string  `json:"overageText"`
+	RemainingFraction float64 `json:"remainingFraction"`
+	RemainingPercent  int     `json:"remainingPercent"`
+	Level             string  `json:"level"`
+	// NextRefill is the soonest renewal that gives anything back, and null
+	// when no counted account has used any credit.
+	NextRefill *APICreditRefill `json:"nextRefill"`
+	// FullAtEpoch is the latest renewal among the counted accounts that have
+	// used any credit: when the pool reads full again if nothing more is spent.
+	FullAtEpoch   *int64 `json:"fullAtEpoch"`
+	FullInSeconds *int64 `json:"fullInSeconds"`
+	// AccountCount == len(accounts) == CountedCount + MissingCount +
+	// DuplicateCount. Missing is every account without a counted reading,
+	// misconfigured ones included.
+	AccountCount   int `json:"accountCount"`
+	CountedCount   int `json:"countedCount"`
+	MissingCount   int `json:"missingCount"`
+	DuplicateCount int `json:"duplicateCount"`
+}
+
+// APICreditRefill is one renewal instant and what it returns to the pool,
+// assuming each renewing organization's next credit is its configured amount.
+type APICreditRefill struct {
+	// AccountIDs is every counted account renewing at this instant, in
+	// account order.
+	AccountIDs      []string `json:"accountIds"`
+	RefillAtEpoch   int64    `json:"refillAtEpoch"`
+	RefillInSeconds int64    `json:"refillInSeconds"`
+	// Gain is the credit those accounts have used, which the renewal restores.
+	Gain     float64 `json:"gain"`
+	GainText string  `json:"gainText"`
+	// GainFraction is Gain on the pool's 0-1 scale, 0 when the pool's credit
+	// is 0; GainPercent is the same figure as printed.
+	GainFraction float64 `json:"gainFraction"`
+	GainPercent  int     `json:"gainPercent"`
+}
+
+// APICreditAccount is one Console organization's credit this cycle.
+type APICreditAccount struct {
+	// ID is quota-cache's name for the item, "label-<hex>" from its label, or
+	// "item-<n>" for an item with no usable label. It survives a key rotation.
+	ID string `json:"id"`
+	// Label is "" when the item has no usable label.
+	Label string `json:"label"`
+	// Order is the item's configured position.
+	Order int `json:"order"`
+	// OrganizationID is from the reading made with the current key, and ""
+	// when there is none.
+	OrganizationID string `json:"organizationId"`
+	// HasReading is true for a current-cycle reading that is counted in the
+	// pool. Without one every amount but MonthlyCredit is zero with "" text,
+	// Level is "", and DailySpend is empty: render a dash.
+	HasReading bool `json:"hasReading"`
+	// MonthlyCredit is the configured monthly-usd, present whenever it is
+	// valid, reading or not. MonthlyCreditText is "" when it is not.
+	MonthlyCredit     float64 `json:"monthlyCredit"`
+	MonthlyCreditText string  `json:"monthlyCreditText"`
+	// Spent is gross spend this cycle; it can exceed MonthlyCredit, and could
+	// fall below zero if Anthropic ever reported a refund as a negative cost.
+	Spent      float64 `json:"spent"`
+	SpentText  string  `json:"spentText"`
+	CreditUsed float64 `json:"creditUsed"`
+	// CreditUsedText is CreditUsed as printed: Spent clamped to [0,
+	// MonthlyCredit].
+	CreditUsedText    string  `json:"creditUsedText"`
+	Left              float64 `json:"left"`
+	LeftText          string  `json:"leftText"`
+	Overage           float64 `json:"overage"`
+	OverageText       string  `json:"overageText"`
+	RemainingFraction float64 `json:"remainingFraction"`
+	RemainingPercent  int     `json:"remainingPercent"`
+	Level             string  `json:"level"`
+	// CycleStartEpoch and RenewsAtEpoch bound the cycle containing the build
+	// instant, from the configured renewal day; null when it is unusable.
+	CycleStartEpoch *int64 `json:"cycleStartEpoch"`
+	RenewsAtEpoch   *int64 `json:"renewsAtEpoch"`
+	RenewsInSeconds *int64 `json:"renewsInSeconds"`
+	// DailySpend is one element per day of this cycle the report covered,
+	// oldest first. A day Anthropic has not reported yet is absent, never 0.
+	DailySpend []APICreditDay `json:"dailySpend"`
+	// ObservedAtEpoch is when the stored reading was taken, counted or not,
+	// and null when there is none.
+	ObservedAtEpoch *int64 `json:"observedAtEpoch"`
+	// NextAttemptEpoch is quota-cache's next scheduled poll, and null when
+	// there is none, which is always so for a misconfigured item.
+	NextAttemptEpoch *int64 `json:"nextAttemptEpoch"`
+	// State is ok, stale, error, pending, misconfigured or duplicate.
+	State      string   `json:"state"`
+	DataIssues []string `json:"dataIssues"`
+	// Issue is one plain-language sentence about the account, already
+	// written, and "" when there is nothing to say.
+	Issue string `json:"issue"`
+}
+
+// APICreditDay is one UTC day of an account's spend.
+type APICreditDay struct {
+	// DayStartEpoch is 00:00 UTC of the day.
+	DayStartEpoch int64   `json:"dayStartEpoch"`
+	Spent         float64 `json:"spent"`
+	SpentText     string  `json:"spentText"`
 }
 
 // Balance is the money left on one prepaid account.

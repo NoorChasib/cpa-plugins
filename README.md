@@ -9,7 +9,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | A Codex Models page to switch each model on or off for Codex, served to Codex at its own catalog URL |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
-| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, which credential is taking the requests, banked Codex and Claude resets you can spend from the sidebar, a browser or the menu bar, and optionally your OpenRouter balance |
+| [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, which credential is taking the requests, banked Codex and Claude resets you can spend from the sidebar, a browser or the menu bar, and optionally your OpenRouter balance and Claude API credit spend |
 | [Token Usage](plugins/token-usage/README.md) | Persistent token statistics in a CPA sidebar page |
 
 For macOS, [Quota Glance Menu Bar](plugins/quota-glance-menubar/README.md) embeds

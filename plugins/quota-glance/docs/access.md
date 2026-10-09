@@ -56,7 +56,7 @@ timer, costs the whole address its management access in about five minutes.
 | --- | --- | --- |
 | `quota-glance.token` | local storage | The dashboard password. Written when you sign in or open a `?token=` link (which is then taken out of the address bar), removed by **Sign out**. |
 | `quota-glance.console-refused` | local storage | The console latch, below. |
-| `quota-glance.collapsed` | local storage | Which window cards you folded. Not a credential. |
+| `quota-glance.opened` | local storage | Which cards you opened; every card starts shut. Not a credential. The older `quota-glance.collapsed` entry is removed on first load. |
 | — | this document's memory | The password the plugin refused, the ids of presses whose answer never arrived, and any console key whose last request got no answer at all. A reload forgets all three. |
 
 The page reads the console's own entries — `cli-proxy-auth`, and the legacy
@@ -449,7 +449,7 @@ On the Mac, with this repository checked out:
 2. In the app's **Settings**, set the URL to
    `http://127.0.0.1:8787/v0/resource/plugins/quota-glance/app`.
 3. Sign in with `dev-token`.
-4. Press **Use one** on any tile and confirm. The outcome line should start
+4. Press **Use one** on any row of a **Banked resets** card and confirm. The outcome line should start
    "Reset applied".
 5. Choose a quota under **Menu bar quota** and check the readout keeps
    updating.

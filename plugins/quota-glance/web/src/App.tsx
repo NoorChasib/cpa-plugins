@@ -16,6 +16,9 @@ import * as token from "./lib/token"
 import { NowProvider, useClock } from "./lib/now"
 import type { Credential, Summary } from "./lib/types"
 
+/** The provider whose section the monthly API credit belongs in. */
+const CLAUDE = "claude"
+
 /** The catalog, by id. Entries name a credential; they do not repeat it. */
 function catalogOf(summary: Summary): Map<string, Credential> {
   return new Map(summary.credentials.map((credential) => [credential.id, credential]))
@@ -53,6 +56,22 @@ function Body({
   // every card repeats it, so the top row is always the credential that
   // recovers next.
   const providers = [...summary.providers].sort((a, b) => a.order - b.order)
+  // The monthly API credit belongs to Claude and is shown in its section. An
+  // install that reads Console organizations but has no Claude credential in
+  // CPA still has a credit to show, so it gets a Claude section of its own
+  // holding just that card. Absent from an older plugin, and null when Quota
+  // Cache has none configured: either way, nothing.
+  const apiCredits = summary.apiCredits ?? null
+  const claudeShown = providers.some((provider) => provider.id === CLAUDE)
+  const creditsOnly =
+    apiCredits && !claudeShown ? (
+      <ProviderSection
+        provider={{ id: CLAUDE, title: "Claude", order: 0, credentialCount: 0, rows: [] }}
+        credentials={new Map()}
+        apiCredits={apiCredits}
+        onRedeemed={onRedeemed}
+      />
+    ) : null
   // Below the quota providers, and whether or not there are any: a prepaid
   // balance belongs to no CPA credential, so an install with none still has
   // one to show.
@@ -63,9 +82,10 @@ function Body({
     // it is an ordinary state on a fresh install.
     return (
       <>
-        <p className={`qg-empty ${held.length > 0 ? "mb-[30px]" : ""}`}>
+        <p className={`qg-empty ${held.length > 0 || creditsOnly ? "mb-[30px]" : ""}`}>
           No credentials with a quota provider yet. Once quota-cache polls one, its windows appear here.
         </p>
+        {creditsOnly}
         {balances}
       </>
     )
@@ -79,9 +99,11 @@ function Body({
           key={provider.id}
           provider={provider}
           credentials={credentials}
+          apiCredits={provider.id === CLAUDE ? apiCredits : null}
           onRedeemed={onRedeemed}
         />
       ))}
+      {creditsOnly}
       {balances}
     </>
   )
