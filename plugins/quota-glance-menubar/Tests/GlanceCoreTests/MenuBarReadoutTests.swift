@@ -96,6 +96,18 @@ final class MenuBarReadoutTests: XCTestCase {
         XCTAssertNil(chosen.adoptingFirstSummary(codexOnly))
     }
 
+    func testOpenSettingsDraftFollowsAdoptedWindowsOnlyWhileUntouched() {
+        let codex = [QuotaSelection(providerID: "codex", rowID: "session"), codexWeekly]
+        var draft = MenuBarReadout.newInstall
+        draft.style = .splitPill
+        let followed = draft.followingAdoptedWindows(codex)
+        XCTAssertEqual(followed.windows, codex)
+        XCTAssertEqual(followed.style, .splitPill, "Only the windows follow; the draft's other edits stay")
+        let picked = MenuBarReadout(style: .letteredPair, windows: [fable], badge: .off, showsAppIcon: false)
+        XCTAssertEqual(picked.followingAdoptedWindows(codex), picked, "Windows the user picked are kept")
+        XCTAssertEqual(draft.followingAdoptedWindows([]), draft)
+    }
+
     func testBadgeModes() {
         let claude = MenuBarReadout(style: .letteredPair, windows: MenuBarReadout.defaultWindows, badge: .whenProvidersDiffer, showsAppIcon: false)
         XCTAssertFalse(claude.badgeVisible)

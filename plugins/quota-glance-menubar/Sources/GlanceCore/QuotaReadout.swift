@@ -55,6 +55,10 @@ public struct QuotaReadoutState {
         return (0...150).contains(now.timeIntervalSince(receivedAt))
     }
 
+    /// Whether any summary has listed its windows yet. Until one has, a chosen
+    /// window is unknown, not gone.
+    public var hasSummary: Bool { !windows.isEmpty }
+
     /// One cell per chosen window, in order: its letter, provider and the
     /// remaining percent, or nil ("—") for a stale, missing or expired reading.
     /// Letters are computed against every row the summary lists.
@@ -68,14 +72,18 @@ public struct QuotaReadoutState {
                 letter: ReadoutLetters.letter(for: selection, among: rows),
                 percent: current ? window?.remainingPercent : nil,
                 title: window?.title ?? fallbackTitle(for: selection),
-                available: window != nil)
+                available: !hasSummary || window != nil)
         }
     }
 
+    /// The title a window has when the summary doesn't list it: the provider's
+    /// title from another of its rows, else quota-glance's own provider and row
+    /// titles, so it reads as the dashboard would title it.
     private func fallbackTitle(for selection: QuotaSelection) -> String {
         let provider = windows.first { $0.selection.providerID == selection.providerID }
-            .flatMap { $0.title.components(separatedBy: " · ").first } ?? selection.providerID
-        return "\(provider) · \(selection.rowID)"
+            .flatMap { $0.title.components(separatedBy: " · ").first }
+            ?? QuotaTitles.provider(selection.providerID)
+        return "\(provider) · \(QuotaTitles.row(selection.rowID))"
     }
 
     public func presentation(for selection: QuotaSelection?, at now: Date = Date()) -> (text: String, detail: String) {
@@ -142,5 +150,42 @@ public enum ReadoutText {
         }
         lines.append(cadence)
         return lines.joined(separator: "\n")
+    }
+}
+
+/// quota-glance's fallback titles (`providerTitleOf` and `rowTitleOf` in
+/// `plugins/quota-glance/internal/aggregate/build.go`), for windows the
+/// current summary doesn't list.
+public enum QuotaTitles {
+    public static func provider(_ id: String) -> String {
+        switch id {
+        case "claude": return "Claude"
+        case "codex": return "Codex"
+        case "xai": return "xAI"
+        default: return id
+        }
+    }
+
+    /// `weekly_fable` → "Weekly (Fable)", `model_weekly:sonnet` → "Weekly (sonnet)",
+    /// `raw:xai:product/BUILD` → "product/BUILD". Unknown keys are shown as they are.
+    public static func row(_ rowID: String) -> String {
+        if rowID.hasPrefix("raw:") {
+            let rest = rowID.dropFirst(4)
+            if let colon = rest.firstIndex(of: ":") { return String(rest[rest.index(after: colon)...]) }
+            return String(rest)
+        }
+        let parts = rowID.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        let key = String(parts[0])
+        let model = parts.count > 1 ? String(parts[1]) : ""
+        let base: String
+        switch key {
+        case "session", "model_session": base = "Session"
+        case "weekly", "model_weekly": base = "Weekly"
+        case "weekly_fable": base = "Weekly (Fable)"
+        case "credits": base = "Credits"
+        case "monthly": base = "Monthly"
+        default: return rowID
+        }
+        return model.isEmpty ? base : "\(base) (\(model))"
     }
 }

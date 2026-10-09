@@ -148,6 +148,16 @@ public struct MenuBarReadout: Codable, Equatable {
         return copy.normalized()
     }
 
+    /// After the saved windows were swapped for a dashboard's own
+    /// (`adoptingFirstSummary`), an open Settings draft follows them unless
+    /// the user has already picked other windows in it.
+    public func followingAdoptedWindows(_ adopted: [QuotaSelection]) -> MenuBarReadout {
+        guard windows == Self.defaultWindows, !adopted.isEmpty else { return self }
+        var copy = self
+        copy.windows = adopted
+        return copy.normalized()
+    }
+
     /// Whether badges are drawn for these windows.
     public var badgeVisible: Bool { badge.isVisible(forProviders: windows.map(\.providerID)) }
 }

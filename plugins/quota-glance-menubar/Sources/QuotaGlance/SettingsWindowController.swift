@@ -9,6 +9,8 @@ final class SettingsWindowController: NSWindowController {
     private let updater: SPUUpdater
     private let logos: ProviderLogos
     private let onSave: (DashboardLocation) -> Void
+    /// Asks for the summary's window list when none has loaded (Icon only polls nothing).
+    var onNeedsWindows: (() -> Void)?
     private let urlField = NSTextField()
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private lazy var loginCheckbox = NSButton(checkboxWithTitle: "Open at login", target: self, action: #selector(toggleLogin))
@@ -59,6 +61,17 @@ final class SettingsWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(urlField)
+        if !state.hasSummary { onNeedsWindows?() }
+    }
+
+    /// The saved windows were just swapped for a dashboard's own (its first
+    /// summary had no Claude rows). The draft follows unless the user has
+    /// already picked other windows, so Save cannot write the old pair back.
+    func savedWindowsAdopted(_ windows: [QuotaSelection]) {
+        let followed = draft.followingAdoptedWindows(windows)
+        guard followed != draft else { return }
+        draft = followed
+        refreshMenuBarSection()
     }
 
     /// Called on every summary. While Settings is closed the draft follows the
@@ -293,16 +306,19 @@ final class SettingsWindowController: NSWindowController {
         previewWidth.stringValue = (width.rounded() == width ? String(Int(width)) : String(format: "%.1f", width)) + "pt wide"
 
         // Two chosen windows with the same letters look alike when they share a
-        // provider (the badge can't help) or when no badge is drawn.
-        if lettered, let clash = ReadoutLetters.clash(draft.windows, letters: cells.map(\.letter), badgeVisible: draft.badgeVisible) {
+        // provider (the badge can't help) or when neither draws a badge: the
+        // badge is off, or its provider has no bundled logo.
+        let badges = draft.windows.map { draft.badgeVisible && logos.mark(for: $0.providerID) != nil }
+        if lettered, let clash = ReadoutLetters.clash(draft.windows, letters: cells.map(\.letter), badges: badges) {
             let names = "\(Self.name(cells[clash.first])) and \(Self.name(cells[clash.second]))"
             let why = clash.sameProvider ? "They look the same in the menu bar whatever the badge setting."
-                                         : "With badges off they look the same in the menu bar."
+                : draft.badgeVisible ? "Neither provider has a logo, so they look the same in the menu bar."
+                : "With badges off they look the same in the menu bar."
             clashWarning.show("\(names) both read \(cells[clash.first].letter). \(why)")
         } else {
             clashWarning.show(nil)
         }
-        if draft.style != .iconOnly, !state.windows.isEmpty, let gone = cells.first(where: { !$0.available }) {
+        if draft.style != .iconOnly, state.hasSummary, let gone = cells.first(where: { !$0.available }) {
             goneWarning.show("\(Self.name(gone)) isn’t in your dashboard any more. It shows “—” until it comes back, or pick another window.")
         } else {
             goneWarning.show(nil)
@@ -492,7 +508,7 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
         let selection = draft.windows[row]
         let (menu, selected) = windowMenu(forRow: row)
         view.configure(letter: letter(for: selection), logo: logos.image(for: selection.providerID, size: 14),
-                       title: title(for: selection), available: state.windows.isEmpty || state.windows.contains { $0.selection == selection },
+                       title: title(for: selection), available: !state.hasSummary || state.windows.contains { $0.selection == selection },
                        menu: menu, selected: selected, row: row, enabled: draft.style != .iconOnly)
         view.onChoose = { [weak self] choice, row in self?.choose(choice, forRow: row) }
         return view

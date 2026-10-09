@@ -179,7 +179,9 @@ enum ReadoutRenderer {
             }
             x = box.maxX
         } else {
-            let gap = CGFloat(ReadoutLayout.pairGap(badges: options.badges))
+            // 6pt with badges, 7pt without: count the badges actually drawn, so
+            // providers without a bundled logo space as if badges were off.
+            let gap = CGFloat(ReadoutLayout.pairGap(badges: measured.contains { $0.mark != nil }))
             for (index, cell) in measured.enumerated() {
                 if index > 0 { x += gap }
                 let slot = CGFloat(ReadoutLayout.pairSlotWidth(letterAdvance: Double(cell.letter.advance), numberAdvance: Double(cell.number.advance),

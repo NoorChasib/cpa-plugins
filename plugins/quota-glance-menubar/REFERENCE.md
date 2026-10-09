@@ -47,7 +47,7 @@ signed-off round 2 board,
 
 | Show | Draws |
 | --- | --- |
-| Icon only | the chart icon; no background requests |
+| Icon only | the chart icon; no background timer |
 | Percent | the icon and the first window's remaining percentage, `59%` (0.3's form) |
 | Lettered pair | one to three windows as letter + number, `S94 W59`, plain text |
 | Split pill | the same windows in round 1's box, one half per window, `S94 \| W59` |
@@ -56,7 +56,10 @@ The percentage is the aggregate **remaining** quota, matching the page.
 Windows are chosen from every row the dashboard summary lists, grouped by
 provider, in any order (drag to reorder) and from any provider: one to three,
 no duplicates. A chosen window that leaves the summary stays in the list,
-marked unavailable, and reads **—** until it returns.
+marked unavailable, and reads **—** until it returns; it keeps the title the
+dashboard gives it (Claude · Weekly (Fable), using quota-glance's own provider
+and row titles). Until the first summary arrives, chosen windows have no
+reading yet and are not reported as missing.
 
 ### Letters
 
@@ -75,7 +78,8 @@ letter (`Wsp`, `Wsa`), so a new row in the summary can lengthen an existing
 letter. Across providers letters may repeat (Codex W, Claude W); the badge
 tells them apart. Settings warns, below the preview, when two chosen windows
 would still look alike: same letters and same provider, or same letters with
-no badge drawn. Saving is still allowed. The rules are in
+no badge drawn on either (badges off, or a provider without a bundled logo).
+Saving is still allowed. The rules are in
 `Sources/GlanceCore/ReadoutLetters.swift`; `scripts/letters-fixture.mjs`
 holds the board's own copy and generates the fixture the Swift tests check.
 
@@ -84,8 +88,9 @@ holds the board's own copy and generates the fixture the Swift tests check.
 **Badge** draws the provider's logo, 9pt square, 1pt after each number with
 its top 3pt above the digits' cap height. **Always** is the default; **When
 providers differ** draws badges only when the chosen windows span more than
-one provider; **Off** draws letters only. Logos are bundled SVG files; the
-0.4.0 files are placeholders. Replacing them is described in
+one provider; **Off** draws letters only. A provider without a bundled logo
+draws no badge and is spaced as if badges were off (Lettered pair slots 7pt
+apart, not 6pt). Logos are bundled SVG files; the 0.4.0 files are placeholders. Replacing them is described in
 [docs/logos.md](docs/logos.md).
 
 ### Drawing
@@ -126,7 +131,9 @@ reload the page. The bridge reuses the page’s successful same-origin GET
 request, including its authentication, proxy prefix, and ETag. Native
 messages contain only quota IDs, labels, percentages, and freshness state.
 Unauthorized responses stop background credential retries until the page
-signs in successfully again.
+signs in successfully again. With Icon only no timer runs; opening Settings
+before any summary has loaded requests it once (now, or when the page next
+finishes loading) so the windows can be chosen.
 
 A scoped App Nap activity keeps this user-requested readout active while the
 Mac is awake; it permits normal system sleep. Wake requests a fresh reading.
@@ -343,14 +350,16 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The suite contains 62 Swift tests and 14 JavaScript tests. GlanceCore (45
+The suite contains 67 Swift tests and 14 JavaScript tests. GlanceCore (49
 tests, which also run on Linux) covers the readout preference and its
-migration, letters against the board-generated fixture, cells, accessibility
-and tooltip text, the pill and slot arithmetic, and the SVG logo reader
-against the three bundled files. The app tests (17, macOS only) cover
-popover reopening without reload, migration through real UserDefaults,
-rendering (template images, stable widths for any two-digit reading, a 100
-that fits the pill, light versus dark and Increase Contrast drawings), and a
+migration, letters against the board-generated fixture and the look-alike
+warning, cells before and after the first summary, fallback titles,
+accessibility and tooltip text, the pill and slot arithmetic, and the SVG logo reader
+against the three bundled files. The app tests (18, macOS only) cover
+popover reopening without reload, migration and first-summary adoption through
+real UserDefaults, rendering (template images, stable widths for any two-digit
+reading, a 100 that fits the pill, one ink at every level, providers without a
+logo, light versus dark and Increase Contrast drawings), and a
 native refresh through the full message bridge in a real WebKit view with no
 window attached. Bridge fixtures also exercise
 conditional responses, authentication fallback, failures/recovery, concurrent

@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import GlanceCore
 import XCTest
 @testable import QuotaGlance
@@ -82,10 +83,13 @@ final class ReadoutRendererTests: XCTestCase {
             XCTAssertGreaterThan(icon, on, "\(style)")
             XCTAssertGreaterThan(three, on, "\(style)")
         }
-        // A provider without a logo gets no badge, so its slot is narrower.
+        // A provider without a logo draws no badge, so it is laid out exactly as
+        // with badges off: no badge room and slots 7pt apart, not 6pt.
         let unknown = ReadoutRenderer.image(cells: cells([94, 59], providers: ["mystery", "mystery"]), options: options(.letteredPair), marks: m).size.width
         let off = ReadoutRenderer.image(cells: cells([94, 59]), options: options(.letteredPair, badges: false), marks: m).size.width
-        XCTAssertEqual(unknown, off - 1, "Slots are 6pt apart with badges on, 7pt without")
+        XCTAssertEqual(unknown, off, "Slots are 6pt apart only when a badge is drawn")
+        let plan = ReadoutRenderer.layout(cells: cells([94, 59], providers: ["mystery", "mystery"]), options: options(.letteredPair), marks: m, scale: 2)
+        XCTAssertFalse(plan.operations.contains { if case .logo = $0 { return true } else { return false } })
     }
 
     func testLightDarkAndIncreasedContrastDrawDifferently() throws {
@@ -99,14 +103,53 @@ final class ReadoutRendererTests: XCTestCase {
         }
     }
 
+    /// Every alpha the plan paints with, in order: the pill fill and each text run's colour.
+    private func inks(_ plan: ReadoutRenderer.Plan) -> [CGFloat] {
+        plan.operations.flatMap { operation -> [CGFloat] in
+            switch operation {
+            case let .fill(_, _, alpha):
+                return [alpha]
+            case let .text(line, _):
+                let runs = CTLineGetGlyphRuns(line) as? [CTRun] ?? []
+                return runs.map { run in
+                    let attributes = CTRunGetAttributes(run) as NSDictionary
+                    guard let value = attributes[kCTForegroundColorAttributeName as String] else { return -1 }
+                    return (value as! CGColor).alpha
+                }
+            case .icon, .logo:
+                return []
+            }
+        }
+    }
+
     func testLowReadingsUseTheSameInk() throws {
-        // One ink at every level: 3% and 94% differ only by their glyphs, so the
-        // most opaque pixel is the same.
+        // One ink at every level: no colour change and no dimming for low
+        // readings, 0 or "—". The plan's fill and text alphas must not depend on the reading.
         let m = try marks()
-        let high = try pixels(ReadoutRenderer.image(cells: cells([94, 94]), options: options(.splitPill), marks: m))
-        let low = try pixels(ReadoutRenderer.image(cells: cells([3, 3]), options: options(.splitPill), marks: m))
-        let alpha = { (data: Data) in stride(from: 3, to: data.count, by: 4).map { data[$0] }.max() }
-        XCTAssertEqual(alpha(high), alpha(low))
+        for style in [ReadoutStyle.letteredPair, .splitPill] {
+            for dark in [true, false] {
+                let o = options(style, dark: dark)
+                let high = inks(ReadoutRenderer.layout(cells: cells([94, 94]), options: o, marks: m, scale: 2))
+                XCTAssertFalse(high.isEmpty)
+                XCTAssertFalse(high.contains(-1), "Every text run carries its ink")
+                for low in [[3, 3], [0, 0], [nil, nil]] as [[Int?]] {
+                    let ink = inks(ReadoutRenderer.layout(cells: cells(low), options: o, marks: m, scale: 2))
+                    XCTAssertEqual(ink, high, "\(style) dark=\(dark) \(low)")
+                }
+            }
+        }
+        // And in pixels, with badges off so only letters, numbers and fill draw:
+        // the strongest ink and the fill beside the glyphs are unchanged.
+        let high = ReadoutRenderer.image(cells: cells([94, 94]), options: options(.splitPill, badges: false), marks: m)
+        let low = ReadoutRenderer.image(cells: cells([3, 3]), options: options(.splitPill, badges: false), marks: m)
+        XCTAssertEqual(high.size, low.size)
+        let highPixels = try pixels(high), lowPixels = try pixels(low)
+        let strongest = { (data: Data) in stride(from: 3, to: data.count, by: 4).map { data[$0] }.max() }
+        XCTAssertEqual(strongest(highPixels), strongest(lowPixels))
+        // 2pt in from the pill's left edge, halfway up: fill only.
+        let fill = (Int(high.size.height) * Int(high.size.width) * 2 + 4) * 4 + 3
+        XCTAssertGreaterThan(highPixels[fill], 0)
+        XCTAssertEqual(highPixels[fill], lowPixels[fill])
     }
 
     @MainActor

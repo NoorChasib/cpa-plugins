@@ -50,16 +50,23 @@ public enum ReadoutLetters {
 
     /// The first two chosen windows that would look alike in the menu bar:
     /// same letters and either the same provider (the badge cannot help) or no
-    /// badge drawn. Indexes into `windows`.
-    public static func clash(_ windows: [QuotaSelection], letters: [String], badgeVisible: Bool) -> (first: Int, second: Int, sameProvider: Bool)? {
-        guard windows.count == letters.count else { return nil }
+    /// badge drawn on either. `badges[i]` is whether window i's badge is
+    /// actually drawn: the badge setting shows it and its provider has a logo.
+    /// Indexes into `windows`.
+    public static func clash(_ windows: [QuotaSelection], letters: [String], badges: [Bool]) -> (first: Int, second: Int, sameProvider: Bool)? {
+        guard windows.count == letters.count, windows.count == badges.count else { return nil }
         for i in windows.indices {
             for j in windows.indices where j > i && letters[i] == letters[j] {
                 let same = windows[i].providerID == windows[j].providerID
-                if same || !badgeVisible { return (i, j, same) }
+                if same || (!badges[i] && !badges[j]) { return (i, j, same) }
             }
         }
         return nil
+    }
+
+    /// The same, when every window's badge is drawn or none is.
+    public static func clash(_ windows: [QuotaSelection], letters: [String], badgeVisible: Bool) -> (first: Int, second: Int, sameProvider: Bool)? {
+        clash(windows, letters: letters, badges: Array(repeating: badgeVisible, count: windows.count))
     }
 
     private static func parse(_ rowID: String) -> (kind: String, name: String) {

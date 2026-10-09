@@ -77,4 +77,15 @@ final class ReadoutLettersTests: XCTestCase {
         XCTAssertEqual(off?.sameProvider, false)
         XCTAssertNil(ReadoutLetters.clash([sel("claude", "session"), sel("claude", "weekly")], letters: ["S", "W"], badgeVisible: false))
     }
+
+    func testClashCountsOnlyBadgesThatAreDrawn() {
+        // Two providers without a bundled logo draw no badge even with the badge on.
+        let windows = [sel("openrouter", "weekly"), sel("mistral", "weekly")]
+        let none = ReadoutLetters.clash(windows, letters: ["W", "W"], badges: [false, false])
+        XCTAssertEqual(none?.sameProvider, false)
+        XCTAssertNil(ReadoutLetters.clash(windows, letters: ["W", "W"], badges: [true, false]), "One badge tells them apart")
+        XCTAssertNil(ReadoutLetters.clash(windows, letters: ["W", "W"], badges: [true, true]))
+        XCTAssertNotNil(ReadoutLetters.clash([sel("xai", "raw:xai:BUILD"), sel("xai", "raw:xai:bulk")], letters: ["Bu", "Bu"], badges: [true, true]))
+        XCTAssertNil(ReadoutLetters.clash(windows, letters: ["W", "W"], badges: [false]), "Mismatched counts never warn")
+    }
 }
