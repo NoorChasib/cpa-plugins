@@ -95,9 +95,54 @@ final class QuotaReadoutTests: XCTestCase {
         XCTAssertEqual(cell.text, "—")
         XCTAssertEqual(cell.letter, "F")
         XCTAssertFalse(cell.available)
-        XCTAssertEqual(cell.title, "Claude · weekly_fable")
+        XCTAssertEqual(cell.title, "Claude · Weekly (Fable)", "A gone window keeps the dashboard's title")
+        XCTAssertEqual(cell.spokenName, "Claude weekly (Fable)")
         state.markUnavailable()
         XCTAssertEqual(state.cells(for: [session], at: now).map(\.text), ["—"])
+    }
+
+    func testBeforeAnySummaryChosenWindowsAreUnknownNotGone() {
+        let state = QuotaReadoutState()
+        XCTAssertFalse(state.hasSummary)
+        let chosen = MenuBarReadout.defaultWindows + [QuotaSelection(providerID: "codex", rowID: "model_weekly:spark")]
+        let cells = state.cells(for: chosen, at: now)
+        XCTAssertTrue(cells.allSatisfy(\.available), "No summary yet is not 'not in your dashboard'")
+        XCTAssertEqual(cells.map(\.text), ["—", "—", "—"])
+        XCTAssertEqual(cells.map(\.title), ["Claude · Session", "Claude · Weekly", "Codex · Weekly (spark)"])
+        XCTAssertEqual(ReadoutText.accessibilityLabel(cells),
+                       "Quota Glance. Claude session, no current reading, Claude weekly, no current reading, Codex weekly (spark), no current reading.")
+        XCTAssertEqual(ReadoutText.tooltip(cells), """
+            Claude · Session: no current reading.
+            Claude · Weekly: no current reading.
+            Codex · Weekly (spark): no current reading.
+            Open the dashboard to check its connection and sign-in.
+            Updates every minute while your Mac is awake.
+            """)
+    }
+
+    func testFallbackTitlesMatchQuotaGlance() throws {
+        XCTAssertEqual(QuotaTitles.row("session"), "Session")
+        XCTAssertEqual(QuotaTitles.row("weekly"), "Weekly")
+        XCTAssertEqual(QuotaTitles.row("weekly_fable"), "Weekly (Fable)")
+        XCTAssertEqual(QuotaTitles.row("credits"), "Credits")
+        XCTAssertEqual(QuotaTitles.row("monthly"), "Monthly")
+        XCTAssertEqual(QuotaTitles.row("model_session:spark"), "Session (spark)")
+        XCTAssertEqual(QuotaTitles.row("model_weekly:sonnet"), "Weekly (sonnet)")
+        XCTAssertEqual(QuotaTitles.row("raw:xai:product/BUILD"), "product/BUILD")
+        XCTAssertEqual(QuotaTitles.row("something_new"), "something_new")
+        XCTAssertEqual(QuotaTitles.provider("xai"), "xAI")
+        XCTAssertEqual(QuotaTitles.provider("openrouter"), "openrouter")
+        // After a summary, a gone window of a listed provider takes that provider's title.
+        var state = QuotaReadoutState()
+        state.receive(try summary(), at: now)
+        let gone = try XCTUnwrap(state.cells(for: [QuotaSelection(providerID: "xai", rowID: "raw:xai:product/BUILD")], at: now).first)
+        XCTAssertFalse(gone.available)
+        XCTAssertEqual(gone.title, "xAI · product/BUILD")
+        XCTAssertEqual(ReadoutText.tooltip([gone]), """
+            xAI · product/BUILD: not in your dashboard.
+            Open the dashboard to check its connection and sign-in.
+            Updates every minute while your Mac is awake.
+            """)
     }
 
     func testAccessibilityAndTooltipText() throws {

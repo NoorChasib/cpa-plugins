@@ -12,7 +12,8 @@ SVG files bundled with the app:
 
 The files shipped in 0.4.0 are **placeholders** copied from the design board
 (an eight-point spark, a hexagon ring and a slashed X). A provider without a
-readable file gets no badge; the number keeps its letter.
+readable file gets no badge; the number keeps its letter, and it is spaced
+and checked for look-alike letters as if badges were off.
 
 ## Swapping in the real logos
 

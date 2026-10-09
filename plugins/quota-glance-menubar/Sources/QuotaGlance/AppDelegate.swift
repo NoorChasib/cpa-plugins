@@ -52,9 +52,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         dashboard.readout.onChange = { [weak self] in
             guard let self else { return }
-            self.settings.adoptFirstSummary(self.dashboard.readout.state.windows)
+            if self.settings.adoptFirstSummary(self.dashboard.readout.state.windows) {
+                // An open Settings window must not save the old default pair back.
+                self.settingsWindow.savedWindowsAdopted(self.settings.readout.windows)
+            }
             self.updateReadout()
         }
+        settingsWindow.onNeedsWindows = { [weak self] in self?.dashboard.readout.requestWindows() }
         if let location = settings.location { dashboard.configure(location) }
         dashboard.readout.setEnabled(settings.readout.style != .iconOnly)
         updateReadout()

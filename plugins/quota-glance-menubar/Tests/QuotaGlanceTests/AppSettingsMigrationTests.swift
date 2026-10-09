@@ -57,6 +57,31 @@ final class AppSettingsMigrationTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: store).readout, chosen)
     }
 
+    func testSavingFromSettingsOpenDuringAdoptionKeepsTheAdoptedWindows() throws {
+        // A new install on a Codex-only dashboard, with Settings open when the
+        // first summary arrives. Settings' draft must follow the adoption, or
+        // Save would write the Claude pair back and adoption never runs again.
+        let store = defaults()
+        let settings = AppSettings(defaults: store)
+        let location = try DashboardLocation("https://quota.example.com/app")
+        settings.save(location)
+        var draft = settings.readout
+        draft.style = .splitPill
+        let json = """
+        {"stale":false,"windows":[
+          {"selection":{"providerID":"codex","rowID":"session"},"title":"Codex · Session","remainingPercent":80},
+          {"selection":{"providerID":"codex","rowID":"weekly"},"title":"Codex · Weekly","remainingPercent":60}]}
+        """
+        let codex = try JSONDecoder().decode(QuotaReadoutSnapshot.self, from: Data(json.utf8)).windows
+        XCTAssertTrue(settings.adoptFirstSummary(codex))
+        draft = draft.followingAdoptedWindows(settings.readout.windows)
+        settings.save(location, readout: draft)
+        XCTAssertEqual(settings.readout.windows, codex.map(\.selection))
+        XCTAssertEqual(settings.readout.style, .splitPill)
+        XCTAssertFalse(settings.adoptFirstSummary(codex), "Adoption runs once per dashboard")
+        XCTAssertEqual(AppSettings(defaults: store).readout.windows, codex.map(\.selection))
+    }
+
     func testFirstSummaryWithoutClaudeAdoptsItsFirstProviderOnce() throws {
         let store = defaults()
         let settings = AppSettings(defaults: store)
