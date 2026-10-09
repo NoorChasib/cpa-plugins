@@ -89,8 +89,8 @@ a release. Test the downloaded DMG on your Mac. After a successful check, push
 a fresh release tag against the same commit on `main`:
 
 ```sh
-git tag quota-glance-menubar/v0.3.1 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.3.1
+git tag quota-glance-menubar/v0.4.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.4.0
 ```
 
 GitHub then builds and publishes the DMG and ZIP on the repository's Releases

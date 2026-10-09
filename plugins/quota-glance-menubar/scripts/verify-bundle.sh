@@ -5,6 +5,7 @@ app="${1:-dist/Quota Glance.app}"
 test -x "$app/Contents/MacOS/QuotaGlance"
 test -s "$app/Contents/Resources/AppIcon.icns"
 test -s "$app/Contents/Resources/QuotaReadout.js"
+for logo in claude codex xai; do test -s "$app/Contents/Resources/Logos/$logo.svg"; done
 plutil -lint "$app/Contents/Info.plist"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.noorchasib.quota-glance-menubar
 test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$app/Contents/Info.plist")" = true

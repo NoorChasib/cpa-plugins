@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Placeholder for the Codex/OpenAI mark (a hexagon ring, from the design board). Replace this file with the real single-colour SVG. -->
+  <path d="M8 1.7l5.45 3.15v6.3L8 14.3l-5.45-3.15v-6.3z" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linejoin="round"/>
+  <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+</svg>
