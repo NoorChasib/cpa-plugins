@@ -227,7 +227,9 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 	// Dating the banked resets is a second request, so it is made only when the
 	// first one said there is something to date. A failure here is not a failed
 	// observation: the count is already known and everything else in this
-	// response is good, so the expiry is simply left unknown.
+	// response is good, so the expiry is simply left unknown. Nor is a 429 here
+	// the poll's: the caller judges the poll by the usage request, the first
+	// one made through doer, and never by this one.
 	if provider == "codex" && details != nil && details.ResetCredits != nil {
 		if expiry, ok := codexResetCreditExpiry(ctx, doer, creds, now); ok {
 			details.ResetCredits.SoonestExpiry = &expiry

@@ -52,6 +52,31 @@ type RateLimited struct{ RetryAfter time.Time }
 
 func (RateLimited) Error() string { return "provider rate limited" }
 
+// Failure is one failed poll and the schedule it earned. It carries only the
+// poll's status and times, never a response body, provider error text, or
+// anything naming the account beyond its index.
+type Failure struct {
+	Provider, AuthIndex string
+	// HTTPStatus is the poll's own status, zero when no response arrived.
+	HTTPStatus  int
+	RateLimited bool
+	// RetryAfter is zero unless a 429 carried one.
+	RetryAfter  time.Time
+	NextAttempt time.Time
+	// ProviderPause is when the provider's other credentials may be polled
+	// again, zero unless this poll's 429 paused them.
+	ProviderPause time.Time
+}
+
+// FailureReporter is implemented by a Fetcher that wants to hear of every
+// failed poll, to put it in the operator's log. The snapshot keeps only the
+// last hundred polls, so without the log a rate limit older than that cannot
+// be dated. Step reports each failed poll once, after the schedule it earned
+// has been set.
+type FailureReporter interface {
+	ReportFailure(context.Context, Failure)
+}
+
 type Options struct {
 	Path              string
 	Interval, Spacing time.Duration
@@ -175,6 +200,17 @@ func (c *Cache) applySchedule(now time.Time) error {
 	return nil
 }
 
+// spacingTolerance is how far ahead of NextRequest a request may still be
+// admitted. The poller ticks once per spacing, and each tick wakes a few
+// milliseconds either side of the last. Without it, a tick that woke a moment
+// earlier than the one before found the spacing not quite over and lost its
+// slot, which in practice cost about half of all ticks and doubled the time a
+// round of polls took. A tenth of the spacing, up to a second, is far more
+// than a tick's jitter and far less than the spacing.
+func spacingTolerance(spacing time.Duration) time.Duration {
+	return min(time.Second, spacing/10)
+}
+
 // Step performs at most one provider request. Concurrent callers serialize at
 // this interface. Schedule and cooldowns are persisted before provider calls so
 // restarts cannot repeatedly bypass admission. Dashboard/consumer reads never
@@ -200,7 +236,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	if err := c.applySchedule(now); err != nil {
 		return err
 	}
-	if now.Before(c.data.NextRequest) {
+	if now.Add(spacingTolerance(c.opts.Spacing)).Before(c.data.NextRequest) {
 		return nil
 	}
 	accounts, err := c.fetcher.List(ctx)
@@ -263,7 +299,14 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		entry.LastAttempt, entry.NextAttempt = now, now.Add(c.opts.Interval)
 		entry.LastError = "refresh pending"
 		c.data.Entries[key] = entry
-		c.data.NextRequest = now.Add(c.opts.Spacing)
+		// The next slot follows this one's, not the moment it was taken, so
+		// a request admitted a little early does not bring the next one
+		// forward too and requests never come faster than the spacing.
+		slot := now
+		if c.data.NextRequest.After(slot) {
+			slot = c.data.NextRequest
+		}
+		c.data.NextRequest = slot.Add(c.opts.Spacing)
 		if err := c.save(now); err != nil {
 			return err
 		}
@@ -277,6 +320,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		if observation.RequestSent {
 			c.data.Totals.Requests++
 		}
+		failure := Failure{Provider: a.Provider, AuthIndex: a.AuthIndex, HTTPStatus: observation.HTTPStatus}
 		if fetchErr != nil {
 			c.data.Totals.Failures++
 			poll.Outcome = "failed"
@@ -296,11 +340,30 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 				c.data.Totals.RateLimits++
 				poll.Outcome = "rate_limited"
 				entry.LastError = "provider rate limited"
+				// A 429 is the provider's answer, not a verdict on this
+				// credential, so its backoff stops at an hour, or at the
+				// interval when that is longer. An hourly probe is what finds
+				// the limit lifted; six hours of silence would not.
+				ceiling := max(time.Hour, min(c.opts.Interval, 6*time.Hour))
+				if entry.NextAttempt.After(now.Add(ceiling)) {
+					entry.NextAttempt = now.Add(ceiling)
+				}
 				if limited.RetryAfter.After(entry.NextAttempt) {
 					entry.NextAttempt = limited.RetryAfter
 				}
-				c.data.ProviderCooldown[a.Provider] = entry.NextAttempt
+				// Its siblings pause for one interval, never for this
+				// credential's own backoff: that also counts its earlier
+				// failures, such as a revoked token's 401s, and lending it to
+				// the provider would let one dead credential stop every other
+				// one being read for hours.
+				pause := now.Add(min(c.opts.Interval, 6*time.Hour))
+				if limited.RetryAfter.After(pause) {
+					pause = limited.RetryAfter
+				}
+				c.data.ProviderCooldown[a.Provider] = pause
+				failure.RateLimited, failure.RetryAfter, failure.ProviderPause = true, limited.RetryAfter, pause
 			}
+			failure.NextAttempt = entry.NextAttempt
 		} else {
 			c.data.Totals.Successes++
 			entry.Percent, entry.ResetAt, entry.ObservedAt = observation.Percent, observation.ResetAt, observation.ObservedAt
@@ -329,7 +392,11 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 			c.data.History = c.data.History[len(c.data.History)-100:]
 		}
 		c.data.Entries[key] = entry
-		return c.save(now)
+		err := c.save(now)
+		if reporter, ok := c.fetcher.(FailureReporter); ok && fetchErr != nil {
+			reporter.ReportFailure(ctx, failure)
+		}
+		return err
 	}
 	if dirty {
 		return c.save(now)

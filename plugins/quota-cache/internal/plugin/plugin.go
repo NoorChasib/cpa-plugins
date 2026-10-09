@@ -24,7 +24,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.11"
+var Version = "0.1.12"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -362,6 +362,39 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 	return observed(doer, observation, err)
 }
 
+// ReportFailure puts one line in CPA's log for each failed poll. The snapshot
+// keeps only the last hundred polls and host HTTP traffic never reaches CPA's
+// own log, so without this a rate limit older than the history cannot be
+// dated. A 429 is a warning because it pauses every credential of its
+// provider; any other failure backs off one credential, which the status page
+// already shows, and is logged as info. The poll schedule bounds the volume.
+// A line names only the provider, the opaque auth index already in the
+// snapshot, the status and the schedule: never an email, token, file name,
+// URL or response body.
+func (f hostFetcher) ReportFailure(ctx context.Context, failure cache.Failure) {
+	// A poll cut short by shutdown is not a failure worth a line.
+	if ctx.Err() != nil {
+		return
+	}
+	level, message := "info", "quota-cache poll failed; this credential is retried at next_attempt"
+	fields := map[string]any{"provider": failure.Provider, "auth_index": failure.AuthIndex, "next_attempt": logTime(failure.NextAttempt)}
+	if failure.RateLimited {
+		level, message = "warn", "quota-cache poll rate limited; this provider's credentials are paused"
+	}
+	if failure.HTTPStatus != 0 {
+		fields["http_status"] = failure.HTTPStatus
+	}
+	if !failure.RetryAfter.IsZero() {
+		fields["retry_after"] = logTime(failure.RetryAfter)
+	}
+	if !failure.ProviderPause.IsZero() {
+		fields["provider_paused_until"] = logTime(failure.ProviderPause)
+	}
+	f.host.Log(ctx, level, message, fields)
+}
+
+func logTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
 func observed(doer *captureDoer, observation quota.Observation, err error) (cache.Observation, error) {
 	result := cache.Observation{RequestSent: doer.sent, HTTPStatus: doer.status}
 	if doer.limited() {
@@ -377,6 +410,11 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 	return result, nil
 }
 
+// captureDoer records the poll's own request, the usage or credits read, which
+// is always the first a fetch makes. A later request through it, Codex's reset
+// inventory, is an optional read on top of a reading already in hand, so its
+// status is never the poll's: like a profile 429, an inventory 429 must not
+// discard a good usage reading, count as a rate limit, or pause the provider.
 type captureDoer struct {
 	host       Host
 	status     int
@@ -384,13 +422,17 @@ type captureDoer struct {
 	sent       bool
 }
 
-// limited reports whether the last request through this doer was refused with
-// 429, which turns the whole poll into a provider-wide pause.
+// limited reports whether the poll's own request was refused with 429, which
+// turns the whole poll into a provider-wide pause.
 func (d *captureDoer) limited() bool { return d.status == 429 }
 
 func (d *captureDoer) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	first := !d.sent
 	d.sent = true
 	response, err := d.host.HTTPDo(ctx, req)
+	if !first {
+		return response, err
+	}
 	d.status = response.StatusCode
 	value := http.Header(response.Headers).Get("Retry-After")
 	if seconds, e := strconv.ParseInt(value, 10, 32); e == nil && seconds > 0 {
