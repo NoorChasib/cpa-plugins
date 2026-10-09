@@ -2,7 +2,7 @@
 
 One scheduled poller for Claude, Codex, and Grok quota windows, credit balances, banked Codex and Claude rate-limit resets, plans and renewal dates, and availability flags, and optionally your OpenRouter account balance and your Claude API credit spend. Account Health and Reset Priority can read its saved observations instead of each contacting the providers.
 
-**Linux amd64:** Quota Cache 0.1.5 normalizes every provider's quota windows into one canonical vocabulary and records the subscription plan beside each credential, so a consumer never pattern-matches a provider string. 0.1.4's extended fields are still there — expand **All cached quota fields** in the sidebar to inspect them. Quota Cache 0.1.10 adds Claude's banked rate-limit resets, each account's plan from Claude's and Grok's account endpoints, Codex's subscription renewal date, and the Claude subscription start and billing period that a consumer can estimate a renewal from ([account details](docs/cache-format.md#account-details)). Everything is additive and the snapshot stays on schema 1: Account Health and Reset Priority keep their regular weekly/pool behavior and need no rebuild. Quota Cache 0.1.11 keeps saved observations, failure backoff, and account details through a CPA restart instead of clearing them while CPA is still loading its credentials. Quota Cache 0.1.12 stops one rate-limited or dead credential from pausing its provider for hours, stops a 429 on Codex's optional reset-credit request from discarding a good reading, sends polls at the configured spacing instead of often twice it, and logs every failed poll to CPA's log ([polling schedule and failures](docs/cache-format.md#polling-schedule-and-failures)). Quota Cache 0.1.13 adds [Claude API credits](#claude-api-credits-optional): each Claude Console organization's spend against its Max or Team plan's monthly API credit, with an `anthropic-api` entry per organization ([format](docs/cache-format.md#claude-api-credits)). See the [cache format and reader API](docs/cache-format.md) for building another consumer.
+**Linux amd64:** Quota Cache 0.1.5 normalizes every provider's quota windows into one canonical vocabulary and records the subscription plan beside each credential, so a consumer never pattern-matches a provider string. 0.1.4's extended fields are still there — expand **All cached quota fields** in the sidebar to inspect them. Quota Cache 0.1.10 adds Claude's banked rate-limit resets, each account's plan from Claude's and Grok's account endpoints, Codex's subscription renewal date, and the Claude subscription start and billing period that a consumer can estimate a renewal from ([account details](docs/cache-format.md#account-details)). Everything is additive and the snapshot stays on schema 1: Account Health and Reset Priority keep their regular weekly/pool behavior and need no rebuild. Quota Cache 0.1.11 keeps saved observations, failure backoff, and account details through a CPA restart instead of clearing them while CPA is still loading its credentials. Quota Cache 0.1.12 stops one rate-limited or dead credential from pausing its provider for hours, stops a 429 on Codex's optional reset-credit request from discarding a good reading, sends polls at the configured spacing instead of often twice it, and logs every failed poll to CPA's log ([polling schedule and failures](docs/cache-format.md#polling-schedule-and-failures)). Quota Cache 0.1.13 adds [Claude API credits](#claude-api-credits-optional): each Claude Console organization's spend against its Max or Team plan's monthly API credit, with an `anthropic-api` entry per organization ([format](docs/cache-format.md#claude-api-credits)). Quota Cache 0.1.14 stops reading Anthropic's cost report for them: it counts each organization's Claude API-key traffic as CPA serves it, keyed by the organization's id, holds no Anthropic key, and sends Anthropic nothing. See the [cache format and reader API](docs/cache-format.md) for building another consumer.
 
 ## Install and start
 
@@ -75,53 +75,46 @@ The snapshot keeps OpenRouter's purchased and spent totals and never the key. Th
 
 ## Claude API credits (optional)
 
-Max and Team plans include a monthly Claude API credit, deposited into one Claude Console organization per plan and shared by every API key in it. Quota Cache can read what each organization has spent this cycle from Anthropic's cost report, so [Quota Glance](../quota-glance/README.md) can show what is left. Anthropic reports neither the credit's amount nor its renewal date, so you enter both.
+Max and Team plans include a monthly Claude API credit, deposited into one Claude Console organization per plan and shared by every API key in it. Quota Cache can count what each organization's API keys spend through CPA, so [Quota Glance](../quota-glance/README.md) can estimate what is left. Nothing is asked of Anthropic: Quota Cache registers with CPA as a usage plugin, counts the tokens of every Claude API-key request CPA serves, per Console organization, and saves the count to a meter file beside its snapshot (`snapshot.meter.json`). Quota Glance prices the tokens at Anthropic's list prices and marks every figure as an estimate; from time to time you type the balance Console shows into Quota Glance, which anchors the estimate.
 
-**Update Quota Cache to 0.1.13 before adding `claude-api-credits`.** Older builds reject the key, which fails the whole configuration and stops all polling.
+Requirements:
+
+- **CPA v8.0.4 or newer (verified on v8.0.22).** An older CPA can hand a retried request the earlier attempt's response headers, which attributes its spend to the wrong organization.
+- Every organization's API traffic goes through CPA as `claude-api-key` entries. Traffic that does not pass through CPA (the Console Workbench, other tools) is not counted. A personal key that is not scoped to a workspace needs an `anthropic-workspace-id` header for inference; a `claude-api-key` entry's `headers:` map can carry it.
+- Update Quota Cache to 0.1.14 before adding `organization-id`. Quota Cache 0.1.13 marks such an item as misconfigured and does not read it; 0.1.12 and older reject `claude-api-credits` and stop polling altogether.
 
 Configure one item per organization. Two Team seats share one organization and one credit, so they are a single item: four personal Max organizations and one Team organization make five items.
 
-1. In each organization, create an Admin API key in Console under **Settings > Admin keys**. Only a member with the admin role can. **Give it an expiry.** An Admin key has no scopes: it can also manage the organization's members, workspaces, and API keys. A personal or service-account key that is not scoped to a workspace (`sk-ant-api...`) is also accepted by Anthropic's cost report.
-2. Check each key once before you configure it. These are your own requests to Anthropic; Quota Cache's tests never make them:
-
-   ```sh
-   KEY=sk-ant-admin01-...
-   curl -sS https://api.anthropic.com/v1/organizations/me \
-     -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01"
-   curl -sS "https://api.anthropic.com/v1/organizations/cost_report?starting_at=$(date -u +%F)T00:00:00Z&ending_at=$(date -u -d tomorrow +%F)T00:00:00Z&bucket_width=1d" \
-     -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01"
-   ```
-
-   The first must return the organization's `id`. The second should return one bucket for today. A 401 or 403 means that key will not work. (On macOS, replace `date -u -d tomorrow +%F` with `date -u -v+1d +%F`.)
-3. Add the items to Quota Cache's configuration in CPA's config file. The plugin panel cannot edit this list, so use YAML. Quote `monthly-usd` and `renews`:
+1. Copy each organization's **Organization ID** from Console under **Settings > Organization**. It is not a secret, and no key of any kind goes into the configuration.
+2. Add the items to Quota Cache's configuration in CPA's config file. The plugin panel cannot edit this list, so use YAML. Quote `monthly-usd` and `renews`:
 
    ```yaml
    quota-cache:
      claude-api-credits:
        - label: siphorchannel
-         admin-key: sk-ant-admin01-...
-         monthly-usd: "200"
-         renews: "2026-10-29"
+         organization-id: "12345678-1234-5678-1234-567812345678"
+         monthly-usd: "200"        # optional
+         renews: "2026-10-29"      # optional
        - label: agency-team
-         admin-key: sk-ant-admin01-...
-         monthly-usd: "260"
-         renews: "2026-10-03"
+         organization-id: "00000000-0000-4000-8000-000000000002"
    ```
 
 - `label` is your unique name for the organization.
-- `monthly-usd` is the exact monthly credit in dollars. Team pools differ, so enter what Console shows.
-- `renews` is the day the next credit is deposited: the date the linked claude.ai plan renews (claude.ai **Settings > Billing**, or **Organization settings > Billing** on Team), as a UTC date. Console's expiry date for the current credit (**Settings > Billing > Promotional credits**) may be the day before; if so, use the claude.ai date. Only the day of the month is used, and it repeats monthly.
+- `organization-id` is the Organization ID from Console, in either case. It links the item to the traffic CPA serves for that organization.
+- `monthly-usd` is the monthly credit in dollars, optional. Team pools differ, so enter what Console shows. It can also be set in Quota Glance's dashboard, where a value set there wins over this file.
+- `renews` is the day the next credit is deposited, optional: the date the linked claude.ai plan renews (claude.ai **Settings > Billing**, or **Organization settings > Billing** on Team), as a UTC date. Console's expiry date for the current credit (**Settings > Billing > Promotional credits**) may be the day before; if so, use the claude.ai date. Only the day of the month is used, and it repeats monthly. It can also be set in Quota Glance's dashboard. An invalid `monthly-usd` or `renews` is ignored and flagged, never a reason to stop counting.
+- `admin-key` from Quota Cache 0.1.13 is still accepted, so an older configuration loads, but it is ignored: never read, validated, stored or logged. Delete it. While it is there, CPA's log says so once per load, the item is flagged in the snapshot, and the sidebar shows the note.
 
-Changes take effect at the next scan with no restart. An item with a mistake is shown in the sidebar as **Not polled** with the reason, and every other item keeps polling. Saving any Quota Cache setting in the plugin panel rewrites the list through JSON; unquoted values come back in a form Quota Cache still accepts.
+Changes take effect at the next scan with no restart. An item with a mistake is shown in the sidebar as **Not polled** with the reason, and every other item keeps being counted. An item whose `organization-id` is valid keeps its count while you fix the rest of it.
 
-The snapshot keeps each day's spend as Anthropic reported it, the values you configured, and a fingerprint of the key, never the key itself. The spend is the organization's gross spend, paid from the credit or from purchased credit alike; Priority Tier usage is not in Anthropic's cost report. Like every plugin setting, the keys are stored in plain text in CPA's configuration file and are readable by anyone who holds the CPA management key. Details are in [Claude API credits](docs/cache-format.md#claude-api-credits).
+The snapshot keeps each item's configuration under `api_credit` and nothing else: no key, and no spend. The meter file keeps, per organization, the tokens of each UTC day (today and the 40 before) and hour (this hour and the 72 before) per model, low-credit refusals, the organizations CPA served that no item names, and a map of CPA's own auth indexes to organizations. It never holds a key, a request or response body, a session id or a client identity. Counting stops while Quota Cache is off, reloading or disabled, and every stop is recorded as a gap; Quota Glance reads the estimate as incomplete after a stop of five minutes or more until you enter a Console reading, and ignores shorter ones. Details are in [Claude API credits](docs/cache-format.md#claude-api-credits).
 
 ## Polling behavior
 
 - At most one provider request runs at a time in the cache plugin. Polls are spaced 10 seconds apart by default; the follow-up requests a poll can make (Codex's reset inventory, account details) run straight after it.
 - Each credential is polled at most once per 15-minute interval by default. The initial accounts are staggered by request spacing. If you shorten `poll-interval`, keep your number of credentials times `request-spacing` well below it, so every credential fits into each interval.
 - Plans and subscription renewal dates are read from separate account endpoints at most once per credential every six hours, and a failure there, like a failure of Codex's reset inventory, never fails the poll, backs it off, or pauses the provider. See [account details and requests per credential](docs/cache-format.md#account-details).
-- Each Claude API credit organization costs one cost-report request per `poll-interval` (96 a day at the default), and is polled again as soon as its cycle renews. Each organization has its own Admin API key and its own Anthropic rate limits, so a 429 on any of its requests backs off that organization alone, for at most an hour (or one interval, if that is longer), or a longer `Retry-After`. It never pauses another organization or Claude subscription polling. Each failed poll is logged like any other (below), and a failing organization backs off up to six hours, so a wrong key does not log every interval.
+- Claude API credit items are never polled. Their organizations' spend is counted from the usage records CPA hands Quota Cache ([Claude API credits](#claude-api-credits-optional)); no request to Anthropic is made for them, and they take no place in the polling schedule.
 - On 429 from Claude, Codex, Grok, or OpenRouter, all accounts for that provider pause for one poll interval, and the rate-limited credential retries after at most an hour, or one interval if that is longer; a longer `Retry-After` from the provider extends either. The previous observation is kept, and other failures back off up to six hours. See [polling schedule and failures](docs/cache-format.md#polling-schedule-and-failures).
 - Every failed poll writes one line to CPA's log: a warning for a 429, info for any other failure. It names the provider, the credential's auth index, the HTTP status, and when polling resumes, and never an email, token, file name, or response body.
 - Schedules and cooldowns persist before calls; restarts retain them. A second writer for the same cache path is rejected.

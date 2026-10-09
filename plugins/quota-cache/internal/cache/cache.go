@@ -183,9 +183,8 @@ func (c *Cache) SetSchedule(interval, spacing time.Duration) {
 // applySchedule runs under the writer lock. Successful credentials adopt the
 // new interval; failed/pending attempts retain their existing backoff floor.
 // Provider cooldowns and already-admitted global spacing are never shortened.
-// An anthropic-api entry keeps its own two rules: one adoptCredit made due at
-// once stays due, and a new time is capped at the renewal that ends the cycle
-// of its last attempt, as capAtRenewal would have capped it then.
+// An anthropic-api entry is never polled, so it has no last attempt and is
+// left alone.
 func (c *Cache) applySchedule(now time.Time) error {
 	c.scheduleMu.Lock()
 	opts := c.schedule
@@ -201,15 +200,7 @@ func (c *Cache) applySchedule(now time.Time) error {
 		if entry.LastAttempt.IsZero() {
 			continue
 		}
-		if entry.APICredit != nil && entry.NextAttempt.IsZero() {
-			continue
-		}
 		next := entry.LastAttempt.Add(opts.Interval)
-		if entry.APICredit != nil {
-			if cycle, err := client.CreditCycleAt(entry.APICredit.Renews, entry.LastAttempt); err == nil && next.After(cycle.End) {
-				next = cycle.End
-			}
-		}
 		if entry.LastError == "" || next.After(entry.NextAttempt) {
 			entry.NextAttempt = next
 			c.data.Entries[key] = entry
@@ -300,8 +291,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		}
 		// Configuration reaches the snapshot at the scan that sees it, so an
 		// item that is never polled still shows what was configured.
-		if a.Credit != nil && (entry.APICredit == nil || *entry.APICredit != *a.Credit) {
-			adoptCredit(&entry, *a.Credit)
+		if a.Credit != nil && adoptCredit(&entry, *a.Credit) {
 			changed = true
 		}
 		if changed {
@@ -329,9 +319,10 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	for _, key := range keys {
 		a := active[key]
 		entry := c.data.Entries[key]
-		// A misconfigured credit item is never fetched, so it never fails and
-		// never backs off; its entry says what is wrong instead.
-		if a.Credit != nil && a.Credit.Problem != "" {
+		// A credit item is never fetched: what its organization spent comes
+		// from the meter, and Anthropic is asked nothing. Its entry carries
+		// the configuration, and says what is wrong with it.
+		if a.Credit != nil {
 			continue
 		}
 		if now.Before(entry.NextAttempt) || now.Before(c.data.ProviderCooldown[a.Provider]) {
@@ -381,7 +372,6 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 				delay = 6 * time.Hour
 			}
 			entry.NextAttempt = now.Add(delay)
-			capAtRenewal(&entry, a, now)
 			var limited RateLimited
 			if errors.As(fetchErr, &limited) {
 				c.data.Totals.RateLimits++
@@ -404,21 +394,12 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 				// failures, such as a revoked token's 401s, and lending it to
 				// the provider would let one dead credential stop every other
 				// one being read for hours.
-				//
-				// A credit organization's 429 pauses nothing but itself. Each
-				// organization has its own Admin API key and its own Anthropic
-				// rate limits, and Anthropic's spend-cap 429 comes without a
-				// Retry-After and goes on failing, so a provider pause would
-				// stop unrelated organizations being read. Only this entry
-				// waits, under the same capped backoff as any 429.
-				if a.Provider != client.ProviderAnthropicAPI {
-					pause := now.Add(min(c.opts.Interval, 6*time.Hour))
-					if limited.RetryAfter.After(pause) {
-						pause = limited.RetryAfter
-					}
-					c.data.ProviderCooldown[a.Provider] = pause
-					failure.ProviderPause = pause
+				pause := now.Add(min(c.opts.Interval, 6*time.Hour))
+				if limited.RetryAfter.After(pause) {
+					pause = limited.RetryAfter
 				}
+				c.data.ProviderCooldown[a.Provider] = pause
+				failure.ProviderPause = pause
 			}
 			failure.NextAttempt = entry.NextAttempt
 		} else {
@@ -442,7 +423,6 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 				entry.AccountDetails = observation.AccountDetails
 			}
 			entry.Failures, entry.LastError = 0, ""
-			capAtRenewal(&entry, a, now)
 		}
 		poll.Error = entry.LastError
 		c.data.History = append(c.data.History, poll)
@@ -462,40 +442,19 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	return nil
 }
 
-// adoptCredit stores the configured credit on an anthropic-api entry. A change
-// to what a poll reads, or to whether it runs, makes the entry due at the next
-// free slot instead of waiting out a schedule set under the old configuration:
-// a rotated or corrected key, a moved renewal date (an earlier one would
-// otherwise leave the stored reading short of the new cycle's start), or a
-// problem fixed or introduced. Only a new key also forgets the failures, which
-// say nothing about it; a corrected date must not hide a rejected key. The
-// label names the account, so a new label is a new entry, and the amount and
-// position change nothing that is fetched, so they reset nothing. Provider
-// cooldowns and request spacing still apply.
-func adoptCredit(entry *client.Entry, credit client.APICredit) {
-	if old := entry.APICredit; old != nil {
-		if old.KeyFingerprint != credit.KeyFingerprint || old.Renews != credit.Renews || old.Problem != credit.Problem {
-			entry.NextAttempt = time.Time{}
-		}
-		if old.KeyFingerprint != credit.KeyFingerprint {
-			entry.Failures, entry.LastError = 0, ""
-		}
+// adoptCredit stores the configured credit on an anthropic-api entry and
+// reports whether the entry changed. The entry is never polled, so whatever
+// a poll left on it, which only quota-cache 0.1.13 could have, is cleared:
+// its reading, its failures and its schedule.
+func adoptCredit(entry *client.Entry, credit client.APICredit) bool {
+	changed := entry.APICredit == nil || *entry.APICredit != credit
+	if entry.Quota != nil || entry.Failures != 0 || entry.LastError != "" || !entry.LastAttempt.IsZero() || !entry.NextAttempt.IsZero() {
+		entry.Quota, entry.Failures, entry.LastError = nil, 0, ""
+		entry.LastAttempt, entry.NextAttempt = time.Time{}, time.Time{}
+		changed = true
 	}
 	entry.APICredit = &credit
-}
-
-// capAtRenewal brings an anthropic-api entry's next poll forward to the end of
-// the credit cycle that contains now. At that instant the stored reading
-// becomes last cycle's and stops counting, so the first poll of the new cycle
-// should run as soon as spacing and any cooldown allow, not an interval or a
-// backoff later. A Retry-After beyond it is applied afterwards and still wins.
-func capAtRenewal(entry *client.Entry, a Account, now time.Time) {
-	if a.Credit == nil {
-		return
-	}
-	if cycle, err := client.CreditCycleAt(a.Credit.Renews, now); err == nil && entry.NextAttempt.After(cycle.End) {
-		entry.NextAttempt = cycle.End
-	}
+	return changed
 }
 
 func (c *Cache) save(now time.Time) error {

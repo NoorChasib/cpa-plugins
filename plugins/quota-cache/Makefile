@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-VERSION ?= 0.1.13
+VERSION ?= 0.1.14
 .PHONY: ci build fmt-check test race vet
 fmt-check:
 	@test -z "$$(gofmt -l .)"

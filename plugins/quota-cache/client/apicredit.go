@@ -11,34 +11,40 @@ import (
 
 // ProviderAnthropicAPI is the snapshot provider for a Claude Console
 // organization's monthly API credit. It is separate from "claude", the
-// subscription poll, so a subscription 429 never pauses these reads. A 429
-// from Anthropic's Admin API pauses only the organization that got it: each
-// has its own Admin API key and rate limits, so the provider is never paused.
+// subscription poll.
 //
 // Its entries are not CPA credentials. quota-cache creates one per item of its
-// own claude-api-credits configuration and keys it APICreditAccount(label).
-// Like OpenRouter's, an entry has no weekly window: used_percent, reset_at and
-// observed_at stay empty, and quota.observed_at dates the reading.
+// own claude-api-credits configuration and keys it
+// APICreditOrgAccount(organization-id), or "item-<position+1>" for an item that
+// cannot be linked to its organization. Since quota-cache 0.1.14 they are never
+// polled: Anthropic is never asked anything. What the organization spent comes
+// from quota-cache's API meter, the file at MeterPath beside the snapshot, and
+// the entry carries only the configuration in APICredit. Like OpenRouter's, an
+// entry has no weekly window: used_percent, reset_at and observed_at stay
+// empty, and so does quota.
 const ProviderAnthropicAPI = "anthropic-api"
 
 // APICredit is what the operator configured for one Console organization's
-// monthly API credit, copied onto the entry at every scan whether or not the
-// organization is polled. Values are kept as the operator wrote them (trimmed);
-// quota-cache validates them but never converts or computes with them.
+// monthly API credit, copied onto the entry at every scan. Values are kept as
+// the operator wrote them (trimmed); quota-cache validates them but never
+// converts or computes with them.
 //
 // Anthropic reports neither the credit's amount nor its renewal date, so both
-// come from here. A consumer computes the cycle with CreditCycleAt(Renews, t)
-// and the amount from MonthlyUSD.
+// come from here, unless the operator set them in Quota Glance. A consumer
+// computes the cycle with CreditCycleAt(Renews, t) and the amount from
+// MonthlyUSD, and the spend from the meter's MeterOrganization for
+// OrganizationID.
 type APICredit struct {
 	// Label is the operator's unique display name for the organization. Empty
 	// when the configured label is missing or invalid; Problem then says so.
 	Label string `json:"label"`
 	// Position is the item's zero-based index in the configured list. It orders
-	// the accounts for display, and when two items read the same organization
+	// the accounts for display, and when two items name the same organization
 	// the one listed first is the one counted.
 	Position int `json:"position"`
 	// MonthlyUSD is the monthly credit in US dollars, a decimal with at most two
-	// places ("200", "260.50"). Empty when it is missing or invalid.
+	// places ("200", "260.50"). Empty when it is not set or invalid;
+	// MonthlyUSDInvalid tells the two apart.
 	MonthlyUSD string `json:"monthly_usd,omitempty"`
 	// Renews is a date on which the organization's next credit is deposited:
 	// the day the linked claude.ai plan renews, as a UTC calendar date. It is
@@ -46,28 +52,61 @@ type APICredit struct {
 	// day before. Written "2026-10-29", or the same date at 00:00:00 UTC in
 	// RFC 3339 form, which is what a save from CPA's plugin panel turns an
 	// unquoted YAML date into. Only its day of the month matters; see
-	// CreditCycleAt. Empty when it is missing or invalid.
+	// CreditCycleAt. Empty when it is not set or invalid; RenewsInvalid tells
+	// the two apart.
 	Renews string `json:"renews,omitempty"`
 	// KeyFingerprint is "key-" and the first 12 hex digits of the SHA-256 of the
-	// configured key. Never the key. Empty when no well-formed key is set.
+	// configured admin key. Never the key. An entry that has one and no
+	// OrganizationID was written by quota-cache 0.1.13.
+	//
+	// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 	KeyFingerprint string `json:"key_fingerprint,omitempty"`
 	// Problem is the first configuration problem found in the item, one of the
-	// CreditProblem values, or empty. An item with a problem is never polled;
-	// every other item keeps polling.
+	// CreditProblem values, or empty. A consumer counts nothing for an item
+	// with a problem; every other item is unaffected.
 	Problem string `json:"problem,omitempty"`
+	// OrganizationID is the item's organization-id, the Console organization's
+	// UUID as NormalizeOrganizationID returns it. It is set whenever the
+	// configured value has a valid shape, whatever Problem says, so a consumer
+	// can name the organization of a duplicate or an item past
+	// MaxAPICreditItems. Empty when organization-id is missing or invalid.
+	OrganizationID string `json:"organization_id,omitempty"`
+	// MonthlyUSDInvalid is set when monthly-usd was present but not a value
+	// ValidMonthlyUSD accepts. It is ignored, as if not set.
+	MonthlyUSDInvalid bool `json:"monthly_usd_invalid,omitempty"`
+	// RenewsInvalid is set when renews was present but not a date ParseRenewal
+	// accepts. It is ignored, as if not set.
+	RenewsInvalid bool `json:"renews_invalid,omitempty"`
+	// AdminKeyIgnored is set when the item still has the admin-key quota-cache
+	// 0.1.13 used. Its value is never read.
+	AdminKeyIgnored bool `json:"admin_key_ignored,omitempty"`
 }
 
-// CreditProblem values: why an item of claude-api-credits cannot be polled.
-// Fields are checked in the order label, admin-key, monthly-usd, renews, and
-// only the first problem is reported. Readers must treat an unknown value as
-// "misconfigured for a reason this reader does not know".
+// CreditProblem values: why an item of claude-api-credits cannot be counted.
+// They are checked in this order, and only the first problem is reported.
+// monthly-usd and renews are optional and never a problem: an invalid value is
+// ignored and flagged with APICredit.MonthlyUSDInvalid or RenewsInvalid.
+// Readers must treat an unknown value as "misconfigured for a reason this
+// reader does not know".
 const (
-	CreditProblemItemInvalid      = "item_invalid"       // the item is not a mapping of scalar values, or repeats a key
-	CreditProblemUnknownField     = "unknown_field"      // the item has a key other than the four below
-	CreditProblemTooManyItems     = "too_many_items"     // the item is past MaxAPICreditItems
-	CreditProblemLabelMissing     = "label_missing"      // label is absent or empty
-	CreditProblemLabelInvalid     = "label_invalid"      // label is over 64 characters or has a non-printable character (unicode.IsPrint: a control character, a space other than U+0020, or a joiner such as U+200D)
-	CreditProblemLabelDuplicate   = "label_duplicate"    // an earlier item has the same label, ignoring case
+	CreditProblemItemInvalid             = "item_invalid"              // the item is not a mapping of scalar values, or repeats a key
+	CreditProblemUnknownField            = "unknown_field"             // the item has a key other than label, organization-id, monthly-usd, renews and admin-key
+	CreditProblemTooManyItems            = "too_many_items"            // the item is past MaxAPICreditItems
+	CreditProblemLabelMissing            = "label_missing"             // label is absent or empty
+	CreditProblemLabelInvalid            = "label_invalid"             // label is over 64 characters or has a non-printable character (unicode.IsPrint: a control character, a space other than U+0020, or a joiner such as U+200D)
+	CreditProblemLabelDuplicate          = "label_duplicate"           // an earlier item has the same label, ignoring case
+	CreditProblemOrganizationIDMissing   = "organization_id_missing"   // organization-id is absent or empty
+	CreditProblemOrganizationIDInvalid   = "organization_id_invalid"   // organization-id is not a UUID NormalizeOrganizationID accepts
+	CreditProblemOrganizationIDDuplicate = "organization_id_duplicate" // an earlier item has the same organization-id; that item keeps it
+)
+
+// CreditProblem values only quota-cache 0.1.13 reported, when it read each
+// organization's cost report with the item's admin-key and required
+// monthly-usd and renews. Since 0.1.14, admin-key is ignored and the other two
+// are optional.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
+const (
 	CreditProblemAdminKeyMissing  = "admin_key_missing"  // admin-key is absent or empty
 	CreditProblemAdminKeyInvalid  = "admin_key_invalid"  // admin-key is not shaped like an Anthropic key (sk-ant-...); Anthropic judges the rest
 	CreditProblemAdminKeyRepeated = "admin_key_repeated" // an earlier item has the same admin-key
@@ -78,14 +117,15 @@ const (
 )
 
 // MaxAPICreditItems bounds the configured list. Items past it are kept, with
-// CreditProblemTooManyItems, and never polled.
+// CreditProblemTooManyItems, and never linked to the meter.
 const MaxAPICreditItems = 16
 
-// Failure messages an anthropic-api entry's last_error can carry, beside the
-// two every provider can: "refresh pending" while a poll is in flight, and
-// "provider rate limited" after a 429 (which backs off only this
-// organization), and the generic "quota fetch failed" for a transport failure.
-// They are static: nothing Anthropic sends is ever copied into one.
+// Failure messages an anthropic-api entry's last_error carried when quota-cache
+// 0.1.13 polled the cost report, beside "refresh pending", "provider rate
+// limited" and "quota fetch failed". They are static: nothing Anthropic sent
+// was ever copied into one.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 const (
 	CreditErrorKeyRejected = "admin key rejected"      // HTTP 401
 	CreditErrorForbidden   = "admin key not permitted" // HTTP 403
@@ -104,6 +144,8 @@ const (
 // It is gross spend: everything the organization was charged, paid from the
 // monthly credit or from purchased credit alike. quota-cache adds nothing up;
 // the consumer sums the days of the cycle it computes, up to CoveredUntil.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 type CostReport struct {
 	// OrganizationID is the organization the key belongs to, from the
 	// anthropic-organization-id header of the cost report's response, or from
@@ -135,6 +177,8 @@ type CostReport struct {
 // in [StartingAt, CoveredUntil) is exact to the UTC day; nothing at or after it
 // was reported, which is not the same as nothing spent. A report with no days
 // covers nothing, and CoveredUntil is StartingAt.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 func (r *CostReport) CoveredUntil() time.Time {
 	if r == nil {
 		return time.Time{}
@@ -154,12 +198,16 @@ func (r *CostReport) CoveredUntil() time.Time {
 // end by it, so the window stops at the bucket in progress, never asks for a
 // future one, and never runs past the cycle that contains now, whose end is
 // always a later 00:00 UTC.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 func CostReportEndingAt(now time.Time) time.Time {
 	year, month, day := now.UTC().Date()
 	return time.Date(year, month, day+1, 0, 0, 0, 0, time.UTC)
 }
 
 // CostDay is one daily bucket of the cost report.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 type CostDay struct {
 	// StartingAt is 00:00 UTC of the day; the bucket ends 24 hours later.
 	StartingAt time.Time `json:"starting_at"`
@@ -170,6 +218,8 @@ type CostDay struct {
 }
 
 // CostAmount is one result of a bucket, verbatim.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 type CostAmount struct {
 	// Amount is a decimal string in the LOWEST units of Currency, which for
 	// USD is cents: "123.45" is $1.2345. Anthropic sends fractions of a cent.
@@ -178,15 +228,49 @@ type CostAmount struct {
 	Currency string `json:"currency"`
 }
 
-// APICreditAccount is the snapshot auth_index of the configured item with this
-// label: "label-" and the first 12 hex digits of the SHA-256 of the label,
-// trimmed and lower-cased. It depends on nothing but the label, so rotating an
-// organization's admin key, or correcting its amount or date, keeps the
-// account; renaming the label starts a new one. quota-cache names an item with
-// no usable label "item-<position+1>" instead.
+// APICreditAccount is the snapshot auth_index quota-cache 0.1.13 gave the
+// configured item with this label: "label-" and the first 12 hex digits of the
+// SHA-256 of the label, trimmed and lower-cased.
+//
+// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
+// 0.1.14 keys an item by its organization with APICreditOrgAccount.
 func APICreditAccount(label string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(label))))
 	return "label-" + hex.EncodeToString(sum[:6])
+}
+
+// organizationIDShape is a UUID in its 8-4-4-4-12 hex form and nothing else:
+// no braces, no urn:uuid: prefix, no undashed form. It checks no version or
+// variant bits, because Anthropic's own example organization id
+// (12345678-1234-5678-1234-567812345678) has neither.
+var organizationIDShape = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
+// NormalizeOrganizationID reads a Console organization id, as configured or as
+// the anthropic-organization-id response header carries it: trimmed, shaped as
+// a UUID (8-4-4-4-12 hex digits, either case) and not all zeros. It returns the
+// id lower-cased, and false for anything else. An organization id is not a
+// secret; it is what links an item of claude-api-credits to the meter.
+func NormalizeOrganizationID(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	// Past the shape check, nothing but zeros and dashes is the nil UUID.
+	if !organizationIDShape.MatchString(s) || strings.Trim(s, "0-") == "" {
+		return "", false
+	}
+	return strings.ToLower(s), true
+}
+
+// APICreditOrgAccount is the snapshot auth_index of the item that links this
+// organization: "org-" and the first 12 hex digits of the SHA-256 of the id as
+// NormalizeOrganizationID returns it. It depends on nothing but the
+// organization, so a label rename or a changed credit or date keeps the
+// account, and Quota Glance's settings for it; naming a different organization
+// starts a new one. quota-cache names an item it cannot link
+// "item-<position+1>" instead.
+func APICreditOrgAccount(organizationID string) string {
+	// For a valid id, trimming and lower-casing is exactly what
+	// NormalizeOrganizationID does.
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(organizationID))))
+	return "org-" + hex.EncodeToString(sum[:6])
 }
 
 var monthlyUSD = regexp.MustCompile(`^[0-9]{1,7}(?:\.[0-9]{1,2})?$`)
@@ -233,10 +317,9 @@ type CreditCycle struct {
 	End time.Time
 }
 
-// CreditCycleAt is the one rule both quota-cache and quota-glance use for an
-// organization's monthly credit cycle. Keep it the only one, so that the window
-// quota-cache asks Anthropic for and the window quota-glance sums can never
-// disagree.
+// CreditCycleAt is the one rule for an organization's monthly credit cycle.
+// Keep it the only one, so that every plugin that reasons about a cycle draws
+// its bounds in the same place.
 //
 // The cycle containing t starts at 00:00 UTC on the most recent occurrence of
 // the renewal day of the month on or before t, and ends at the next one. The
@@ -247,11 +330,11 @@ type CreditCycle struct {
 // future works alike.
 //
 // Start is inclusive and End exclusive: at 00:00 UTC on the renewal day the new
-// cycle has begun. Anthropic's cost report resolves to UTC days, so the whole
-// renewal day counts toward the new cycle, although the credit is deposited
-// "shortly after" payment: spend made on the renewal day before the deposit is
-// counted against the new credit. That can overstate the new cycle's spend by
-// at most part of one day.
+// cycle has begun. The meter's daily buckets are UTC days too (MeterDayStart),
+// so the whole renewal day counts toward the new cycle, although the credit is
+// deposited "shortly after" payment: spend made on the renewal day before the
+// deposit is counted against the new credit. That can overstate the new
+// cycle's spend by at most part of one day.
 func CreditCycleAt(renews string, t time.Time) (CreditCycle, error) {
 	anchor, err := ParseRenewal(renews)
 	if err != nil {

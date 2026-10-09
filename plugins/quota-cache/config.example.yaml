@@ -15,20 +15,23 @@ plugins:
       # Optional, and only in this file: the CPA plugin panel cannot edit it.
       # Claude API credits, one item per Claude Console organization that
       # receives a Max or Team plan's monthly credit. Two Team seats share one
-      # organization, so they are one item. Quote monthly-usd and renews.
+      # organization, so they are one item. Quota Cache counts the
+      # organization's Claude API-key traffic as CPA serves it (CPA v8.0.4 or
+      # newer) and asks Anthropic nothing; no key goes here. Quote monthly-usd
+      # and renews.
       # claude-api-credits:
       #   - label: siphorchannel            # your name for it; unique
-      #     admin-key: sk-ant-admin01-...   # that organization's Admin API key; give it an expiry
-      #     monthly-usd: "200"              # the monthly credit, in dollars
-      #     # The day the next credit arrives: the date your claude.ai plan
-      #     # renews (Settings > Billing), as a UTC date. Console's expiry date
-      #     # for the current credit may be the day before; if so, use the
-      #     # claude.ai date. Only the day of the month is used.
+      #     # The Organization ID from Console under Settings > Organization.
+      #     organization-id: "12345678-1234-5678-1234-567812345678"
+      #     monthly-usd: "200"              # optional: the monthly credit, in dollars
+      #     # Optional: the day the next credit arrives, the date your claude.ai
+      #     # plan renews (Settings > Billing), as a UTC date. Console's expiry
+      #     # date for the current credit may be the day before; if so, use the
+      #     # claude.ai date. Only the day of the month is used. Both optional
+      #     # values can also be set in Quota Glance, where that setting wins.
       #     renews: "2026-10-29"
       #   - label: agency-team
-      #     admin-key: sk-ant-admin01-...
-      #     monthly-usd: "260"
-      #     renews: "2026-10-03"
+      #     organization-id: "00000000-0000-4000-8000-000000000002"
     account-health-pushover:
       # Requires the updated consumer binary; old published releases do not use this option.
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
