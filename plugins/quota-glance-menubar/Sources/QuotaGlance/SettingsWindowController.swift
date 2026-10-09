@@ -64,9 +64,18 @@ final class SettingsWindowController: NSWindowController {
     /// Called on every summary. While Settings is closed the draft follows the
     /// saved choice; while it is open, the user's edits are kept.
     func updateQuotas(_ state: QuotaReadoutState) {
+        let rowsChanged = state.windows.map(\.selection) != self.state.windows.map(\.selection)
+            || state.windows.map(\.title) != self.state.windows.map(\.title)
         self.state = state
-        if window?.isVisible != true { draft = settings.readout }
-        refreshMenuBarSection()
+        if window?.isVisible != true {
+            draft = settings.readout
+            refreshMenuBarSection()
+        } else if rowsChanged {
+            refreshMenuBarSection()
+        } else {
+            // Same rows, new readings: leave the table (and any open pop-up) alone.
+            refreshPreviewAndWarnings()
+        }
     }
 
     // MARK: - Layout

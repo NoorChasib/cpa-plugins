@@ -27,7 +27,7 @@ enum ReadoutRenderer {
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             let scale = max(1, abs(context.userSpaceToDeviceSpaceTransform.a))
-            draw(layout(cells: cells, options: options, marks: marks, scale: scale), in: context)
+            Self.draw(Self.layout(cells: cells, options: options, marks: marks, scale: scale), in: context)
             return true
         }
         image.isTemplate = true
@@ -44,10 +44,10 @@ enum ReadoutRenderer {
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             if let icon {
-                icon.draw(in: NSRect(x: 0, y: ((height - icon.size.height) / 2).rounded(), width: icon.size.width, height: icon.size.height))
+                icon.draw(in: NSRect(x: 0, y: ((Self.height - icon.size.height) / 2).rounded(), width: icon.size.width, height: icon.size.height))
             }
             context.textMatrix = .identity
-            context.textPosition = CGPoint(x: iconWidth + 8, y: ((height - glyphs.capHeight) / 2).rounded())
+            context.textPosition = CGPoint(x: iconWidth + 8, y: ((Self.height - glyphs.capHeight) / 2).rounded())
             CTLineDraw(glyphs.line, context)
             return true
         }
