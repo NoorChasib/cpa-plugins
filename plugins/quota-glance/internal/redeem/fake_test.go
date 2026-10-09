@@ -32,6 +32,21 @@ type fakeHost struct {
 	// budgets is the time each request's context had left when it arrived,
 	// or -1 when it had no deadline.
 	budgets []time.Duration
+
+	// cooldownErr fails every cooldown clear; cooldownEcho, when set, is the
+	// auth_index CPA's answer names in place of the one asked about.
+	cooldownErr  error
+	cooldownEcho func(string) string
+	// onCooldown runs inside each clear, outside the lock: how a test presses
+	// again while a clear is under way.
+	onCooldown func()
+	// cooldowns records every clear asked for, in order, and cooldownOrder
+	// the number of provider requests made before each one, so a test can
+	// tell a clear that followed the spend from one that preceded it.
+	cooldowns     []string
+	cooldownOrder []int
+	// cooldownCtxErr is each clear's context error on arrival.
+	cooldownCtxErr []error
 }
 
 type reply struct {
@@ -90,6 +105,35 @@ func (h *fakeHost) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest)
 		status = 200
 	}
 	return protocol.HostHTTPResponse{StatusCode: status, Body: []byte(h.bodies[request.URL])}, nil
+}
+
+func (h *fakeHost) ResetCooldown(ctx context.Context, authIndex string) (protocol.HostRoutingResetCooldownResponse, error) {
+	h.mu.Lock()
+	hook := h.onCooldown
+	h.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cooldowns = append(h.cooldowns, authIndex)
+	h.cooldownOrder = append(h.cooldownOrder, len(h.requests))
+	h.cooldownCtxErr = append(h.cooldownCtxErr, ctx.Err())
+	if h.cooldownErr != nil {
+		return protocol.HostRoutingResetCooldownResponse{}, h.cooldownErr
+	}
+	echo := authIndex
+	if h.cooldownEcho != nil {
+		echo = h.cooldownEcho(authIndex)
+	}
+	return protocol.HostRoutingResetCooldownResponse{AuthIndex: echo, Models: []string{"synthetic-model"}}, nil
+}
+
+// cleared is every credential whose cooldown a clear was asked for.
+func (h *fakeHost) cleared() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.cooldowns...)
 }
 
 func (h *fakeHost) queue(url string, replies ...reply) {
