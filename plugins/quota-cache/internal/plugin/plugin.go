@@ -24,7 +24,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.12"
+var Version = "0.1.13"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -49,6 +49,9 @@ type Plugin struct {
 	// fetcher reads it on every scan, so adding, rotating or removing the key
 	// takes effect without restarting the writer.
 	openRouterKey atomic.Pointer[string]
+	// apiCredits is the parsed claude-api-credits list, read by the fetcher on
+	// every scan like openRouterKey, so editing it needs no restart.
+	apiCredits atomic.Pointer[[]creditItem]
 }
 
 func New(host Host) *Plugin { return &Plugin{host: host} }
@@ -119,13 +122,17 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
 	cfg := struct {
-		Path          string         `yaml:"cache-path"`
-		Interval      string         `yaml:"poll-interval"`
-		Spacing       string         `yaml:"request-spacing"`
-		OpenRouterKey string         `yaml:"openrouter-management-key"`
-		Enabled       *bool          `yaml:"enabled"`
-		Priority      *int           `yaml:"priority"`
-		Store         map[string]any `yaml:"store"`
+		Path          string `yaml:"cache-path"`
+		Interval      string `yaml:"poll-interval"`
+		Spacing       string `yaml:"request-spacing"`
+		OpenRouterKey string `yaml:"openrouter-management-key"`
+		// CreditItems is decoded as raw nodes so that each item is judged on
+		// its own by parseAPICredits. A value that is not a list still fails
+		// the whole configuration, as any mistyped key does.
+		CreditItems []yaml.Node    `yaml:"claude-api-credits"`
+		Enabled     *bool          `yaml:"enabled"`
+		Priority    *int           `yaml:"priority"`
+		Store       map[string]any `yaml:"store"`
 	}{Path: client.DefaultPath, Interval: "15m", Spacing: "10s"}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
@@ -165,9 +172,11 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.wake <- spacing
 	}
 	p.opts = opts
-	// Stored before a writer starts, so its first scan already sees the key.
+	// Stored before a writer starts, so its first scan already sees the keys.
 	openRouterKey := strings.TrimSpace(cfg.OpenRouterKey)
 	p.openRouterKey.Store(&openRouterKey)
+	credits := parseAPICredits(cfg.CreditItems)
+	p.apiCredits.Store(&credits)
 	if cfg.Enabled != nil && !*cfg.Enabled && p.cache != nil {
 		p.cancel()
 		<-p.done
@@ -175,7 +184,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.cache = nil
 	}
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
-		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey})
+		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits})
 		if err != nil {
 			return protocol.Registration{}, err
 		}
@@ -271,6 +280,24 @@ func (p *Plugin) Shutdown() { p.stop(true) }
 type hostFetcher struct {
 	host          Host
 	openRouterKey *atomic.Pointer[string]
+	apiCredits    *atomic.Pointer[[]creditItem]
+}
+
+// creditUserAgent names this plugin to Anthropic's Admin API. It is never
+// claudeUserAgent: these are the operator's own reads with their own key, not
+// Claude Code's, and Anthropic asks integrations to identify themselves.
+func creditUserAgent() string {
+	return "cpa-plugins-quota-cache/" + Version + " (https://github.com/NoorChasib/cpa-plugins)"
+}
+
+func (f hostFetcher) credits() []creditItem {
+	if f.apiCredits == nil {
+		return nil
+	}
+	if items := f.apiCredits.Load(); items != nil {
+		return *items
+	}
+	return nil
 }
 
 func (f hostFetcher) openRouter() string {
@@ -328,6 +355,13 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 	if key := f.openRouter(); key != "" {
 		accounts = append(accounts, cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)})
 	}
+	// Every configured item is listed, misconfigured or not, so the snapshot
+	// can say what is wrong with one; the cache never polls an item with a
+	// problem.
+	for _, item := range f.credits() {
+		credit := item.credit
+		accounts = append(accounts, cache.Account{Provider: client.ProviderAnthropicAPI, AuthIndex: item.id, Credit: &credit})
+	}
 	return accounts, nil
 }
 func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *client.AccountDetails) (cache.Observation, error) {
@@ -342,6 +376,18 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 		doer := &captureDoer{host: f.host}
 		observation, err := quota.FetchOpenRouter(ctx, doer, key, time.Now().UTC())
 		return observed(doer, observation, err)
+	}
+	if account.Provider == client.ProviderAnthropicAPI {
+		// The same guard as OpenRouter's: an item removed, broken or given
+		// another key since the scan that listed it is not read with whatever
+		// key it holds now.
+		item, ok := f.credit(account.AuthIndex)
+		if !ok || account.Credit == nil || item.credit.Problem != "" || item.credit.KeyFingerprint != account.Credit.KeyFingerprint {
+			return cache.Observation{}, errors.New("credential read failed")
+		}
+		doer := &captureDoer{host: f.host, everyRequest: true}
+		observation, err := quota.FetchAPICredit(ctx, doer, item.key, item.credit.Renews, item.credit.KeyFingerprint, creditUserAgent(), time.Now().UTC())
+		return observed(doer, observation, creditFailure(err))
 	}
 	raw, err := f.host.GetAuth(ctx, account.AuthIndex)
 	if err != nil {
@@ -362,12 +408,22 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 	return observed(doer, observation, err)
 }
 
+func (f hostFetcher) credit(id string) (creditItem, bool) {
+	for _, item := range f.credits() {
+		if item.id == id {
+			return item, true
+		}
+	}
+	return creditItem{}, false
+}
+
 // ReportFailure puts one line in CPA's log for each failed poll. The snapshot
 // keeps only the last hundred polls and host HTTP traffic never reaches CPA's
 // own log, so without this a rate limit older than the history cannot be
 // dated. A 429 is a warning because it pauses every credential of its
-// provider; any other failure backs off one credential, which the status page
-// already shows, and is logged as info. The poll schedule bounds the volume.
+// provider, or, for a Claude API credit organization, stops that organization
+// being read until its own retry; any other failure backs off one credential,
+// which the status page already shows, and is logged as info. The poll schedule bounds the volume.
 // A line names only the provider, the opaque auth index already in the
 // snapshot, the status and the schedule: never an email, token, file name,
 // URL or response body.
@@ -378,8 +434,11 @@ func (f hostFetcher) ReportFailure(ctx context.Context, failure cache.Failure) {
 	}
 	level, message := "info", "quota-cache poll failed; this credential is retried at next_attempt"
 	fields := map[string]any{"provider": failure.Provider, "auth_index": failure.AuthIndex, "next_attempt": logTime(failure.NextAttempt)}
-	if failure.RateLimited {
+	switch {
+	case failure.RateLimited && !failure.ProviderPause.IsZero():
 		level, message = "warn", "quota-cache poll rate limited; this provider's credentials are paused"
+	case failure.RateLimited:
+		level, message = "warn", "quota-cache poll rate limited; this credential is retried at next_attempt"
 	}
 	if failure.HTTPStatus != 0 {
 		fields["http_status"] = failure.HTTPStatus
@@ -400,6 +459,12 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 	if doer.limited() {
 		return result, cache.RateLimited{RetryAfter: doer.retryAfter}
 	}
+	// A PollError carries one of a fixed set of messages, so it passes
+	// through; anything else could hold provider text and is collapsed.
+	var pollErr cache.PollError
+	if errors.As(err, &pollErr) {
+		return result, pollErr
+	}
 	if err != nil {
 		return result, errors.New("quota fetch failed")
 	}
@@ -415,25 +480,33 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 // inventory, is an optional read on top of a reading already in hand, so its
 // status is never the poll's: like a profile 429, an inventory 429 must not
 // discard a good usage reading, count as a rate limit, or pause the provider.
+//
+// A Claude API credit poll is the exception, set by everyRequest. Every
+// request it makes, each cost-report page and the /v1/organizations/me
+// fallback, is part of the one reading, and the reading fails with any of
+// them. So each request counts until one is refused: the poll's status is the
+// first that is not 2xx, a 429 on any of them makes the poll rate-limited, and
+// Retry-After is read from that response.
 type captureDoer struct {
-	host       Host
-	status     int
-	retryAfter time.Time
-	sent       bool
+	host         Host
+	everyRequest bool
+	status       int
+	retryAfter   time.Time
+	sent         bool
 }
 
 // limited reports whether the poll's own request was refused with 429, which
-// turns the whole poll into a provider-wide pause.
+// turns the whole poll into a rate limit.
 func (d *captureDoer) limited() bool { return d.status == 429 }
 
 func (d *captureDoer) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
-	first := !d.sent
+	counts := !d.sent || (d.everyRequest && d.status >= 200 && d.status < 300)
 	d.sent = true
 	response, err := d.host.HTTPDo(ctx, req)
-	if !first {
+	if !counts {
 		return response, err
 	}
-	d.status = response.StatusCode
+	d.status, d.retryAfter = response.StatusCode, time.Time{}
 	value := http.Header(response.Headers).Get("Retry-After")
 	if seconds, e := strconv.ParseInt(value, 10, 32); e == nil && seconds > 0 {
 		d.retryAfter = time.Now().Add(time.Duration(seconds) * time.Second)

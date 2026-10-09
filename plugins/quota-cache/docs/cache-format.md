@@ -18,6 +18,7 @@ The outer snapshot stays at schema 1. The nested `quota.schema` is 1 and has its
 | `unified_billing` | Grok's shared billing flag, if supplied |
 | `reset_credits` | Codex's or Claude's banked rate-limit resets, when the account holds at least one |
 | `billing_period` | Claude only: `monthly` or `annual`, how often the subscription is billed, when the usage response states one |
+| `cost_report` | Claude API credits only: the organization's daily spend, described under [Claude API credits](#claude-api-credits) |
 | `truncated` | True if a provider response exceeded the bounded entry count |
 
 Every window can contain `used_percent`, `duration_seconds`, `starts_at`, `resets_at`, and `period`. Unavailable values are omitted. Unlike the compatibility percentage, extended percentages preserve reported values above 100. Absolute timestamps use UTC; relative reset times are anchored to the observation, never recalculated on reads.
@@ -52,6 +53,7 @@ Every balance contains `unit` and may contain `used`, `limit`, `remaining`, `use
 | Codex | `windows.regular/primary` and `regular/secondary`; corresponding `limits.regular`; `code_review/primary` and `code_review/secondary` plus `limits.code_review`; `additional/<limit-name>/primary` and `/secondary` with associated flags; `balances.credits` with remaining credits, has-credits and unlimited flags; plan type; `limits.spend_control` and `balances.spend_control` with used/limit/remaining amounts, percentages, reset, and source in `provider_units`; `reset_credits.available_count` |
 | Grok | `windows.shared` percentage and billing-period start/end/type; `product/<product>` usage; `balances.included` used/monthly limit, `prepaid` remaining, and `on_demand` used/cap/enabled; amounts in `usd_cents`; unified billing and subscription tier |
 | OpenRouter | `balances.credits` in `usd`: `limit` is `total_credits` (all-time purchases) and `used` is `total_usage` (all-time spend). The balance is their difference and is not stored |
+| Claude API credits (`anthropic-api`) | `cost_report`: the organization id and one entry per UTC day of the current credit cycle, each day's amounts in cents, verbatim. Nothing is summed. See [Claude API credits](#claude-api-credits) |
 
 The OpenRouter entry exists only while `openrouter-management-key` is configured. It is not a CPA credential: it is keyed `openrouter:key-<fingerprint>`, where the fingerprint is the first 12 hex digits of the key's SHA-256, and the key itself is never written. It has no weekly window, so `used_percent`, `reset_at`, and `observed_at` stay empty and `quota.observed_at` dates the observation. It contributes no canonical `windows`. `GET https://openrouter.ai/api/v1/credits` is the only request, and nothing else in its response is kept.
 
@@ -124,6 +126,7 @@ At the default 15-minute `poll-interval`, one credential costs at most:
 | Codex | 96 | up to 96 inventory reads, only while resets are banked | 4 subscription | 100, or up to 196 while resets are banked |
 | Grok | 96 | none | 4 settings, plus up to 4 user reads when settings names no plan | 100 to 104 |
 | OpenRouter | 96 | none | none | 96 |
+| Claude API credits, per organization | 96 | none normally; `GET /v1/organizations/me` only when the cost report lacks its `anthropic-organization-id` header, and a further cost-report page only if Anthropic pages a window it should return in one | none | 96 |
 
 Reading Claude's subscription start and billing period added no requests. The start comes from the profile response already read for the plan, and the billing period from the usage response already read every poll, so the figures above are unchanged.
 
@@ -140,25 +143,102 @@ Before account details were read, the same credentials cost 96 (Claude), 96 to 1
 When a poll fails:
 
 - The previous observation is kept and `last_error` is set. The credential is retried one interval later, and each further consecutive failure doubles that, up to six hours.
-- A 429 (`last_error` `provider rate limited`, poll outcome `rate_limited`) pauses every credential of the same provider for one interval, and at most six hours. The pause is `provider_cooldown`. It never takes the rate-limited credential's own backoff, which also counts that credential's earlier failures: before 0.1.12, a credential that had been answering 401 for a day could pause all of its siblings for six hours with one 429.
+- A 429 (`last_error` `provider rate limited`, poll outcome `rate_limited`) pauses every credential of the same provider for one interval, and at most six hours. `anthropic-api` is the exception: a 429 there pauses only the organization that got it ([Claude API credits](#requests-and-validation)). The pause is `provider_cooldown`. It never takes the rate-limited credential's own backoff, which also counts that credential's earlier failures: before 0.1.12, a credential that had been answering 401 for a day could pause all of its siblings for six hours with one 429.
 - The rate-limited credential's own backoff doubles as above but stops at one hour, or at the interval when that is longer, and at most six hours. A 429 is about the provider rather than the credential, and an hourly retry is what notices it has lifted. Once a credential's backoff has reached that cap, it draws at most one 429 an hour. While the backoff is still doubling it can draw more, so at a short interval the first few hours of a long outage cost some extra 429s; every 429 pauses the provider, though, so the provider never draws more than one per pause.
 - A successful poll does not shorten its siblings' backoff. After a long outage, each credential is therefore read again only when its own backoff runs out, which can be up to an hour after the limit lifts (or one interval, if that is longer), though the first is usually read much sooner. Bringing the others forward on a success would cost a 429 and a provider pause each time the limit is on one account rather than the whole provider.
 - A `Retry-After` longer than the pause or the backoff replaces it, for both.
-- Only the poll's own request decides its outcome and `http_status`. A failure or 429 from an account-details or reset-inventory request never fails the poll, never counts as a rate limit, and never pauses the provider.
+- Only the poll's own request decides its outcome and `http_status`. A failure or 429 from an account-details or reset-inventory request never fails the poll, never counts as a rate limit, and never pauses the provider. A Claude API credit poll is one reading made of several requests, so every one of them is the poll's own ([Claude API credits](#requests-and-validation)).
 
-Each failed poll also writes one line to CPA's log through the plugin host, so failures and rate limits can still be dated after the 100-poll `history` has moved on. The plugin's own provider requests never appear in CPA's request log. A 429 is logged at `warn` as `quota-cache poll rate limited; this provider's credentials are paused`, and any other failure at `info` as `quota-cache poll failed; this credential is retried at next_attempt`. The fields are:
+Each failed poll also writes one line to CPA's log through the plugin host, so failures and rate limits can still be dated after the 100-poll `history` has moved on. The plugin's own provider requests never appear in CPA's request log. A 429 is logged at `warn` as `quota-cache poll rate limited; this provider's credentials are paused`, or, for an `anthropic-api` organization, which pauses nothing else, as `quota-cache poll rate limited; this credential is retried at next_attempt`. Any other failure is logged at `info` as `quota-cache poll failed; this credential is retried at next_attempt`. The fields are:
 
 | Field | Meaning |
 | --- | --- |
-| `provider` | `claude`, `codex`, `xai`, or `openrouter` |
-| `auth_index` | the credential's opaque index, the one its snapshot entry is keyed by |
+| `provider` | `claude`, `codex`, `xai`, `openrouter`, or `anthropic-api` |
+| `auth_index` | the credential's opaque index, the one its snapshot entry is keyed by; for `anthropic-api`, `label-<12 hex>` or `item-<n>`, never the admin key |
 | `http_status` | the poll's HTTP status; absent when no response arrived |
 | `retry_after` | the instant the provider's `Retry-After` named; present only for a 429 that sent one |
 | `next_attempt` | when this credential is polled next |
-| `provider_paused_until` | when the provider's other credentials resume; present only for a 429 |
+| `provider_paused_until` | when the provider's other credentials resume; present only for a 429 that paused them, so never for `anthropic-api` |
 
 Times are RFC 3339 in UTC. No line names an email, token, auth file name, URL, or response body. A successful poll logs nothing, so there is at most one line per poll.
 
+
+## Claude API credits
+
+Quota Cache 0.1.13 adds `anthropic-api` entries, with `api_credit` and `quota.cost_report`, and the `claude-api-credits` setting. Every earlier version rejects that setting and stops polling, so update before adding it. The snapshot stays on schema 1, and consumers that look entries up by CPA credential, such as Account Health, Reset Priority and Quota Glance before 0.7.0, never see these entries.
+
+Quota Cache can also read the spend of each Claude Console organization that receives a Max or Team plan's monthly API credit. The organizations are configured in Quota Cache's own `claude-api-credits` list, not held by CPA, so their entries exist only while configured. The provider is `anthropic-api`, separate from `claude`: a 429 from Anthropic's Admin API pauses only the organization that got it, never another organization or subscription polling, and a subscription 429 never pauses it.
+
+### Configuration
+
+Each item has four keys, all required: `label`, `admin-key`, `monthly-usd`, and `renews`. The list is read from YAML only. CPA's plugin panel has no way to describe a list of objects, mark a value secret, or check one item, so it is not offered there; a panel save keeps it, rewritten through JSON.
+
+Each item is judged on its own, so one bad item never stops the others. Every item becomes an entry. An item with a problem has `api_credit.problem` set and is never polled, never fails, and never backs off. Only the first problem is reported, in this order:
+
+| Problem | When |
+| --- | --- |
+| `item_invalid` | The item is not a mapping, a value is not a scalar, or a key appears twice |
+| `unknown_field` | The item has a key other than the four |
+| `too_many_items` | The item is the 17th or later |
+| `label_missing` / `label_invalid` / `label_duplicate` | The label is empty; over 64 characters or containing a character Go's `unicode.IsPrint` rejects (a control character, any space other than the ASCII space, such as a no-break space, or an invisible format character such as the zero-width joiner, so a joined emoji sequence is rejected too); or the same as an earlier item's, ignoring case |
+| `admin_key_missing` / `admin_key_invalid` / `admin_key_repeated` | The key is empty; not shaped `sk-ant-` followed by 10 to 250 of `A-Z a-z 0-9 _ -`; or the same as an earlier item's |
+| `monthly_usd_missing` / `monthly_usd_invalid` | The amount is empty, or not a non-negative number of dollars with at most two decimal places |
+| `renews_missing` / `renews_invalid` | The date is empty, or not a real date from 2000 to 2099 written `2026-10-29` or `2026-10-29T00:00:00Z` |
+
+A value YAML reads as null (`null`, `~`, an empty value, or `!!null`) counts as missing. A quoted `"null"` is text. Values are read as written, after trimming spaces, so an unquoted `renews: 2026-10-29` or `monthly-usd: 200` keeps its text. The key shape check does not decide whether a key works; Anthropic does, with 401 or 403.
+
+### Entry
+
+The entry is keyed `anthropic-api:label-<12 hex>`, the first 12 hex digits of the SHA-256 of the label, trimmed and lower-cased (`client.APICreditAccount`). Rotating the key or correcting the amount or date keeps the entry; renaming the label starts a new one. An item without a usable label is keyed `anthropic-api:item-<position+1>`. Like OpenRouter's, the entry has no weekly window: `used_percent`, `reset_at`, and `observed_at` stay empty, it contributes no canonical `windows`, and `quota.observed_at` dates the reading.
+
+`api_credit` is the configuration, rewritten at every scan, so it is current even for an item that has never been polled:
+
+| Field | Meaning |
+| --- | --- |
+| `label` | The configured label; empty when it is missing, invalid, or a duplicate |
+| `position` | The item's zero-based place in the list |
+| `monthly_usd` | The monthly credit in **dollars**, exactly as configured |
+| `renews` | The configured renewal date, exactly as written |
+| `key_fingerprint` | `key-` and the first 12 hex digits of the key's SHA-256; never the key |
+| `problem` | The first configuration problem, or absent |
+
+`quota.cost_report` is the last successful reading. Like every observation it is replaced whole by the next success and kept, under `last_error`, by a failure:
+
+| Field | Meaning |
+| --- | --- |
+| `organization_id` | The organization the key belongs to, from the response's `anthropic-organization-id` header, or from `GET /v1/organizations/me` when the header is absent |
+| `key_fingerprint` | The fingerprint of the key that made this reading. When it differs from `api_credit.key_fingerprint` the key has changed since, and the reading may be another organization's |
+| `starting_at` / `ending_at` | The window asked for: 00:00 UTC on the first day of the cycle containing the poll, and 00:00 UTC on the day after the poll |
+| `days` | One entry per UTC day from `starting_at`, without a gap, each `{starting_at, amounts: [{amount, currency}]}`. A day with no spend has `amounts: []` |
+
+`amount` is a decimal string in the **lowest unit** of `currency`, which for USD is **cents**: `"1250"` is $12.50, and fractions of a cent occur. `monthly_usd` is in dollars. Quota Cache adds nothing up.
+
+The credit cycle is `client.CreditCycleAt(renews, t)`: it starts at 00:00 UTC on the most recent occurrence of `renews`' day of the month and ends at the next one, clamped to short months (a day of 31 falls on Nov 30 and Feb 28 or 29) and re-anchored every month. Consumers must use the same function. The whole renewal day counts toward the new cycle, although Anthropic deposits the credit "shortly after" payment, so spend that day before the deposit can overstate the new cycle by part of a day.
+
+### Requests and validation
+
+One poll sends `GET https://api.anthropic.com/v1/organizations/cost_report?starting_at=<cycle start>&ending_at=<next 00:00 UTC>&bucket_width=1d&limit=31` with `x-api-key`, `anthropic-version: 2023-06-01`, and the User-Agent `cpa-plugins-quota-cache/<version> (https://github.com/NoorChasib/cpa-plugins)`. The window never exceeds 31 daily buckets, so one page covers it; `has_more` is followed for at most three pages. `GET /v1/organizations/me` is sent only when the response has no usable `anthropic-organization-id`. `totals.requests` counts one per poll, which under-counts only those two rare cases.
+
+Every request of a poll is part of its one reading, so each counts toward the poll's outcome, unlike the optional follow-up requests of other providers. The poll's `http_status` is that of the first response that is not 2xx, or 200 when all are; a 401, 403, 404 or 5xx on a later page or on `/me` fails the poll as it would on the first page; and a 429 on any of them makes the poll `rate_limited`, with that response's `Retry-After`.
+
+A reading is stored only when it is whole. Each bucket must start at 00:00 UTC, last exactly one day, and follow the previous one without a gap from the cycle's first day; each `amount` must be a decimal string of at most 64 characters and each `currency` three capital letters; and every complete day before today must be present. Today's bucket may be missing, since it is still in progress; a consumer tells that from `client.CostReport.CoveredUntil`, never by treating the day as $0. A bucket at or after `ending_at` is dropped without failing the poll. Anything else fails the poll and keeps the previous reading.
+
+| `last_error` | Cause |
+| --- | --- |
+| `admin key rejected` | HTTP 401: the key is malformed, revoked, or expired |
+| `admin key not permitted` | HTTP 403 |
+| `cost report unavailable` | HTTP 404 |
+| `request refused` | HTTP 400 or any other 4xx but 429 |
+| `anthropic server error` | HTTP 5xx, including 529 |
+| `unreadable response` | A 2xx whose body breaks the rules above |
+| `provider rate limited` | HTTP 429, on any request of the poll |
+| `quota fetch failed` | No HTTP response |
+
+These are fixed strings. No response body, header, request id, or Anthropic message is stored or logged, and the key is never written to the snapshot, the status route, the history, or the log.
+
+Scheduling is the same as every other account's, with four additions. A change to an item's key, renewal date, or problem makes it due at the next free slot; only a new key also clears its failures. After each poll the next one is brought forward to the end of the current cycle, so a renewed organization is read again at once; a later `Retry-After` still wins. A 429 never pauses the provider, and never sets `provider_cooldown`: each organization has its own Admin API key and its own Anthropic rate limits, and Anthropic describes a spend-cap refusal as a 429 without `Retry-After` that goes on failing, so a provider pause would stop unrelated organizations being read. The organization that got the 429 backs off as any rate-limited credential does, doubling from one interval to at most an hour (or one interval, if that is longer), and waits for a longer `Retry-After` when Anthropic sends one; every other organization keeps its schedule.
+
+The cost report is gross organization spend: what the credit paid and what purchased credit paid alike, so anything above the credit is overage. Priority Tier usage is not in it. Anthropic says new usage typically appears within five minutes. Source: Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) and [Get Cost Report](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve), checked 2026-10-09.
 
 ## Reading from a new plugin
 

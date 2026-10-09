@@ -26,7 +26,10 @@ type Quota struct {
 	// nothing, and it is what turns AccountDetails.SubscriptionStartedAt into
 	// an estimated renewal: the same anniversary monthly or yearly.
 	BillingPeriod string `json:"billing_period,omitempty"`
-	Truncated     bool   `json:"truncated,omitempty"`
+	// CostReport is an anthropic-api entry's daily spend as Anthropic's cost
+	// report returned it. Nil for every other provider.
+	CostReport *CostReport `json:"cost_report,omitempty"`
+	Truncated  bool        `json:"truncated,omitempty"`
 }
 
 // The values Quota.BillingPeriod takes. Anything else the provider says is

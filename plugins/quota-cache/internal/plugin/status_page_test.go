@@ -97,3 +97,33 @@ func TestStatusPageNeverPresentsAMissingOrRefusedKey(t *testing.T) {
 		}
 	}
 }
+
+// Claude API credit entries have a name, a filter, an endpoint and a reading
+// of their own, and the page prints Anthropic's amounts without adding them up.
+func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
+	script := sidebarScript
+	for _, rule := range []string{
+		"'anthropic-api': 'Claude API credits'",
+		"'anthropic-api': 'api.anthropic.com/v1/organizations/cost_report'",
+		"item.api_credit.label",
+		"const noWeekly = ['openrouter', 'anthropic-api'];",
+		"const label = problem ? 'Not polled' :",
+		"if (entry.provider === 'anthropic-api') return creditDetails(entry, now);",
+		"' (lowest units)'",
+		"'Today not reported yet'",
+		"claude-api-credits",
+	} {
+		if !strings.Contains(script, rule) {
+			t.Fatalf("page script lost %q", rule)
+		}
+	}
+	credit := script[strings.Index(script, "function creditDetails("):strings.Index(script, "function extendedQuota(")]
+	for _, arithmetic := range []string{"Number(", "parseFloat", "reduce(", " + Number", "+= "} {
+		if strings.Contains(credit, arithmetic) {
+			t.Fatalf("the credit reading does arithmetic (%q); totals are Quota Glance's", arithmetic)
+		}
+	}
+	if !strings.Contains(sidebarHTML, `<option value="anthropic-api">Claude API credits</option>`) || !strings.Contains(sidebarHTML, "claude-api-credits") {
+		t.Fatal("the provider filter or the empty state lacks Claude API credits")
+	}
+}

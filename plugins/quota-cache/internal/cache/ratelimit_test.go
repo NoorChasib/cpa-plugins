@@ -32,7 +32,7 @@ func load(t *testing.T, path string) client.Snapshot {
 // being read in between.
 func TestOneRepeatedlyRateLimitedCredentialPausesItsProviderOneIntervalAtATime(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = []Account{{"claude", "bad"}, {"claude", "one"}, {"claude", "two"}}
+	f.accounts = []Account{{Provider: "claude", AuthIndex: "bad"}, {Provider: "claude", AuthIndex: "one"}, {Provider: "claude", AuthIndex: "two"}}
 	f.failures = map[string]error{"bad": RateLimited{}}
 	bad, end := client.Key("claude", "bad"), f.now.Add(12*time.Hour)
 	lastRead := map[string]time.Time{}
@@ -73,7 +73,7 @@ func TestOneRepeatedlyRateLimitedCredentialPausesItsProviderOneIntervalAtATime(t
 // 429, its siblings pause for one interval, not for the backoff it had earned.
 func TestARateLimitAfterOtherFailuresPausesTheProviderOneInterval(t *testing.T) {
 	c, f, opts := fixture(t)
-	f.accounts = []Account{{"claude", "dead"}, {"claude", "one"}}
+	f.accounts = []Account{{Provider: "claude", AuthIndex: "dead"}, {Provider: "claude", AuthIndex: "one"}}
 	f.failures = map[string]error{"dead": errors.New("synthetic 401")}
 	dead := client.Key("claude", "dead")
 	at := f.now
@@ -206,7 +206,7 @@ func TestALongProviderOutageSettlesAtHourlyProbesAndRecoversWithinAnHour(t *test
 			c.SetSchedule(tc.interval, tc.spacing)
 			f.accounts, f.failures = nil, map[string]error{}
 			for i := 0; i < 6; i++ {
-				f.accounts = append(f.accounts, Account{"claude", "claude-" + strconv.Itoa(i)})
+				f.accounts = append(f.accounts, Account{Provider: "claude", AuthIndex: "claude-" + strconv.Itoa(i)})
 			}
 			at := f.now
 			for ; f.calls < len(f.accounts); at = at.Add(tc.spacing) {

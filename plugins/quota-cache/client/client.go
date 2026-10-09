@@ -91,6 +91,11 @@ type Entry struct {
 	// RenewalAt above already include it; it is kept separately so the next
 	// poll, or the next process, knows when it was read and does not ask again.
 	AccountDetails *AccountDetails `json:"account_details,omitempty"`
+	// APICredit is the configured monthly API credit of an anthropic-api
+	// entry, and nil on every other provider. It is rewritten at every scan
+	// from configuration, so unlike Quota it is current even when the
+	// organization has never been polled or its last poll failed.
+	APICredit *APICredit `json:"api_credit,omitempty"`
 }
 
 // AccountDetails are the facts about an account that rarely change and cost a
