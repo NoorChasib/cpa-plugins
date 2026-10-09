@@ -2,9 +2,10 @@
 //
 // Nothing here takes a share of anything. Every width the bar draws is a
 // field the server wrote — the aggregate's fractions — and this module only
-// decides what to call each account in a sentence or on a tile.
+// decides what to call each account in a sentence or on a tile, and what to
+// say when the pool counts an account as less than its own reading.
 
-import type { Credential } from "./types"
+import type { Aggregate, Credential, RowEntry } from "./types"
 
 /** The part of an address before the "@", which is how a sentence names an account. */
 export function shortName(credential: Credential | undefined, fallback: string): string {
@@ -73,4 +74,51 @@ export function recoveryNames(names: string[]): { who: string; plural: boolean }
   if (names.length === 1) return { who: names[0]!, plural: false }
   if (names.length === 2) return { who: `${names[0]} and ${names[1]}`, plural: true }
   return { who: `${names.length} accounts`, plural: true }
+}
+
+/**
+ * Why the pool counts an account as less than its own figure, in a word or
+ * two for a chip beside its address. `spent` when what it counts as is
+ * nothing at all, which is what mutes its bar.
+ */
+export type WeeklyNote = { text: string; spent: boolean }
+
+/**
+ * What an account's row says about its weekly limit, or null when the pool
+ * counts it at its own reading.
+ *
+ * On Claude's session row an account whose weekly is spent is held out of the
+ * mean; on its Fable row an account counts as no more than its weekly has
+ * left. Either way the row keeps the account's real figure, because that is
+ * what an expanded card is for, and this says why the pool above disagrees.
+ * Read from the server's fields alone, so a document from a plugin that
+ * predates them has no note on any row.
+ */
+export function weeklyNote(entry: Pick<RowEntry, "remainingPercent" | "heldOut" | "pooledPercent">): WeeklyNote | null {
+  if (entry.heldOut === true) return { text: "weekly spent", spent: true }
+  if (typeof entry.pooledPercent === "number" && entry.pooledPercent < entry.remainingPercent) {
+    return entry.pooledPercent === 0
+      ? { text: "weekly spent", spent: true }
+      : { text: `weekly caps at ${entry.pooledPercent}%`, spent: false }
+  }
+  return null
+}
+
+/**
+ * The accounts a row's mean leaves out, by reason, as the fold prints them:
+ * those held out because their weekly is spent, then those with no reading.
+ * Empty when the mean covers every account.
+ *
+ * Split because the two explain different things: no reading is a gap in what
+ * the page knows, a spent weekly is a fact about the account. A plugin older
+ * than `heldOutCount` held nothing out, so all of its exclusions are missing
+ * readings.
+ */
+export function foldNotes(aggregate: Pick<Aggregate, "excludedCount" | "heldOutCount">): string[] {
+  const heldOut = typeof aggregate.heldOutCount === "number" ? aggregate.heldOutCount : 0
+  const missing = aggregate.excludedCount - heldOut
+  const notes: string[] = []
+  if (heldOut > 0) notes.push(`${heldOut} weekly spent`)
+  if (missing > 0) notes.push(`${missing} without a reading`)
+  return notes
 }

@@ -150,14 +150,20 @@ row repeats that order, so the top row of each card is always the credential
 that recovers next. Clients do not re-sort.
 
 A credential that did not report a window is **excluded** from that row's mean
-rather than counted as full. Rows keep serving their last good figures with
-`stale: true` and a reason when the snapshot goes missing or its schema stops
-matching, because an empty response is indistinguishable from a broken install.
+rather than counted as full. On Claude, the session row leaves out an account
+whose weekly is spent, and the Fable row counts each account at no more than
+its weekly has left, so an account with no weekly left adds nothing to either;
+its own figures stay on the expanded card
+([how](docs/summary-contract.md#claudes-session-and-fable-bounded-by-the-weekly)).
+Rows keep serving their last good figures with `stale: true` and a reason when
+the snapshot goes missing or its schema stops matching, because an empty
+response is indistinguishable from a broken install.
 
-Each row also arrives taken apart: every credential's slice of what is left,
-and what the next reset gives back. The dashboard draws its pooled bar from
-those slices rather than dividing the mean itself, so the bar and the number
-under it cannot disagree — see
+Each row also arrives taken apart: every credential's slice of the pool, and
+what the next reset gives back. The dashboard sizes its pooled bar from the
+row's own `remainingFraction` and `projectedGainFraction` rather than working
+anything out itself, so the bar and the number under it cannot disagree. The
+slices are for a client that draws the pool account by account — see
 [The pool, slice by slice](docs/summary-contract.md#the-pool-slice-by-slice).
 
 Plan names arrive display-ready: Claude shows Team, Enterprise, Max 20x, Max 5x,
@@ -319,17 +325,21 @@ refused a console session, **Try it again**. How the page keeps a refused or
 unanswered console key from adding up to CPA's 30-minute lockout is in
 [docs/access.md](docs/access.md#when-cpa-refuses-a-key).
 
-**Each window is one pooled bar.** Every account's slice of what is left sits
-end to end in its own shade, followed by a hatched slice for what the next
-reset gives back; the empty track after that is capacity no scheduled reset is
-about to return. Under the bar are the pool's "% left", who resets next and
-when, and a legend naming each account with its own figure.
+**Each window is one pooled bar.** What is left is one fill in the level's
+colour, followed by a hatched stretch for what the next reset gives back; the
+empty track after that is capacity no scheduled reset is about to return.
+Under the bar are the pool's "% left", who resets next and when, and when it is
+full again if that is later. Each account's own figure is in its row below,
+with a note when the pool counts it as less, as a spent or capping weekly does
+on Claude.
 
 **Cards fold.** Click the **N accounts** line under a card and its per-account
-rows fold away, leaving the bar, the big percentage, the recovery line and the
-legend. That is deliberate: folding a card should hide the detail, not the
-headline, so a folded page still answers "how much is left and when does more
-arrive" at a glance.
+rows fold away, leaving the bar, the big percentage, the recovery line, when it
+is full again, and the **N accounts** line itself, which says how many accounts
+the pool leaves out and why (for example "5 accounts · 2 weekly spent · 1
+without a reading"). That is deliberate: folding a card should hide the detail,
+not the headline, so a folded page still answers "how much is left and when
+does more arrive" at a glance.
 
 Which cards you folded is remembered in that browser, under
 `quota-glance.collapsed` in local storage. It is a preference about how one
@@ -339,10 +349,12 @@ Cards are keyed by provider and row, so folding Claude's **Session** leaves
 Codex's alone.
 
 Everything the page shows is precomputed here: percentages, levels, ordering,
-trend, every slice of the pooled bar, the ink level of every block in an
-activity strip, and the wording of each card's subtitle. The only arithmetic in
-the browser is subtracting an instant from now — to tick the countdowns, and to
-age the last request under an address.
+trend, every width in the pooled bar, the ink level of every block in an
+activity strip, and the wording of each card's subtitle. The browser's only
+arithmetic is subtracting an instant from now — to tick the countdowns, and to
+age the last request under an address — and one subtraction of counts: the
+fold line takes `heldOutCount` from `excludedCount` to say how many accounts
+have no reading.
 
 ## Development
 

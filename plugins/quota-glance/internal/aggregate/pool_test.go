@@ -14,33 +14,78 @@ import (
 // the slices add back up to the aggregate the headline prints, so the bar and
 // the number beside it cannot drift apart.
 func TestPoolSharesAddUpToTheAggregate(t *testing.T) {
-	const tolerance = 1e-9
 	for name, doc := range map[string]Document{"summary": buildFixture(t), "degraded": buildDegraded(t)} {
-		for _, provider := range doc.Providers {
-			for _, row := range provider.Rows {
-				where := name + " " + provider.ID + " " + row.RowID
-				pool, gain := 0.0, 0.0
-				for _, entry := range row.Entries {
-					pool += entry.PoolShare
-					gain += entry.RecoveryShare
-					if !entry.HasReading && (entry.PoolShare != 0 || entry.RecoveryShare != 0 || entry.ResetsNext) {
-						t.Errorf("%s: %s has no reading but holds a slice: %+v", where, entry.CredentialID, entry)
+		checkPoolAddsUp(t, name, doc)
+	}
+}
+
+// checkPoolAddsUp asserts, on every row of a document, what a client drawing
+// the pooled bar from its entries relies on: the slices add back up to the
+// headline and the gain, the counts add up to the provider's credentials, and
+// an entry left out of the mean holds no slice of it.
+func checkPoolAddsUp(t *testing.T, name string, doc Document) {
+	t.Helper()
+	const tolerance = 1e-9
+	for _, provider := range doc.Providers {
+		for _, row := range provider.Rows {
+			where := name + " " + provider.ID + " " + row.RowID
+			agg := row.Aggregate
+			fable := provider.ID == "claude" && row.RowID == qc.WindowWeeklyFable
+			session := provider.ID == "claude" && row.RowID == qc.WindowSession
+			pool, gain, heldOut := 0.0, 0.0, 0
+			for _, entry := range row.Entries {
+				pool += entry.PoolShare
+				gain += entry.RecoveryShare
+				if !entry.HasReading && (entry.PoolShare != 0 || entry.RecoveryShare != 0 || entry.ResetsNext ||
+					entry.HeldOut || entry.PooledFraction != 0 || entry.PooledPercent != 0) {
+					t.Errorf("%s: %s has no reading but holds a slice: %+v", where, entry.CredentialID, entry)
+				}
+				if entry.RecoveryShare > 0 && !entry.ResetsNext {
+					t.Errorf("%s: %s returns capacity at a reset it is not part of", where, entry.CredentialID)
+				}
+				if entry.RecoveryShare < 0 {
+					t.Errorf("%s: %s takes capacity away at a reset: %v", where, entry.CredentialID, entry.RecoveryShare)
+				}
+				if entry.PooledPercent != percentOf(entry.PooledFraction) {
+					t.Errorf("%s: %s pooled %v prints as %d%%", where, entry.CredentialID, entry.PooledFraction, entry.PooledPercent)
+				}
+				// Only Claude's Fable row counts an account at anything but its
+				// own reading, and there only ever lower.
+				if (!fable && entry.PooledFraction != entry.RemainingFraction) || entry.PooledFraction > entry.RemainingFraction {
+					t.Errorf("%s: %s counts as %v against a reading of %v", where, entry.CredentialID,
+						entry.PooledFraction, entry.RemainingFraction)
+				}
+				switch {
+				case entry.HeldOut:
+					heldOut++
+					if !session {
+						t.Errorf("%s: %s is held out of a row nothing is held out of", where, entry.CredentialID)
 					}
-					if entry.RecoveryShare > 0 && !entry.ResetsNext {
-						t.Errorf("%s: %s returns capacity at a reset it is not part of", where, entry.CredentialID)
+					if !entry.HasReading || entry.PoolShare != 0 || entry.RecoveryShare != 0 || entry.ResetsNext {
+						t.Errorf("%s: held-out %s holds a slice: %+v", where, entry.CredentialID, entry)
+					}
+				case entry.HasReading:
+					if want := entry.PooledFraction / float64(agg.MemberCount); math.Abs(entry.PoolShare-want) > tolerance {
+						t.Errorf("%s: %s share = %v; want %v", where, entry.CredentialID, entry.PoolShare, want)
 					}
 				}
-				if math.Abs(pool-row.Aggregate.RemainingFraction) > tolerance {
-					t.Errorf("%s: shares sum to %v; the aggregate is %v", where, pool, row.Aggregate.RemainingFraction)
-				}
-				if math.Abs(gain-row.Aggregate.ProjectedGainFraction) > tolerance {
-					t.Errorf("%s: recovery shares sum to %v; the gain is %v", where, gain, row.Aggregate.ProjectedGainFraction)
-				}
-				if percentOf(row.Aggregate.ProjectedGainFraction) != row.Aggregate.ProjectedGainPercent {
-					t.Errorf("%s: gain fraction %v prints as %d%%, not %d%%", where,
-						row.Aggregate.ProjectedGainFraction, percentOf(row.Aggregate.ProjectedGainFraction),
-						row.Aggregate.ProjectedGainPercent)
-				}
+			}
+			if math.Abs(pool-agg.RemainingFraction) > tolerance {
+				t.Errorf("%s: shares sum to %v; the aggregate is %v", where, pool, agg.RemainingFraction)
+			}
+			if math.Abs(gain-agg.ProjectedGainFraction) > tolerance {
+				t.Errorf("%s: recovery shares sum to %v; the gain is %v", where, gain, agg.ProjectedGainFraction)
+			}
+			if percentOf(agg.ProjectedGainFraction) != agg.ProjectedGainPercent {
+				t.Errorf("%s: gain fraction %v prints as %d%%, not %d%%", where,
+					agg.ProjectedGainFraction, percentOf(agg.ProjectedGainFraction), agg.ProjectedGainPercent)
+			}
+			if heldOut != agg.HeldOutCount || agg.HeldOutCount > agg.ExcludedCount {
+				t.Errorf("%s: %d entries held out; heldOutCount %d of %d excluded", where, heldOut, agg.HeldOutCount, agg.ExcludedCount)
+			}
+			if agg.MemberCount+agg.ExcludedCount != provider.CredentialCount || len(row.Entries) != provider.CredentialCount {
+				t.Errorf("%s: members %d + excluded %d over %d entries; the provider has %d credentials", where,
+					agg.MemberCount, agg.ExcludedCount, len(row.Entries), provider.CredentialCount)
 			}
 		}
 	}
@@ -48,29 +93,20 @@ func TestPoolSharesAddUpToTheAggregate(t *testing.T) {
 
 // poolRow builds one Claude weekly row from (used percent, reset offset)
 // pairs, one credential each. A zero offset means the window reports no reset
-// instant at all.
+// instant at all. The IDs must be Claude auth indexes ("claude-..."), since
+// buildAccounts reads each credential's provider from its ID.
 func poolRow(t *testing.T, windows map[string][2]int64) Row {
 	t.Helper()
 	now := at(t, 0)
-	observed := now.Add(-2 * time.Minute)
-	entries := map[string]qc.Entry{}
-	roster := []Identity{}
+	accounts := map[string][]qc.EntryWindow{}
 	for id, w := range windows {
-		window := qc.EntryWindow{Key: qc.WindowWeekly, UsedPercent: float64(w[0]), ObservedAt: observed}
+		var reset time.Time
 		if w[1] != 0 {
-			window.ResetAt = now.Add(time.Duration(w[1]) * time.Second)
+			reset = now.Add(time.Duration(w[1]) * time.Second)
 		}
-		entries[qc.Key("claude", id)] = qc.Entry{
-			Provider: "claude", AuthIndex: id, ObservedAt: observed, Windows: []qc.EntryWindow{window},
-		}
-		roster = append(roster, Identity{AuthIndex: id, Provider: "claude"})
+		accounts[id] = []qc.EntryWindow{win(qc.WindowWeekly, float64(w[0]), reset)}
 	}
-	doc := Build(Input{
-		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: entries},
-		Identities: roster,
-		StaleAfter: time.Hour,
-	}, now)
-	return rowOf(t, doc, "claude", qc.WindowWeekly)
+	return rowOf(t, buildAccounts(t, accounts, nil), "claude", qc.WindowWeekly)
 }
 
 func entryOf(t *testing.T, row Row, id string) RowEntry {

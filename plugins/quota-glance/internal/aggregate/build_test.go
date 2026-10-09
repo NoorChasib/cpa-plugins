@@ -757,6 +757,11 @@ func TestSnapshotEntryAbsentFromRosterIsIgnored(t *testing.T) {
 func degradedRoster() []Identity {
 	return []Identity{
 		{AuthIndex: "claude-fresh@example.com.json", Provider: "claude"},
+		// Its weekly is spent and its session all but unused: the account the
+		// session card holds out of its mean, and whose Fable counts as
+		// nothing. Its session resets soonest on the card, which must not make
+		// it the one the recovery names.
+		{AuthIndex: "claude-weekly-spent@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-stale@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-failing@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-pending@example.com.json", Provider: "claude"},
@@ -855,6 +860,10 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 	levels, trends, states, hints := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	issues := map[string]bool{}
 	var sawNullReset, sawEmptySubtext, sawUnmatched, sawModel, sawExcluded bool
+	// The two ways a spent weekly shows: a session held out of the mean with
+	// its reading still printed, and a Fable entry counted at nothing while it
+	// prints Fable to spare.
+	var sawHeldOut, sawCappedToZero bool
 	for _, provider := range doc.Providers {
 		for _, row := range provider.Rows {
 			levels[row.Aggregate.Level] = true
@@ -881,8 +890,17 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 				for _, issue := range entry.DataIssues {
 					issues[issue] = true
 				}
+				if row.RowID == qc.WindowSession && entry.HeldOut && entry.HasReading && row.Aggregate.HeldOutCount > 0 {
+					sawHeldOut = true
+				}
+				if row.RowID == qc.WindowWeeklyFable && entry.HasReading && entry.RemainingPercent > 0 && entry.PooledPercent == 0 {
+					sawCappedToZero = true
+				}
 			}
 		}
+	}
+	if !sawHeldOut || !sawCappedToZero {
+		t.Errorf("missing: heldOutSession=%v fableCappedToZero=%v", sawHeldOut, sawCappedToZero)
 	}
 	for name, set := range map[string][]string{
 		"level": {LevelOK, LevelLow, LevelCritical},
@@ -1022,6 +1040,11 @@ func TestNeverObservedCredentialIsNeverARowMember(t *testing.T) {
 // cooldown, which is exactly the moment its figures matter most — and the row
 // it vanished from was the one that would have explained why. It stays, with
 // its real reading, on every card its provider has.
+//
+// What the session mean counts is decided by the weekly reading, never by the
+// routing state. A credential parked on its session alone counts there at 0%.
+// One parked with its weekly spent too is held out of the session mean, since
+// nothing can use its session until the weekly refills, and is still printed.
 func TestCooldownCredentialStaysOnEveryCard(t *testing.T) {
 	now := at(t, 0)
 	observed := now.Add(-2 * time.Minute)
@@ -1037,46 +1060,58 @@ func TestCooldownCredentialStaysOnEveryCard(t *testing.T) {
 			ObservedAt: observed, Windows: windows(0, 40),
 		},
 		// Rate limited a minute ago: CPA will not route to it, quota-cache
-		// polled it anyway, and it is empty. All three are true at once.
+		// polled it anyway, and its session is empty. All three are true at
+		// once.
 		"claude:claude-cooling@example.com.json": {
 			Provider: "claude", AuthIndex: "claude-cooling@example.com.json",
+			ObservedAt: observed, Windows: windows(100, 40),
+		},
+		// The same, with its weekly gone as well.
+		"claude:claude-spent@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-spent@example.com.json",
 			ObservedAt: observed, Windows: windows(100, 100),
 		},
 	}}
 	doc := Build(Input{Snapshot: snapshot, Identities: []Identity{
 		{AuthIndex: "claude-fine@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-cooling@example.com.json", Provider: "claude", Unavailable: true},
+		{AuthIndex: "claude-spent@example.com.json", Provider: "claude", Unavailable: true},
 	}, StaleAfter: time.Hour}, now)
+	checkPoolAddsUp(t, "cooldown", doc)
 
 	for _, rowID := range []string{qc.WindowSession, qc.WindowWeekly} {
-		row := rowOf(t, doc, "claude", rowID)
-		if len(row.Entries) != 2 || row.Aggregate.MemberCount != 2 {
-			t.Fatalf("row %s dropped the credential in cooldown: %d entries, %+v",
-				rowID, len(row.Entries), row.Aggregate)
+		if row := rowOf(t, doc, "claude", rowID); len(row.Entries) != 3 {
+			t.Fatalf("row %s dropped a credential in cooldown: %d entries", rowID, len(row.Entries))
 		}
 	}
-	// Means of (100%, 0%) and (60%, 0%). Dropping the exhausted credential
-	// would report 100% and 60% — a dashboard claiming full capacity at the
-	// moment half the fleet is rate limited.
-	if got := rowOf(t, doc, "claude", qc.WindowSession).Aggregate.RemainingPercent; got != 50 {
-		t.Fatalf("session = %d%%; want 50", got)
+	// Means of (100%, 0%) and (60%, 60%, 0%). Dropping the credential parked
+	// on its session would report 100% — a dashboard claiming full capacity at
+	// the moment half the accounts that can send are rate limited.
+	session := rowOf(t, doc, "claude", qc.WindowSession).Aggregate
+	if session.RemainingPercent != 50 || session.MemberCount != 2 || session.HeldOutCount != 1 {
+		t.Fatalf("session = %d%% over %d members, %d held out; want 50%% over 2, 1 held out",
+			session.RemainingPercent, session.MemberCount, session.HeldOutCount)
 	}
-	if got := rowOf(t, doc, "claude", qc.WindowWeekly).Aggregate.RemainingPercent; got != 30 {
-		t.Fatalf("weekly = %d%%; want 30", got)
+	weekly := rowOf(t, doc, "claude", qc.WindowWeekly).Aggregate
+	if weekly.RemainingPercent != 40 || weekly.MemberCount != 3 {
+		t.Fatalf("weekly = %d%% over %d members; want 40%% over 3", weekly.RemainingPercent, weekly.MemberCount)
 	}
-	// The reason it is parked is still reported, on the credential where a
+	// The reason each is parked is still reported, on the credential where a
 	// client looks for it rather than on the reading, which is perfectly good.
 	for _, c := range doc.Credentials {
-		if c.ID == "claude-cooling@example.com.json" && c.Status != StatusUnavailable {
-			t.Fatalf("status = %q; want unavailable", c.Status)
+		if c.ID != "claude-fine@example.com.json" && c.Status != StatusUnavailable {
+			t.Fatalf("%s status = %q; want unavailable", c.ID, c.Status)
 		}
 	}
 	for _, entry := range rowOf(t, doc, "claude", qc.WindowSession).Entries {
-		if entry.CredentialID != "claude-cooling@example.com.json" {
+		if entry.CredentialID == "claude-fine@example.com.json" {
 			continue
 		}
 		if !entry.HasReading || entry.State != StatusOK || entry.RemainingPercent != 0 {
 			t.Fatalf("a fresh reading from a parked credential is still a good reading: %+v", entry)
+		}
+		if held := entry.CredentialID == "claude-spent@example.com.json"; entry.HeldOut != held {
+			t.Fatalf("%s heldOut = %v; only the spent weekly holds a session out", entry.CredentialID, entry.HeldOut)
 		}
 	}
 }

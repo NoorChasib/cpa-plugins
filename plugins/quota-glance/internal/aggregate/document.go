@@ -106,7 +106,9 @@ type RecentRequest struct {
 	Failed  int64
 }
 
-// Sample is one observation of one window's remaining fraction, used for trend.
+// Sample is one observation of what one credential counted as in one row's
+// mean, used for trend. Remaining keeps its name because the history is
+// persisted under it.
 type Sample struct {
 	AuthIndex string    `json:"authIndex"`
 	WindowKey string    `json:"windowKey"`
@@ -338,29 +340,36 @@ type Row struct {
 
 // Aggregate carries both a fraction and a rounded percent so the bar width and
 // the printed label cannot disagree. MemberCount counts the credentials the
-// mean was taken over — those with a reading for this window — and
-// ExcludedCount the rest. The two always sum to the provider's credential
-// count, which is also the length of Entries.
+// mean was taken over — those with a reading for this window that are not held
+// out — and ExcludedCount the rest. The two always sum to the provider's
+// credential count, which is also the length of Entries.
 type Aggregate struct {
-	RemainingFraction     float64 `json:"remainingFraction"`
-	RemainingPercent      int     `json:"remainingPercent"`
-	MemberCount           int     `json:"memberCount"`
-	ExcludedCount         int     `json:"excludedCount"`
-	Level                 string  `json:"level"`
-	Trend                 string  `json:"trend"`
-	SoonestResetAtEpoch   *int64  `json:"soonestResetAtEpoch"`
-	SoonestResetInSeconds *int64  `json:"soonestResetInSeconds"`
-	ProjectedGainPercent  int     `json:"projectedGainPercent"`
+	RemainingFraction float64 `json:"remainingFraction"`
+	RemainingPercent  int     `json:"remainingPercent"`
+	MemberCount       int     `json:"memberCount"`
+	ExcludedCount     int     `json:"excludedCount"`
+	// HeldOutCount is the part of ExcludedCount that has a reading but is left
+	// out of the mean regardless: on Claude's session row, the accounts whose
+	// weekly is spent. The rest of ExcludedCount is the credentials with no
+	// reading. Zero on every other row.
+	HeldOutCount          int    `json:"heldOutCount"`
+	Level                 string `json:"level"`
+	Trend                 string `json:"trend"`
+	SoonestResetAtEpoch   *int64 `json:"soonestResetAtEpoch"`
+	SoonestResetInSeconds *int64 `json:"soonestResetInSeconds"`
+	ProjectedGainPercent  int    `json:"projectedGainPercent"`
 	// ProjectedGainFraction is the same gain unrounded, on the same 0-1 scale
 	// as RemainingFraction, so a client drawing what the next reset returns
 	// sizes it from this and prints ProjectedGainPercent beside it — the pair
 	// that keeps every other bar and label in this document in agreement.
 	ProjectedGainFraction float64 `json:"projectedGainFraction"`
 	// FullAtEpoch is when the row would read 100% if nothing more were used:
-	// the latest reset among the members below full. Null when every member is
-	// already full, when a member below full has no reset instant (that window
-	// does not refill on a schedule), or when there is nothing ahead to count
-	// down to. It is the far end of the recovery SoonestResetAtEpoch begins.
+	// the latest reset among the members below full. On Claude's Fable row a
+	// member waits for its weekly's reset as well, when that is below full.
+	// Null when every member is already full, when a reset a member below full
+	// waits for has no instant (that window does not refill on a schedule), or
+	// when there is nothing ahead to count down to. It is the far end of the
+	// recovery SoonestResetAtEpoch begins.
 	FullAtEpoch   *int64 `json:"fullAtEpoch"`
 	FullInSeconds *int64 `json:"fullInSeconds"`
 	Subtext       string `json:"subtext"`
@@ -377,10 +386,25 @@ type RowEntry struct {
 	RemainingFraction float64 `json:"remainingFraction"`
 	RemainingPercent  int     `json:"remainingPercent"`
 	Level             string  `json:"level"`
+	// HeldOut is true for an entry with a reading that the row's mean leaves
+	// out: on Claude's session row, an account whose weekly is spent, whose
+	// session can read 100% with nothing able to use it. The figures above are
+	// still its real reading; its shares are zero and ResetsNext is false.
+	// False on every other row.
+	HeldOut bool `json:"heldOut"`
+	// PooledFraction is what this credential counts as in the row's mean, and
+	// PooledPercent the same figure as printed. Both equal RemainingFraction
+	// and RemainingPercent on every row but Claude's Fable, where an account
+	// counts as the lesser of its Fable and its weekly remaining, since it
+	// cannot spend more Fable than its weekly allows. A held-out entry's is its
+	// own reading, though the mean leaves it out. Zero with no reading.
+	PooledFraction float64 `json:"pooledFraction"`
+	PooledPercent  int     `json:"pooledPercent"`
 	// PoolShare is this credential's slice of the row's aggregate, on the
 	// row's 0-1 scale: across a row's entries the shares sum to the
 	// aggregate's RemainingFraction, so a pooled bar is these laid end to end.
-	// Zero for an entry with no reading, which is not in the mean.
+	// Zero for an entry with no reading or held out, neither of which is in
+	// the mean.
 	PoolShare float64 `json:"poolShare"`
 	// RecoveryShare is what the row regains from this credential at its next
 	// recovery, on the same scale, and zero unless ResetsNext. Across a row the
@@ -388,9 +412,11 @@ type RowEntry struct {
 	// return, credential by credential.
 	RecoveryShare float64 `json:"recoveryShare"`
 	// ResetsNext is true for every credential whose window resets at the
-	// row's soonest reset or within the minute after it — the ones that
-	// recovery is made of. True even for a credential already full, whose
-	// reset returns nothing: it is still the next thing to happen to the row.
+	// row's soonest reset or within the minute after it — on Claude's Fable
+	// row, whose Fable window or weekly does — the ones that recovery is made
+	// of. True even for a credential whose reset returns nothing, full already
+	// or still held down by its weekly: it is still the next thing to happen to
+	// the row.
 	ResetsNext       bool     `json:"resetsNext"`
 	ResetAtEpoch     *int64   `json:"resetAtEpoch"`
 	ResetInSeconds   *int64   `json:"resetInSeconds"`

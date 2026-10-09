@@ -167,11 +167,21 @@ export interface Aggregate {
   projectedGainFraction?: number
   /**
    * When the row would read 100% if nothing more were used — the latest reset
-   * among the members below full — or null when that cannot be said: every
-   * member already full, or one below full with no reset at all.
+   * among the members below full, and on Claude's Fable row a member's weekly
+   * reset as well when its weekly is below full — or null when that cannot be
+   * said: every member already full, or a reset one below full waits for has
+   * no instant at all.
    */
   fullAtEpoch?: number | null
   fullInSeconds?: number | null
+  /**
+   * The part of `excludedCount` that does have a reading but was held out of
+   * the mean — on Claude's session row, the accounts whose weekly limit is
+   * spent — so the rest of `excludedCount` is the credentials with no reading.
+   * Zero on every other row. Absent from an older plugin, whose every
+   * exclusion was a missing reading.
+   */
+  heldOutCount?: number
   /** The recovery as one sentence, for printing whole. Never parsed. */
   subtext: string
 }
@@ -191,8 +201,10 @@ export interface RowEntry {
   /**
    * This credential's slice of the row's pool, on the row's 0-1 scale. Laid
    * end to end, the entries' shares are `aggregate.remainingFraction` — the
-   * server's slices of the server's mean, so the pooled bar needs no
-   * arithmetic here. Zero with no reading. Absent from an older plugin.
+   * server's slices of the server's mean — for a client that draws the pool
+   * account by account. This dashboard sizes its bar from the aggregate
+   * itself. Zero with no reading or when held out. Absent from an older
+   * plugin.
    */
   poolShare?: number
   /**
@@ -202,10 +214,31 @@ export interface RowEntry {
   recoveryShare?: number
   /**
    * Part of the row's next recovery: its window resets at the row's soonest
-   * reset or within the minute after. True for a full credential too, which
-   * the recovery names but which returns nothing.
+   * reset or within the minute after — on Claude's Fable row, its Fable window
+   * or its weekly does. True too for a credential whose reset returns nothing,
+   * one already full or a Fable reset under a weekly that still caps it, which
+   * the recovery names anyway. Always false when held out.
    */
   resetsNext?: boolean
+  /**
+   * Left out of the row's mean although it has a reading. On Claude's session
+   * row, an account whose weekly limit is spent: its session can sit at 100%
+   * with nothing able to use it, and counting it would make the pool look
+   * fuller than it is. The figures above are still its real reading; its
+   * shares are zero and `resetsNext` is false. Absent from an older plugin,
+   * which held nothing out.
+   */
+  heldOut?: boolean
+  /**
+   * What this credential counts as in the row's mean, as a fraction and as
+   * the percent printed for it. The same as `remainingFraction` and
+   * `remainingPercent` on every row but Claude's Fable, where an account
+   * cannot use more Fable than its weekly has left and so counts as the
+   * lesser of the two. A held-out credential's is its own reading, though the
+   * mean leaves it out. Zero with no reading. Absent from an older plugin.
+   */
+  pooledFraction?: number
+  pooledPercent?: number
   resetAtEpoch: number | null
   resetInSeconds: number | null
   resetDisplayHint: ResetDisplayHint

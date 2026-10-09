@@ -1,4 +1,5 @@
 import { useNowSeconds } from "../lib/now"
+import { weeklyNote } from "../lib/pool"
 import { formatAgo, formatDate, formatDuration, formatReset } from "../lib/time"
 import type { Activity, Credential, Credits, RowEntry } from "../lib/types"
 
@@ -30,11 +31,25 @@ function Email({ address }: { address: string }) {
  *
  * Sized from the fraction and labelled from the integer percent, both of which
  * the server sends, so the bar and the number beside it cannot disagree.
+ *
+ * `spent` keeps the width and takes the colour: the reading is real, but an
+ * account whose weekly is spent can use none of it, and a full bar in the
+ * accent would read as room.
  */
-function Bar({ fraction, percent, level }: { fraction: number; percent: number; level: string }) {
+function Bar({
+  fraction,
+  percent,
+  level,
+  spent,
+}: {
+  fraction: number
+  percent: number
+  level: string
+  spent: boolean
+}) {
   const width = Math.max(0, Math.min(1, fraction)) * 100
   return (
-    <span className={`qg-abar qg-lvl-${level}`} role="img" aria-label={`${percent}% left`}>
+    <span className={`qg-abar qg-lvl-${level} ${spent ? "is-spent" : ""}`} role="img" aria-label={`${percent}% left`}>
       <i style={{ width: `${width}%` }} />
     </span>
   )
@@ -251,9 +266,13 @@ export function CredentialRow({
   // than drawing a confident bar over a reading the server would not vouch for.
   const degraded = entry.state !== "ok"
   const parked = credential ? ROUTING_LABELS[credential.status] : undefined
+  // Why the pool counts this account as less than its own figure, if it does.
+  const weekly = weeklyNote(entry)
   // The pool bar is this account's bar when it is the only one, unless the
-  // reading needs saying again with its caveat beside it.
-  const compact = solo && !degraded
+  // reading needs saying again with its caveat beside it — or the pool counts
+  // it as less than it reads, when the pool's figure is not this account's
+  // and the account's own would otherwise be shown nowhere.
+  const compact = solo && !degraded && weekly === null
 
   // Checked by type rather than against null: a document from a plugin that
   // predates these fields has neither, and must render as it always did.
@@ -294,10 +313,11 @@ export function CredentialRow({
           * the part that gives way when the line runs short. A plan the
           * provider did not report is left out rather than shown as an empty
           * pill, which read as a placeholder never filled in. */}
-        {(credential?.plan || parked) && (
+        {(credential?.plan || parked || weekly) && (
           <span className="qg-achips">
             {credential?.plan && <span className="qg-chip">{credential.plan}</span>}
             {parked && <span className="qg-chip qg-chip-route">{parked}</span>}
+            {weekly && <span className="qg-chip qg-chip-weekly">{weekly.text}</span>}
           </span>
         )}
       </div>
@@ -309,7 +329,12 @@ export function CredentialRow({
           // this reading has not earned that.
           <span className="qg-astate">{STATE_LABELS[entry.state] ?? entry.state}</span>
         ) : (
-          <Bar fraction={entry.remainingFraction} percent={entry.remainingPercent} level={entry.level} />
+          <Bar
+            fraction={entry.remainingFraction}
+            percent={entry.remainingPercent}
+            level={entry.level}
+            spent={weekly?.spent === true}
+          />
         ))}
 
       {figureLine && (

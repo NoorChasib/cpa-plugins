@@ -669,12 +669,25 @@
     color: #f29393;
   }
 
-  /* CPA's routing state: an outline, because it is a fact about where
-   * requests go and not a property of the account like its plan. */
-  .qg-chip-route {
+  /* The account chips that are not a property of the account like its plan
+   * share an outline. */
+  .qg-chip-route,
+  .qg-chip-weekly {
     border: 1px solid #2e3239;
     background: transparent;
+  }
+
+  /* CPA's routing state: a fact about where requests go, so it says nothing
+   * about how the pool counts the account. In the dimmer ink. */
+  .qg-chip-route {
     color: var(--color-ink-3);
+  }
+
+  /* Why the pool counts an account as less than its own figure. In the
+   * brighter ink, because it explains why the figure on this row is not the
+   * one the pool's mean uses. */
+  .qg-chip-weekly {
+    color: var(--color-ink-2);
   }
 
   /* Bar colours, from the level the server computed: the accent while there
@@ -959,6 +972,13 @@
     inset: 0 auto 0 0;
     border-radius: 3px;
     background: var(--lvl);
+  }
+
+  /* An account whose weekly is spent keeps its bar at its real width, in the
+   * dimmest ink rather than its level's colour: the reading it shows is real,
+   * but nothing can use it, and an idle 100% in the accent reads as room. */
+  .qg-abar.is-spent i {
+    background: var(--color-ink-4);
   }
 
   /* In the bar's place on a reading the server will not vouch for: the word

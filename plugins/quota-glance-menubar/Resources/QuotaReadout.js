@@ -25,10 +25,14 @@
       for (const row of [...provider.rows].sort((a, b) => a.order - b.order)) {
         if (typeof row.rowId !== "string" || typeof row.title !== "string" || !row.aggregate) throw new Error("Invalid window");
         const value = row.aggregate.remainingPercent;
+        // A Claude session whose every reporting account has spent its weekly
+        // limit has no members, yet its 0% is a real reading. Older summaries
+        // omit heldOutCount, so their memberless rows still read as missing.
+        const reading = row.aggregate.memberCount > 0 || row.aggregate.heldOutCount > 0;
         windows.push({
           selection: { providerID: provider.id, rowID: row.rowId },
           title: `${provider.title} · ${row.title}`,
-          remainingPercent: row.aggregate.memberCount > 0 && Number.isInteger(value) && value >= 0 && value <= 100 ? value : null,
+          remainingPercent: reading && Number.isInteger(value) && value >= 0 && value <= 100 ? value : null,
         });
       }
     }

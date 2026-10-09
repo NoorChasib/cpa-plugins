@@ -18,9 +18,10 @@ func absDuration(d time.Duration) time.Duration {
 	return d
 }
 
-// observation is one member's current remaining fraction. Members arrive in
-// catalog order, and the means below are accumulated in that order so float
-// addition cannot make the result depend on map iteration.
+// observation is one member's current pooled fraction, what it counts as in
+// the row's mean. Members arrive in catalog order, and the means below are
+// accumulated in that order so float addition cannot make the result depend on
+// map iteration.
 type observation struct {
 	authIndex string
 	remaining float64
@@ -90,6 +91,18 @@ func trendOf(samples []Sample, current []observation, rowID string, now time.Tim
 // from the document rather than the snapshot means a sample always matches the
 // row it will later be compared against, including per-model rows.
 //
+// Each sample is the entry's pooled fraction, the figure the row's mean counts
+// it at, so a trend describes the headline it is drawn beside. That differs
+// from the remaining fraction only on Claude's Fable row, where the weekly caps
+// it. A history recorded before the cap holds raw Fable figures there, so for
+// the first hour after an upgrade the Fable trend compares capped values with
+// raw ones and can point down where nothing moved. That is accepted: once the
+// sample nearest an hour ago was recorded capped, it compares like with like.
+//
+// Held-out entries are recorded at their own reading like any other. trendOf
+// compares only the members the mean is taken over, so a held-out sample is
+// not used while it is held out, and is there when its weekly refills.
+//
 // Entries with no reading are skipped. Their remaining fraction is zero because
 // there is no number, not because the credential is empty, and recording that
 // zero would write a fabricated drop to 0% into the history every other trend
@@ -106,7 +119,7 @@ func SamplesFrom(doc Document, at time.Time) []Sample {
 					AuthIndex: entry.CredentialID,
 					WindowKey: row.RowID,
 					At:        at,
-					Remaining: entry.RemainingFraction,
+					Remaining: entry.PooledFraction,
 				})
 			}
 		}

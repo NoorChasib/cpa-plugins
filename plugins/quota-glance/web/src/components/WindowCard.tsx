@@ -2,7 +2,7 @@ import { useId } from "react"
 
 import { CredentialRow } from "./CredentialRow"
 import { useNowSeconds } from "../lib/now"
-import { type AccountName, nameText, recoveryNames, shortName } from "../lib/pool"
+import { type AccountName, foldNotes, nameText, recoveryNames, shortName, weeklyNote } from "../lib/pool"
 import { formatDuration, secondsUntil } from "../lib/time"
 import type { Credential, Row } from "../lib/types"
 
@@ -193,9 +193,32 @@ export function WindowCard({
   }))
   const levelWord = LEVEL_WORD[aggregate.level]
 
+  // Each account's own figure, with the reason when the pool counts it as
+  // less — "noor 100% (weekly spent)". The label is read with the card
+  // folded, when the chip that says so beside the row is not there, and
+  // without it the figures would add up to more than the pool. In brackets,
+  // because the comma already separates the accounts and a note set off by
+  // one more is heard as belonging to whichever account comes next.
   const figures = row.entries
-    .map((entry, index) => `${named[index]!.name} ${entry.hasReading ? `${entry.remainingPercent}%` : "no reading"}`)
+    .map((entry, index) => {
+      const weekly = weeklyNote(entry)
+      return `${named[index]!.name} ${entry.hasReading ? `${entry.remainingPercent}%` : "no reading"}${
+        weekly ? ` (${weekly.text})` : ""
+      }`
+    })
     .join(", ")
+  // How many accounts the pool's figure is over. When every account that
+  // reports is held out the mean covers none of them, and "across 0 accounts"
+  // ahead of a list of five reads as a miscount, so it says why instead —
+  // "reporting", because accounts with no reading can sit beside them.
+  const heldOut = typeof aggregate.heldOutCount === "number" ? aggregate.heldOutCount : 0
+  const scope =
+    row.entries.length <= 1
+      ? ""
+      : aggregate.memberCount === 0 && heldOut > 0
+        ? ": every reporting account's weekly is spent"
+        : ` across ${plural(aggregate.memberCount, "account")}`
+  const foldNote = foldNotes(aggregate)
   // The far end of the recovery: when every account below full has reset.
   // Shown only when it says something the recovery line has not — with one
   // account, or one account below full, it is the same instant.
@@ -207,9 +230,7 @@ export function WindowCard({
   // Everything the hidden line under the bar shows, so that line can stay
   // hidden from assistive technology without taking a figure with it.
   const label = [
-    `${aggregate.remainingPercent}% left${levelWord ? `, ${levelWord}` : ""}${
-      row.entries.length > 1 ? ` across ${plural(aggregate.memberCount, "account")}` : ""
-    }.`,
+    `${aggregate.remainingPercent}% left${levelWord ? `, ${levelWord}` : ""}${scope}.`,
     row.entries.length > 1 ? `${figures}.` : "",
     recoverySentence(row, named, now),
     full > 0 ? `Full again in ${formatDuration(full)}.` : "",
@@ -265,12 +286,11 @@ export function WindowCard({
         <Chevron />
         <span id={countID}>
           {plural(row.entries.length, "account")}
-          {/* The mean is over the accounts with a reading. Saying how many
-            * have none is what explains a pool that looks smaller than its
-            * rows. */}
-          {aggregate.excludedCount > 0 && (
-            <span className="qg-fold-note"> · {aggregate.excludedCount} without a reading</span>
-          )}
+          {/* The mean is over the accounts with a reading that it does not
+            * hold out. Saying how many it leaves out, and why, is what
+            * explains a pool that looks smaller than its rows — most of all
+            * a session pool at 0% over accounts each reading 100%. */}
+          {foldNote.length > 0 && <span className="qg-fold-note"> · {foldNote.join(" · ")}</span>}
         </span>
       </button>
 
