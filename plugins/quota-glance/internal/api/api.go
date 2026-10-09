@@ -495,7 +495,7 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 	if err != nil {
 		return redeemError(err)
 	}
-	return jsonResponse(http.StatusOK, map[string]any{
+	answer := map[string]any{
 		// Which provider answered, so the client can word the outcome in that
 		// provider's terms — a Codex credit and a Claude grant are not the
 		// same thing, and "cooldown" is only ever Claude's word.
@@ -508,7 +508,16 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 		// poll, and a dashboard that silently disagreed with itself for ten
 		// minutes is worse than one that says why.
 		"snapshotPending": true,
-	})
+	}
+	// Present only on an outcome that touched, or deliberately left, CPA's
+	// routing cooldown on the credential. Anything but "cleared" is a reset
+	// spent with CPA still skipping the account until its cooldown ends: a
+	// partial success, which the page words as one rather than as a failure,
+	// because a second press would spend a second reset and clear nothing.
+	if result.Cooldown != "" {
+		answer["cooldown"] = result.Cooldown
+	}
+	return jsonResponse(http.StatusOK, answer)
 }
 
 // redeemableCredential finds the credential the document says can be redeemed

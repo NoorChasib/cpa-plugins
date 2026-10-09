@@ -573,8 +573,15 @@ function pressFromHeader(value: string | string[] | undefined): Press | string {
  * press id is answered with it, from the ledger.
  */
 function pressReply(ending: string, provider: string): Reply {
-  const outcome = (name: string, windowsReset: number, remainingCount: number) =>
-    pluginJSON(200, { provider, outcome: name, windowsReset, remainingCount, snapshotPending: true })
+  const outcome = (name: string, windowsReset: number, remainingCount: number, cooldown = "") =>
+    pluginJSON(200, {
+      provider,
+      outcome: name,
+      windowsReset,
+      remainingCount,
+      snapshotPending: true,
+      ...(cooldown === "" ? {} : { cooldown }),
+    })
   switch (ending) {
     case "nothing-to-reset":
       return outcome("nothingToReset", 0, 0)
@@ -594,7 +601,14 @@ function pressReply(ending: string, provider: string): Reply {
     // The answer to a second press after an unknown outcome, when the first
     // had gone through.
     case "already-used":
-      return outcome("alreadyUsed", 0, 1)
+      return outcome("alreadyUsed", 0, 1, "cleared")
+    // A reset spent, and CPA's cooldown on the credential not cleared after it.
+    case "cooldown-failed":
+      return outcome("reset", 2, 1, "failed")
+    case "cooldown-unsupported":
+      return outcome("reset", 2, 1, "unsupported")
+    case "cooldown-unconfirmed":
+      return outcome("reset", 0, 1, "unconfirmed")
     case "refused":
       return pluginJSON(502, { error: "provider_refused" })
     case "unavailable":
@@ -614,7 +628,7 @@ function pressReply(ending: string, provider: string): Reply {
     case "not-redeemable":
       return pluginJSON(409, { error: "not_redeemable" })
     default:
-      return outcome("reset", 2, 1)
+      return outcome("reset", 2, 1, "cleared")
   }
 }
 
@@ -629,6 +643,9 @@ const ENDINGS = [
   "paused",
   "ineligible",
   "already-used",
+  "cooldown-failed",
+  "cooldown-unsupported",
+  "cooldown-unconfirmed",
   "refused",
   "unavailable",
   "rate-limited",

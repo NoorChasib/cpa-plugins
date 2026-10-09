@@ -237,8 +237,9 @@ func cliproxyPluginShutdown() {
 
 // Everything quota-glance does on a schedule uses two host callbacks: the
 // credential roster and the log. It reads a file and serves memory. The
-// callbacks below the roster — host.auth.get and host.http.do — belong to the
-// redeem path alone, which runs only on a confirmed press of the button.
+// callbacks below the roster — host.auth.get, host.http.do and
+// host.routing.reset_cooldown — belong to the redeem path alone, which runs
+// only on a confirmed press of the button.
 
 func (hostBridge) ListAuth(ctx context.Context) ([]protocol.HostAuthFileEntry, error) {
 	result, err := callHost(ctx, protocol.MethodHostAuthList, map[string]any{})
@@ -314,6 +315,22 @@ func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) 
 	var response protocol.HostHTTPResponse
 	if err := json.Unmarshal(result, &response); err != nil {
 		return protocol.HostHTTPResponse{}, errors.New("decode host.http.do response")
+	}
+	return response, nil
+}
+
+// ResetCooldown clears CPA's routing cooldown on one credential. It is reached
+// only from the redeem path, after the provider confirmed a reset on that same
+// credential, and it changes nothing but CPA's in-memory and persisted cooldown
+// state: no provider request, and no token file.
+func (hostBridge) ResetCooldown(ctx context.Context, authIndex string) (protocol.HostRoutingResetCooldownResponse, error) {
+	result, err := callHost(ctx, protocol.MethodHostRoutingResetCooldown, protocol.HostRoutingResetCooldownRequest{AuthIndex: authIndex})
+	if err != nil {
+		return protocol.HostRoutingResetCooldownResponse{}, err
+	}
+	var response protocol.HostRoutingResetCooldownResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return protocol.HostRoutingResetCooldownResponse{}, errors.New("decode host.routing.reset_cooldown response")
 	}
 	return response, nil
 }
@@ -396,12 +413,26 @@ func callHost(ctx context.Context, method string, payload any) (json.RawMessage,
 		return nil, fmt.Errorf("host callback %s returned an invalid envelope", method)
 	}
 	if !envelope.OK {
-		if envelope.Error != nil {
-			return nil, fmt.Errorf("host callback %s failed: %s", method, envelope.Error.Code)
-		}
-		return nil, fmt.Errorf("host callback %s failed", method)
+		return nil, callbackFailure(method, envelope.Error)
 	}
 	return envelope.Result, nil
+}
+
+// callbackFailure is the error for a callback the host answered with a
+// failure.
+//
+// CPA answers every failed callback with the same code, and says only in the
+// message that it has no such callback at all. That one case is recognized by
+// its fixed prefix, so a caller can tell an older CPA from a failed call; the
+// message itself is never kept, because elsewhere it can carry upstream text.
+func callbackFailure(method string, failure *protocol.EnvelopeError) error {
+	if failure == nil {
+		return fmt.Errorf("host callback %s failed", method)
+	}
+	if strings.HasPrefix(failure.Message, "unsupported host callback") {
+		return fmt.Errorf("host callback %s: %w", method, protocol.ErrUnsupportedCallback)
+	}
+	return fmt.Errorf("host callback %s failed: %s", method, failure.Code)
 }
 
 func okEnvelope(result any) ([]byte, error) {
