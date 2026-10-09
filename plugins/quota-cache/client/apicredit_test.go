@@ -1,9 +1,12 @@
 package client
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -305,5 +308,127 @@ func TestCostReportCoveredUntil(t *testing.T) {
 	var missing *CostReport
 	if !missing.CoveredUntil().IsZero() {
 		t.Fatal("a nil report covers something")
+	}
+}
+
+// An organization id is read as Console and the response header write it, in
+// either case and with surrounding space, and stored lower-cased. Anything
+// that is not the dashed 8-4-4-4-12 form is refused, and so is the nil UUID.
+func TestNormalizeOrganizationID(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000a"},
+		{"00000000-0000-4000-8000-00000000000A", "00000000-0000-4000-8000-00000000000a"},
+		{"ABCDEF01-2345-4678-9ABC-DEF012345678", "abcdef01-2345-4678-9abc-def012345678"},
+		{"aBcDeF01-2345-4678-9aBc-DeF012345678", "abcdef01-2345-4678-9abc-def012345678"},
+		{"  00000000-0000-4000-8000-00000000000b\n", "00000000-0000-4000-8000-00000000000b"},
+		// Anthropic's own example has neither a version 4 nor an RFC variant.
+		{"12345678-1234-5678-1234-567812345678", "12345678-1234-5678-1234-567812345678"},
+	} {
+		if got, ok := NormalizeOrganizationID(tc.in); !ok || got != tc.want {
+			t.Errorf("NormalizeOrganizationID(%q) = %q, %v; want %q", tc.in, got, ok, tc.want)
+		}
+	}
+	for _, bad := range []string{
+		"", "   ",
+		"{00000000-0000-4000-8000-00000000000a}",
+		"urn:uuid:00000000-0000-4000-8000-00000000000a",
+		"0000000000004000800000000000000a",
+		"0000000-00000-4000-8000-00000000000a",
+		"00000000-000-04000-8000-00000000000a",
+		"00000000-0000-4000-8000-0000000000a",
+		"00000000-0000-4000-8000-00000000000ab",
+		"0000000g-0000-4000-8000-00000000000a",
+		"00000000-0000-4000-8000-00000000000a\x00",
+		"00000000 0000 4000 8000 00000000000a",
+		"００000000-0000-4000-8000-00000000000a",
+		"00000000-0000-0000-0000-000000000000",
+	} {
+		if got, ok := NormalizeOrganizationID(bad); ok || got != "" {
+			t.Errorf("NormalizeOrganizationID(%q) = %q, %v; want refused", bad, got, ok)
+		}
+	}
+}
+
+// An organization's account is the hash of its normalized id, so the way the
+// id was typed never changes it, two organizations never share one, and the
+// id cannot be read back from it.
+func TestAPICreditOrgAccount(t *testing.T) {
+	const id = "00000000-0000-4000-8000-00000000000a"
+	a := APICreditOrgAccount(id)
+	sum := sha256.Sum256([]byte(id))
+	if a != "org-"+hex.EncodeToString(sum[:])[:12] {
+		t.Fatalf("account = %q", a)
+	}
+	if a != APICreditOrgAccount("  00000000-0000-4000-8000-00000000000A ") {
+		t.Fatal("case or spacing of the id changed the account")
+	}
+	if a == APICreditOrgAccount("00000000-0000-4000-8000-00000000000b") {
+		t.Fatal("two organizations share an account")
+	}
+	if !regexp.MustCompile(`^org-[0-9a-f]{12}$`).MatchString(a) {
+		t.Fatalf("account = %q", a)
+	}
+	for _, id := range []string{id, "12345678-1234-5678-1234-567812345678"} {
+		account := APICreditOrgAccount(id)
+		for _, part := range strings.Split(id, "-") {
+			if len(part) >= 8 && strings.Contains(account, part) {
+				t.Fatalf("%q leaked into the account id %q", part, account)
+			}
+		}
+	}
+}
+
+// The 0.1.14 fields are additive too: an item that sets none of them encodes
+// exactly as 0.1.13 wrote it, and their wire names, and those of the new
+// problems, are the contract quota-glance reads.
+func TestAPICreditOrganizationFieldsAreAdditive(t *testing.T) {
+	bare, err := json.Marshal(APICredit{Label: "alpha", MonthlyUSD: "200", Renews: "2026-10-29"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"label":"alpha","position":0,"monthly_usd":"200","renews":"2026-10-29"}`; string(bare) != want {
+		t.Fatalf("bare credit = %s, want %s", bare, want)
+	}
+
+	credit := APICredit{Label: "alpha", Position: 16, Problem: CreditProblemTooManyItems,
+		OrganizationID: "00000000-0000-4000-8000-00000000000a", MonthlyUSDInvalid: true, RenewsInvalid: true, AdminKeyIgnored: true}
+	raw, err := json.Marshal(credit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"label":"alpha","position":16,"problem":"too_many_items",` +
+		`"organization_id":"00000000-0000-4000-8000-00000000000a",` +
+		`"monthly_usd_invalid":true,"renews_invalid":true,"admin_key_ignored":true}`
+	if string(raw) != want {
+		t.Fatalf("credit = %s, want %s", raw, want)
+	}
+
+	// The credit stays comparable, which quota-cache relies on to tell
+	// whether a scan changed it, and survives the snapshot round trip.
+	entry := Entry{Provider: ProviderAnthropicAPI, AuthIndex: APICreditOrgAccount(credit.OrganizationID), APICredit: &credit}
+	snapshotRaw, err := json.Marshal(Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]Entry{Key(entry.Provider, entry.AuthIndex): entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	if err := os.WriteFile(path, snapshotRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot.Entries[Key(entry.Provider, entry.AuthIndex)].APICredit; got == nil || *got != credit {
+		t.Fatalf("round trip = %+v", got)
+	}
+
+	for got, want := range map[string]string{
+		CreditProblemOrganizationIDMissing:   "organization_id_missing",
+		CreditProblemOrganizationIDInvalid:   "organization_id_invalid",
+		CreditProblemOrganizationIDDuplicate: "organization_id_duplicate",
+	} {
+		if got != want {
+			t.Errorf("problem %q, want %q", got, want)
+		}
 	}
 }

@@ -28,6 +28,8 @@ type Quota struct {
 	BillingPeriod string `json:"billing_period,omitempty"`
 	// CostReport is an anthropic-api entry's daily spend as Anthropic's cost
 	// report returned it. Nil for every other provider.
+	//
+	// Deprecated: written only by quota-cache 0.1.13; 0.1.14 never writes it.
 	CostReport *CostReport `json:"cost_report,omitempty"`
 	Truncated  bool        `json:"truncated,omitempty"`
 }
