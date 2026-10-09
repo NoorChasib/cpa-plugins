@@ -90,7 +90,7 @@ its top 3pt above the digits' cap height. **Always** is the default; **When
 providers differ** draws badges only when the chosen windows span more than
 one provider; **Off** draws letters only. A provider without a bundled logo
 draws no badge and is spaced as if badges were off (Lettered pair slots 7pt
-apart, not 6pt). Logos are bundled SVG files; the 0.4.0 files are placeholders. Replacing them is described in
+apart, not 6pt). Logos are bundled SVG files (Claude, OpenAI for Codex, Grok for xAI); replacing them is described in
 [docs/logos.md](docs/logos.md).
 
 ### Drawing

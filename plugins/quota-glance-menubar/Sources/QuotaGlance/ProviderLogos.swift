@@ -2,9 +2,9 @@ import AppKit
 import GlanceCore
 
 /// Provider badges, read from the bundle's `Resources/Logos/<providerID>.svg`
-/// (claude, codex and xai ship as placeholders). Replacing those files and
-/// rebuilding swaps the logos; see docs/logos.md. A provider without a
-/// readable file gets no badge.
+/// (claude, codex and xai ship). Replacing those files and rebuilding swaps
+/// the logos; see docs/logos.md. A provider without a readable file gets no
+/// badge.
 @MainActor
 final class ProviderLogos {
     static let bundled = ProviderLogos(directory: Bundle.main.resourceURL?.appendingPathComponent("Logos", isDirectory: true))
