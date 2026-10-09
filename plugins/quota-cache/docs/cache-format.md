@@ -57,7 +57,7 @@ The OpenRouter entry exists only while `openrouter-management-key` is configured
 
 Codex primary/secondary IDs describe provider slots; use `duration_seconds` to identify five-hour versus weekly windows, since the slots can change. Additional Codex limits accept array and object forms. Grok retains the response's period type rather than assuming a weekly cycle. A Grok money object `{}` means zero under its documented proto3 encoding; an absent/null object means unknown.
 
-The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. One further Codex endpoint is read per poll, and only to date banked resets: when `rate_limit_reset_credits.available_count` in the usage response is non-zero, `GET /wham/rate-limit-reset-credits` supplies `soonest_expiry`. Credit ids, titles, and statuses are read and discarded; only the one timestamp is cached. At most 32 windows, 32 limit groups, 32 reset grants, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
+The extension is allowlisted: raw response bodies, tokens, headers, arbitrary nested objects, billing history, payment methods, and auto-top-up settings are not copied. No separate billing or auto-top-up endpoint is queried. One further Codex endpoint is read per poll, and only to date banked resets: when `rate_limit_reset_credits.available_count` in the usage response is non-zero, `GET /wham/rate-limit-reset-credits` supplies `soonest_expiry`. If that request fails, including with 429, only `soonest_expiry` is lost: the poll is still a success recorded with the usage request's `http_status`, and the provider is not paused. Credit ids, titles, and statuses are read and discarded; only the one timestamp is cached. At most 32 windows, 32 limit groups, 32 reset grants, and 32 additional/product input items are processed; labels are bounded to 64 characters. Unknown fields remain unsupported until explicitly mapped.
 
 Claude's usage request is `GET /api/oauth/usage?cedar_ember=1`, which adds the reset-grant block to the same response. Claude Code also sends `skip_spend=1` on that path; Quota Cache does not, because it skips the spend-store read that fills `extra_usage`, which is collected from this response. Every other field read from the response is unchanged by the query.
 
@@ -128,6 +128,36 @@ At the default 15-minute `poll-interval`, one credential costs at most:
 Reading Claude's subscription start and billing period added no requests. The start comes from the profile response already read for the plan, and the billing period from the usage response already read every poll, so the figures above are unchanged.
 
 Before account details were read, the same credentials cost 96 (Claude), 96 to 192 (Codex), and 96 (Grok) per day. The first poll after upgrading reads each credential's account details once; after that, restarts add nothing. A longer `poll-interval` lowers the usage figures; account details stay at no more than four reads a day, and fall below that once the interval exceeds six hours, since they are only read after a poll.
+
+## Polling schedule and failures
+
+`request-spacing` (default 10 seconds) is the gap between one poll and the next, across every credential. `poll-interval` (default 15 minutes) is the least time between two polls of the same credential. The follow-up requests a poll can make, Codex's reset inventory and the account details, run straight after it and are not spaced.
+
+- Polls are sent on a timer that ticks once per spacing. Ticks wake a few milliseconds earlier or later than one another, so a tick is admitted up to a tenth of the spacing, and at most one second, before the spacing is over. Before 0.1.12 a tick that woke a moment early was skipped, and many gaps were twice the spacing. The next slot is counted from the previous slot rather than from an early tick, so two polls are never closer than the spacing less that tolerance, and never more frequent than the spacing on average.
+- A credential falls due one interval after its last poll and is polled at the first free tick after that, so its gaps run a little over the interval.
+- Every credential has to fit into an interval. With N credentials, N times `request-spacing` should be well below `poll-interval`, which leaves room to catch up after a pause. For example, twelve credentials at a 30-second spacing need six minutes per round and cannot all be read every five minutes; at a 10-second spacing they need two.
+
+When a poll fails:
+
+- The previous observation is kept and `last_error` is set. The credential is retried one interval later, and each further consecutive failure doubles that, up to six hours.
+- A 429 (`last_error` `provider rate limited`, poll outcome `rate_limited`) pauses every credential of the same provider for one interval, and at most six hours. The pause is `provider_cooldown`. It never takes the rate-limited credential's own backoff, which also counts that credential's earlier failures: before 0.1.12, a credential that had been answering 401 for a day could pause all of its siblings for six hours with one 429.
+- The rate-limited credential's own backoff doubles as above but stops at one hour, or at the interval when that is longer, and at most six hours. A 429 is about the provider rather than the credential, and an hourly retry is what notices it has lifted. Once a credential's backoff has reached that cap, it draws at most one 429 an hour. While the backoff is still doubling it can draw more, so at a short interval the first few hours of a long outage cost some extra 429s; every 429 pauses the provider, though, so the provider never draws more than one per pause.
+- A successful poll does not shorten its siblings' backoff. After a long outage, each credential is therefore read again only when its own backoff runs out, which can be up to an hour after the limit lifts (or one interval, if that is longer), though the first is usually read much sooner. Bringing the others forward on a success would cost a 429 and a provider pause each time the limit is on one account rather than the whole provider.
+- A `Retry-After` longer than the pause or the backoff replaces it, for both.
+- Only the poll's own request decides its outcome and `http_status`. A failure or 429 from an account-details or reset-inventory request never fails the poll, never counts as a rate limit, and never pauses the provider.
+
+Each failed poll also writes one line to CPA's log through the plugin host, so failures and rate limits can still be dated after the 100-poll `history` has moved on. The plugin's own provider requests never appear in CPA's request log. A 429 is logged at `warn` as `quota-cache poll rate limited; this provider's credentials are paused`, and any other failure at `info` as `quota-cache poll failed; this credential is retried at next_attempt`. The fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `provider` | `claude`, `codex`, `xai`, or `openrouter` |
+| `auth_index` | the credential's opaque index, the one its snapshot entry is keyed by |
+| `http_status` | the poll's HTTP status; absent when no response arrived |
+| `retry_after` | the instant the provider's `Retry-After` named; present only for a 429 that sent one |
+| `next_attempt` | when this credential is polled next |
+| `provider_paused_until` | when the provider's other credentials resume; present only for a 429 |
+
+Times are RFC 3339 in UTC. No line names an email, token, auth file name, URL, or response body. A successful poll logs nothing, so there is at most one line per poll.
 
 
 ## Reading from a new plugin

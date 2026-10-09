@@ -25,6 +25,15 @@ type fakeFetcher struct {
 	known   []*client.AccountDetails
 	// listErr is returned by List in place of the accounts.
 	listErr error
+	// failures overrides failure for the auth indexes it names, so one
+	// credential can fail while its siblings answer.
+	failures map[string]error
+	// reports records every failed poll Step reported.
+	reports []Failure
+}
+
+func (f *fakeFetcher) ReportFailure(_ context.Context, failure Failure) {
+	f.reports = append(f.reports, failure)
 }
 
 func (f *fakeFetcher) List(context.Context) ([]Account, error) {
@@ -33,10 +42,14 @@ func (f *fakeFetcher) List(context.Context) ([]Account, error) {
 	}
 	return f.accounts, nil
 }
-func (f *fakeFetcher) Fetch(_ context.Context, _ Account, known *client.AccountDetails) (Observation, error) {
+func (f *fakeFetcher) Fetch(_ context.Context, a Account, known *client.AccountDetails) (Observation, error) {
 	f.calls++
 	f.known = append(f.known, known)
-	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now, AccountDetails: f.details, RequestSent: true, HTTPStatus: 200}, f.failure
+	failure := f.failure
+	if err, ok := f.failures[a.AuthIndex]; ok {
+		failure = err
+	}
+	return Observation{Percent: 95, ResetAt: f.now.Add(7 * 24 * time.Hour), ObservedAt: f.now, AccountDetails: f.details, RequestSent: true, HTTPStatus: 200}, failure
 }
 func fixture(t *testing.T) (*Cache, *fakeFetcher, Options) {
 	t.Helper()
