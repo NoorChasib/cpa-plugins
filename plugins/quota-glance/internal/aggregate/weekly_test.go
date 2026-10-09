@@ -408,7 +408,7 @@ func TestHealthyContractCountsFableUnderEachWeekly(t *testing.T) {
 		"claude-agency@example.com.json":        {88, 88},
 		"claude-chasibnoor@example.com.json":    {45, 24},
 		"claude-noor@example.com.json":          {70, 60},
-		"claude-noorchasib@example.com.json":    {10, 10},
+		noorchasibID:                            {10, 10},
 	} {
 		if entry := entryOf(t, fable, id); entry.RemainingPercent != want[0] || entry.PooledPercent != want[1] {
 			t.Errorf("%s prints %d%% and counts %d%%; want %v", id, entry.RemainingPercent, entry.PooledPercent, want)

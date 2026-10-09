@@ -9,7 +9,16 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, test } from "node:test"
 
-import { accountFlags, lastFailure } from "../src/lib/accounts.ts"
+import {
+  accountFlags,
+  accountsCardNeeded,
+  lastFailure,
+  renewalFoot,
+  renewalMark,
+  renewalOrphanText,
+  shortCredentialId,
+  yearlyEstimate,
+} from "../src/lib/accounts.ts"
 import type { Activity, ActivityBucket, Credential, Summary } from "../src/lib/types.ts"
 
 const quiet: ActivityBucket = { success: 0, failed: 0, intensity: 0 }
@@ -88,5 +97,69 @@ describe("accountFlags", () => {
   test("a calm provider has a calm fold line", () => {
     const { now, credentials } = held("summary", "codex")
     assert.deepEqual(accountFlags(credentials, local(credentials), ago(now)), [])
+  })
+})
+
+describe("renewal marks (F.3)", () => {
+  const doc = (name: string) =>
+    JSON.parse(readFileSync(new URL(`../../testdata/golden/${name}.json`, import.meta.url), "utf8")) as Summary
+  const golden = doc("summary")
+  const degraded = doc("summary-degraded")
+  const credential = (id: string) => golden.credentials.find((one) => one.id === id)!
+
+  test("a date set here carries the dot and is read on the UTC calendar", () => {
+    const mark = renewalMark(credential("5f2b8c41d09e7a36"))
+    assert.deepEqual(mark, { atEpoch: 1791590400, source: "dashboard", estimated: false, setHere: true, utc: true })
+  })
+
+  test("an estimate carries ~, in the reader's own zone", () => {
+    const mark = renewalMark(credential("claude-siphorchannel@example.com.json"))
+    assert.deepEqual([mark?.source, mark?.estimated, mark?.setHere, mark?.utc], ["estimated", true, false, false])
+  })
+
+  test("the provider's own date is neither", () => {
+    const mark = renewalMark(credential("codex-noor@example.com.json"))
+    assert.deepEqual([mark?.source, mark?.estimated, mark?.setHere], ["reported", false, false])
+  })
+
+  test("no renewal, or a plugin too old to say, is no mark", () => {
+    assert.equal(renewalMark(credential("claude-noor@example.com.json")), null)
+    assert.equal(renewalMark({ renewalAtEpoch: undefined as unknown as null }), null)
+    // A plugin before renewalSource: renewalEstimated alone still says estimate.
+    assert.equal(renewalMark({ renewalAtEpoch: 1, renewalEstimated: true })?.estimated, true)
+  })
+
+  test("an estimate more than a month off is a yearly plan's", () => {
+    const now = golden.generatedAtEpoch
+    assert.equal(yearlyEstimate(credential("claude-agency@example.com.json"), now), true)
+    assert.equal(yearlyEstimate(credential("claude-siphorchannel@example.com.json"), now), false)
+    assert.equal(yearlyEstimate(credential("5f2b8c41d09e7a36"), now), false)
+  })
+
+  test("the foot explains what the rows show, and offers the editor only when it may", () => {
+    const claude = (set: Summary) => set.credentials.filter((one) => one.provider === "claude")
+    assert.deepEqual(renewalFoot(claude(golden)), { estimated: true, setHere: true, editable: true })
+    assert.deepEqual(renewalFoot(claude(degraded)), { estimated: true, setHere: false, editable: false })
+  })
+
+  test("a renewal orphan is named by its id's ends, with Remove beside it (E.8 #4)", () => {
+    const orphan = degraded.renewalOrphans![0]!
+    assert.equal(renewalOrphanText(orphan), "Saved renewal date for an account no longer in CPA: 0123…cdef")
+    assert.equal(shortCredentialId("5f2b8c41d09e7a36"), "5f2b…7a36")
+    assert.deepEqual(golden.renewalOrphans, [])
+  })
+})
+
+
+describe("the renewal editor's card", () => {
+  test("one Claude account still has the editor", () => {
+    assert.equal(accountsCardNeeded("claude", 1, 0), true)
+    assert.equal(accountsCardNeeded("codex", 1, 0), false)
+    assert.equal(accountsCardNeeded("claude", 0, 0), false)
+  })
+
+  test("renewal orphans keep the editor when the last Claude account disappears", () => {
+    assert.equal(accountsCardNeeded("claude", 0, 1), true)
+    assert.equal(accountsCardNeeded("codex", 0, 1), false)
   })
 })

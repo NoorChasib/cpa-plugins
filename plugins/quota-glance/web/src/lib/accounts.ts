@@ -1,10 +1,11 @@
 // What a provider's Accounts card says about each account: whether CPA has
-// parked it, and when its requests last failed.
+// parked it, when its requests last failed, and where its renewal date comes
+// from.
 //
 // Imports nothing but types, so node loads it directly in test/.
 
 import type { FoldFlag } from "./pool"
-import type { Activity, Credential } from "./types"
+import type { Activity, Credential, RenewalOrphan } from "./types"
 
 /**
  * CPA will not route to this credential right now. Not a reading's state: the
@@ -77,4 +78,86 @@ export function accountFlags(
       },
     ]
   })
+}
+
+/**
+ * A renewal date as a row prints it: the instant, whether it is an estimate
+ * ("~Oct 29") or was set on the dashboard (a dot after it), and which clock
+ * it is read on. A date set here is 00:00 UTC on the day the reader picked,
+ * so it is printed as UTC sees it; west of Greenwich the reader's own zone
+ * would put it on the evening before. Null with no renewal to show.
+ */
+export interface RenewalMark {
+  atEpoch: number
+  source: "reported" | "dashboard" | "estimated"
+  estimated: boolean
+  setHere: boolean
+  utc: boolean
+}
+
+export function renewalMark(
+  credential: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource">,
+): RenewalMark | null {
+  // Checked by type rather than against null: a document from a plugin that
+  // predates these fields has neither, and must render as it always did.
+  if (typeof credential.renewalAtEpoch !== "number") return null
+  const source =
+    credential.renewalSource === "dashboard"
+      ? "dashboard"
+      : credential.renewalSource === "estimated" || credential.renewalEstimated === true
+        ? "estimated"
+        : "reported"
+  return {
+    atEpoch: credential.renewalAtEpoch,
+    source,
+    estimated: source === "estimated",
+    setHere: source === "dashboard",
+    utc: source === "dashboard",
+  }
+}
+
+/**
+ * Whether an estimated renewal is a yearly plan's. A monthly estimate is the
+ * next monthly anniversary, never more than a month off; one further away can
+ * only be an annual plan's.
+ */
+export function yearlyEstimate(
+  credential: Pick<Credential, "renewalAtEpoch" | "renewalSource" | "renewalEstimated">,
+  now: number,
+): boolean {
+  const mark = renewalMark(credential)
+  return mark !== null && mark.estimated && mark.atEpoch - now > 31 * 86400
+}
+
+/** Claude keeps the renewal editor even with one account, or only saved orphans. */
+export function accountsCardNeeded(provider: string, count: number, orphanCount: number): boolean {
+  return count > 1 || (provider === "claude" && (count > 0 || orphanCount > 0))
+}
+
+/** A CPA auth index as an orphan line names it: "0123…cdef". */
+export function shortCredentialId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id
+}
+
+/** The editor's last line for a renewal date kept for a credential CPA no longer lists. */
+export function renewalOrphanText(orphan: Pick<RenewalOrphan, "id">): string {
+  return `Saved renewal date for an account no longer in CPA: ${shortCredentialId(orphan.id)}`
+}
+
+/**
+ * Whether the Accounts card has anything to say about renewal dates in its
+ * foot: an estimate to explain, a date set here to explain, or one the reader
+ * may set.
+ */
+export function renewalFoot(held: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource" | "renewalEditable">[]): {
+  estimated: boolean
+  setHere: boolean
+  editable: boolean
+} {
+  const marks = held.map(renewalMark)
+  return {
+    estimated: marks.some((mark) => mark?.estimated === true),
+    setHere: marks.some((mark) => mark?.setHere === true),
+    editable: held.some((credential) => credential.renewalEditable === true),
+  }
 }

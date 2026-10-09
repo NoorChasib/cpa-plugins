@@ -105,7 +105,7 @@ func newFixturePlugin(t *testing.T) (*Plugin, *fakeHost, string) {
 		{AuthIndex: "claude-agency@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-chasibnoor@example.com.json", Provider: "claude"},
 		{AuthIndex: "claude-noor@example.com.json", Provider: "claude"},
-		{AuthIndex: "claude-noorchasib@example.com.json", Provider: "claude"},
+		{AuthIndex: "5f2b8c41d09e7a36", Provider: "claude", Email: "noorchasib@example.com"},
 		{AuthIndex: "codex-noor@example.com.json", Provider: "codex"},
 		{AuthIndex: "xai-noor@example.com.json", Provider: "xai"},
 	}}
@@ -310,24 +310,25 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	// Four authenticated routes, and four public ones: the page, which carries
-	// no data, then the document's fallback path, the redeem action, and the
-	// spend action that carries the same press as a GET. Those three carry
-	// this plugin's own token check because CPA carries none.
-	if len(registration.Routes) != 4 || len(registration.Resources) != 4 {
+	// Five authenticated routes, and five public ones: the page, which carries
+	// no data, then the document's fallback path, the redeem action, the
+	// spend action that carries the same press as a GET, and the settings
+	// save as a GET. Those four carry this plugin's own token check because
+	// CPA carries none.
+	if len(registration.Routes) != 5 || len(registration.Resources) != 5 {
 		t.Fatalf("registration = %+v", registration)
 	}
-	for i, path := range []string{"/app", "/summary", "/redeem", "/spend"} {
+	for i, path := range []string{"/app", "/summary", "/redeem", "/spend", "/save-settings"} {
 		if registration.Resources[i].Path != path {
 			t.Fatalf("public resources = %+v", registration.Resources)
 		}
 	}
-	// Exactly one management route may be anything other than GET, and it must
-	// be the one that spends a credit. (Resource routes are GET by
-	// construction; /spend is the resource tree's spend.) A second write route
-	// appearing here without a deliberate change to this list is the thing
-	// worth catching.
-	writes := map[string]string{"/plugins/" + ID + "/redeem": "POST"}
+	// Exactly two management routes may be anything other than GET: the one
+	// that spends a credit and the one that saves settings. (Resource routes
+	// are GET by construction; /spend and /save-settings are the resource
+	// tree's.) A third write route appearing here without a deliberate change
+	// to this list is the thing worth catching.
+	writes := map[string]string{"/plugins/" + ID + "/redeem": "POST", "/plugins/" + ID + "/settings": "POST"}
 	for _, route := range registration.Routes {
 		if route.Menu != "" {
 			t.Fatalf("management route %s carries Menu %q, which CPA turns into a public resource", route.Path, route.Menu)

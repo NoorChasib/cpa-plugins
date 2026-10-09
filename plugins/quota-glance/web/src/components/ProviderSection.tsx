@@ -6,7 +6,8 @@ import { BankedResetsCard, useBankedResets } from "./BankedResets"
 import { WindowCard } from "./WindowCard"
 import { CARD, cardKey, openedKeys, setOpened } from "../lib/collapsed"
 import { accountNames } from "../lib/pool"
-import type { APICredits, Credential, Provider } from "../lib/types"
+import { accountsCardNeeded } from "../lib/accounts"
+import type { APICredits, Credential, Provider, RenewalOrphan } from "../lib/types"
 
 /**
  * A section's heading: the provider's name and a hairline to the edge,
@@ -36,12 +37,16 @@ export function ProviderSection({
   provider,
   credentials,
   apiCredits = null,
+  renewalOrphans = [],
   onRedeemed,
 }: {
   provider: Provider
   credentials: Map<string, Credential>
   /** The monthly API credit, which belongs in the Claude section; null anywhere else. */
   apiCredits?: APICredits | null
+  /** Renewal dates stored for credentials no longer listed, which Claude's Accounts editor lists; empty anywhere else. */
+  renewalOrphans?: RenewalOrphan[]
+  /** Re-reads the document: after a reset is spent, or settings are saved. */
   onRedeemed: () => void
 }) {
   // Sorted by the server's key, not by anything this app decides. `order` is
@@ -87,14 +92,21 @@ export function ProviderSection({
         ))
       )}
 
-      {apiCredits && <APICreditsCard credits={apiCredits} {...fold(CARD.apiCredits)} />}
+      {apiCredits && <APICreditsCard credits={apiCredits} onSaved={onRedeemed} {...fold(CARD.apiCredits)} />}
 
-      {/* One account has nothing to choose between, so it is one line rather
-        * than a card to open. */}
-      {held.length === 1 ? (
+      {/* Claude keeps its renewal editor even with one account. Other
+        * providers' solo accounts need only the slim read-only line. */}
+      {accountsCardNeeded(provider.id, held.length, renewalOrphans.length) ? (
+        <AccountsCard
+          held={held}
+          names={names}
+          renewalOrphans={renewalOrphans}
+          editingOffer={apiCredits?.editing ?? null}
+          onSaved={onRedeemed}
+          {...fold(CARD.accounts)}
+        />
+      ) : held.length === 1 ? (
         <SoloAccount credential={held[0]!} title={provider.title} />
-      ) : held.length > 1 ? (
-        <AccountsCard held={held} names={names} {...fold(CARD.accounts)} />
       ) : null}
 
       <BankedResetsCard state={resets} names={names} />

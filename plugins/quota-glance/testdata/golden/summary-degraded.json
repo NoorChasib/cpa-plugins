@@ -22,6 +22,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -35,6 +38,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -55,6 +61,9 @@
       },
       "renewalAtEpoch": 1803801600,
       "renewalEstimated": true,
+      "renewalSource": "estimated",
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -68,6 +77,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -88,6 +100,9 @@
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -217,6 +232,9 @@
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -306,6 +324,9 @@
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": {
         "display": "Unlimited",
         "unlimited": true,
@@ -324,6 +345,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -337,6 +361,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": null
     },
     {
@@ -350,6 +377,9 @@
       "resetCredits": null,
       "renewalAtEpoch": null,
       "renewalEstimated": false,
+      "renewalSource": null,
+      "renewalEditable": false,
+      "renewalSetting": null,
       "credits": {
         "display": "$0.00",
         "unlimited": false,
@@ -1235,439 +1265,217 @@
     }
   ],
   "apiCredits": {
-    "title": "Claude API credits",
+    "title": "Monthly API Credit",
     "currency": "USD",
+    "pricing": {
+      "asOf": "2026-10-09",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "cacheWrites": "5m"
+    },
+    "meter": {
+      "sinceEpoch": 1785542400,
+      "updatedAtEpoch": 1789007400,
+      "stale": true,
+      "stoppedAtEpoch": null,
+      "stopReason": "",
+      "dropped": 0,
+      "lastDroppedEpoch": null,
+      "unattributed": 0,
+      "lastUnattributedEpoch": null,
+      "rejected": 2,
+      "lastRejectedEpoch": 1786698000,
+      "foreign": 0,
+      "gaps": [
+        {
+          "fromEpoch": 1788984000,
+          "toEpoch": 1788991200,
+          "reason": "shutdown"
+        }
+      ]
+    },
+    "editing": {
+      "available": false,
+      "reason": "disabled"
+    },
     "pool": {
-      "hasReading": true,
-      "monthlyCredit": 500,
-      "monthlyCreditText": "$500.00",
-      "spent": 275.255,
-      "spentText": "$275.26",
-      "creditUsed": 275.255,
-      "creditUsedText": "$275.26",
-      "left": 224.745,
-      "leftText": "$224.75",
+      "hasEstimate": true,
+      "lowerBound": true,
+      "monthlyCredit": 300,
+      "monthlyCreditText": "$300.00",
+      "used": 210,
+      "usedText": "$210.00",
+      "left": 90,
+      "leftText": "$90.00",
       "overage": 0,
       "overageText": "$0.00",
-      "remainingFraction": 0.44949,
-      "remainingPercent": 45,
-      "level": "ok",
+      "remainingFraction": 0.3,
+      "remainingPercent": 30,
+      "level": "low",
       "nextRefill": {
         "accountIds": [
-          "label-5c98d8bed25e"
+          "org-e79acd97ac88"
         ],
         "refillAtEpoch": 1789862400,
         "refillInSeconds": 849600,
-        "gain": 93,
-        "gainText": "$93.00",
-        "gainFraction": 0.186,
-        "gainPercent": 19
+        "gain": 10,
+        "gainText": "$10.00",
+        "gainFraction": 0.03333333333333333,
+        "gainPercent": 3
       },
       "fullAtEpoch": 1790640000,
       "fullInSeconds": 1627200,
-      "accountCount": 7,
-      "countedCount": 3,
-      "missingCount": 3,
-      "duplicateCount": 1
+      "accountCount": 9,
+      "countedCount": 2,
+      "missingCount": 7
     },
     "accounts": [
       {
-        "id": "label-9611d9ba844a",
-        "label": "siphorchannel",
+        "id": "org-11e594f48195",
+        "label": "alpha",
         "order": 0,
         "organizationId": "00000000-0000-4000-8000-000000000001",
-        "hasReading": true,
+        "state": "out",
+        "counted": true,
+        "hasEstimate": true,
+        "basis": "credit",
+        "lowerBound": true,
         "monthlyCredit": 200,
         "monthlyCreditText": "$200.00",
-        "spent": 130.005,
-        "spentText": "$130.01",
-        "creditUsed": 130.005,
-        "creditUsedText": "$130.01",
-        "left": 69.995,
-        "leftText": "$70.00",
+        "monthlyCreditSource": "config",
+        "spent": 40.08,
+        "spentText": "$40.08",
+        "spentSinceEpoch": 1787961600,
+        "used": 200,
+        "usedText": "$200.00",
+        "left": 0,
+        "leftText": "$0.00",
+        "estimateLeftText": "$159.92",
         "overage": 0,
         "overageText": "$0.00",
-        "remainingFraction": 0.349975,
-        "remainingPercent": 35,
-        "level": "low",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "critical",
         "cycleStartEpoch": 1787961600,
         "renewsAtEpoch": 1790640000,
         "renewsInSeconds": 1627200,
-        "dailySpend": [
-          {
-            "dayStartEpoch": 1787961600,
-            "spent": 40,
-            "spentText": "$40.00"
-          },
-          {
-            "dayStartEpoch": 1788048000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788134400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788220800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788307200,
-            "spent": 50,
-            "spentText": "$50.00"
-          },
-          {
-            "dayStartEpoch": 1788393600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788480000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788566400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788652800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788739200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788825600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788912000,
-            "spent": 40.005,
-            "spentText": "$40.01"
-          },
-          {
-            "dayStartEpoch": 1788998400,
-            "spent": 0,
-            "spentText": "$0.00"
-          }
-        ],
-        "observedAtEpoch": 1789005600,
-        "nextAttemptEpoch": 1789006500,
-        "state": "stale",
+        "renewsSource": "config",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 2,
+          "lastAtEpoch": 1789002000,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1785542400,
+        "lastSeenEpoch": 1789002000,
         "dataIssues": [
-          "stale"
+          "refused",
+          "stale",
+          "meterGap"
         ],
-        "issue": "This reading is out of date; Quota Cache has not refreshed it."
+        "issue": "Anthropic refused a request for low credit, so this credit is spent. The estimate had $159.92 left; enter a Console reading to correct it.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "disabled",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "200",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "2026-09-29",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
       },
       {
-        "id": "label-5c98d8bed25e",
-        "label": "chasibnoor",
+        "id": "org-e79acd97ac88",
+        "label": "bravo",
         "order": 1,
         "organizationId": "00000000-0000-4000-8000-000000000002",
-        "hasReading": true,
+        "state": "stale",
+        "counted": true,
+        "hasEstimate": true,
+        "basis": "credit",
+        "lowerBound": true,
         "monthlyCredit": 100,
         "monthlyCreditText": "$100.00",
-        "spent": 93,
-        "spentText": "$93.00",
-        "creditUsed": 93,
-        "creditUsedText": "$93.00",
-        "left": 7,
-        "leftText": "$7.00",
+        "monthlyCreditSource": "config",
+        "spent": 10,
+        "spentText": "$10.00",
+        "spentSinceEpoch": 1787184000,
+        "used": 10,
+        "usedText": "$10.00",
+        "left": 90,
+        "leftText": "$90.00",
+        "estimateLeftText": "",
         "overage": 0,
         "overageText": "$0.00",
-        "remainingFraction": 0.07,
-        "remainingPercent": 7,
-        "level": "critical",
+        "remainingFraction": 0.9,
+        "remainingPercent": 90,
+        "level": "ok",
         "cycleStartEpoch": 1787184000,
         "renewsAtEpoch": 1789862400,
         "renewsInSeconds": 849600,
-        "dailySpend": [
-          {
-            "dayStartEpoch": 1787184000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787270400,
-            "spent": 30,
-            "spentText": "$30.00"
-          },
-          {
-            "dayStartEpoch": 1787356800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787443200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787529600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787616000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787702400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787788800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787875200,
-            "spent": 41,
-            "spentText": "$41.00"
-          },
-          {
-            "dayStartEpoch": 1787961600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788048000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788134400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788220800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788307200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788393600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788480000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788566400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788652800,
-            "spent": 22,
-            "spentText": "$22.00"
-          },
-          {
-            "dayStartEpoch": 1788739200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788825600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788912000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788998400,
-            "spent": 0,
-            "spentText": "$0.00"
-          }
-        ],
-        "observedAtEpoch": 1789010400,
-        "nextAttemptEpoch": 1789014000,
-        "state": "error",
+        "renewsSource": "config",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1788566400,
+        "lastSeenEpoch": 1788976800,
         "dataIssues": [
-          "observeError"
+          "stale",
+          "meterStartedLate",
+          "meterGap"
         ],
-        "issue": "The last read failed; Quota Cache will retry."
+        "issue": "Quota Cache has not saved its meter recently, so recent spend may be missing.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "disabled",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "100",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "2026-09-20",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
       },
       {
-        "id": "label-92a70799e19d",
-        "label": "noor",
+        "id": "org-993224b4fe85",
+        "label": "charlie",
         "order": 2,
         "organizationId": "00000000-0000-4000-8000-000000000003",
-        "hasReading": false,
+        "state": "needsSettings",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
         "monthlyCredit": 100,
         "monthlyCreditText": "$100.00",
+        "monthlyCreditSource": "config",
         "spent": 0,
         "spentText": "",
-        "creditUsed": 0,
-        "creditUsedText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
         "left": 0,
         "leftText": "",
-        "overage": 0,
-        "overageText": "",
-        "remainingFraction": 0,
-        "remainingPercent": 0,
-        "level": "",
-        "cycleStartEpoch": 1788825600,
-        "renewsAtEpoch": 1791417600,
-        "renewsInSeconds": 2404800,
-        "dailySpend": [],
-        "observedAtEpoch": 1788818400,
-        "nextAttemptEpoch": 1789018200,
-        "state": "error",
-        "dataIssues": [
-          "observeError",
-          "keyRejected"
-        ],
-        "issue": "Anthropic rejected this admin key. It may be revoked or expired; create a new one in Console under Settings \u003e Admin keys."
-      },
-      {
-        "id": "label-72fc76109558",
-        "label": "noorchasib",
-        "order": 3,
-        "organizationId": "00000000-0000-4000-8000-000000000004",
-        "hasReading": true,
-        "monthlyCredit": 200,
-        "monthlyCreditText": "$200.00",
-        "spent": 52.25,
-        "spentText": "$52.25",
-        "creditUsed": 52.25,
-        "creditUsedText": "$52.25",
-        "left": 147.75,
-        "leftText": "$147.75",
-        "overage": 0,
-        "overageText": "$0.00",
-        "remainingFraction": 0.73875,
-        "remainingPercent": 74,
-        "level": "ok",
-        "cycleStartEpoch": 1787616000,
-        "renewsAtEpoch": 1790294400,
-        "renewsInSeconds": 1281600,
-        "dailySpend": [
-          {
-            "dayStartEpoch": 1787616000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787702400,
-            "spent": 25,
-            "spentText": "$25.00"
-          },
-          {
-            "dayStartEpoch": 1787788800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787875200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1787961600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788048000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788134400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788220800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788307200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788393600,
-            "spent": 27.25,
-            "spentText": "$27.25"
-          },
-          {
-            "dayStartEpoch": 1788480000,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788566400,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788652800,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788739200,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788825600,
-            "spent": 0,
-            "spentText": "$0.00"
-          },
-          {
-            "dayStartEpoch": 1788912000,
-            "spent": 0,
-            "spentText": "$0.00"
-          }
-        ],
-        "observedAtEpoch": 1789012500,
-        "nextAttemptEpoch": 1789013400,
-        "state": "ok",
-        "dataIssues": [
-          "todayNotReported"
-        ],
-        "issue": "Anthropic has not reported today's spend yet; spent covers the cycle through yesterday."
-      },
-      {
-        "id": "label-aa6943c97255",
-        "label": "agency-team",
-        "order": 4,
-        "organizationId": "",
-        "hasReading": false,
-        "monthlyCredit": 500,
-        "monthlyCreditText": "$500.00",
-        "spent": 0,
-        "spentText": "",
-        "creditUsed": 0,
-        "creditUsedText": "",
-        "left": 0,
-        "leftText": "",
+        "estimateLeftText": "",
         "overage": 0,
         "overageText": "",
         "remainingFraction": 0,
@@ -1676,60 +1484,130 @@
         "cycleStartEpoch": null,
         "renewsAtEpoch": null,
         "renewsInSeconds": null,
-        "dailySpend": [],
-        "observedAtEpoch": null,
-        "nextAttemptEpoch": null,
-        "state": "misconfigured",
+        "renewsSource": "none",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1785542400,
+        "lastSeenEpoch": 1788858000,
         "dataIssues": [
-          "misconfigured"
+          "needsRefillDate",
+          "stale"
         ],
-        "issue": "renews must be a date like \"2026-10-29\"."
+        "issue": "Set the refill date, or enter a Console reading.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "disabled",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "100",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
       },
       {
-        "id": "label-a5c78d07b308",
-        "label": "siphorchannel-2",
-        "order": 5,
-        "organizationId": "00000000-0000-4000-8000-000000000001",
-        "hasReading": false,
-        "monthlyCredit": 200,
-        "monthlyCreditText": "$200.00",
-        "spent": 0,
-        "spentText": "",
-        "creditUsed": 0,
-        "creditUsedText": "",
+        "id": "org-008bf60b9309",
+        "label": "delta",
+        "order": 3,
+        "organizationId": "00000000-0000-4000-8000-000000000004",
+        "state": "needsSettings",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": true,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "none",
+        "spent": 50.45,
+        "spentText": "$50.45",
+        "spentSinceEpoch": 1787616000,
+        "used": 0,
+        "usedText": "",
         "left": 0,
         "leftText": "",
+        "estimateLeftText": "",
         "overage": 0,
         "overageText": "",
         "remainingFraction": 0,
         "remainingPercent": 0,
         "level": "",
-        "cycleStartEpoch": 1787961600,
-        "renewsAtEpoch": 1790640000,
-        "renewsInSeconds": 1627200,
-        "dailySpend": [],
-        "observedAtEpoch": 1789012500,
-        "nextAttemptEpoch": 1789013400,
-        "state": "duplicate",
-        "dataIssues": [
-          "duplicateOrganization"
+        "cycleStartEpoch": 1787616000,
+        "renewsAtEpoch": 1790294400,
+        "renewsInSeconds": 1281600,
+        "renewsSource": "config",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [
+          {
+            "model": "claude-mythos-preview",
+            "tokens": 1000000
+          }
         ],
-        "issue": "Same Console organization as siphorchannel; counted there."
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1785542400,
+        "lastSeenEpoch": 1788782400,
+        "dataIssues": [
+          "needsCredit",
+          "stale",
+          "meterGap",
+          "unpricedModel",
+          "configMonthlyUsdInvalid"
+        ],
+        "issue": "Set this organization's monthly credit to count it in the total.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "disabled",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "",
+          "configMonthlyUsdInvalid": true,
+          "renews": "",
+          "configRenews": "2026-09-25",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
       },
       {
-        "id": "label-1babf40d9c04",
-        "label": "new-org",
-        "order": 6,
-        "organizationId": "",
-        "hasReading": false,
-        "monthlyCredit": 50,
-        "monthlyCreditText": "$50.00",
+        "id": "org-3303f939347e",
+        "label": "echo",
+        "order": 4,
+        "organizationId": "00000000-0000-4000-8000-000000000005",
+        "state": "pending",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "config",
         "spent": 0,
         "spentText": "",
-        "creditUsed": 0,
-        "creditUsedText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
         "left": 0,
         "leftText": "",
+        "estimateLeftText": "",
         "overage": 0,
         "overageText": "",
         "remainingFraction": 0,
@@ -1738,13 +1616,316 @@
         "cycleStartEpoch": 1787011200,
         "renewsAtEpoch": 1789689600,
         "renewsInSeconds": 676800,
-        "dailySpend": [],
-        "observedAtEpoch": null,
-        "nextAttemptEpoch": 1789013100,
-        "state": "pending",
-        "dataIssues": [],
-        "issue": "Waiting for the first reading."
+        "renewsSource": "config",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "orgNotCounted"
+        ],
+        "issue": "Counting starts at Quota Cache's next save.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "disabled",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "50",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "2026-09-18",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      },
+      {
+        "id": "item-6",
+        "label": "foxtrot",
+        "order": 5,
+        "organizationId": "",
+        "state": "misconfigured",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "config",
+        "spent": 0,
+        "spentText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
+        "left": 0,
+        "leftText": "",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": null,
+        "renewsAtEpoch": null,
+        "renewsInSeconds": null,
+        "renewsSource": "none",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "misconfigured"
+        ],
+        "issue": "organization-id must be the Organization ID from Console, like 12345678-1234-5678-1234-567812345678.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "noOrganization",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "100",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      },
+      {
+        "id": "item-7",
+        "label": "golf",
+        "order": 6,
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "state": "misconfigured",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "config",
+        "spent": 0,
+        "spentText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
+        "left": 0,
+        "leftText": "",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": null,
+        "renewsAtEpoch": null,
+        "renewsInSeconds": null,
+        "renewsSource": "none",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "misconfigured"
+        ],
+        "issue": "Another item already uses this organization-id.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "duplicateOrganization",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "100",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      },
+      {
+        "id": "label-7c2f0f8e5d1a",
+        "label": "india",
+        "order": 7,
+        "organizationId": "",
+        "state": "cacheTooOld",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "config",
+        "spent": 0,
+        "spentText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
+        "left": 0,
+        "leftText": "",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": 1788825600,
+        "renewsAtEpoch": 1791417600,
+        "renewsInSeconds": 2404800,
+        "renewsSource": "config",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "cacheTooOld"
+        ],
+        "issue": "Quota Cache 0.1.13 reads Anthropic's cost report, which Quota Glance no longer uses. Update Quota Cache to 0.1.14 and add this organization's organization-id.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "cacheTooOld",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "200",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "2026-09-08",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      },
+      {
+        "id": "item-17",
+        "label": "hotel",
+        "order": 16,
+        "organizationId": "00000000-0000-4000-8000-00000000000f",
+        "state": "misconfigured",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "none",
+        "spent": 0,
+        "spentText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
+        "left": 0,
+        "leftText": "",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": null,
+        "renewsAtEpoch": null,
+        "renewsInSeconds": null,
+        "renewsSource": "none",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "misconfigured"
+        ],
+        "issue": "Only the first 16 items in claude-api-credits are read.",
+        "settings": {
+          "editable": false,
+          "notEditableReason": "overLimit",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      }
+    ],
+    "unlinked": [
+      {
+        "organizationId": "00000000-0000-4000-8000-00000000000f",
+        "firstSeenEpoch": 1788256800,
+        "lastSeenEpoch": 1789003800,
+        "requests": 37,
+        "reason": "overLimit"
+      },
+      {
+        "organizationId": "00000000-0000-4000-8000-00000000000e",
+        "firstSeenEpoch": 1788940800,
+        "lastSeenEpoch": 1788987600,
+        "requests": 3,
+        "reason": "notConfigured"
+      }
+    ],
+    "orphans": [
+      {
+        "id": "org-3f2a9c1d0b7e",
+        "monthlyUsd": "260.50",
+        "renews": "2026-09-29",
+        "hasReading": false,
+        "revision": "4",
+        "updatedAtEpoch": 1788084000
       }
     ]
-  }
+  },
+  "renewalOrphans": [
+    {
+      "id": "0123456789abcdef",
+      "date": "2026-09-29",
+      "revision": "9",
+      "updatedAtEpoch": 1788264000
+    }
+  ]
 }

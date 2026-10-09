@@ -140,50 +140,116 @@ type Document struct {
 	// the header instants, the counters, or staleReason above, which all
 	// describe credentials: each balance carries its own.
 	Balances []Balance `json:"balances"`
-	// APICredits is the monthly Claude API credit of the Console organizations
-	// quota-cache reads with admin keys of its own, pooled. Null when the
-	// snapshot has none, which is every snapshot until claude-api-credits is
-	// configured. Like Balances it takes no part in the header instants, the
-	// counters, or staleReason; each account carries its own.
+	// APICredits is the monthly Claude API credit of the Console
+	// organizations quota-cache lists, estimated from its usage meter and
+	// pooled. Null when the snapshot has none, which is every snapshot until
+	// claude-api-credits is configured. Like Balances it takes no part in the
+	// header instants, the counters, or staleReason; each account carries its
+	// own.
 	APICredits *APICredits `json:"apiCredits"`
+	// RenewalOrphans are renewal dates set from the dashboard for credentials
+	// the roster no longer lists, oldest updatedAt first, which the page
+	// offers to remove. Always an array.
+	RenewalOrphans []RenewalOrphan `json:"renewalOrphans"`
 }
 
-// APICredits is the pooled monthly Claude API credit across every configured
-// Console organization, and each organization beside it.
+// APICredits is the monthly Claude API credit of every Console organization
+// quota-cache lists, estimated from the CPA traffic its meter counted, and
+// pooled.
 //
-// Nothing in it is estimated. The credit and its renewal date are what the
-// operator configured, because Anthropic reports neither, and the spend is the
-// organization's cost report summed exactly to the UTC day. An organization
-// without a current, complete reading is listed and left out of the pool, never
-// counted at a guess.
+// Every amount is an estimate. Anthropic reports neither the credit nor what
+// is left of it to anything this plugin can read, so the credit and its refill
+// date are what the operator configured or set here, the spend is the meter's
+// tokens at the list prices of Pricing.AsOf, and a Console reading the
+// operator types in is the anchor that corrects it. An account whose figures
+// could be missing spend says so with LowerBound.
 type APICredits struct {
 	Title string `json:"title"`
 	// Currency is ISO 4217; every amount below is in it.
-	Currency string        `json:"currency"`
-	Pool     APICreditPool `json:"pool"`
+	Currency string           `json:"currency"`
+	Pricing  APICreditPricing `json:"pricing"`
+	// Meter is quota-cache's API meter, null when its file is missing or
+	// cannot be read.
+	Meter   *APICreditMeter  `json:"meter"`
+	Editing APICreditEditing `json:"editing"`
+	Pool    APICreditPool    `json:"pool"`
 	// Accounts lists every configured organization, counted or not, sorted by
 	// order, then label, then id. Do not re-sort.
 	Accounts []APICreditAccount `json:"accounts"`
+	// Unlinked lists organizations that sent API traffic through CPA while no
+	// counted item names them, newest lastSeen first. Always an array.
+	Unlinked []APICreditUnlinked `json:"unlinked"`
+	// Orphans are stored dashboard values for an account no longer listed,
+	// which the page offers to remove. Always an array.
+	Orphans []APICreditOrphan `json:"orphans"`
 }
 
-// APICreditPool sums the counted accounts. Left is the sum of each account's
-// own left, so one organization's overage never consumes another's credit:
-// Spent - CreditUsed == Overage, while MonthlyCredit - Spent is generally not
-// Left.
+// APICreditPricing says which prices the estimates use.
+type APICreditPricing struct {
+	// AsOf is the day the embedded price table was read, YYYY-MM-DD.
+	AsOf string `json:"asOf"`
+	// Source is the pricing page it was read from.
+	Source string `json:"source"`
+	// CacheWrites is the cache-write rate every amount uses: "5m".
+	CacheWrites string `json:"cacheWrites"`
+}
+
+// APICreditMeter is quota-cache's API meter as last saved.
+type APICreditMeter struct {
+	SinceEpoch int64 `json:"sinceEpoch"`
+	// UpdatedAtEpoch is when quota-cache last saved it. Stale is that older
+	// than stale-after: quota-cache saves at least every 10 minutes while it
+	// counts, so a stale meter has stopped.
+	UpdatedAtEpoch int64 `json:"updatedAtEpoch"`
+	Stale          bool  `json:"stale"`
+	// StoppedAtEpoch and StopReason are set while the meter is stopped:
+	// shutdown, quiesce, disabled, no_items or failed.
+	StoppedAtEpoch        *int64 `json:"stoppedAtEpoch"`
+	StopReason            string `json:"stopReason"`
+	Dropped               uint64 `json:"dropped"`
+	LastDroppedEpoch      *int64 `json:"lastDroppedEpoch"`
+	Unattributed          uint64 `json:"unattributed"`
+	LastUnattributedEpoch *int64 `json:"lastUnattributedEpoch"`
+	Rejected              uint64 `json:"rejected"`
+	LastRejectedEpoch     *int64 `json:"lastRejectedEpoch"`
+	Foreign               uint64 `json:"foreign"`
+	// Gaps are the periods the meter was not counting, oldest first. A gap
+	// under five minutes (a restart, an update, a reload) is left out, as it
+	// is everywhere in this document. Always an array.
+	Gaps []APICreditGap `json:"gaps"`
+}
+
+// APICreditGap is one period the meter was not counting.
+type APICreditGap struct {
+	FromEpoch int64  `json:"fromEpoch"`
+	ToEpoch   int64  `json:"toEpoch"`
+	Reason    string `json:"reason"`
+}
+
+// APICreditEditing says whether the page may offer to change these values.
+type APICreditEditing struct {
+	Available bool `json:"available"`
+	// Reason is "" when available, "disabled" when allow-edit is off (stored
+	// values still apply), or "settingsUnreadable" when settings.json could
+	// not be read (stored values do not apply).
+	Reason string `json:"reason"`
+}
+
+// APICreditPool sums the counted accounts: those in state ok, stale or out.
+// Left is the sum of each account's own left, so one organization's overage
+// never consumes another's credit.
 type APICreditPool struct {
-	// HasReading is false when no account is counted. Every amount is then zero
-	// with "" text, Level is "", and NextRefill and FullAtEpoch are null.
-	HasReading        bool    `json:"hasReading"`
+	// HasEstimate is false when no account is counted. Every amount is then
+	// zero with "" text, Level is "", and NextRefill and FullAtEpoch are null.
+	HasEstimate bool `json:"hasEstimate"`
+	// LowerBound is true when any counted account's is: used is then at
+	// least, and left at most, what is printed.
+	LowerBound        bool    `json:"lowerBound"`
 	MonthlyCredit     float64 `json:"monthlyCredit"`
 	MonthlyCreditText string  `json:"monthlyCreditText"`
-	// Spent is gross: everything the counted organizations were charged this
-	// cycle, from the credit and from purchased credit alike.
-	Spent     float64 `json:"spent"`
-	SpentText string  `json:"spentText"`
-	// CreditUsed is the part of Spent the credits paid for: MonthlyCredit -
-	// Left.
-	CreditUsed        float64 `json:"creditUsed"`
-	CreditUsedText    string  `json:"creditUsedText"`
+	// Used is the part of MonthlyCredit spent: MonthlyCredit - Left.
+	Used              float64 `json:"used"`
+	UsedText          string  `json:"usedText"`
 	Left              float64 `json:"left"`
 	LeftText          string  `json:"leftText"`
 	Overage           float64 `json:"overage"`
@@ -191,31 +257,28 @@ type APICreditPool struct {
 	RemainingFraction float64 `json:"remainingFraction"`
 	RemainingPercent  int     `json:"remainingPercent"`
 	Level             string  `json:"level"`
-	// NextRefill is the soonest renewal that gives anything back, and null
+	// NextRefill is the soonest refill that gives anything back, and null
 	// when no counted account has used any credit.
 	NextRefill *APICreditRefill `json:"nextRefill"`
-	// FullAtEpoch is the latest renewal among the counted accounts that have
+	// FullAtEpoch is the latest refill among the counted accounts that have
 	// used any credit: when the pool reads full again if nothing more is spent.
 	FullAtEpoch   *int64 `json:"fullAtEpoch"`
 	FullInSeconds *int64 `json:"fullInSeconds"`
-	// AccountCount == len(accounts) == CountedCount + MissingCount +
-	// DuplicateCount. Missing is every account without a counted reading,
-	// misconfigured ones included.
-	AccountCount   int `json:"accountCount"`
-	CountedCount   int `json:"countedCount"`
-	MissingCount   int `json:"missingCount"`
-	DuplicateCount int `json:"duplicateCount"`
+	// AccountCount == len(accounts) == CountedCount + MissingCount.
+	AccountCount int `json:"accountCount"`
+	CountedCount int `json:"countedCount"`
+	MissingCount int `json:"missingCount"`
 }
 
-// APICreditRefill is one renewal instant and what it returns to the pool,
-// assuming each renewing organization's next credit is its configured amount.
+// APICreditRefill is one refill instant and what it returns to the pool,
+// assuming each refilling organization's next credit is its current amount.
 type APICreditRefill struct {
-	// AccountIDs is every counted account renewing at this instant, in
+	// AccountIDs is every counted account refilling at this instant, in
 	// account order.
 	AccountIDs      []string `json:"accountIds"`
 	RefillAtEpoch   int64    `json:"refillAtEpoch"`
 	RefillInSeconds int64    `json:"refillInSeconds"`
-	// Gain is the credit those accounts have used, which the renewal restores.
+	// Gain is the credit those accounts have used, which the refill restores.
 	Gain     float64 `json:"gain"`
 	GainText string  `json:"gainText"`
 	// GainFraction is Gain on the pool's 0-1 scale, 0 when the pool's credit
@@ -226,67 +289,182 @@ type APICreditRefill struct {
 
 // APICreditAccount is one Console organization's credit this cycle.
 type APICreditAccount struct {
-	// ID is quota-cache's name for the item, "label-<hex>" from its label, or
-	// "item-<n>" for an item with no usable label. It survives a key rotation.
+	// ID is quota-cache's name for the item: "org-<12 hex>" from its
+	// organization, or "item-<n>" for an item it could not link to one. The
+	// dashboard's stored values are keyed by it.
 	ID string `json:"id"`
 	// Label is "" when the item has no usable label.
 	Label string `json:"label"`
 	// Order is the item's configured position.
 	Order int `json:"order"`
-	// OrganizationID is from the reading made with the current key, and ""
-	// when there is none.
+	// OrganizationID is the item's organization-id as quota-cache read it,
+	// and "" when it is missing or invalid.
 	OrganizationID string `json:"organizationId"`
-	// HasReading is true for a current-cycle reading that is counted in the
-	// pool. Without one every amount but MonthlyCredit is zero with "" text,
-	// Level is "", and DailySpend is empty: render a dash.
-	HasReading bool `json:"hasReading"`
-	// MonthlyCredit is the configured monthly-usd, present whenever it is
-	// valid, reading or not. MonthlyCreditText is "" when it is not.
+	// State is ok, stale, out, pending, needsSettings, misconfigured or
+	// cacheTooOld. Counted is true for ok, stale and out.
+	State   string `json:"state"`
+	Counted bool   `json:"counted"`
+	// HasEstimate is true when Left and Used mean something: Basis is not
+	// "".
+	HasEstimate bool `json:"hasEstimate"`
+	// Basis is "reading" when Left is a Console reading less the spend since,
+	// "credit" when it is the monthly credit less the spend this cycle, and
+	// "" when there is neither.
+	Basis string `json:"basis"`
+	// LowerBound is true when spend may be missing: Spent and Used are then
+	// at least, and Left at most, what is printed.
+	LowerBound        bool    `json:"lowerBound"`
 	MonthlyCredit     float64 `json:"monthlyCredit"`
 	MonthlyCreditText string  `json:"monthlyCreditText"`
-	// Spent is gross spend this cycle; it can exceed MonthlyCredit, and could
-	// fall below zero if Anthropic ever reported a refund as a negative cost.
-	Spent      float64 `json:"spent"`
-	SpentText  string  `json:"spentText"`
-	CreditUsed float64 `json:"creditUsed"`
-	// CreditUsedText is CreditUsed as printed: Spent clamped to [0,
-	// MonthlyCredit].
-	CreditUsedText    string  `json:"creditUsedText"`
-	Left              float64 `json:"left"`
-	LeftText          string  `json:"leftText"`
-	Overage           float64 `json:"overage"`
-	OverageText       string  `json:"overageText"`
+	// MonthlyCreditSource and RenewsSource say where the credit and the
+	// refill date come from: "dashboard", "config" or "none".
+	MonthlyCreditSource string `json:"monthlyCreditSource"`
+	// Spent is the metered spend since SpentSinceEpoch: the cycle's start,
+	// or without a cycle the reading's time. Null and "" without either.
+	Spent           float64 `json:"spent"`
+	SpentText       string  `json:"spentText"`
+	SpentSinceEpoch *int64  `json:"spentSinceEpoch"`
+	// Used is the part of the monthly credit spent: MonthlyCredit - Left,
+	// clamped to the credit. "" when the credit is unknown.
+	Used     float64 `json:"used"`
+	UsedText string  `json:"usedText"`
+	Left     float64 `json:"left"`
+	LeftText string  `json:"leftText"`
+	// EstimateLeftText is what the estimate had left before a refusal from
+	// Anthropic marked the account out, and "" unless it is out.
+	EstimateLeftText string  `json:"estimateLeftText"`
+	Overage          float64 `json:"overage"`
+	OverageText      string  `json:"overageText"`
+	// RemainingFraction is Left over MonthlyCredit, clamped to 0-1.
 	RemainingFraction float64 `json:"remainingFraction"`
 	RemainingPercent  int     `json:"remainingPercent"`
 	Level             string  `json:"level"`
 	// CycleStartEpoch and RenewsAtEpoch bound the cycle containing the build
-	// instant, from the configured renewal day; null when it is unusable.
+	// instant, from the refill date in force; null without one.
 	CycleStartEpoch *int64 `json:"cycleStartEpoch"`
 	RenewsAtEpoch   *int64 `json:"renewsAtEpoch"`
 	RenewsInSeconds *int64 `json:"renewsInSeconds"`
-	// DailySpend is one element per day of this cycle the report covered,
-	// oldest first. A day Anthropic has not reported yet is absent, never 0.
-	DailySpend []APICreditDay `json:"dailySpend"`
-	// ObservedAtEpoch is when the stored reading was taken, counted or not,
-	// and null when there is none.
-	ObservedAtEpoch *int64 `json:"observedAtEpoch"`
-	// NextAttemptEpoch is quota-cache's next scheduled poll, and null when
-	// there is none, which is always so for a misconfigured item.
-	NextAttemptEpoch *int64 `json:"nextAttemptEpoch"`
-	// State is ok, stale, error, pending, misconfigured or duplicate.
-	State      string   `json:"state"`
-	DataIssues []string `json:"dataIssues"`
+	RenewsSource    string `json:"renewsSource"`
+	// Reading is the Console reading in use, and null when none is.
+	Reading *APICreditReading `json:"reading"`
+	// CacheWriteExtra is how much more the estimated window would cost were
+	// every cache write a 1-hour one. CacheWriteExtraText is "" below $0.01.
+	CacheWriteExtra     float64 `json:"cacheWriteExtra"`
+	CacheWriteExtraText string  `json:"cacheWriteExtraText"`
+	// Unpriced is every model in the estimated window with no listed price,
+	// most tokens first. Always an array.
+	Unpriced []APICreditUnpriced `json:"unpriced"`
+	Refusals APICreditRefusals   `json:"refusals"`
+	// MeterSinceEpoch is when the meter began counting this organization,
+	// LastSeenEpoch its latest request.
+	MeterSinceEpoch *int64   `json:"meterSinceEpoch"`
+	LastSeenEpoch   *int64   `json:"lastSeenEpoch"`
+	DataIssues      []string `json:"dataIssues"`
 	// Issue is one plain-language sentence about the account, already
 	// written, and "" when there is nothing to say.
-	Issue string `json:"issue"`
+	Issue    string            `json:"issue"`
+	Settings APICreditSettings `json:"settings"`
 }
 
-// APICreditDay is one UTC day of an account's spend.
-type APICreditDay struct {
-	// DayStartEpoch is 00:00 UTC of the day.
-	DayStartEpoch int64   `json:"dayStartEpoch"`
-	Spent         float64 `json:"spent"`
-	SpentText     string  `json:"spentText"`
+// APICreditReading is the Console reading an account's Left is taken from.
+type APICreditReading struct {
+	Remaining      float64 `json:"remaining"`
+	RemainingText  string  `json:"remainingText"`
+	AtEpoch        int64   `json:"atEpoch"`
+	EnteredAtEpoch int64   `json:"enteredAtEpoch"`
+	// SpentSince is the metered spend since the start of the reading's hour.
+	SpentSince     float64 `json:"spentSince"`
+	SpentSinceText string  `json:"spentSinceText"`
+}
+
+// APICreditRefusals counts Anthropic's low-credit refusals of this
+// organization's requests: without a Claude Code session, and with one.
+type APICreditRefusals struct {
+	Total                 uint64 `json:"total"`
+	LastAtEpoch           *int64 `json:"lastAtEpoch"`
+	ClaudeCodeTotal       uint64 `json:"claudeCodeTotal"`
+	ClaudeCodeLastAtEpoch *int64 `json:"claudeCodeLastAtEpoch"`
+}
+
+// APICreditSettings is what the editor shows and sends back for one account.
+type APICreditSettings struct {
+	Editable bool `json:"editable"`
+	// NotEditableReason is "" when editable, else noOrganization,
+	// duplicateOrganization, overLimit, cacheTooOld, disabled or
+	// settingsUnreadable.
+	NotEditableReason string `json:"notEditableReason"`
+	// Revision is the stored entry's, "" with nothing stored; a save sends it
+	// back as baseRevision.
+	Revision string `json:"revision"`
+	// MonthlyUSD and Renews are the values set here, "" when none.
+	MonthlyUSD string `json:"monthlyUsd"`
+	// ConfigMonthlyUSD and ConfigRenews are quota-cache's configured values,
+	// shown beside an override; "" when unset or invalid, which the Invalid
+	// flags tell apart.
+	ConfigMonthlyUSD        string `json:"configMonthlyUsd"`
+	ConfigMonthlyUSDInvalid bool   `json:"configMonthlyUsdInvalid"`
+	Renews                  string `json:"renews"`
+	ConfigRenews            string `json:"configRenews"`
+	ConfigRenewsInvalid     bool   `json:"configRenewsInvalid"`
+	// Reading is the stored reading, used or not; null when there is none.
+	Reading *StoredReading `json:"reading"`
+	// ReadingUnusedReason says why a stored reading is not used: beforeRefill,
+	// otherOrganization, tooOld or future; "" when it is used or absent.
+	ReadingUnusedReason string `json:"readingUnusedReason"`
+	UpdatedAtEpoch      *int64 `json:"updatedAtEpoch"`
+}
+
+// StoredReading is a reading as saved.
+type StoredReading struct {
+	RemainingUSD   string `json:"remainingUsd"`
+	AtEpoch        int64  `json:"atEpoch"`
+	EnteredAtEpoch int64  `json:"enteredAtEpoch"`
+}
+
+// APICreditUnlinked is an organization that sent API traffic through CPA
+// while no counted item named it.
+type APICreditUnlinked struct {
+	OrganizationID string `json:"organizationId"`
+	FirstSeenEpoch int64  `json:"firstSeenEpoch"`
+	LastSeenEpoch  int64  `json:"lastSeenEpoch"`
+	Requests       uint64 `json:"requests"`
+	// Reason is "overLimit" when an item past the first 16 names it, else
+	// "notConfigured".
+	Reason string `json:"reason"`
+}
+
+// APICreditOrphan is stored dashboard values for an account no longer listed.
+type APICreditOrphan struct {
+	ID             string `json:"id"`
+	MonthlyUSD     string `json:"monthlyUsd"`
+	Renews         string `json:"renews"`
+	HasReading     bool   `json:"hasReading"`
+	Revision       string `json:"revision"`
+	UpdatedAtEpoch int64  `json:"updatedAtEpoch"`
+}
+
+// APICreditUnpriced is one model the price table has no price for.
+type APICreditUnpriced struct {
+	Model string `json:"model"`
+	// Tokens is input, output, cache read and cache write together, in the
+	// estimated window.
+	Tokens uint64 `json:"tokens"`
+}
+
+// RenewalSetting is a renewal date set from the dashboard.
+type RenewalSetting struct {
+	Date           string `json:"date"`
+	Revision       string `json:"revision"`
+	UpdatedAtEpoch int64  `json:"updatedAtEpoch"`
+}
+
+// RenewalOrphan is a renewal date stored for a credential the roster no
+// longer lists.
+type RenewalOrphan struct {
+	ID             string `json:"id"`
+	Date           string `json:"date"`
+	Revision       string `json:"revision"`
+	UpdatedAtEpoch int64  `json:"updatedAtEpoch"`
 }
 
 // Balance is the money left on one prepaid account.
@@ -365,6 +543,17 @@ type Credential struct {
 	// so beside the date: an anniversary is wrong for an account whose billing
 	// date has moved since it subscribed, and nothing here can see that.
 	RenewalEstimated bool `json:"renewalEstimated"`
+	// RenewalSource says where RenewalAtEpoch comes from: "reported" by the
+	// provider, set on the "dashboard", or "estimated" from the subscription's
+	// start; null when there is no renewal. A reported date wins over the
+	// dashboard's, and the dashboard's over the estimate.
+	RenewalSource *string `json:"renewalSource"`
+	// RenewalEditable is true for a Claude credential whose renewal date the
+	// page may set, while editing is available; false otherwise.
+	RenewalEditable bool `json:"renewalEditable"`
+	// RenewalSetting is the renewal date stored from the dashboard, used or
+	// not, and null when there is none.
+	RenewalSetting *RenewalSetting `json:"renewalSetting"`
 	// Credits is the prepaid or granted balance the account can spend beyond
 	// its windows, and null for a provider that reports none. Codex reports
 	// credits; Grok reports a prepaid dollar balance.

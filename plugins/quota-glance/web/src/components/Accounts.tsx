@@ -1,11 +1,38 @@
-import { useId } from "react"
+import { useEffect, useId, useState } from "react"
 
+import { Box, Dot, EditButton, EditFoot, EditLink, type FootStatus, RestFoot, SetHereDot } from "./Edit"
 import { Flags, FoldButton } from "./Fold"
-import { accountFlags, ROUTING_LABELS } from "../lib/accounts"
+import {
+  accountFlags,
+  renewalFoot,
+  renewalMark,
+  renewalOrphanText,
+  ROUTING_LABELS,
+  yearlyEstimate,
+} from "../lib/accounts"
+import { editingOffText } from "../lib/apicredits"
 import { useNowSeconds } from "../lib/now"
 import { type AccountName, nameText, shortName } from "../lib/pool"
+import { canSaveHere, saveSettings } from "../lib/save"
+import {
+  CONFLICT_FIELD,
+  dateEpoch,
+  EMPTY_RENEWAL_DRAFT,
+  editRenewal,
+  FIELD_FOOT,
+  type FieldEdit,
+  type FieldState,
+  newerRevision,
+  reconcileRenewals,
+  removeRenewalOrphan,
+  type RenewalDraft,
+  renewalField,
+  renewalPlan,
+  SIGN_IN_FOOT,
+  utcDay,
+} from "../lib/settings"
 import { calendarDaysUntil, formatAgo, formatDate, formatDuration } from "../lib/time"
-import type { Activity, Credential, Credits } from "../lib/types"
+import type { Activity, APICreditEditing, Credential, Credits, RenewalOrphan, RenewalSetting } from "../lib/types"
 
 /**
  * What each of a provider's accounts is, said once for the provider: its plan,
@@ -131,30 +158,36 @@ function CreditsFigure({ credits }: { credits: Credits }) {
 
 const DAY_SECONDS = 86400
 
+/** Calendar days between two instants' UTC dates, for a date set here and printed as UTC sees it. */
+const utcDaysUntil = (epoch: number, now: number) => Math.floor(epoch / DAY_SECONDS) - Math.floor(now / DAY_SECONDS)
+
 /**
  * When the subscription renews: the date, so it can be checked against a
  * receipt, and the distance, ticking like every other countdown here.
  *
- * An estimate carries "~" on its date, which the card's foot explains once,
- * and a hover that explains it in full. Its distance is calendar days, so it
- * agrees with the date beside it: a date that can be days out, if the billing
- * day has moved, has no business being counted down to the hour. One that comes round while the page is open is
- * due rather than passed, since the next document will already carry the
- * anniversary after it.
+ * An estimate carries "~" on its date, and a date set on the dashboard a dot
+ * after it; the card's foot explains both once, and a hover in full. Either
+ * one's distance is calendar days, so it agrees with the date beside it — a
+ * date set here on the UTC calendar it was set on. One that comes round while
+ * the page is open is due rather than passed, since the next document will
+ * already carry the anniversary after it.
  */
 function Renewal({ credential, now }: { credential: Credential; now: number }) {
-  // Checked by type rather than against null: a document from a plugin that
-  // predates these fields has neither, and must render as it always did.
-  if (typeof credential.renewalAtEpoch !== "number") return null
-  const estimated = credential.renewalEstimated === true
-  const remaining = credential.renewalAtEpoch - now
-  const date = `${estimated ? "~" : ""}${formatDate(credential.renewalAtEpoch)}`
-  if (remaining <= 0) return <span>{estimated ? "renewal due" : "renewal date passed"}</span>
+  const mark = renewalMark(credential)
+  if (mark === null) return null
+  const remaining = mark.atEpoch - now
+  const date = `${mark.estimated ? "~" : ""}${mark.utc ? utcDay(mark.atEpoch) : formatDate(mark.atEpoch)}`
+  if (remaining <= 0) return <span>{mark.estimated || mark.setHere ? "renewal due" : "renewal date passed"}</span>
   const distance =
-    estimated && remaining >= DAY_SECONDS ? `${calendarDaysUntil(credential.renewalAtEpoch, now)}d` : formatDuration(remaining)
+    mark.setHere && remaining >= DAY_SECONDS
+      ? `${utcDaysUntil(mark.atEpoch, now)}d`
+      : mark.estimated && remaining >= DAY_SECONDS
+        ? `${calendarDaysUntil(mark.atEpoch, now)}d`
+        : formatDuration(remaining)
   return (
-    <span title={estimated ? ESTIMATED_RENEWAL_TITLE : undefined}>
+    <span title={mark.estimated ? ESTIMATED_RENEWAL_TITLE : undefined}>
       renews <b>{date}</b>
+      {mark.setHere && <SetHereDot title="Set here. Replaces the estimate." />}
       <span className="qg-long"> · in {distance}</span>
     </span>
   )
@@ -213,10 +246,162 @@ function AccountRow({ credential, now }: { credential: Credential; now: number }
   )
 }
 
+/** Under a renewal date field: where the date comes from, or what is about to happen to it (F.3). */
+function RenewalCap({
+  credential,
+  state,
+  now,
+  mark,
+  busy,
+  onEdit,
+}: {
+  credential: Credential
+  state: FieldState
+  now: number
+  mark: string | null
+  busy: boolean
+  onEdit: (edit: FieldEdit | undefined) => void
+}) {
+  const shown = renewalMark(credential)
+  const estimate = shown?.estimated ? `~${formatDate(shown.atEpoch)}` : null
+  const undo = (
+    <EditLink disabled={busy} onClick={() => onEdit(undefined)}>
+      Undo
+    </EditLink>
+  )
+  if (state.error !== null) return <span className="qg-ecap is-bad">{state.error}<Dot />{undo}</span>
+  return (
+    <>
+      {mark && <span className="qg-ecap is-warn">{mark}</span>}
+      {state.edit?.kind === "drop" ? (
+        <span className="qg-ecap">
+          <span className="qg-esrc is-dirty">back to the estimate</span>
+          <Dot />
+          {undo}
+        </span>
+      ) : state.changed ? (
+        <span className="qg-ecap">
+          <span className="qg-esrc is-dirty">changed</span>
+          <Dot />
+          <span>
+            {state.stored ? (
+              <>
+                was <b>{utcDay(dateEpoch(state.stored))}</b>
+              </>
+            ) : estimate ? (
+              <>
+                was <b>{estimate}</b>, estimated
+              </>
+            ) : (
+              "was not known"
+            )}
+          </span>
+          <Dot />
+          {undo}
+        </span>
+      ) : state.source === "dashboard" ? (
+        <span className="qg-ecap">
+          <span className="qg-esrc">
+            <SetHereDot lead />
+            set here
+          </span>
+          <Dot />
+          <EditLink disabled={busy} onClick={() => onEdit({ kind: "drop" })}>
+            Use estimate
+          </EditLink>
+        </span>
+      ) : estimate ? (
+        <span className="qg-ecap">
+          <span className="qg-esrc">
+            estimate <b>{estimate}</b>
+          </span>
+          {yearlyEstimate(credential, now) && (
+            <>
+              <Dot />
+              <span>yearly plan</span>
+            </>
+          )}
+        </span>
+      ) : (
+        <span className="qg-ecap">
+          <span className="qg-esrc">not known yet</span>
+        </span>
+      )}
+    </>
+  )
+}
+
+/** One account in the renewal editor: a date field when it can take one, its date as text when not. */
+function RenewalEditRow({
+  credential,
+  name,
+  setting,
+  edit,
+  now,
+  mark,
+  busy,
+  onEdit,
+}: {
+  credential: Credential
+  name: string
+  setting: RenewalSetting | null | undefined
+  edit: FieldEdit | undefined
+  now: number
+  mark: string | null
+  busy: boolean
+  onEdit: (edit: FieldEdit | undefined) => void
+}) {
+  const who = <Who credential={credential} short />
+  if (credential.renewalEditable !== true) {
+    // Codex reports its own date, and a credential this page cannot key a
+    // date by shows the one it has.
+    return (
+      <div className="qg-arow qg-earow is-locked">
+        {who}
+        <span className="qg-asub">
+          {typeof credential.renewalAtEpoch === "number" ? (
+            <Renewal credential={credential} now={now} />
+          ) : (
+            <span className="text-ink-4">no renewal date</span>
+          )}
+        </span>
+      </div>
+    )
+  }
+  const state = renewalField(setting, edit)
+  return (
+    <div className="qg-arow qg-earow">
+      {who}
+      <div className="qg-efield is-date">
+        <Box state={{ changed: state.changed, dropped: state.edit?.kind === "drop", bad: state.error !== null, busy }}>
+          <input
+            type="date"
+            value={state.text}
+            min="2000-01-01"
+            max="2099-12-31"
+            disabled={busy}
+            aria-invalid={state.error !== null}
+            aria-label={`${name}: subscription renews on, UTC`}
+            onChange={(event) =>
+              onEdit({ kind: "set", text: event.target.value, incomplete: event.target.validity.badInput || undefined })
+            }
+          />
+        </Box>
+        <RenewalCap credential={credential} state={state} now={now} mark={mark} busy={busy} onEdit={onEdit} />
+      </div>
+    </div>
+  )
+}
+
 /**
  * A provider's accounts, once: a card shut by default whose fold line names
  * any account whose requests are failing or that CPA has parked. Open, a
  * line per account.
+ *
+ * On Claude, Set renewal dates turns the renewal column into one date field
+ * per subscription, in place, as the API credit card does (F.3). The draft
+ * lives here, outside the fold's body, so folding keeps it; one Save sends
+ * every changed date as one batch.
  *
  * The fold sits in the card's heading, so the card is found by heading like
  * every other; the button inside it is what opens it.
@@ -226,30 +411,169 @@ export function AccountsCard({
   names,
   open,
   onToggle,
+  renewalOrphans = [],
+  editingOffer = null,
+  onSaved = () => undefined,
 }: {
   held: Credential[]
   names: Map<string, AccountName>
   open: boolean
   onToggle: () => void
+  /** Renewal dates stored for credentials CPA no longer lists; shown in the editor's last line. */
+  renewalOrphans?: RenewalOrphan[]
+  /** Card-level editing availability, when API credits expose it. */
+  editingOffer?: APICreditEditing | null
+  /** Re-reads the document after a save. */
+  onSaved?: () => void
 }) {
   const now = useNowSeconds()
   const bodyID = useId()
   const lineID = useId()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<RenewalDraft>(EMPTY_RENEWAL_DRAFT)
+  const [overlay, setOverlay] = useState<Record<string, RenewalSetting | null>>({})
+  const [marks, setMarks] = useState<Record<string, string>>({})
+  const [status, setStatus] = useState<FootStatus | null>(null)
+  const [saved, setSaved] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  // A refreshed roster: a credential CPA no longer lists takes its edit with
+  // it, said so; a conflict's dates give way once the document has them.
+  // Keyed on what the roster says rather than on the arrays, which the
+  // section builds afresh on every tick of the clock.
+  const roster = [
+    ...held.map((credential) => `${credential.id}@${credential.renewalSetting?.revision ?? ""}`),
+    ...renewalOrphans.map((orphan) => `-${orphan.id}`),
+  ].join(" ")
+  useEffect(() => {
+    setDraft((kept) => {
+      const { draft: next, dropped } = reconcileRenewals(kept, held, renewalOrphans)
+      if (dropped.length > 0) setStatus({ tone: "warn", text: dropped.join(" ") })
+      return next
+    })
+    setOverlay((kept) => {
+      const next = { ...kept }
+      let changed = false
+      for (const credential of held) {
+        const latest = next[credential.id]
+        if (latest !== undefined && !newerRevision(latest?.revision ?? "", credential.renewalSetting?.revision ?? "")) {
+          delete next[credential.id]
+          changed = true
+        }
+      }
+      return changed ? next : kept
+    })
+  }, [roster])
+
+  useEffect(() => {
+    if (saved === null) return
+    const timer = window.setTimeout(() => setSaved(null), 20_000)
+    return () => window.clearTimeout(timer)
+  }, [saved])
+
   const ring = held.find((credential) => credential.activity)?.activity
-  const flags = accountFlags(
-    held,
-    held.map((credential) =>
-      nameText(names.get(credential.id) ?? { local: shortName(credential, credential.id), qualifier: "" }),
-    ),
-    (epoch) => formatAgo(epoch, now),
-  )
+  const nameOf = (credential: Credential) =>
+    nameText(names.get(credential.id) ?? { local: shortName(credential, credential.id), qualifier: "" })
+  const flags = accountFlags(held, held.map(nameOf), (epoch) => formatAgo(epoch, now))
   // The strip's column, as wide as the longest ring among the accounts, so a
   // row without a counter keeps the same columns as one with: each row is a
   // grid of its own, and an `auto` track would be as wide as its own strip.
   const buckets = Math.max(0, ...held.map((credential) => credential.activity?.buckets.length ?? 0))
-  const estimated = held.some(
-    (credential) => credential.renewalEstimated === true && typeof credential.renewalAtEpoch === "number",
-  )
+  const foot = renewalFoot(held)
+  const settingOf = (credential: Credential) =>
+    credential.id in overlay ? overlay[credential.id] : credential.renewalSetting
+  const plan = renewalPlan(held, draft, settingOf)
+  const doorOpen = canSaveHere()
+  const editingOff = editingOffer ? editingOffText(editingOffer) : null
+  const offered = editingOff === null && (foot.editable || renewalOrphans.length > 0)
+  const canEdit = offered && doorOpen
+
+  const startEditing = () => {
+    setSaved(null)
+    setStatus(null)
+    setFailed(false)
+    setEditing(true)
+  }
+  const cancel = () => {
+    setDraft(EMPTY_RENEWAL_DRAFT)
+    setMarks({})
+    setStatus(null)
+    setFailed(false)
+    setEditing(false)
+  }
+  const edit = (credential: Credential, next: FieldEdit | undefined) => {
+    setDraft((kept) => editRenewal(kept, { id: credential.id, renewalSetting: settingOf(credential) }, nameOf(credential), next))
+    setMarks((kept) => {
+      if (!(credential.id in kept)) return kept
+      const rest = { ...kept }
+      delete rest[credential.id]
+      return rest
+    })
+  }
+
+  const save = async () => {
+    if (plan.batch === null || saving) return
+    setSaving(true)
+    setStatus(null)
+    setMarks({})
+    const outcome = await saveSettings(plan.batch)
+    setSaving(false)
+    switch (outcome.kind) {
+      case "saved":
+        setDraft(EMPTY_RENEWAL_DRAFT)
+        setFailed(false)
+        setEditing(false)
+        setSaved(
+          outcome.unchanged
+            ? "Already saved. Nothing needed changing."
+            : `Saved ${plan.changes} renewal ${plan.changes === 1 ? "date" : "dates"}.`,
+        )
+        onSaved()
+        return
+      case "conflict": {
+        const nextOverlay = { ...overlay }
+        const nextMarks: Record<string, string> = {}
+        const rows = { ...draft.rows }
+        const remove = { ...draft.remove }
+        for (const id of outcome.ids) {
+          const current = outcome.current[id]
+          nextOverlay[id] = current && typeof current === "object" ? (current as RenewalSetting) : null
+          nextMarks[id] = CONFLICT_FIELD
+          delete rows[id]
+          delete remove[id]
+        }
+        setDraft({ rows, remove })
+        setOverlay(nextOverlay)
+        setMarks(nextMarks)
+        setStatus({ tone: "bad", text: outcome.text })
+        setFailed(true)
+        onSaved()
+        return
+      }
+      case "field":
+        setMarks({ [outcome.id]: outcome.text })
+        setStatus({ tone: "bad", text: FIELD_FOOT })
+        setFailed(true)
+        return
+      case "failed":
+        setStatus({ tone: "bad", text: outcome.text })
+        setFailed(true)
+        return
+      case "lost":
+        setStatus({ tone: "unknown", text: outcome.text })
+        setFailed(true)
+        onSaved()
+        return
+    }
+  }
+
+  const blocked = editingOff ?? (!offered
+    ? "Renewal dates cannot be set here right now. Your changes are kept until you reload."
+    : !doorOpen
+      ? SIGN_IN_FOOT
+      : plan.tooLarge ? "Too many changes for one save; undo some, save, then make the rest." : null)
+
   return (
     <article
       className="qg-win qg-roster"
@@ -263,24 +587,106 @@ export function AccountsCard({
             <span className="qg-rnote qg-long">
               {ring ? `plan, renewal and requests · last ${formatDuration(ring.windowSeconds)}` : "plan and renewal"}
             </span>
+            {editing && (
+              <span className="qg-fold-note">
+                {" · "}
+                <span className={`qg-estate ${failed ? "is-bad" : ""}`}>{failed ? "not saved" : "editing renewals"}</span>
+                {plan.changes > 0 && ` · ${plan.changes} unsaved`}
+              </span>
+            )}
             <Flags flags={flags} />
           </span>
         </FoldButton>
       </h3>
       <div id={bodyID} hidden={!open} className="qg-rows">
-        {open && (
-          <>
-            {/* The catalog's order, which every window card above repeats. */}
-            {held.map((credential) => (
-              <AccountRow key={credential.id} credential={credential} now={now} />
-            ))}
-            {estimated && (
-              <p className="qg-cfoot">
-                Dates with <b>~</b> are estimated from when the subscription started.
-              </p>
-            )}
-          </>
-        )}
+        {open &&
+          (editing ? (
+            <>
+              <form
+                className="qg-eform"
+                aria-label="Subscription renewal dates"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void save()
+                }}
+              >
+                <div className="qg-eahead" aria-hidden="true">
+                  <span>Account</span>
+                  <span>Renews on, UTC</span>
+                </div>
+                {held.map((credential) => (
+                  <RenewalEditRow
+                    key={credential.id}
+                    credential={credential}
+                    name={credential.email || credential.id}
+                    setting={settingOf(credential)}
+                    edit={draft.rows[credential.id]?.date}
+                    now={now}
+                    mark={marks[credential.id] ?? null}
+                    busy={saving}
+                    onEdit={(next) => edit(credential, next)}
+                  />
+                ))}
+                {renewalOrphans.map((orphan) => (
+                  <p key={orphan.id} className="qg-eorphan">
+                    {renewalOrphanText(orphan)}
+                    <Dot />
+                    {orphan.id in draft.remove ? (
+                      <>
+                        <span className="qg-esrc is-dirty">removing</span>
+                        <Dot />
+                        <EditLink disabled={saving} onClick={() => setDraft((kept) => removeRenewalOrphan(kept, orphan, false))}>
+                          Undo
+                        </EditLink>
+                      </>
+                    ) : (
+                      <EditLink disabled={saving} onClick={() => setDraft((kept) => removeRenewalOrphan(kept, orphan, true))}>
+                        Remove
+                      </EditLink>
+                    )}
+                  </p>
+                ))}
+              </form>
+              <EditFoot
+                help="The date on claude.ai under Settings, Billing. It repeats monthly, or yearly on an annual plan, and replaces the estimate."
+                changes={plan.changes}
+                errors={plan.errors}
+                saving={saving}
+                blocked={blocked}
+                status={status}
+                failed={failed}
+                onCancel={cancel}
+                onSave={() => void save()}
+              />
+            </>
+          ) : (
+            <>
+              {/* The catalog's order, which every window card above repeats. */}
+              {held.map((credential) => (
+                <AccountRow key={credential.id} credential={credential} now={now} />
+              ))}
+              {(foot.estimated || foot.setHere || canEdit || saved || editingOff) && (
+                <RestFoot
+                  saved={saved}
+                  action={canEdit ? <EditButton onClick={startEditing}>Set renewal dates</EditButton> : null}
+                >
+                  {foot.estimated && (
+                    <>
+                      <b>~</b> estimated from when the subscription started
+                    </>
+                  )}
+                  {foot.estimated && (foot.setHere || canEdit) && " · "}
+                  {(foot.setHere || canEdit) && (
+                    <>
+                      <SetHereDot lead />
+                      <b>set here</b>
+                    </>
+                  )}
+                  {editingOff && <><br />{editingOff}</>}
+                </RestFoot>
+              )}
+            </>
+          ))}
       </div>
     </article>
   )

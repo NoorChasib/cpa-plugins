@@ -91,21 +91,94 @@ func TestAtomicRenameProducesExactlyOneDebouncedReload(t *testing.T) {
 	}
 }
 
-// Several rapid commits inside one debounce interval collapse. The dashboard
-// needs the latest document, not one rebuild per write.
+// Several rapid commits collapse. The dashboard needs the latest document,
+// not one rebuild per write.
+//
+// A debounce window opens at the first event and fires once, whatever else
+// arrives inside it, so a burst can cause at most one reload per window it
+// spans, plus one for events delivered just after the last commit. The bound
+// is taken from how long the burst actually took rather than assumed: on a
+// slow runner eight commits can outlast one window, and a fixed bound then
+// fails on a watcher that is collapsing exactly as it should.
 func TestBurstOfWritesCollapses(t *testing.T) {
+	const commits, debounce = 8, 250 * time.Millisecond
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snapshot.json")
 	commit(t, path, `{"schema":1}`)
-	_, calls := start(t, path, time.Hour)
+	var calls atomic.Int64
+	w, err := Start(Options{Path: path, Debounce: debounce, Backstop: time.Hour, Heartbeat: time.Hour, OnChange: func() { calls.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
 
-	for i := 0; i < 8; i++ {
+	started := time.Now()
+	for i := 0; i < commits; i++ {
 		commit(t, path, `{"schema":1,"n":`+string(rune('0'+i))+`}`)
 	}
-	waitFor(t, calls, 2)
-	time.Sleep(250 * time.Millisecond)
-	if got := calls.Load(); got > 3 {
-		t.Fatalf("8 rapid commits produced %d reloads; debounce is not collapsing them", got-1)
+	burst := time.Since(started)
+	allowed := int64(burst/debounce) + 2
+	if allowed >= commits {
+		t.Skipf("%d commits took %v, %d debounce windows; there is no burst left to collapse", commits, burst, allowed-1)
+	}
+	waitFor(t, &calls, 2)
+	time.Sleep(debounce + 150*time.Millisecond)
+	if got := calls.Load() - 1; got > allowed {
+		t.Fatalf("%d commits in %v produced %d reloads; at most %d windows can fire, so debounce is not collapsing them",
+			commits, burst, got, allowed)
+	}
+}
+
+// quota-cache saves its API meter beside the snapshot, on its own schedule.
+// A write to it alone must reload, or the card's spend would wait for the next
+// snapshot write.
+func TestAMeterWriteReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	meter := filepath.Join(dir, "snapshot.meter.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	w, err := Start(Options{Path: path, MeterPath: meter, Debounce: 40 * time.Millisecond, Backstop: time.Hour, OnChange: func() { calls.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	commit(t, meter, `{"schema":1}`)
+	waitFor(t, &calls, 2)
+	// Any other file in the directory is still ignored.
+	commit(t, filepath.Join(dir, "unrelated.json"), `{}`)
+	time.Sleep(200 * time.Millisecond)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("reloads = %d; an unrelated file reloaded", got)
+	}
+}
+
+// The backstop fingerprints the meter too, so a missed meter write is still
+// noticed.
+func TestBackstopNoticesAMissedMeterWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	meter := filepath.Join(dir, "snapshot.meter.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	w, err := Start(Options{Path: path, MeterPath: meter, Debounce: time.Hour, Backstop: 50 * time.Millisecond, Heartbeat: time.Hour,
+		OnChange: func() { calls.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	commit(t, meter, `{"schema":1,"padding":"aaaaaaaa"}`)
+	waitFor(t, &calls, 2)
+	if w.State().Backstops == 0 {
+		t.Fatal("the meter write was not picked up by the backstop")
 	}
 }
 

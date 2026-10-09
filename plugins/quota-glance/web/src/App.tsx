@@ -62,13 +62,19 @@ function Body({
   // holding just that card. Absent from an older plugin, and null when Quota
   // Cache has none configured: either way, nothing.
   const apiCredits = summary.apiCredits ?? null
+  // Renewal dates stored for Claude credentials CPA no longer lists. Only
+  // Claude takes a dashboard renewal date, so its Accounts editor lists them.
+  const renewalOrphans = summary.renewalOrphans ?? []
+  const credentials = catalogOf(summary)
+  const claudeHeld = summary.credentials.some((credential) => credential.provider === CLAUDE)
   const claudeShown = providers.some((provider) => provider.id === CLAUDE)
   const creditsOnly =
-    apiCredits && !claudeShown ? (
+    (apiCredits || claudeHeld || renewalOrphans.length > 0) && !claudeShown ? (
       <ProviderSection
         provider={{ id: CLAUDE, title: "Claude", order: 0, credentialCount: 0, rows: [] }}
-        credentials={new Map()}
+        credentials={credentials}
         apiCredits={apiCredits}
+        renewalOrphans={renewalOrphans}
         onRedeemed={onRedeemed}
       />
     ) : null
@@ -91,7 +97,6 @@ function Body({
     )
   }
 
-  const credentials = catalogOf(summary)
   return (
     <>
       {providers.map((provider) => (
@@ -100,6 +105,7 @@ function Body({
           provider={provider}
           credentials={credentials}
           apiCredits={provider.id === CLAUDE ? apiCredits : null}
+          renewalOrphans={provider.id === CLAUDE ? renewalOrphans : []}
           onRedeemed={onRedeemed}
         />
       ))}
@@ -207,18 +213,15 @@ export function App() {
   }
   const actions = <Access state={access} onSignIn={signIn} />
 
-  // Nothing has ever loaded and neither way in worked, or the reader asked for
-  // the form. Once a document is in hand a lapsed credential does not replace
-  // it — the banner says so and the last good figures stay up — because they
-  // are still worth reading while the reader decides what to do about it.
-  if ((refusal && !query.data) || signingIn) {
-    // What was refused: the last attempt's answer when it found no way in,
-    // else what the doors say now, for a reader who opened the form while the
-    // figures still arrive through the other door.
-    const reason: Refusal | null =
-      refusal?.reason ?? (access.tokenRefused ? "token" : (access.consoleLatch?.reason ?? null))
-    return (
-      <NowProvider value={now}>
+  // Once a document has loaded, keep its cards mounted during sign-in. Their
+  // in-memory drafts must survive opening the form and returning from it.
+  const showSignIn = (refusal !== null && !query.data) || signingIn
+  const reason: Refusal | null =
+    refusal?.reason ?? (access.tokenRefused ? "token" : (access.consoleLatch?.reason ?? null))
+
+  return (
+    <NowProvider value={now}>
+      {showSignIn && (
         <SignIn
           reason={reason}
           rejected={refusal ? refusal.hadCredential : reason !== null}
@@ -226,38 +229,30 @@ export function App() {
           onPassword={(value) => {
             token.write(value)
             resetCache()
-            void queryClient.resetQueries({ queryKey: ["summary"] })
+            // Keep the last document while the new credential reads it. A
+            // reset would briefly replace the cards and discard their drafts.
+            void queryClient.invalidateQueries({ queryKey: ["summary"] })
             setSigningIn(false)
           }}
           onCancel={query.data ? () => setSigningIn(false) : undefined}
         />
-      </NowProvider>
-    )
-  }
-
-  return (
-    <NowProvider value={now}>
-      {/* query.data survives a failed refetch, which is what keeps the last
-        * good figures on screen while the banner explains the silence. */}
-      {/* Spending a credit changes nothing this document can show until
-        * quota-cache polls again — it owns the count — but everything else on
-        * the page is worth bringing forward, and the outcome message says which
-        * part is still lagging. */}
-      <Dashboard
-        summary={query.data}
-        offline={query.isError}
-        refused={!!refusal && refusal.hadCredential && !!query.data}
-        unanswered={unanswered}
-        actions={actions}
-        onSignIn={signIn}
-        // One click, one ask: the hold is lifted and the document asked for
-        // once, so a key whose answer is lost again is held back again.
-        onRetry={() => {
-          resumeConsole()
-          void query.refetch()
-        }}
-        onRedeemed={() => void query.refetch()}
-      />
+      )}
+      <div hidden={showSignIn}>
+        <Dashboard
+          summary={query.data}
+          offline={query.isError}
+          refused={!!refusal && refusal.hadCredential && !!query.data}
+          unanswered={unanswered}
+          actions={actions}
+          onSignIn={signIn}
+          // One click, one ask: a lost console answer is never retried.
+          onRetry={() => {
+            resumeConsole()
+            void query.refetch()
+          }}
+          onRedeemed={() => void query.refetch()}
+        />
+      </div>
     </NowProvider>
   )
 }
