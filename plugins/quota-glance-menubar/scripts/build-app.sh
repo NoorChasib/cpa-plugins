@@ -7,9 +7,9 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 
-version="${VERSION:-0.3.1}"
+version="${VERSION:-0.4.0}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo 'VERSION must have three numeric components, such as 0.3.1.' >&2
+    echo 'VERSION must have three numeric components, such as 0.4.0.' >&2
     exit 1
 fi
 read -r -a architectures <<< "${APP_ARCHS:-arm64 x86_64}"
@@ -46,6 +46,9 @@ cp "$sparkle_artifact/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
 mkdir -p dist/sparkle-tools
 ditto "$sparkle_artifact/bin" dist/sparkle-tools
 cp Resources/QuotaReadout.js "$app/Contents/Resources/QuotaReadout.js"
+# Provider badges. Swap a logo by replacing its SVG here (docs/logos.md).
+mkdir -p "$app/Contents/Resources/Logos"
+cp Resources/Logos/*.svg "$app/Contents/Resources/Logos/"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"

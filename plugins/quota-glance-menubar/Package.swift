@@ -5,7 +5,8 @@ var dependencies: [Package.Dependency] = []
 var products: [Product] = [.library(name: "GlanceCore", targets: ["GlanceCore"])]
 var targets: [Target] = [
     .target(name: "GlanceCore"),
-    .testTarget(name: "GlanceCoreTests", dependencies: ["GlanceCore"]),
+    // Fixtures are read from the source tree by path, so they are not bundled.
+    .testTarget(name: "GlanceCoreTests", dependencies: ["GlanceCore"], exclude: ["Fixtures"]),
 ]
 
 // URL and navigation policy also run under Linux. The app requires Apple's SDK.
