@@ -10,17 +10,20 @@ SVG files bundled with the app:
 | `codex` | `Resources/Logos/codex.svg` |
 | `xai` | `Resources/Logos/xai.svg` |
 
-The files shipped in 0.4.0 are **placeholders** copied from the design board
-(an eight-point spark, a hexagon ring and a slashed X). A provider without a
-readable file gets no badge; the number keeps its letter, and it is spaced
-and checked for look-alike letters as if badges were off.
+The files are the Claude spark, the OpenAI blossom (for Codex) and the Grok
+mark (for xAI), with their fills set to `currentColor` and the OpenAI
+`viewBox` cropped to a square around its ink, so all three fill the badge
+alike. A provider without a readable file gets no badge; the number keeps its
+letter, and it is spaced and checked for look-alike letters as if badges
+were off.
 
 ## Swapping in the real logos
 
-1. Replace the three files above, keeping their names. Each must be a
-   single-colour SVG with a square `viewBox` (for example `0 0 16 16` or
-   `0 0 24 24`). The small "glyph" or "symbol" version of a brand mark works
-   best at 9pt.
+1. Replace the files above, keeping their names. Each must be a
+   single-colour SVG with a square `viewBox` drawn close around the mark: the
+   whole `viewBox` is fitted into the badge, so empty space inside it shrinks
+   the logo. The small "glyph" or "symbol" version of a brand mark works best
+   at 9pt.
 2. Run the checks, which parse the three bundled files:
 
    ```sh
@@ -74,5 +77,6 @@ logos in each row's pop-up menu.
 
 ## Brand marks
 
-Anthropic, OpenAI and xAI each publish rules for using their marks. Check
-them before shipping a build with the real logos.
+Anthropic, OpenAI and xAI each publish rules for using their marks. The
+bundled files are the owner's choice of marks, used only to name the
+provider beside its own reading.

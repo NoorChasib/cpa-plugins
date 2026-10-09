@@ -9,19 +9,22 @@ final class LogoMarkTests: XCTestCase {
     func testTheThreeBundledLogosParse() throws {
         for provider in ["claude", "codex", "xai"] {
             let mark = try LogoMark(contentsOf: logos.appendingPathComponent("\(provider).svg"))
-            XCTAssertEqual(mark.viewBox, LogoMark.Rect(minX: 0, minY: 0, maxX: 16, maxY: 16), provider)
+            let box = mark.viewBox
+            XCTAssertEqual(box.width, box.height, accuracy: box.width * 0.01, "\(provider): the viewBox must be square")
+            XCTAssertTrue(mark.shapes.allSatisfy { if case .fill = $0.paint { return true } else { return false } }, provider)
+            // The whole viewBox is fitted into the badge, so the ink must fill it
+            // edge to edge or the logo draws smaller than the others.
             let ink = try XCTUnwrap(mark.inkBounds, provider)
-            XCTAssertGreaterThan(ink.width, 10, provider)
-            XCTAssertLessThanOrEqual(ink.maxX, 16.01, provider)
+            XCTAssertGreaterThan(max(ink.width, ink.height), box.width * 0.98, provider)
+            XCTAssertGreaterThanOrEqual(ink.minX, box.minX - 0.01, provider)
+            XCTAssertLessThanOrEqual(ink.maxX, box.maxX + 0.01, provider)
             XCTAssertGreaterThanOrEqual(mark.rightInkInset, 0, provider)
-            XCTAssertLessThan(mark.rightInkInset, 0.2, provider)
+            XCTAssertLessThan(mark.rightInkInset, 0.02, provider)
         }
         let codex = try LogoMark(contentsOf: logos.appendingPathComponent("codex.svg"))
-        XCTAssertEqual(codex.shapes.count, 2, "A stroked ring and a filled dot")
-        guard case let .stroke(width, _, join) = codex.shapes[0].paint else { return XCTFail("ring must be stroked") }
-        XCTAssertEqual(width, 2.3)
-        XCTAssertEqual(join, .round)
-        XCTAssertEqual(codex.shapes[1].paint, .fill(evenOdd: false))
+        XCTAssertEqual(codex.shapes.first?.paint, .fill(evenOdd: true), "The blossom's knot is cut out by the even-odd rule")
+        let xai = try LogoMark(contentsOf: logos.appendingPathComponent("xai.svg"))
+        XCTAssertEqual(xai.shapes.count, 2, "The Grok mark is two strokes drawn as fills")
     }
 
     func testPathDataCoversEveryCommand() throws {
