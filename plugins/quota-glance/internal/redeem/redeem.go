@@ -59,7 +59,8 @@ const (
 	// browser does, at 65 seconds, and a reverse proxy in front of CPA commonly
 	// does at 60. This bound sits under both, so the plugin always answers
 	// before anything in front of it gives up and turns a clean answer into a
-	// dropped connection.
+	// dropped connection. The cooldown clear that follows a confirmed reset
+	// (cooldownTimeout) fits in what is left: 49 and 5 is 54.
 	Timeout = 55 * time.Second
 
 	// readTimeout bounds each request that only reads: Codex's inventory,
@@ -106,6 +107,41 @@ const (
 	// was already consumed. On the press after an unknown outcome, that is the
 	// earlier attempt having gone through.
 	OutcomeAlreadyUsed = "alreadyUsed"
+)
+
+// What became of CPA's own routing cooldown on the credential, once the
+// provider has confirmed a reset. CPA records a cooldown when a credential hits
+// its limit and keeps skipping it until that cooldown ends, however the limit
+// was lifted; left alone, a reset the provider honoured buys nothing until CPA
+// stops waiting. So a confirmed reset is followed by clearing that one
+// credential's cooldown in CPA, in process, through host.routing.reset_cooldown.
+//
+// It is reported beside the outcome rather than folded into it. The reset is
+// spent whatever happens to the cooldown, and an answer that let a failure here
+// read as a failed reset would invite the second press that spends another.
+const (
+	// CooldownCleared means CPA confirmed it cleared this credential's
+	// cooldown and quota state.
+	CooldownCleared = "cleared"
+	// CooldownFailed means the clear was asked for and not confirmed: CPA
+	// refused it, answered for a different credential, or did not answer.
+	CooldownFailed = "failed"
+	// CooldownUnsupported means this CPA has no host.routing.reset_cooldown
+	// callback. Nothing was cleared.
+	CooldownUnsupported = "unsupported"
+	// CooldownUnconfirmed means the reset is reported because the provider
+	// accepted the spend, but its answer did not say the reset was applied —
+	// a Codex code this build does not know, or a body it could not read. That
+	// is not enough to tell CPA its cooldown is stale, so it was left alone.
+	CooldownUnconfirmed = "unconfirmed"
+
+	// cooldownTimeout bounds the clear. It is an in-process call into CPA that
+	// takes no time in practice, but CPA serves it under a lock a store reload
+	// holds and then saves its cooldown state, which may be a database write,
+	// with no deadline of its own. So the bound is enforced here, by not
+	// waiting past it (see clearCooldown), and it fits inside Timeout after
+	// the longest exchange.
+	cooldownTimeout = 5 * time.Second
 )
 
 // Errors a caller turns into a status code. Every one of them is a fixed
@@ -174,13 +210,20 @@ func (e *OutcomeUnknownError) Error() string { return ErrOutcomeUnknown.Error() 
 // only the kind of failure does not need the type.
 func (e *OutcomeUnknownError) Unwrap() error { return ErrOutcomeUnknown }
 
-// Host is the narrow pair of callbacks this package needs. It is an interface
-// so the plugin can withhold both when redemption is switched off: a nil Host
-// is a redeemer that cannot make a request at all, which is a stronger
+// Host is the narrow set of callbacks this package needs. It is an interface
+// so the plugin can withhold all of them when redemption is switched off: a nil
+// Host is a redeemer that cannot make a request at all, which is a stronger
 // guarantee than a flag consulted at the top of a function.
+//
+// ResetCooldown is CPA's host.routing.reset_cooldown. It is called only after
+// a provider has confirmed a reset on the same credential, and it clears that
+// credential's routing cooldown in CPA and nothing else: no provider request,
+// no token file. A host without the callback answers
+// protocol.ErrUnsupportedCallback.
 type Host interface {
 	GetAuth(context.Context, string) ([]byte, error)
 	HTTPDo(context.Context, protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error)
+	ResetCooldown(context.Context, string) (protocol.HostRoutingResetCooldownResponse, error)
 }
 
 // Result is one redemption attempt that ended in an answer.
@@ -195,6 +238,12 @@ type Result struct {
 	// no further request, and the next quota-cache poll replaces it with the
 	// truth.
 	RemainingCount int
+	// Cooldown is what became of CPA's routing cooldown on the credential:
+	// one of the Cooldown values on a reset the provider confirmed, or on the
+	// repeat of a claim the provider says was already spent, and
+	// CooldownUnconfirmed on a reset reported without that confirmation. Empty
+	// on every other outcome, which leaves the cooldown untouched.
+	Cooldown string
 }
 
 // Redeemer spends banked resets for one CPA instance. One lives for the life of
@@ -206,6 +255,10 @@ type Redeemer struct {
 	// now is the clock the retry window is measured on. It is a field so a
 	// test can step past the window without waiting ten minutes.
 	now func() time.Time
+	// cooldownWait is how long a clear is waited for; zero means
+	// cooldownTimeout. A field so a test of a wedged host need not wait
+	// five seconds.
+	cooldownWait time.Duration
 
 	mu sync.Mutex
 	// inFlight holds the credentials with a redemption under way, so a second
@@ -279,6 +332,12 @@ type answer struct {
 	kind   answerKind
 	result Result
 	err    error
+	// confirmed means the provider said, in so many words, that the reset is
+	// applied: a reset result, or — on the repeat of an unresolved claim — the
+	// same claim reported already spent. It is the only authority for clearing
+	// CPA's cooldown on the credential. An accepted spend whose answer could
+	// not be read is still reported as a reset, but is not confirmed.
+	confirmed bool
 }
 
 type answerKind int
@@ -340,11 +399,98 @@ func (r *Redeemer) spend(ctx context.Context, authIndex string, claim pendingCla
 	got := interpret(response)
 	switch {
 	case got.kind == answerSettled, got.kind == answerRefused && !isRetry:
+		// Forgotten before anything else happens, the cooldown clear included:
+		// the claim is settled, and nothing that goes wrong after this point
+		// may turn the next press into a repeat of it.
 		r.forget(authIndex)
-		return got.result, got.err
+		result := got.result
+		if got.err == nil {
+			result.Cooldown = r.afterSpend(ctx, authIndex, got)
+		}
+		return result, got.err
 	default:
 		return Result{}, r.stillUnknown(authIndex, claim)
 	}
+}
+
+// afterSpend clears CPA's routing cooldown on the credential when the provider
+// confirmed the reset, and says what came of it.
+//
+// It runs with the credential still reserved, so a second press cannot start
+// until the clear has answered or its bound has passed (see clearCooldown),
+// and it never contacts the provider: the reset is settled, and a clear that
+// fails is reported as a reset spent with its cooldown still in place, never
+// as a reason to spend again.
+func (r *Redeemer) afterSpend(ctx context.Context, authIndex string, got answer) string {
+	switch {
+	case got.confirmed:
+		return r.clearCooldown(ctx, authIndex)
+	case got.result.Outcome == OutcomeReset:
+		return CooldownUnconfirmed
+	default:
+		return ""
+	}
+}
+
+// clearCooldown asks CPA to clear the credential's routing cooldown, and
+// believes it only when the answer names the credential that was asked about.
+//
+// The context is detached from the press's own, so a press whose deadline ran
+// down during the spend still gets the clear its confirmed reset is owed; the
+// clear carries its own short bound instead.
+//
+// That bound is kept by not waiting, rather than by the context alone. The
+// call into CPA is synchronous and takes no deadline across the ABI, so a
+// context that expires does not stop it; a host that stalls would otherwise
+// hold a press whose reset is already spent until the browser gave up, and
+// its answer — the reset, and the cooldown left in place — would be lost. Past
+// the bound the clear is reported as failed and the press answers; the call
+// is left to finish on its own, and whatever it says then is discarded. It
+// can only clear the cooldown that was asked about, never spend.
+//
+// No error text from the host is kept: what the caller learns is one of the
+// Cooldown values.
+func (r *Redeemer) clearCooldown(ctx context.Context, authIndex string) string {
+	wait := r.cooldownWait
+	if wait <= 0 {
+		wait = cooldownTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
+	defer cancel()
+	type reply struct {
+		response protocol.HostRoutingResetCooldownResponse
+		err      error
+	}
+	// Buffered, so a call that outlives the wait can still deliver its
+	// answer and end.
+	done := make(chan reply, 1)
+	go func() {
+		response, err := r.host.ResetCooldown(ctx, authIndex)
+		done <- reply{response, err}
+	}()
+	var got reply
+	select {
+	case got = <-done:
+	case <-ctx.Done():
+		// An answer that landed as the bound ran out still counts.
+		select {
+		case got = <-done:
+		default:
+			return CooldownFailed
+		}
+	}
+	response, err := got.response, got.err
+	switch {
+	case errors.Is(err, protocol.ErrUnsupportedCallback):
+		return CooldownUnsupported
+	case err != nil:
+		return CooldownFailed
+	case strings.TrimSpace(response.AuthIndex) == "" || strings.TrimSpace(response.AuthIndex) != strings.TrimSpace(authIndex):
+		// An answer for some other credential, or for none, is not this
+		// credential's cooldown cleared.
+		return CooldownFailed
+	}
+	return CooldownCleared
 }
 
 // stillUnknown is the answer to a press that leaves claim unresolved.

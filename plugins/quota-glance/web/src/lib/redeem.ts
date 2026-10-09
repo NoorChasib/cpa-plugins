@@ -33,43 +33,12 @@
 
 import { type RefusalCode, spendThrough } from "./access"
 import { managementPath, resourcePath } from "./cpa-auth"
+import { fromEarlier, nameOf, opening, type RedeemResult } from "./outcome"
 import { accessContext, openDoors } from "./session"
 import { formatClock } from "./time"
 
-/**
- * What the plugin reports back. Outcomes widen additively, like every enum.
- *
- * Only "reset" and "nothingToReset" spent anything this time. The four
- * refusals — "notLimited", "cooldown", "paused", "ineligible" — are the
- * provider declining before anything was spent, and "alreadyUsed" is the
- * provider saying the reset this press named had been spent before it.
- */
-export type RedeemOutcome =
-  | "reset"
-  | "nothingToReset"
-  | "noCredit"
-  | "failed"
-  | "notLimited"
-  | "cooldown"
-  | "paused"
-  | "ineligible"
-  | "alreadyUsed"
-  | (string & {})
-
-export interface RedeemResult {
-  outcome: RedeemOutcome
-  windowsReset: number
-  remainingCount: number
-  /** The card's count comes from quota-cache and lags until its next poll. */
-  snapshotPending: boolean
-  /** "codex" or "claude"; empty from a plugin too old to say. */
-  provider: string
-  /**
-   * The plugin answered from its press ledger: this is what an earlier copy of
-   * the same press came to, not something this request did.
-   */
-  replayed: boolean
-}
+export { describeOutcome, fellShort, partlyApplied } from "./outcome"
+export type { CooldownState, RedeemOutcome, RedeemResult } from "./outcome"
 
 /**
  * A failure with something worth printing.
@@ -163,110 +132,7 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
     snapshotPending: body.snapshotPending !== false,
     provider: typeof body.provider === "string" ? body.provider : "",
     replayed,
-  }
-}
-
-/**
- * The provider's name as a sentence uses it, from the credential's own
- * provider id.
- *
- * Only the two providers that bank resets are named. Anything else reads as
- * "the provider" rather than as a raw id, which keeps every sentence below a
- * sentence; the plugin refuses such a credential before contacting anyone, so
- * the fallback is a guard rather than a path.
- */
-const PROVIDER_NAMES: Record<string, string> = { codex: "Codex", claude: "Claude" }
-
-function nameOf(provider: string): string {
-  return PROVIDER_NAMES[provider] ?? "the provider"
-}
-
-/** The same name, opening a sentence. */
-function opening(name: string): string {
-  return name.charAt(0).toUpperCase() + name.slice(1)
-}
-
-/**
- * Whether the press ended without the reset it asked for.
- *
- * It sets the colour of the line, not its words. A refusal is printed in the
- * failure ink even though nothing was lost, because the reader's windows are
- * exactly where they were and that is the fact they pressed the button to
- * change.
- */
-export function fellShort(result: RedeemResult): boolean {
-  switch (result.outcome) {
-    case "noCredit":
-    case "failed":
-    case "notLimited":
-    case "cooldown":
-    case "paused":
-    case "ineligible":
-      return true
-    default:
-      return false
-  }
-}
-
-/**
- * What to tell the reader, in whole sentences, for each ending.
- *
- * `provider` is the credential's own provider; the plugin's answer names one
- * too, and that is preferred when present because it is the one that was
- * actually spoken to.
- */
-export function describeOutcome(result: RedeemResult, provider: string): string {
-  return fromEarlier(result.replayed, outcomeSentence(result, provider))
-}
-
-/**
- * Marks an answer the plugin's ledger replayed: what an earlier copy of this
- * press came to. Without it a reader who pressed again after a dropped
- * connection would read "Reset applied" as a second reset spent.
- */
-function fromEarlier(replayed: boolean | undefined, text: string): string {
-  return replayed ? `From your earlier press: ${text}` : text
-}
-
-function outcomeSentence(result: RedeemResult, provider: string): string {
-  const who = opening(nameOf(result.provider || provider))
-  const left =
-    result.remainingCount === 0
-      ? "No banked resets left."
-      : `${result.remainingCount} banked reset${result.remainingCount === 1 ? "" : "s"} left.`
-  const lag = result.snapshotPending ? " The card updates at the next quota-cache poll." : ""
-  switch (result.outcome) {
-    case "reset":
-      return `Reset applied. ${left}${lag}`
-    case "nothingToReset":
-      // The reset is gone either way. Saying otherwise would be a lie the
-      // reader acts on when they check their windows.
-      return `The reset was spent, but no window needed clearing. ${left}${lag}`
-    case "noCredit":
-      // Usually a count that was spent elsewhere since the poll; on Claude it is
-      // also a grant the provider will not let be used, without saying why.
-      return `${who} reported no reset this account can spend right now — the count on this card may be out of date. Nothing was spent.`
-    case "alreadyUsed":
-      // Most often the answer to a second press after an unknown outcome: the
-      // claim being replayed is one the provider had already honoured. Either
-      // way this press spent nothing, and that is the half the reader needs.
-      return `${who} reports that reset as already used, so this press spent nothing. If an earlier press did not finish, it went through. ${left}${lag}`
-    // The four refusals. The provider declined before spending anything, and
-    // each says what would have to change for the next press to work.
-    case "notLimited":
-      return `${who} allows a reset only once the account has hit a usage limit, and this one has not. Nothing was spent.`
-    case "cooldown":
-      return `${who} has this account in a cooldown after its last reset. Nothing was spent — try again once the cooldown ends.`
-    case "paused":
-      return `${who} has paused resets on this account. Nothing was spent.`
-    case "ineligible":
-      return `${who} says this account is not eligible to use a reset right now. Nothing was spent.`
-    case "failed":
-      // Deliberately not "nothing was spent": this is the plugin's word for a
-      // refusal it could not classify, and it does not promise that.
-      return `${who} did not apply the reset. Check this account’s usage before pressing again.`
-    default:
-      return `Done. ${left}${lag}`
+    cooldown: typeof body.cooldown === "string" ? body.cooldown : "",
   }
 }
 
