@@ -30,6 +30,10 @@ type fakeHost struct {
 	// tests assert it stays empty: building and serving the document must never
 	// reach a provider, whatever redemption is configured to allow.
 	requests []protocol.HostHTTPRequest
+	// cooldowns records every CPA cooldown clear the plugin asked for. Only a
+	// confirmed reset clears one, so serving, reconfiguring and a press that
+	// is refused before the provider must leave it empty.
+	cooldowns []string
 }
 
 func (h *fakeHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) {
@@ -53,6 +57,19 @@ func (h *fakeHost) HTTPDo(_ context.Context, request protocol.HostHTTPRequest) (
 	defer h.mu.Unlock()
 	h.requests = append(h.requests, request)
 	return protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"credits":[]}`)}, nil
+}
+
+func (h *fakeHost) ResetCooldown(_ context.Context, authIndex string) (protocol.HostRoutingResetCooldownResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cooldowns = append(h.cooldowns, authIndex)
+	return protocol.HostRoutingResetCooldownResponse{AuthIndex: authIndex}, nil
+}
+
+func (h *fakeHost) cooldownClears() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.cooldowns...)
 }
 
 func (h *fakeHost) providerRequests() []protocol.HostHTTPRequest {
@@ -634,7 +651,7 @@ func TestARebuildPicksUpNewActivityWithoutANewSnapshot(t *testing.T) {
 // the press after saving an unrelated setting would make a new claim where it
 // should have repeated the unresolved one.
 func TestTheRedeemerOutlivesAReconfigure(t *testing.T) {
-	p, _, cachePath := newFixturePlugin(t)
+	p, host, cachePath := newFixturePlugin(t)
 	dataDir := filepath.Join(filepath.Dir(cachePath), "data")
 	base := "cache-path: " + cachePath + "\ndata-dir: " + dataDir + "\nweb-token: test-token\n"
 	redeemPOST := func() int {
@@ -678,6 +695,11 @@ func TestTheRedeemerOutlivesAReconfigure(t *testing.T) {
 	if p.redeemer != first {
 		t.Fatal("a reconfigure replaced the redeemer and dropped its journal")
 	}
+	// Serving, three reconfigures and two refused presses reached neither a
+	// provider nor CPA's routing state.
+	if requests, clears := host.providerRequests(), host.cooldownClears(); len(requests) != 0 || len(clears) != 0 {
+		t.Fatalf("provider requests %v and cooldown clears %v, want none", requests, clears)
+	}
 }
 
 // A plugin that never had redemption switched on never builds the capability.
@@ -697,5 +719,21 @@ func TestARedeemerIsNeverBuiltWhileRedemptionIsOff(t *testing.T) {
 	defer p.mu.Unlock()
 	if p.redeemer != nil {
 		t.Fatal("a redeemer was built with redemption switched off")
+	}
+}
+
+// The redeem path's adapter passes CPA's cooldown callback through for the
+// credential it names, and a plugin with no host clears nothing.
+func TestTheRedeemAdapterForwardsOnlyTheNamedCooldown(t *testing.T) {
+	host := &fakeHost{}
+	response, err := hostRedeem{host}.ResetCooldown(context.Background(), "claude-a")
+	if err != nil || response.AuthIndex != "claude-a" {
+		t.Fatalf("ResetCooldown = %+v, %v", response, err)
+	}
+	if got := host.cooldownClears(); len(got) != 1 || got[0] != "claude-a" {
+		t.Fatalf("cleared %v, want claude-a alone", got)
+	}
+	if _, err := (hostRedeem{}).ResetCooldown(context.Background(), "claude-a"); err == nil {
+		t.Fatal("an adapter with no host reported a clear")
 	}
 }

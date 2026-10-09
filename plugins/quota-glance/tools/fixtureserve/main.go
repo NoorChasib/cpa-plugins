@@ -37,7 +37,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "listen address")
 	epoch := flag.Int64("now", 1789012800, "build clock, in Unix seconds")
 	ending := flag.String("redeem", "", "answer every confirmed redeem with this ending and offer the button: "+
-		"an outcome (reset, nothingToReset, noCredit, failed, notLimited, cooldown, paused, ineligible, alreadyUsed) "+
+		"an outcome (reset, nothingToReset, noCredit, failed, notLimited, cooldown, paused, ineligible, alreadyUsed), "+
+		"a reset whose CPA cooldown was not cleared (cooldownFailed, cooldownUnsupported, cooldownUnconfirmed) "+
 		"or an error (outcome_unknown, retry_window_closed, provider_rate_limited, provider_refused, provider_unavailable, already_in_flight, credential_unusable). "+
 		"Empty leaves redemption off")
 	flag.Parse()
@@ -119,8 +120,18 @@ func standInFor(ending string) (*standIn, error) {
 	switch ending {
 	case "":
 		return nil, nil
-	case redeem.OutcomeReset, redeem.OutcomeNothingToReset, redeem.OutcomeAlreadyUsed:
+	case redeem.OutcomeReset, redeem.OutcomeAlreadyUsed:
+		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1, Cooldown: redeem.CooldownCleared}}, nil
+	case redeem.OutcomeNothingToReset:
 		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1}}, nil
+	// A reset the provider confirmed, and CPA's cooldown on the credential
+	// not cleared after it.
+	case "cooldownFailed", "cooldownUnsupported", "cooldownUnconfirmed":
+		cooldown := map[string]string{
+			"cooldownFailed": redeem.CooldownFailed, "cooldownUnsupported": redeem.CooldownUnsupported,
+			"cooldownUnconfirmed": redeem.CooldownUnconfirmed,
+		}[ending]
+		return &standIn{result: redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 1, Cooldown: cooldown}}, nil
 	case redeem.OutcomeNoCredit, redeem.OutcomeFailed, redeem.OutcomeNotLimited,
 		redeem.OutcomeCooldown, redeem.OutcomePaused, redeem.OutcomeIneligible:
 		return &standIn{result: redeem.Result{Outcome: ending, RemainingCount: 2}}, nil

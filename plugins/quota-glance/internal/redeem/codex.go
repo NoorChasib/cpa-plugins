@@ -97,14 +97,18 @@ func codexAnswer(response protocol.HostHTTPResponse, claim pendingClaim, isRetry
 		result.Outcome = codexOutcomeOf(code)
 		result.WindowsReset = intOf(root, "windows_reset", "windowsReset")
 		if result.Outcome != OutcomeNoCredit {
-			return answer{kind: answerSettled, result: result}
+			// Only the provider's own "reset" confirms the windows were
+			// cleared. A code this build does not know is still reported as
+			// a reset, because the credit is gone, but it confirms nothing.
+			return answer{kind: answerSettled, result: result, confirmed: code == "reset"}
 		}
 		// "Already redeemed" on the repeat of an unknown claim names the
 		// credit that claim chose while it was still available: the most
-		// likely hand that redeemed it is the earlier attempt.
+		// likely hand that redeemed it is the earlier attempt, and that
+		// attempt's reset is the one being confirmed.
 		if isRetry && (code == "already_redeemed" || code == "alreadyRedeemed") {
 			result.Outcome, result.WindowsReset = OutcomeAlreadyUsed, 0
-			return answer{kind: answerSettled, result: result}
+			return answer{kind: answerSettled, result: result, confirmed: true}
 		}
 		return answer{kind: answerRefused, result: result}
 	case status == 401 || status == 403:

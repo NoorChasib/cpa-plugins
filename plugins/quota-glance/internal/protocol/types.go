@@ -9,7 +9,9 @@
 //
 // host.auth.get and host.http.do are the two exceptions, and they exist for
 // exactly one action: spending a banked Codex or Claude rate-limit reset when
-// the operator presses the button and confirms. That is a write the snapshot
+// the operator presses the button and confirms. host.routing.reset_cooldown
+// follows a reset the provider confirmed, and clears CPA's own cooldown on that
+// one credential. That is a write the snapshot
 // cannot carry and quota-cache's poller has no business performing, and it
 // happens only on an explicit request — never on a timer, never on a rebuild,
 // and never on any route that merely reads. See internal/redeem.
@@ -17,6 +19,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -46,7 +49,17 @@ const (
 	// stalls holds the redeem route until the browser gives up.
 	MethodHostHTTPOperationOpen = "host.http.operation_open"
 	MethodHostHTTPCancel        = "host.http.cancel"
+	// MethodHostRoutingResetCooldown clears CPA's routing cooldown and quota
+	// state for one credential, as the console's Clear cooldown does. Reachable
+	// only from the redeem path, after a provider confirmed a reset on that
+	// same credential.
+	MethodHostRoutingResetCooldown = "host.routing.reset_cooldown"
 )
+
+// ErrUnsupportedCallback is a host that does not offer a callback this plugin
+// asked for: a CPA older than the callback. It is told apart from every other
+// failure because the operator's remedy differs — update CPA, not try again.
+var ErrUnsupportedCallback = errors.New("host does not offer this callback")
 
 type Envelope struct {
 	OK     bool            `json:"ok"`
@@ -215,6 +228,18 @@ type HostHTTPResponse struct {
 	StatusCode int                 `json:"StatusCode"`
 	Headers    map[string][]string `json:"Headers"`
 	Body       []byte              `json:"Body"`
+}
+
+// HostRoutingResetCooldownRequest is the host.routing.reset_cooldown request.
+type HostRoutingResetCooldownRequest struct {
+	AuthIndex string `json:"auth_index"`
+}
+
+// HostRoutingResetCooldownResponse is its result: the credential whose state
+// was cleared, and the model keys it was cleared for.
+type HostRoutingResetCooldownResponse struct {
+	AuthIndex string   `json:"auth_index"`
+	Models    []string `json:"models,omitempty"`
 }
 
 type HostLogRequest struct {

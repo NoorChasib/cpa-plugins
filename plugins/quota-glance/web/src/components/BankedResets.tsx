@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { useNowSeconds } from "../lib/now"
 import { type AccountName, shortName } from "../lib/pool"
-import { canRedeemHere, describeError, describeOutcome, fellShort, mayHaveSpent, redeemReset } from "../lib/redeem"
+import { canRedeemHere, describeError, describeOutcome, fellShort, mayHaveSpent, partlyApplied, redeemReset } from "../lib/redeem"
 import { formatDuration } from "../lib/time"
 import type { Credential } from "../lib/types"
 
@@ -200,11 +200,12 @@ type Notice = { id: string; who: string; tone: Tone; text: string }
 
 /**
  * How a notice is marked: the press did what it was for; it was refused and
- * nothing was spent; or the answer was lost and the reset may be gone. The
- * last two used to share the refusal's red, which left "may have been
- * applied" looking exactly like "nothing was spent" at a glance.
+ * nothing was spent; the answer was lost and the reset may be gone; or the
+ * reset was spent and CPA may still be skipping the account. The middle two
+ * used to share the refusal's red, which left "may have been applied" looking
+ * exactly like "nothing was spent" at a glance.
  */
-type Tone = "ok" | "bad" | "unknown"
+type Tone = "ok" | "bad" | "unknown" | "partial"
 
 /** One provider's tiles, the press in progress, and what earlier presses came to. */
 export interface BankedResets {
@@ -247,7 +248,8 @@ export function useBankedResets(credentials: Credential[], onRedeemed: () => voi
     setBusy(true)
     try {
       const result = await redeemReset(credential.id)
-      report(credential, fellShort(result) ? "bad" : "ok", describeOutcome(result, credential.provider))
+      const tone = fellShort(result) ? "bad" : partlyApplied(result) ? "partial" : "ok"
+      report(credential, tone, describeOutcome(result, credential.provider))
       // Ask for a fresh document. It will not show a smaller count until
       // quota-cache polls again — the message says so — but everything else on
       // the page stays current.
@@ -461,7 +463,7 @@ function UnknownMark() {
   )
 }
 
-const TONE_CLASS: Record<Tone, string> = { ok: "is-ok", bad: "is-bad", unknown: "is-unknown" }
+const TONE_CLASS: Record<Tone, string> = { ok: "is-ok", bad: "is-bad", unknown: "is-unknown", partial: "is-partial" }
 
 /**
  * Where focus goes when a notice's own dismiss button is pressed, since that
@@ -506,7 +508,7 @@ export function ResetNotices({ state }: { state: BankedResets }) {
     <div role="status" className="qg-notices">
       {state.notices.map((notice) => (
         <p key={notice.id} className={`qg-notice ${TONE_CLASS[notice.tone]}`}>
-          {notice.tone === "unknown" && <UnknownMark />}
+          {(notice.tone === "unknown" || notice.tone === "partial") && <UnknownMark />}
           <span className="min-w-0">
             <b className="qg-notice-who">{notice.who}</b> {notice.text}
           </span>
