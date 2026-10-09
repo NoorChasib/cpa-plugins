@@ -85,6 +85,40 @@
         "subscription_started_at": "2024-02-29T08:00:00Z"
       }
     },
+    "claude:claude-weekly-spent@example.com.json": {
+      "provider": "claude",
+      "auth_index": "claude-weekly-spent@example.com.json",
+      "used_percent": 100,
+      "reset_at": "2026-09-11T12:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "max_5x",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session",
+          "used_percent": 2,
+          "reset_at": "2026-09-10T04:20:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly",
+          "used_percent": 100,
+          "reset_at": "2026-09-11T12:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly_fable",
+          "title": "Weekly (Fable)",
+          "used_percent": 40,
+          "reset_at": "2026-09-11T11:59:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ]
+    },
     "claude:claude-failing@example.com.json": {
       "provider": "claude",
       "auth_index": "claude-failing@example.com.json",

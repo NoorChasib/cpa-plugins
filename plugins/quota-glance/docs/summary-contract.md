@@ -12,8 +12,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. |
+| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -80,8 +80,14 @@ The last two answer a different question from the rest: whether CPA will route
 to the credential, not whether quota-cache can read it. They are reported here
 because there is one `status` field and routing state wins it when set — but
 they say nothing about the figures. A parked credential is still polled, still
-appears on every card, and still counts in every mean. Render it normally and
-mark it; `credentials[].status` is the only place that fact lives.
+appears on every card, and counts in every mean exactly as it would if CPA were
+routing to it. The one kind of account with a reading that a mean leaves out —
+on Claude's session row, an account whose weekly is spent — is judged from its
+weekly reading and never from this field, so a cooldown neither causes that
+nor prevents it
+([Claude's session and Fable](#claudes-session-and-fable-bounded-by-the-weekly)).
+Render it normally and mark it; `credentials[].status` is the only place that
+fact lives.
 
 `counters.observedOK` and `counters.observeError` follow the **poll**, not the
 status: a credential polled cleanly is counted as observed whether or not CPA
@@ -105,6 +111,14 @@ The last three always accompany `hasReading: false`. `disabled` and
 `unavailable` deliberately never appear here: they describe the credential, not
 the reading, and a row that called itself `ok` on one card and `disabled` on the
 next would be describing one credential two ways in the same column.
+
+A spent weekly is not a state either. `state` says whether a reading can be
+trusted, and the session of a Claude account whose weekly is spent is a good
+reading: the 100% is true, the account just cannot use it. The two facts are
+independent — an entry can be held out and `stale`, or held out and `error` —
+so one field cannot carry both, and a state other than `ok` tells a client to
+doubt the very figure the expanded card exists to show. `heldOut` and
+`pooledFraction` say it instead, on the two rows it bears on.
 
 ### `entries[].dataIssues` — always an array, often empty
 
@@ -630,6 +644,18 @@ of movement is `up`/`down`. `unknown` when there is too little history — fewer
 than two samples spanning half an hour, which is the normal state for the first
 half hour after a restart. Hide the arrow entirely on `unknown`.
 
+The arrow describes the headline beside it, so it compares what each member
+counts as in the mean (`pooledFraction`), over the members the mean is taken
+over. A held-out account is not compared: its idle session would read as a
+pool refilling. On Claude's Fable row the capped figures are compared, not the
+raw ones.
+
+The history is recorded from served documents, so after upgrading from a
+release without the Fable cap it still holds raw Fable figures. For the first
+hour, Claude's Fable trend compares capped figures with those raw ones and can
+read `down` where nothing moved. That is accepted: once the sample nearest an
+hour ago was recorded capped, it compares like with like.
+
 ### `resetDisplayHint` — `countdown` or `none`
 
 `countdown` means `resetAtEpoch` is in the future and safe to tick against.
@@ -673,24 +699,43 @@ holds no opinion about what the values mean.
 
 ### Membership
 
-A credential is a member of a row if it reported that window. That is the whole
-test: not whether CPA will route to it, not whether it is disabled. The figures
-a parked credential last reported are still true, and a credential vanishing
-from every card at the exact moment it runs out is the opposite of what the card
-is read for.
+A credential is a member of a row if it reported that window, with the one
+exception below. Whether CPA will route to it, and whether it is disabled, play
+no part. The figures a parked credential last reported are still true, and a
+credential vanishing from every card at the exact moment it runs out is the
+opposite of what the card is read for.
 
 **A credential that did not report a window is excluded from the mean, not
 counted as full** — otherwise one silent credential quietly inflates the single
 number the whole card is read from. It is still listed, with `hasReading: false`.
 
-`memberCount` is how many the mean covers and `excludedCount` the rest; they sum
-to `credentialCount`, which is also `entries.length`. Neither is ever negative.
+**On Claude's session row, an account whose weekly is spent is held out** for
+the same reason: its idle session reads 100% with nothing able to use it. It is
+still listed, with its reading and `heldOut: true`. No other row holds anything
+out; [Claude's session and Fable](#claudes-session-and-fable-bounded-by-the-weekly)
+has the rule.
 
-`aggregate.remainingFraction` is the arithmetic mean over members.
+| Field | Counts |
+| --- | --- |
+| `memberCount` | The credentials the mean is taken over: those with a reading that are not held out. |
+| `excludedCount` | The rest: no reading, or held out. `memberCount + excludedCount == credentialCount`, which is also `entries.length`. Neither is ever negative. |
+| `heldOutCount` | The part of `excludedCount` that has a reading and was held out, so `excludedCount - heldOutCount` is the credentials with no reading. `0` on every row but Claude's session. |
+
+Everything the aggregate says is taken over members alone.
+`aggregate.remainingFraction` is the arithmetic mean of their `pooledFraction`,
+which is each one's own remaining fraction on every row but Claude's Fable.
 `soonestResetAtEpoch` is the earliest *future* reset among them, and
 `projectedGainPercent` is the capacity the row regains when it fires, summed
 over every member resetting in that same minute. `subtext` is that sentence
-already written out — it is empty when no member has a future reset.
+already written out, naming the first member in entry order that resets at
+exactly `soonestResetAtEpoch`; it is empty when no member has a future reset. A
+held-out account's reset is never the soonest, never part of the gain, and
+never named, because it returns nothing the row can use.
+
+A session row whose every reporting account is held out has no members. It
+reads `remainingFraction: 0` and `critical`, with every reset, gain and full-at
+field `null` or `0` and `subtext` empty, while every account is still listed
+with its reading.
 
 ### The pool, slice by slice
 
@@ -701,17 +746,134 @@ they always add back up to it.
 
 | Field | Meaning |
 | --- | --- |
-| `entries[].poolShare` | This credential's slice of `remainingFraction`, on the row's 0–1 scale: its own remaining fraction over `memberCount`. Across a row's entries the shares sum to `aggregate.remainingFraction`. `0` with no reading. |
-| `entries[].resetsNext` | The credential's window resets at `soonestResetAtEpoch` or within the minute after it — it is part of the next recovery. True for a credential already full too, whose reset returns nothing: it is still the next thing to happen to the row. |
-| `entries[].recoveryShare` | What the row regains from this credential at that recovery, on the same scale: what it has used, over `memberCount`. `0` unless `resetsNext`. Across a row they sum to `projectedGainFraction`. |
+| `entries[].pooledFraction` / `pooledPercent` | What this credential counts as in the row's mean, as a fraction and as printed. Equal to `remainingFraction` / `remainingPercent` on every row but Claude's Fable, where it is the lesser of the account's Fable and its weekly remaining. A held-out entry's is its own reading, though the mean leaves it out. `0` with no reading. |
+| `entries[].heldOut` | `true` for an entry with a reading that the mean leaves out: on Claude's session row, an account whose weekly is spent. Its figures are still its real reading; its shares are `0` and `resetsNext` is `false`. `false` everywhere else. |
+| `entries[].poolShare` | This credential's slice of `remainingFraction`, on the row's 0–1 scale: its `pooledFraction` over `memberCount`. Across a row's entries the shares sum to `aggregate.remainingFraction`. `0` with no reading, and `0` when held out. |
+| `entries[].resetsNext` | The credential's window resets at `soonestResetAtEpoch` or within the minute after it — on Claude's Fable row, its Fable window or its weekly does. It is part of the next recovery. True too for a credential whose reset returns nothing — one already full, or a Fable reset under a weekly that still holds it down (one with no more left than the Fable, a spent one included): it is still the next thing to happen to the row. Always `false` when held out. |
+| `entries[].recoveryShare` | What the row regains from this credential at that recovery, on the same scale: the rise in its `pooledFraction`, over `memberCount`. On every row but Claude's Fable that is everything it has used. On Fable it is the rise in the lesser of its Fable and its weekly, each counted full if it resets in that minute. Never negative. `0` unless `resetsNext`. Across a row they sum to `projectedGainFraction`. |
 | `aggregate.projectedGainFraction` | `projectedGainPercent` unrounded. Size a "what the next reset returns" mark from this and print the percent beside it, as with every other fraction/percent pair. |
-| `aggregate.fullAtEpoch` / `fullInSeconds` | When the row would read 100% if nothing more were used: the latest reset among members below full. `null` when every member is already full, when one below full has no reset instant (that window does not refill on a schedule), or when every one below full is already mid-turnover. |
+| `aggregate.fullAtEpoch` / `fullInSeconds` | When the row would read 100% if nothing more were used: the latest reset among members below full. On Claude's Fable row a member waits for its weekly's reset as well, when the weekly is below full. `null` when every member is already full, when a reset one below full waits for has no instant (that window does not refill on a schedule), or when every one below full is already mid-turnover. A held-out account is not a member and is not waited for. |
 
 Name the next recovery from the entries with `resetsNext` rather than from
-`subtext`, which is a sentence for printing whole and is never parsed. The
-dashboard's pooled bar lays the `poolShare` slices end to end in entry order
-and the `recoveryShare` slices after them, hatched; the track that is left is
-capacity no scheduled reset is about to return.
+`subtext`, which is a sentence for printing whole and is never parsed. A
+client that draws the pool account by account lays the `poolShare` slices end
+to end in entry order and the `recoveryShare` slices after them, hatched; the
+track that is left is capacity no scheduled reset is about to return. A
+held-out account has no slice, because its shares are `0`. The dashboard draws
+the pool as one fill sized from `remainingFraction` and one hatched stretch
+from `projectedGainFraction`, which are the same totals.
+
+Print an account's own figure from `remainingPercent`, as everywhere else. A
+`heldOut` entry, or a `pooledPercent` below `remainingPercent`, is the pool
+counting that account as less than it reads, and is worth saying beside it:
+otherwise the figures under a card do not average to its headline.
+
+### Claude's session and Fable, bounded by the weekly
+
+A Claude account's weekly limit sits over its other windows. Once the weekly is
+spent the account can send nothing, however much of its session or its Fable
+allowance reads as left, and an idle session reads 100%. Averaged as they read,
+a pool whose accounts had burned through their weeklies showed a nearly full
+session. So on Claude, those two rows count each account by what its weekly
+still lets it use:
+
+- **Session holds a spent weekly out.** An account whose weekly is spent is
+  left out of the session mean and out of everything taken from it: the soonest
+  reset, the full-at instant, the projected gain, `subtext` and the trend. Its
+  entry is still listed with its real reading, `heldOut: true`, no `poolShare`
+  or `recoveryShare`, and `resetsNext: false`.
+- **Fable counts no more than the weekly leaves.** Nothing is held out of
+  Fable. Each account counts as the lesser of its Fable and its weekly
+  remaining (`pooledFraction`), since no account can spend more Fable than its
+  weekly allows, so the row draws down as the weeklies do. Its entry still
+  prints its own Fable figure, because the expanded card is where the actual
+  numbers are read.
+- **The Weekly row is unchanged.** It is the gate, not gated: an account whose
+  weekly is spent is in its mean at 0%. So is every other Claude row (per-model,
+  `credits`, unmapped) and every row of every other provider, where
+  `pooledFraction` always equals `remainingFraction`. No other provider's
+  windows nest this way.
+
+Burn through every account's weekly and the card reads 0% on all three: the
+weekly mean is 0, every Fable counts as 0, and the session, with every
+reporting account held out, has no members and takes the empty row's shape
+described under [Membership](#membership).
+
+These rules, and `heldOut`, `heldOutCount`, `pooledFraction` and
+`pooledPercent`, arrived in 0.6.0. An older plugin omits all four, so a client
+that has to tell an empty session from a held-out one reads a missing
+`heldOutCount` as nothing held out.
+
+#### The gate
+
+Each account's weekly is read once per build, and both rows are judged against
+that same reading.
+
+| Term | Meaning |
+| --- | --- |
+| **Which window** | The account's first window with key `weekly` and no model: the very reading the Weekly row shows for it. A per-model weekly is not the gate. |
+| **Known** | There is such a window, its figure is a number, and its reset has not passed. A weekly with no reset instant is still known: at 100% it is a limit reached that Claude gives no end for, and is spent. |
+| **Spent** | Known, and printed as 0% on the Weekly row. Judged on the rounded percent for the same reason `level` is: an account the page calls empty on one card must not count as usable on the card beside it. 99.6% used is spent; 99.4% is not. |
+
+A gate that is not known holds nothing out and caps nothing, so the two rows
+count the account at its own reading:
+
+- **Turned over.** A weekly whose reset is at or before the build instant has
+  refilled since the poll, so the figure no longer holds. It gates nothing
+  until the next poll reads the new window — the same mid-turnover reading
+  `fullAtEpoch` waits out.
+- **Not a number.** A weekly figure that is not finite (`percentInvalid`) says
+  nothing about the weekly, so there is nothing to judge the session or Fable
+  against. The Weekly row still reports that entry as 0% with the issue, as it
+  does any invalid figure.
+- **No weekly window.** An account that reported no weekly is counted at its
+  own readings.
+
+The gate is decided from that reading and nothing else, because anything
+folded in would move the session or Fable figure for a reason the reader
+cannot see on the Weekly card beside it:
+
+- **Not routing status.** A credential CPA has parked or that is disabled is
+  gated exactly as it would be otherwise. `credentials[].status` says whether
+  CPA routes to it; the weekly says whether the account has anything left.
+- **Not freshness.** A `stale` or `error` weekly still gates on its last
+  figure, as that figure still counts in the Weekly mean. The entry's `state`
+  says how far to trust it.
+- **Not credits or banked resets.** Usage an account can buy beyond its plan,
+  and a banked reset waiting to be spent, are not the plan's capacity. Until a
+  reset is spent the weekly is still spent, and the next poll after spending
+  one shows it refilled.
+
+#### What Fable recovers
+
+A capped Fable account rises when its Fable window resets or when its weekly
+does, so on the Fable row both are recovery events for an account whose gate is
+known.
+
+- `soonestResetAtEpoch` is the earliest future event over every member, a Fable
+  reset or a weekly one. `subtext` names the first account with an event at
+  exactly that instant.
+- `resetsNext` is true for an account with either event at that instant or in
+  the minute after it. The minute counts from the row's soonest instant, not
+  from each account's own first reset, so an account has its Fable and weekly
+  gathered into one recovery only when both fall inside it. In the fixtures
+  each account's Fable resets a minute before its weekly, so the account
+  resetting soonest has both gathered. A reset after that minute waits for a
+  later recovery, even when it is seconds from the account's other reset.
+- What the account regains is the rise in the lesser of the two: each window
+  that resets in that span counts as full, and the other keeps its figure. A
+  Fable reset returns only up to what its weekly has left, so under a weekly
+  that still holds it down — one with no more left than the Fable, a spent one
+  included, even one that resets just after the minute — it returns nothing,
+  and that account is `resetsNext` with a `recoveryShare` of 0. A weekly reset
+  under a Fable that binds returns only up to the Fable's own figure.
+- `fullAtEpoch` waits, for each account below full, for its Fable reset when the
+  Fable is below full and for its weekly reset when the weekly is. A weekly
+  below full with no reset instant makes it `null`, as any window that does not
+  refill on a schedule does.
+
+Without a known gate each of these reduces to the plain rule: the window's own
+reset, and everything the account has used coming back.
 
 ## Balances — prepaid accounts
 

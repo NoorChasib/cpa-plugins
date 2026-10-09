@@ -16,6 +16,7 @@ import { after, before, describe, test } from "node:test"
 
 import { goldenFixtureRoute, PRESS_PATHS } from "../dev/fixture-route.ts"
 import { classifyRefusal, encodeSpendHeader } from "../src/lib/access.ts"
+import type { RowEntry, Summary } from "../src/lib/types.ts"
 
 type Middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
 
@@ -318,5 +319,40 @@ describe("CPA's ban, as the fixture keeps it", () => {
     assert.ok(warnings.some((line) => line.includes("ban this address")))
     // The token door is the plugin's own, and CPA's ban never reaches it.
     assert.equal((await call("GET", SPEND, spendHeaders(press()))).status, 200)
+  })
+})
+
+describe("the weekly-spent scenario", () => {
+  const { call } = serve()
+
+  test("holds every Claude account out of the session, and adds up as a real document does", async () => {
+    const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=weekly-spent`, TOKEN)
+    assert.equal(reply.status, 200)
+    const claude = (JSON.parse(reply.body) as Summary).providers.find((provider) => provider.id === "claude")
+    assert.ok(claude)
+    const row = (rowId: string) => {
+      const found = claude.rows.find((candidate) => candidate.rowId === rowId)
+      assert.ok(found, rowId)
+      return found
+    }
+
+    // The sums checkPoolAddsUp in pool_test.go holds the server to, so the
+    // hand-patched document cannot drift from what the server would send.
+    for (const { rowId, aggregate, entries } of claude.rows) {
+      const sum = (share: (entry: RowEntry) => number | undefined) =>
+        entries.reduce((total, entry) => total + (share(entry) ?? 0), 0)
+      assert.equal(aggregate.memberCount + aggregate.excludedCount, claude.credentialCount, rowId)
+      assert.ok(Math.abs(sum((entry) => entry.poolShare) - aggregate.remainingFraction) < 1e-9, rowId)
+      assert.ok(Math.abs(sum((entry) => entry.recoveryShare) - (aggregate.projectedGainFraction ?? 0)) < 1e-9, rowId)
+      assert.equal(entries.filter((entry) => entry.heldOut === true).length, aggregate.heldOutCount ?? 0, rowId)
+    }
+
+    const session = row("session")
+    assert.equal(session.aggregate.memberCount, 0)
+    assert.equal(session.aggregate.heldOutCount, 5)
+    assert.equal(session.aggregate.remainingPercent, 0)
+    assert.ok(session.entries.filter((entry) => entry.hasReading).every((entry) => entry.heldOut === true))
+    assert.equal(row("weekly").aggregate.remainingPercent, 0)
+    assert.equal(row("weekly_fable").aggregate.remainingPercent, 0)
   })
 })

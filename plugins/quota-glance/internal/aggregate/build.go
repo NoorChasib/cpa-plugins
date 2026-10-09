@@ -672,9 +672,73 @@ func buildProviders(records []record, in Input, now time.Time) []Provider {
 
 // member is one credential's contribution to one row.
 type member struct {
-	record    record
-	window    qc.EntryWindow
+	record record
+	window qc.EntryWindow
+	// remaining is the window's own reading, which the entry prints.
 	remaining float64
+	// pooled is what the member counts as in the row's mean. It is remaining
+	// on every row but one a Claude weekly caps; see gatedBy.
+	pooled float64
+	// heldOut leaves the member out of the mean, the recovery and the shares,
+	// while its entry still prints its reading.
+	heldOut bool
+	// weekly is the credential's weekly gate on a row it caps, so the row's
+	// recovery counts the weekly's reset as well as the window's own. Unknown
+	// on every other row.
+	weekly weeklyGate
+}
+
+// resets lists the instants at which the member's pooled value can rise: its
+// window's own reset and, on a row its weekly caps, the weekly's. Either may be
+// zero, which is no instant at all.
+func (m member) resets() []time.Time {
+	if m.weekly.known {
+		return []time.Time{m.window.ResetAt, m.weekly.reset}
+	}
+	return []time.Time{m.window.ResetAt}
+}
+
+// resetsAt reports whether one of the member's resets falls exactly at t.
+func (m member) resetsAt(t time.Time) bool {
+	for _, reset := range m.resets() {
+		if reset.Equal(t) {
+			return true
+		}
+	}
+	return false
+}
+
+// pooledAfter is the member's pooled value once every reset after now and no
+// later than through has restored its window. Neither the window nor the
+// weekly can fall at a reset, so neither can the lesser of them, and the gain
+// this is measured against is never negative. On an uncapped row it is 1 for a
+// member resetting in that span: everything it has used comes back, which is
+// all a recovery has ever projected.
+func (m member) pooledAfter(now, through time.Time) float64 {
+	restored := func(reset time.Time) bool { return reset.After(now) && !reset.After(through) }
+	after := m.remaining
+	if restored(m.window.ResetAt) {
+		after = 1
+	}
+	if !m.weekly.known {
+		return after
+	}
+	weekly := m.weekly.remaining
+	if restored(m.weekly.reset) {
+		weekly = 1
+	}
+	return math.Min(after, weekly)
+}
+
+// pooledOf is the members the row's mean is taken over, in catalog order.
+func pooledOf(members []member) []member {
+	pooled := make([]member, 0, len(members))
+	for _, m := range members {
+		if !m.heldOut {
+			pooled = append(pooled, m)
+		}
+	}
+	return pooled
 }
 
 func buildRows(records []record, in Input, now time.Time) []Row {
@@ -684,19 +748,28 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 	windowKeys := map[string]string{}
 	models := map[string]string{}
 	for _, r := range records {
-		// Membership turns on one thing only: did this credential report this
-		// window. A credential CPA has parked in a quota cooldown reports the
-		// same figures it did a minute earlier, and those figures are the whole
-		// reason to look at this dashboard — a credential vanishing from every
-		// card at the exact moment it runs out is the opposite of what the card
-		// is read for. Disabled is the same story: the quota is still there and
-		// comes back with the credential.
+		// Whether a credential lands in a row turns on one thing only: did it
+		// report this window. A credential CPA has parked in a quota cooldown
+		// reports the same figures it did a minute earlier, and those figures
+		// are the whole reason to look at this dashboard — a credential
+		// vanishing from every card at the exact moment it runs out is the
+		// opposite of what the card is read for. Disabled is the same story: the
+		// quota is still there and comes back with the credential.
+		//
+		// The mean is narrower on Claude's session row only. A Claude credential
+		// whose weekly is spent still lands in its session row here and is still
+		// listed with its reading. gatedBy marks it held out, deciding from the
+		// weekly reading alone and never from routing state, and pooledOf then
+		// keeps it out of the mean and out of memberCount.
 		//
 		// A credential with no observation at all has nothing to average. It is
 		// not dropped either; it lands below as an entry with no reading.
 		if !r.observed {
 			continue
 		}
+		// Read once per credential, before its windows, so every row its weekly
+		// bears on is judged against the same reading.
+		gate := weeklyGateOf(r.windows, now)
 		claimed := map[string]bool{}
 		for _, w := range r.windows {
 			id := rowIDOf(w)
@@ -714,7 +787,8 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 				titles[id], windowKeys[id], models[id] = w.Title, w.Key, w.Model
 			}
 			remaining, _ := remainingOf(w.UsedPercent)
-			byRow[id] = append(byRow[id], member{record: r, window: w, remaining: remaining})
+			m := member{record: r, window: w, remaining: remaining, pooled: remaining}
+			byRow[id] = append(byRow[id], gatedBy(m, gate))
 		}
 	}
 	sort.SliceStable(rowIDs, func(i, j int) bool {
@@ -733,15 +807,18 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 		}
 		// Found once and handed to both halves of the row, so the gain the
 		// aggregate announces and the per-entry shares a client draws it from
-		// are taken over the same credentials by the same rule.
-		next := nextRecoveryOf(byRow[id], now)
+		// are taken over the same credentials by the same rule. A held-out
+		// member is in neither: its reset returns nothing the row can use.
+		members := byRow[id]
+		pooled := pooledOf(members)
+		next := nextRecoveryOf(pooled, now)
 		rows = append(rows, Row{
 			RowID:     id,
 			Title:     title,
 			Order:     rowOrderOf(windowKeys[id]),
 			Matched:   !strings.HasPrefix(windowKeys[id], qc.WindowRawPrefix),
-			Aggregate: buildAggregate(id, byRow[id], next, len(records), in, now),
-			Entries:   buildEntries(records, byRow[id], next, now),
+			Aggregate: buildAggregate(id, pooled, len(members)-len(pooled), next, len(records), in, now),
+			Entries:   buildEntries(records, members, len(pooled), next, now),
 		})
 	}
 	return rows
@@ -752,42 +829,54 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 type recovery struct {
 	// at is the soonest future reset, and zero when no member has one.
 	at time.Time
-	// with holds the auth index of each member whose window resets at `at` or
-	// within the minute after it. They land together because a card claiming
-	// two separate gains seconds apart would be noise.
+	// with holds the auth index of each member with a reset at `at` or within
+	// the minute after it. They land together because a card claiming two
+	// separate gains seconds apart would be noise.
 	with map[string]bool
+	// gain is what each member in `with` regains then, on its own 0-1 scale:
+	// everything it has used, on an uncapped row, and on a row its weekly caps
+	// the rise in the lesser of the two. A Fable reset under a spent weekly
+	// returns nothing, which is the point of the cap.
+	gain map[string]float64
 }
 
 func nextRecoveryOf(members []member, now time.Time) recovery {
-	next := recovery{with: map[string]bool{}}
+	next := recovery{with: map[string]bool{}, gain: map[string]float64{}}
 	for _, m := range members {
-		reset := m.window.ResetAt
-		if reset.IsZero() || !reset.After(now) {
-			continue
-		}
-		if next.at.IsZero() || reset.Before(next.at) {
-			next.at = reset
+		for _, reset := range m.resets() {
+			if reset.IsZero() || !reset.After(now) {
+				continue
+			}
+			if next.at.IsZero() || reset.Before(next.at) {
+				next.at = reset
+			}
 		}
 	}
 	if next.at.IsZero() {
 		return next
 	}
+	through := next.at.Add(time.Minute)
 	for _, m := range members {
-		reset := m.window.ResetAt
-		if reset.IsZero() || reset.Before(next.at) || reset.After(next.at.Add(time.Minute)) {
-			continue
+		for _, reset := range m.resets() {
+			if reset.IsZero() || reset.Before(next.at) || reset.After(through) {
+				continue
+			}
+			id := m.record.identity.AuthIndex
+			next.with[id] = true
+			next.gain[id] = m.pooledAfter(now, through) - m.pooled
+			break
 		}
-		next.with[m.record.identity.AuthIndex] = true
 	}
 	return next
 }
 
 // fullAgainOf is when the row would read 100% if nothing more were used: the
 // latest reset among the members below full, since a reset restores its window
-// outright and a full member has nothing to wait for.
+// outright and a full member has nothing to wait for. A member its weekly caps
+// waits for each of the two that is below full.
 //
-// It is unknowable, and reported as such, when a member below full has no
-// reset instant at all — that window does not refill on a schedule. A member
+// It is unknowable, and reported as such, when a reset a member waits for has
+// no instant at all — that window does not refill on a schedule. A member
 // whose reset has already passed is mid-turnover and refilling now, so it
 // neither delays the instant nor voids it. Zero when there is nothing ahead to
 // count down to: every member full, or every one below full already turning
@@ -795,15 +884,23 @@ func nextRecoveryOf(members []member, now time.Time) recovery {
 func fullAgainOf(members []member, now time.Time) time.Time {
 	latest := now
 	for _, m := range members {
-		if m.remaining >= 1 {
+		if m.pooled >= 1 {
 			continue
 		}
-		reset := m.window.ResetAt
-		if reset.IsZero() {
-			return time.Time{}
+		needed := make([]time.Time, 0, 2)
+		if m.remaining < 1 {
+			needed = append(needed, m.window.ResetAt)
 		}
-		if reset.After(latest) {
-			latest = reset
+		if m.weekly.known && m.weekly.remaining < 1 {
+			needed = append(needed, m.weekly.reset)
+		}
+		for _, reset := range needed {
+			if reset.IsZero() {
+				return time.Time{}
+			}
+			if reset.After(latest) {
+				latest = reset
+			}
 		}
 	}
 	if !latest.After(now) {
@@ -812,29 +909,34 @@ func fullAgainOf(members []member, now time.Time) time.Time {
 	return latest
 }
 
-// buildAggregate computes the row summary. The mean is arithmetic over member
-// credentials only: a credential that did not report this window is excluded
+// buildAggregate computes the row summary. The mean is arithmetic over the
+// pooled members only: a credential that did not report this window is excluded
 // rather than counted as full, which would let a silent credential inflate the
-// number that the whole card is read from.
-func buildAggregate(rowID string, members []member, next recovery, providerCredentials int, in Input, now time.Time) Aggregate {
-	excluded := providerCredentials - len(members)
+// number that the whole card is read from, and one held out by its weekly is
+// excluded for the same reason.
+//
+// Every reporting credential held out leaves nothing to average, and the row
+// reads 0% critical with nothing ahead: no account in it can send.
+func buildAggregate(rowID string, pooled []member, heldOut int, next recovery, providerCredentials int, in Input, now time.Time) Aggregate {
+	excluded := providerCredentials - len(pooled)
 	if excluded < 0 {
 		excluded = 0
 	}
 	agg := Aggregate{
-		MemberCount:   len(members),
+		MemberCount:   len(pooled),
 		ExcludedCount: excluded,
+		HeldOutCount:  heldOut,
 		Trend:         TrendUnknown,
 	}
-	if len(members) == 0 {
+	if len(pooled) == 0 {
 		agg.Level = levelOf(0)
 		return agg
 	}
 	sum := 0.0
-	for _, m := range members {
-		sum += m.remaining
+	for _, m := range pooled {
+		sum += m.pooled
 	}
-	agg.RemainingFraction = sum / float64(len(members))
+	agg.RemainingFraction = sum / float64(len(pooled))
 	agg.RemainingPercent = percentOf(agg.RemainingFraction)
 	agg.Level = levelOf(agg.RemainingFraction)
 
@@ -843,15 +945,17 @@ func buildAggregate(rowID string, members []member, next recovery, providerCrede
 	// which, with members in catalog order, is the credential at the top of the
 	// card.
 	var soonestName string
-	for _, m := range members {
-		if !soonest.IsZero() && m.window.ResetAt.Equal(soonest) {
+	for _, m := range pooled {
+		if !soonest.IsZero() && m.resetsAt(soonest) {
 			soonestName = shortName(emailOf(m.record.identity))
 			break
 		}
 	}
-	current := make([]observation, 0, len(members))
-	for _, m := range members {
-		current = append(current, observation{authIndex: m.record.identity.AuthIndex, remaining: m.remaining})
+	// The trend is of the headline, so it compares what each member counts as
+	// in the mean, over the members the mean is taken over.
+	current := make([]observation, 0, len(pooled))
+	for _, m := range pooled {
+		current = append(current, observation{authIndex: m.record.identity.AuthIndex, remaining: m.pooled})
 	}
 	agg.Trend = trendOf(in.Samples, current, rowID, now)
 	if soonest.IsZero() {
@@ -860,21 +964,21 @@ func buildAggregate(rowID string, members []member, next recovery, providerCrede
 
 	epoch, seconds := soonest.Unix(), int64(soonest.Sub(now)/time.Second)
 	agg.SoonestResetAtEpoch, agg.SoonestResetInSeconds = &epoch, &seconds
-	if full := fullAgainOf(members, now); !full.IsZero() {
+	if full := fullAgainOf(pooled, now); !full.IsZero() {
 		epoch, seconds := full.Unix(), int64(full.Sub(now)/time.Second)
 		agg.FullAtEpoch, agg.FullInSeconds = &epoch, &seconds
 	}
 
 	// Capacity the row regains when the soonest window resets: what each member
-	// resetting with it has used, as a share of the whole row. The same sum,
+	// resetting with it gets back, as a share of the whole row. The same sum,
 	// member by member, is each entry's recoveryShare.
 	gain := 0.0
-	for _, m := range members {
-		if next.with[m.record.identity.AuthIndex] {
-			gain += 1 - m.remaining
+	for _, m := range pooled {
+		if id := m.record.identity.AuthIndex; next.with[id] {
+			gain += next.gain[id]
 		}
 	}
-	agg.ProjectedGainFraction = gain / float64(len(members))
+	agg.ProjectedGainFraction = gain / float64(len(pooled))
 	agg.ProjectedGainPercent = percentOf(agg.ProjectedGainFraction)
 
 	// Precomputed so the wording lives in one place rather than in each client.
@@ -892,7 +996,7 @@ func buildAggregate(rowID string, members []member, next recovery, providerCrede
 // printed, with HasReading false: the card is the place an operator counts
 // their credentials, and a list that quietly omits the ones in trouble is worth
 // less than no list.
-func buildEntries(records []record, members []member, next recovery, now time.Time) []RowEntry {
+func buildEntries(records []record, members []member, pooledCount int, next recovery, now time.Time) []RowEntry {
 	byCredential := make(map[string]member, len(members))
 	for _, m := range members {
 		byCredential[m.record.identity.AuthIndex] = m
@@ -906,15 +1010,18 @@ func buildEntries(records []record, members []member, next recovery, now time.Ti
 		}
 		remaining, issue := remainingOf(m.window.UsedPercent)
 		// This credential's slice of the row, in the row's own units: the mean
-		// is taken over members, so each holds an equal 1/members of the bar.
-		// Served rather than left to the client so that a weighted mean, if the
-		// row ever takes one, changes the slices in the same place as the
-		// headline they add up to.
-		weight := 1 / float64(len(members))
-		resetsNext := next.with[m.record.identity.AuthIndex]
-		recoveryShare := 0.0
-		if resetsNext {
-			recoveryShare = (1 - m.remaining) * weight
+		// is taken over pooled members, so each holds an equal 1/members of the
+		// bar, and a held-out one holds none. Served rather than left to the
+		// client so that a weighted mean, if the row ever takes one, changes
+		// the slices in the same place as the headline they add up to.
+		poolShare, recoveryShare, resetsNext := 0.0, 0.0, false
+		if !m.heldOut {
+			weight := 1 / float64(pooledCount)
+			poolShare = m.pooled * weight
+			resetsNext = next.with[m.record.identity.AuthIndex]
+			if resetsNext {
+				recoveryShare = next.gain[m.record.identity.AuthIndex] * weight
+			}
 		}
 		entry := RowEntry{
 			CredentialID:      m.record.identity.AuthIndex,
@@ -922,7 +1029,10 @@ func buildEntries(records []record, members []member, next recovery, now time.Ti
 			RemainingFraction: remaining,
 			RemainingPercent:  percentOf(remaining),
 			Level:             levelOf(remaining),
-			PoolShare:         m.remaining * weight,
+			HeldOut:           m.heldOut,
+			PooledFraction:    m.pooled,
+			PooledPercent:     percentOf(m.pooled),
+			PoolShare:         poolShare,
 			RecoveryShare:     recoveryShare,
 			ResetsNext:        resetsNext,
 			ResetDisplayHint:  HintNone,

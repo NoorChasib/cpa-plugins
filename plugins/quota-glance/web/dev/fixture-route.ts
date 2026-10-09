@@ -224,6 +224,90 @@ function withEveryHold(doc: Doc): Doc {
   return { ...doc, credentials }
 }
 
+/**
+ * Every Claude account with its weekly limit spent, which is the session
+ * card's face when the pool holds every reporting account out. Neither golden
+ * document reaches it, so it is patched from the ordinary one as the server
+ * would build it: the counts and shares still add up, as checkPoolAddsUp in
+ * pool_test.go demands of a real document.
+ */
+function withEveryWeeklySpent(doc: Doc): Doc {
+  const spent = { remainingFraction: 0, remainingPercent: 0, level: "critical" }
+  const providers = (doc.providers as Doc[]).map((provider) => {
+    if (provider.id !== "claude") return provider
+    const rows = (provider.rows as Doc[]).map((row) => {
+      const aggregate = row.aggregate as Doc
+      const entries = row.entries as Doc[]
+      const patch = (fields: (entry: Doc) => Doc) =>
+        entries.map((entry) => (entry.hasReading ? { ...entry, ...fields(entry) } : entry))
+
+      if (row.rowId === "weekly") {
+        // Each account that resets next now goes from nothing to full, so
+        // the recovery is its whole share of the pool.
+        const share = 1 / (aggregate.memberCount as number)
+        const next = patch((entry) => ({
+          ...spent,
+          pooledFraction: 0,
+          pooledPercent: 0,
+          poolShare: 0,
+          recoveryShare: entry.resetsNext ? share : 0,
+        }))
+        const gain = next.reduce((sum, entry) => sum + ((entry.recoveryShare as number | undefined) ?? 0), 0)
+        const gainPercent = Math.round(gain * 100)
+        return {
+          ...row,
+          entries: next,
+          aggregate: {
+            ...aggregate,
+            ...spent,
+            projectedGainFraction: gain,
+            projectedGainPercent: gainPercent,
+            subtext: (aggregate.subtext as string).replace(/^\+\d+%/, `+${gainPercent}%`),
+          },
+        }
+      }
+
+      if (row.rowId === "session") {
+        // Every reporting account is held out at its own reading, and a mean
+        // over nobody has nothing ahead to announce.
+        const next = patch(() => ({ heldOut: true, poolShare: 0, recoveryShare: 0, resetsNext: false }))
+        return {
+          ...row,
+          entries: next,
+          aggregate: {
+            ...aggregate,
+            ...spent,
+            memberCount: 0,
+            excludedCount: provider.credentialCount,
+            heldOutCount: next.filter((entry) => entry.heldOut === true).length,
+            trend: "unknown",
+            soonestResetAtEpoch: null,
+            soonestResetInSeconds: null,
+            fullAtEpoch: null,
+            fullInSeconds: null,
+            projectedGainFraction: 0,
+            projectedGainPercent: 0,
+            subtext: "",
+          },
+        }
+      }
+
+      if (row.rowId === "weekly_fable") {
+        // Each account keeps its own Fable figure but counts as the nothing
+        // its weekly leaves. The golden's gain, subtext, soonest reset and
+        // full-at all stand: siphorchannel's Fable and weekly reset within
+        // the minute, so its recovery is still from nothing to full.
+        const next = patch(() => ({ pooledFraction: 0, pooledPercent: 0, poolShare: 0 }))
+        return { ...row, entries: next, aggregate: { ...aggregate, ...spent } }
+      }
+
+      return row
+    })
+    return { ...provider, rows }
+  })
+  return { ...doc, providers }
+}
+
 type Outcome = Doc | "unauthorized" | "down"
 
 /** The states §5 of the handoff requires the app to render legibly. */
@@ -237,6 +321,10 @@ function scenarios(): Record<string, () => Outcome> {
 
     // Every hint a Claude reset can carry beside its button, at once.
     holds: () => withEveryHold(golden()),
+
+    // Every Claude account has burned its weekly: the session card's face
+    // when every reporting account is held out of its mean.
+    "weekly-spent": () => withEveryWeeklySpent(golden()),
 
     // Data still renders; a banner names the reason above it.
     "stale-cache": () => stale(golden(), "cacheStale"),

@@ -48,6 +48,12 @@ jobs:
             plugins/quota-glance/testdata/golden/summary-degraded.json
           make -C plugins/quota-glance golden
           git diff --exit-code -- plugins/quota-glance/testdata/golden/
+      # The menu bar's bridge reads the healthy golden document and pins figures
+      # from it, but its own workflow runs only for changes under its directory.
+      # Its JavaScript tests need nothing but Node, so they run here too: a
+      # golden change that breaks the menu bar fails in the same push.
+      - name: Menu bar bridge still reads the golden document
+        run: node --test plugins/quota-glance-menubar/scripts/tests/*.test.mjs
       # Every other check in this suite calls Handle() in process. Only this one
       # proves the shared library loads, that CPA accepts the ABI handshake,
       # that the routes are registered where we think, and that the plugin

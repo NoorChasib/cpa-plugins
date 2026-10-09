@@ -45,7 +45,7 @@ test('projects the real summary without consuming the page response or exposing 
   assert.equal(message.kind, 'snapshot');
   assert.equal(message.session, config.session);
   assert.deepEqual(message.snapshot.windows.find(w => w.selection.rowID === 'weekly_fable'), {
-    selection: { providerID: 'claude', rowID: 'weekly_fable' }, title: 'Claude · Weekly (Fable)', remainingPercent: 43,
+    selection: { providerID: 'claude', rowID: 'weekly_fable' }, title: 'Claude · Weekly (Fable)', remainingPercent: 36,
   });
   assert.deepEqual(Object.keys(message.snapshot).sort(), ['stale', 'windows']);
   assert.equal(JSON.stringify(message).includes(authorization), false);
@@ -192,6 +192,30 @@ test('zero, absent data and stale snapshots stay distinct', async () => {
   assert.equal(snapshot.stale, true);
   assert.equal(snapshot.windows[0].remainingPercent, 0);
   assert.equal(snapshot.windows[1].remainingPercent, null);
+});
+
+// Quota Glance holds a Claude account out of the session mean once its weekly
+// limit is spent. Both cases send the same memberless 0% row, so only
+// heldOutCount separates a real 0% from an older summary with no reading.
+async function projectClaudeSession(edit) {
+  const h = harness(), changed = structuredClone(fixture);
+  const row = changed.providers.find(p => p.id === 'claude').rows.find(r => r.rowId === 'session');
+  Object.assign(row.aggregate, { memberCount: 0, excludedCount: 5, remainingPercent: 0 });
+  edit(row.aggregate);
+  h.respond(() => new Response(JSON.stringify(changed)));
+  await h.fetchPage();
+  await h.settle();
+  return h.messages.at(-1).snapshot.windows.find(w => w.selection.providerID === 'claude' && w.selection.rowID === 'session');
+}
+
+test('a session with every reporting account held out shows its real 0%', async () => {
+  const session = await projectClaudeSession(aggregate => { aggregate.heldOutCount = 5; });
+  assert.equal(session.remainingPercent, 0);
+});
+
+test('a memberless row from a summary without heldOutCount still has no reading', async () => {
+  const session = await projectClaudeSession(aggregate => { delete aggregate.heldOutCount; });
+  assert.equal(session.remainingPercent, null);
 });
 
 test('leaves non-summary Request bodies usable by dashboard actions', async () => {

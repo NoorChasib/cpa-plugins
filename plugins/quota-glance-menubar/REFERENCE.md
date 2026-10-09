@@ -58,10 +58,14 @@ A scoped App Nap activity keeps this user-requested readout active while the
 Mac is awake; it permits normal system sleep. Wake requests a fresh reading.
 Icon-only mode stops the native timer and activity. macOS scheduling and network
 availability may delay updates. Missing quota data, stale server data, failed
-requests, and readings older than 150 seconds display **—%**. The last quota
-list remains available in Settings across temporary failures. Hover over the
-icon for the selected quota and status. A failed document or terminated WebKit
-process is retried by the background timer when a quota is selected.
+requests, and readings older than 150 seconds display **—%**. A Claude session
+whose every reporting account has spent its weekly limit shows **0%**, because
+Quota Glance 0.6.0 and newer report those accounts as held out rather than
+missing.
+The last quota list remains available in Settings across temporary failures.
+Hover over the icon for the selected quota and status. A failed document or
+terminated WebKit process is retried by the background timer when a quota is
+selected.
 
 The normal page continues using its own refresh behavior. Background readout
 requests do not rewrite the dashboard’s UI or affect its open dialogs. No
@@ -142,7 +146,7 @@ make appcast        # after signing: generate, sign, and test the update feed
 make ci             # scripts, tests, universal build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.3.0` and must be three numeric components. For a faster
+`VERSION` defaults to `0.3.1` and must be three numeric components. For a faster
 local build, use `make build ARCHS=arm64` or `ARCHS=x86_64`. `INSTALL_DIR` can
 override the default `~/Applications` install directory. Quit a running copy
 before installing its replacement.
@@ -210,8 +214,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.3.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.3.0
+git tag quota-glance-menubar/v0.3.1 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.3.1
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed
@@ -242,7 +246,7 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The dashboard suite contains 18 Swift tests and nine JavaScript bridge tests. It
+The dashboard suite contains 18 Swift tests and 12 JavaScript bridge tests. It
 covers actual popover reopening without reload, preference persistence, quota
 selection/freshness, and a native refresh through the full message bridge in a
 real WebKit view with no window attached. Bridge fixtures also exercise
