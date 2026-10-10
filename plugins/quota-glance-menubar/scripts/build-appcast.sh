@@ -14,6 +14,9 @@ printf '%s' "$SPARKLE_ED25519_PRIVATE_KEY" > "$stage/key"
 xcrun swift scripts/check-update-key.swift "$stage/key" "$app/Contents/Info.plist"
 mkdir "$stage/updates"
 cp "dist/Quota-Glance-$version-macOS.dmg" "$stage/updates/"
+# The app has no Intel slice, so generate_appcast itself adds
+# <sparkle:hardwareRequirements>arm64 to the signed item; Intel Macs on an older
+# universal build are not offered it. publish-appcast.py fails if it is missing.
 dist/sparkle-tools/generate_appcast --ed-key-file "$stage/key" \
     --download-url-prefix "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance-menubar/v$version/" \
     --maximum-deltas 0 "$stage/updates"

@@ -89,8 +89,8 @@ a release. Test the downloaded DMG on your Mac. After a successful check, push
 a fresh release tag against the same commit on `main`:
 
 ```sh
-git tag quota-glance-menubar/v0.4.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.4.0
+git tag quota-glance-menubar/v0.5.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.5.0
 ```
 
 GitHub then builds and publishes the DMG and ZIP on the repository's Releases
@@ -101,7 +101,8 @@ checks keep using ad-hoc signing and do not receive these credentials.
 
 ## What the workflow does
 
-1. Run the existing tests, build both architectures, and verify the bundle.
+1. Run the existing tests, build the Apple silicon (arm64) app, and verify the
+   bundle contains only arm64 code.
 2. Import the `.p12` into a temporary, password-protected keychain and verify
    there is one usable Developer ID Application identity for the configured team.
 3. Sign the already-built app with Hardened Runtime and a secure timestamp.

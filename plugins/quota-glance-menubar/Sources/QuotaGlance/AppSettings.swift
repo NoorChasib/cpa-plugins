@@ -17,8 +17,15 @@ final class AppSettings {
         if resolved.migrated { store(resolved.readout) }
     }
 
+    /// The dashboard URL as saved, even one this version refuses, such as a
+    /// Management API address an earlier version accepted. It is never
+    /// loaded; Settings shows it with the reason until a valid URL replaces it.
+    var storedURLText: String? {
+        defaults.string(forKey: locationKey)
+    }
+
     var location: DashboardLocation? {
-        guard let value = defaults.string(forKey: locationKey) else { return nil }
+        guard let value = storedURLText else { return nil }
         return try? DashboardLocation(value)
     }
 

@@ -19,7 +19,7 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
-def validate_feed(data, version=None, assets=None):
+def validate_feed(data, version=None, assets=None, require_arm64=True):
     root = ET.fromstring(data)
     items = root.findall("./channel/item")
     if root.tag != "rss" or len(items) != 1:
@@ -42,11 +42,19 @@ def validate_feed(data, version=None, assets=None):
         raise ValueError("Archive length differs from the signed feed")
     if b"<!-- sparkle-signatures:" not in data:
         raise ValueError("Missing signed-feed block")
+    # The app is Apple silicon only. Sparkle 2.9+ (every updater release ships
+    # 2.10.0) hides an arm64 item from Intel Macs; generate_appcast adds it for
+    # an arm64-only app. Parsed as Sparkle does: comma/space list, any case.
+    requirements = set(re.split(r"[\s,]+", (item.findtext(SPARKLE + "hardwareRequirements") or "").lower()))
+    if require_arm64 and "arm64" not in requirements:
+        raise ValueError("Update must require Apple silicon (sparkle:hardwareRequirements arm64)")
     return actual
 
 
 def should_publish(current, candidate):
-    old_version, new_version = validate_feed(current), validate_feed(candidate)
+    # The published feed may still be a universal release without the requirement.
+    old_version = validate_feed(current, require_arm64=False)
+    new_version = validate_feed(candidate)
     if version_tuple(old_version) > version_tuple(new_version):
         return False  # A slower, older release must never move the feed backward.
     if old_version == new_version:

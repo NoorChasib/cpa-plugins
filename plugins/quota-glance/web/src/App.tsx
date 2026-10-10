@@ -13,7 +13,6 @@ import type { Refusal } from "./lib/access"
 import { ConsoleUnansweredError, fetchSummary, NoSessionError, resetCache, summaryRefetchInterval } from "./lib/client"
 import { resumeConsole, subscribeReads, useAccess } from "./lib/session"
 import * as token from "./lib/token"
-import { NowProvider, useClock } from "./lib/now"
 import type { Credential, Summary } from "./lib/types"
 
 /** The provider whose section the monthly API credit belongs in. */
@@ -155,7 +154,6 @@ function Dashboard({
 }
 
 export function App() {
-  const now = useClock()
   const queryClient = useQueryClient()
   // Which ways in this browser has, re-read whenever one opens or closes —
   // here or in another tab — so the key in the header, the poll and the reset
@@ -220,7 +218,7 @@ export function App() {
     refusal?.reason ?? (access.tokenRefused ? "token" : (access.consoleLatch?.reason ?? null))
 
   return (
-    <NowProvider value={now}>
+    <>
       {showSignIn && (
         <SignIn
           reason={reason}
@@ -253,6 +251,6 @@ export function App() {
           onRedeemed={() => void query.refetch()}
         />
       </div>
-    </NowProvider>
+    </>
   )
 }

@@ -9,11 +9,13 @@ appcast = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(appcast)
 
 
-def feed(version="0.3.0"):
+def feed(version="0.3.0", hardware="arm64"):
     # Structural fixture only; real signature verification uses Sparkle on macOS.
+    # hardware=None models an earlier universal release, such as 0.4.0.
     signature = base64.b64encode(bytes(64)).decode()
+    requirement = "" if hardware is None else f"<sparkle:hardwareRequirements>{hardware}</sparkle:hardwareRequirements>"
     return f'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
-      <sparkle:version>{version}</sparkle:version>
+      <sparkle:version>{version}</sparkle:version>{requirement}
       <enclosure url="https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance-menubar/v{version}/Quota-Glance-{version}-macOS.dmg" length="4" sparkle:edSignature="{signature}"/>
     </item></channel></rss><!-- sparkle-signatures: fixture -->'''.encode()
 
@@ -42,3 +44,17 @@ class AppcastTests(unittest.TestCase):
         self.assertFalse(appcast.should_publish(feed(), feed()))
         with self.assertRaises(ValueError):
             appcast.should_publish(feed(), feed().replace(b"fixture", b"changed"))
+
+    def test_updates_require_apple_silicon(self):
+        # Sparkle hides an arm64-only item from Intel Macs running a universal build.
+        self.assertEqual(appcast.validate_feed(feed()), "0.3.0")
+        self.assertEqual(appcast.validate_feed(feed(hardware=" ARM64 ")), "0.3.0")
+        for hardware in [None, "", "x86_64"]:
+            with self.assertRaises(ValueError):
+                appcast.validate_feed(feed(hardware=hardware))
+
+    def test_universal_feed_can_be_replaced_only_by_an_arm64_update(self):
+        universal = feed("0.4.0", hardware=None)
+        self.assertTrue(appcast.should_publish(universal, feed("0.5.0")))
+        with self.assertRaises(ValueError):
+            appcast.should_publish(universal, feed("0.5.0", hardware=None))
