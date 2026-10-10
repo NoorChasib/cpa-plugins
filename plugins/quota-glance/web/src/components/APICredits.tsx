@@ -9,6 +9,8 @@ import {
   creditBar,
   creditBasis,
   creditCondition,
+  conditionKey,
+  conditionsSaidOnce,
   creditFigures,
   creditFlags,
   creditLevel,
@@ -21,6 +23,8 @@ import {
   type RefillWhen,
   refillWhen,
   setHere,
+  type SharedIssue,
+  sharedIssues,
 } from "../lib/apicredits"
 import { useNowSeconds } from "../lib/now"
 import { recoveryNames } from "../lib/pool"
@@ -192,7 +196,8 @@ function basisTitle(account: APICreditAccount): string | undefined {
  * One Console organization this cycle, on one line: its label and what is
  * wrong with it in a word, its own bar, what is left of its credit, what it
  * has used, and when the credit refills. A row with something to say earns a
- * line under it.
+ * line under it, unless the pool says it once for several rows; a condition
+ * every row shares and the pool explains is not repeated beside each name.
  *
  * Every amount is the server's text, without the card's ≈: the column heads
  * say "est." once. A bound carries ≤ and ≥. With nothing to draw, the bar's
@@ -201,17 +206,22 @@ function basisTitle(account: APICreditAccount): string | undefined {
 function CreditRow({
   account,
   meter,
+  shared,
+  saidOnce,
   now,
   onReading,
 }: {
   account: APICreditAccount
   meter: APICredits["meter"]
+  shared: SharedIssue[]
+  saidOnce: Set<string>
   now: number
   onReading: (() => void) | null
 }) {
   const level = creditLevel(account)
-  const condition = creditCondition(account, meter)
-  const notes = creditNotes(account)
+  const marked = creditCondition(account, meter)
+  const condition = marked && !saidOnce.has(conditionKey(marked)) ? marked : null
+  const notes = creditNotes(account, shared)
   const bar = creditBar(account)
   const figures = creditFigures(account)
   const dot = setHereTitles(account).credit
@@ -882,7 +892,9 @@ export function APICreditsCard({
   const when = refill ? refillWhen(refill.refillAtEpoch, null, now) : null
   const distance = when && when.kind !== "due" ? refillDistance(when) : ""
   const whenText = distance ? `in ${distance}` : "now"
-  const notes = poolNotes(credits, now)
+  const shared = sharedIssues(accounts)
+  const notes = poolNotes(credits, now, shared)
+  const saidOnce = conditionsSaidOnce(accounts, meter, shared)
   const flags = creditFlags(accounts, meter, (since) => formatDuration(now - since))
   const source = meterLine(meter, now)
   // The far end, when it is not the same instant as the next refill.
@@ -928,9 +940,11 @@ export function APICreditsCard({
     })
   }
 
-  // The link under a row that a Console reading would settle: the editor,
-  // open on that row's reading.
+  // The link under a row that a Console reading would settle, or under the
+  // pool for several such rows: the editor, open on that row's reading. The
+  // pool's line shows with the fold shut, so it opens the fold too.
   const enterReading = (account: APICreditAccount) => {
+    if (!open) onToggle()
     startEditing()
     if (draft.rows[account.id]?.reading?.kind !== "set") {
       edit(account, "reading", { kind: "set", amount: "", at: localInputValue(now) })
@@ -1098,9 +1112,18 @@ export function APICreditsCard({
         </div>
       )}
 
-      {notes.map((note, index) => (
-        <Note key={index} note={note} now={now} />
-      ))}
+      {notes.map((note, index) => {
+        // Not while editing: the rows' links give way to the fields then, and so does this one.
+        const target = note.readingFor !== undefined ? accounts.find((account) => account.id === note.readingFor) : undefined
+        return (
+          <Note
+            key={index}
+            note={note}
+            now={now}
+            onReading={canEdit && !editing && target?.settings.editable ? () => enterReading(target) : undefined}
+          />
+        )
+      })}
 
       <FoldButton open={open} controls={bodyID} labelledBy={`${titleID} ${countID}`} onToggle={onToggle}>
         <span id={countID} className="qg-fold-line">
@@ -1195,6 +1218,8 @@ export function APICreditsCard({
                   key={account.id}
                   account={account}
                   meter={meter}
+                  shared={shared}
+                  saidOnce={saidOnce}
                   now={now}
                   onReading={canEdit && account.settings.editable ? () => enterReading(account) : null}
                 />

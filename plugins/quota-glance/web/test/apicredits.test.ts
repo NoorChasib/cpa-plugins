@@ -22,6 +22,8 @@ import {
   creditBar,
   creditBasis,
   creditCondition,
+  conditionKey,
+  conditionsSaidOnce,
   creditFigures,
   creditFlags,
   creditLevel,
@@ -35,6 +37,8 @@ import {
   poolNotes,
   refillWhen,
   setHere,
+  sharedIssues,
+  sharedWho,
   shortOrganization,
   wantsReading,
 } from "../src/lib/apicredits.ts"
@@ -65,6 +69,31 @@ const patched = (set: APICredits, label: string, patch: Partial<APICreditAccount
   ...account(set, label),
   ...patch,
 })
+
+/** The sentence the server writes for meterGap (D.4). */
+const GAP =
+  "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter a Console reading to correct it."
+
+/** The pool's own line for a gap (F.2 pool note 3). */
+const GAP_LINE = "Quota Cache was not counting for part of this period, so some spend may be missing."
+
+/**
+ * The golden pool with Quota Cache stopped two hours ago, as the dev
+ * scenario meter-stopped builds it: every account a lower bound for the gap,
+ * each with the server's one sentence for it.
+ */
+const stoppedCard: APICredits = {
+  ...golden,
+  meter: { ...golden.meter!, stoppedAtEpoch: NOW - 7200 },
+  pool: { ...golden.pool, lowerBound: true },
+  accounts: golden.accounts.map((item) => ({ ...item, lowerBound: true, dataIssues: ["meterGap"], issue: GAP })),
+}
+
+/** Golden accounts with an issue sentence each, by label; the rest unchanged. */
+const withIssues = (issues: Record<string, string>, first = "meterGap"): APICreditAccount[] =>
+  golden.accounts.map((item) =>
+    item.label in issues ? { ...item, lowerBound: true, dataIssues: [first], issue: issues[item.label]! } : item,
+  )
 
 describe("creditLevel", () => {
   test("a healthy account says nothing", () => {
@@ -161,16 +190,37 @@ describe("creditFlags", () => {
   })
 
   test("names every account worth opening the card for; one not counted yet is not named", () => {
+    // charlie and delta lack different settings, and foxtrot, golf and hotel
+    // have different problems, but each pair or trio is one chip.
     assert.deepEqual(said(creditFlags(degraded.accounts, degraded.meter, age)), [
       "alpha $0.00 out critical",
       "bravo 2h old low",
-      "charlie not set low",
-      "delta not set low",
-      "foxtrot not set up low",
-      "golf not set up low",
       "india update Quota Cache low",
-      "hotel not set up low",
+      "2 not set low",
+      "3 not set up low",
     ])
+  })
+
+  test("a condition every account shares is one chip with a count; levels stay their own", () => {
+    const flags = creditFlags(stoppedCard.accounts, stoppedCard.meter, age)
+    assert.deepEqual(said(flags), ["charlie $32.00 low low", "5 incomplete low"])
+    // The count is the chip's figure, with no name before it.
+    assert.deepEqual(flags[1], { id: "condition:incomplete", name: "", figure: "5", word: "incomplete", tone: "low" })
+  })
+
+  test("a condition one account carries stays on its own chip, beside its level", () => {
+    const accounts = golden.accounts.map((item) => (item.label === "charlie" ? { ...item, lowerBound: true } : item))
+    assert.deepEqual(said(creditFlags(accounts, golden.meter, age)), ["charlie $32.00 low · incomplete low"])
+    const two = golden.accounts.map((item) =>
+      item.label === "charlie" || item.label === "echo" ? { ...item, lowerBound: true } : item,
+    )
+    assert.deepEqual(said(creditFlags(two, golden.meter, age)), ["charlie $32.00 low low", "2 incomplete low"])
+  })
+
+  test("aged figures several accounts share say stale, once", () => {
+    const accounts = golden.accounts.map((item) => ({ ...item, state: "stale", lowerBound: true }))
+    assert.deepEqual(said(creditFlags(accounts, golden.meter, age)), ["charlie $32.00 low low", "5 stale low"])
+    assert.equal(conditionKey({ figure: "", word: "", tone: "warn", since: 1 }), "stale")
   })
 })
 
@@ -317,6 +367,20 @@ describe("creditNotes", () => {
     }
   })
 
+  test("a sentence the pool says once for several rows is not under them; the rest of the row's lines are", () => {
+    const shared = sharedIssues(stoppedCard.accounts)
+    assert.deepEqual(creditNotes(account(stoppedCard, "alpha"), shared), [])
+    assert.deepEqual(creditNotes(account(stoppedCard, "delta"), shared), [
+      {
+        text: "Cache writes are priced at the 5-minute rate; at the 1-hour rate this would be $12.00 more.",
+        tone: "quiet",
+      },
+    ])
+    // A sentence one row carries stays on it.
+    const one = withIssues({ alpha: GAP })
+    assert.equal(creditNotes(one[0]!, sharedIssues(one))[0]!.text, GAP)
+  })
+
   test("rows a Console reading would settle ask for one (E.7)", () => {
     assert.equal(wantsReading(account(degraded, "alpha")), true)
     assert.equal(wantsReading(account(degraded, "bravo")), true)
@@ -327,6 +391,110 @@ describe("creditNotes", () => {
     // A reading stands in for a missing refill date; it does not for a missing credit.
     assert.equal(wantsReading(account(degraded, "charlie")), true)
     for (const label of ["delta", "echo", "india"]) assert.equal(wantsReading(account(degraded, label)), false, label)
+  })
+})
+
+describe("sharedIssues", () => {
+  test("groups the rows' sentences by exact string, in the order of the first row to carry each", () => {
+    const groups = sharedIssues(stoppedCard.accounts)
+    assert.equal(groups.length, 1)
+    assert.deepEqual(groups[0]!.ids, stoppedCard.accounts.map((item) => item.id))
+    assert.deepEqual(groups[0]!.note, { text: GAP, tone: "warn", reading: true })
+    assert.equal(groups[0]!.issue, "meterGap")
+    assert.equal(groups[0]!.readingFor, account(golden, "alpha").id)
+  })
+
+  test("a sentence one row carries is not shared", () => {
+    assert.deepEqual(sharedIssues(withIssues({ alpha: GAP })), [])
+    assert.deepEqual(sharedIssues(golden.accounts), [])
+    // The degraded document's sentences are each its own.
+    assert.deepEqual(sharedIssues(degraded.accounts), [])
+  })
+
+  test("only the exact string: a different letter, space or stop is another sentence", () => {
+    const groups = sharedIssues(
+      withIssues({ alpha: GAP, bravo: GAP, charlie: `${GAP} `, delta: GAP.replace("Quota", "quota"), echo: GAP.slice(0, -1) }),
+    )
+    assert.deepEqual(groups.map((group) => group.ids.map((id) => golden.accounts.find((item) => item.id === id)!.label)), [
+      ["alpha", "bravo"],
+    ])
+  })
+
+  test("two refusals group only at the same instant", () => {
+    const out = account(degraded, "alpha")
+    const twin = (at: number): APICreditAccount => ({
+      ...out,
+      id: `org-${at}`,
+      issue: "Anthropic refused a request for low credit, so this credit is spent.",
+      refusals: { ...out.refusals, lastAtEpoch: at },
+    })
+    assert.deepEqual(sharedIssues([twin(1), twin(2)]), [])
+    const same = sharedIssues([twin(1), { ...twin(1), id: "org-other" }])
+    assert.equal(same.length, 1)
+    assert.equal(same[0]!.note.at, 1)
+  })
+
+  test("its link opens the first row a row link would have: one that wants a reading and can be edited", () => {
+    const accounts = stoppedCard.accounts.map((item) =>
+      item.label === "alpha" ? { ...item, settings: { ...item.settings, editable: false, notEditableReason: "disabled" } } : item,
+    )
+    assert.equal(sharedIssues(accounts)[0]!.readingFor, account(golden, "bravo").id)
+    const none = stoppedCard.accounts.map((item) => ({ ...item, settings: { ...item.settings, editable: false } }))
+    assert.equal(sharedIssues(none)[0]!.readingFor, null)
+    // A sentence no reading settles has no link at all.
+    const stale = withIssues({ alpha: "x", bravo: "x" }, "stale")
+    assert.deepEqual(sharedIssues(stale)[0]!.note, { text: "x", tone: "warn" })
+    assert.equal(sharedIssues(stale)[0]!.readingFor, null)
+  })
+})
+
+describe("sharedWho", () => {
+  const ids = (...labels: string[]) => labels.map((label) => account(golden, label).id)
+
+  test("two or three accounts by name, as a sentence lists them", () => {
+    assert.equal(sharedWho(ids("alpha", "bravo"), golden.accounts), "alpha and bravo")
+    assert.equal(sharedWho(ids("alpha", "bravo", "charlie"), golden.accounts), "alpha, bravo and charlie")
+    // In the card's order, whatever order they were given in.
+    assert.equal(sharedWho(ids("charlie", "alpha"), golden.accounts), "alpha and charlie")
+  })
+
+  test("every account, by count", () => {
+    assert.equal(sharedWho(ids("alpha", "bravo", "charlie", "delta", "echo"), golden.accounts), "All 5 accounts")
+    assert.equal(sharedWho(ids("alpha", "bravo"), golden.accounts.slice(0, 2)), "Both accounts")
+  })
+
+  test("every counted account, when the card has others the pool leaves out", () => {
+    const accounts = golden.accounts.map((item) => (item.label === "echo" ? { ...item, counted: false } : item))
+    assert.equal(sharedWho(ids("alpha", "bravo", "charlie", "delta"), accounts), "All 4 counted accounts")
+    assert.equal(sharedWho(ids("alpha", "bravo", "charlie"), accounts), "alpha, bravo and charlie")
+  })
+})
+
+describe("conditionsSaidOnce", () => {
+  test("a condition every counted row carries, and the pool explains, leaves the rows", () => {
+    const shared = sharedIssues(stoppedCard.accounts)
+    assert.deepEqual([...conditionsSaidOnce(stoppedCard.accounts, stoppedCard.meter, shared)], ["incomplete"])
+  })
+
+  test("a condition only some rows carry keeps their chips", () => {
+    const accounts = withIssues({ alpha: GAP, bravo: GAP, charlie: GAP })
+    assert.deepEqual([...conditionsSaidOnce(accounts, golden.meter, sharedIssues(accounts))], [])
+  })
+
+  test("every row incomplete, but one says why on its own row: the chips stay", () => {
+    const accounts = withIssues({ alpha: GAP, bravo: GAP, charlie: GAP, delta: GAP, echo: "Some requests used a model with no listed price." })
+    assert.deepEqual([...conditionsSaidOnce(accounts, golden.meter, sharedIssues(accounts))], [])
+  })
+
+  test("with nothing counted, a condition every row carries", () => {
+    const pending = golden.accounts.map((item) => ({
+      ...item,
+      state: "pending",
+      counted: false,
+      dataIssues: ["meterMissing"],
+      issue: "Quota Cache has not saved an API meter yet.",
+    }))
+    assert.deepEqual([...conditionsSaidOnce(pending, golden.meter, sharedIssues(pending))], ["not counted yet"])
   })
 })
 
@@ -422,6 +590,43 @@ describe("poolNotes", () => {
     assert.equal(line({ lastRejectedEpoch: after }), "Quota Cache could not read some usage records from CPA, so some spend may be missing.")
     // The degraded meter rejected records before either counted anchor.
     assert.ok(!poolNotes(degraded, NOW).some((note) => note.text.includes("could not read")))
+  })
+
+  test("a shared sentence is said once, after whom it is about, with one link", () => {
+    const notes = poolNotes(stoppedCard, NOW)
+    assert.deepEqual(notes[0], {
+      text: `All 5 accounts: ${GAP}`,
+      tone: "warn",
+      reading: true,
+      readingFor: account(golden, "alpha").id,
+    })
+    assert.match(notes[1]!.text, /^CPA sent traffic from Console organization/)
+    assert.equal(notes.length, 2)
+  })
+
+  test("never the same thing twice: a shared gap sentence stands for the pool's gap line", () => {
+    assert.ok(!poolNotes(stoppedCard, NOW).some((note) => note.text === GAP_LINE))
+    // Shared by some rows only, it still stands for it.
+    const some = { ...stoppedCard, accounts: withIssues({ alpha: GAP, bravo: GAP }) }
+    const texts = poolNotes(some, NOW).map((note) => note.text)
+    assert.ok(texts.includes(`alpha and bravo: ${GAP}`))
+    assert.ok(!texts.includes(GAP_LINE))
+    // One row's sentence is under that row, so the pool keeps its own line.
+    const one = { ...stoppedCard, accounts: withIssues({ alpha: GAP }) }
+    assert.ok(poolNotes(one, NOW).some((note) => note.text === GAP_LINE))
+  })
+
+  test("a shared record-loss sentence stands for the pool's line about the same loss", () => {
+    const dropped = "Quota Cache dropped usage records it could not keep up with, so some spend is missing."
+    const meter = { ...golden.meter!, lastDroppedEpoch: NOW - 60 }
+    const shared = { ...golden, meter, accounts: withIssues({ alpha: dropped, bravo: dropped }, "meterDropped") }
+    assert.deepEqual(
+      poolNotes(shared, NOW).filter((note) => note.text.endsWith(dropped)).map((note) => note.text),
+      [`alpha and bravo: ${dropped}`],
+    )
+    // A different loss is not the same thing, and is still said.
+    const unread = { ...shared, meter: { ...meter, lastDroppedEpoch: null, lastRejectedEpoch: NOW - 60 } }
+    assert.ok(poolNotes(unread, NOW).some((note) => note.text.startsWith("Quota Cache could not read")))
   })
 
   test("an account's anchor: its reading, its cycle, else what its spend counts from", () => {

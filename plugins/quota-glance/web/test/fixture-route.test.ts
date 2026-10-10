@@ -556,7 +556,7 @@ describe("rebasing", () => {
   })
 
   test("and every one each scenario carries", async () => {
-    for (const scenario of ["api-states", "meter-stopped", "no-meter", "settings-unreadable", "degraded-editable", "single-claude", "renewal-orphans", "renewals-editable"]) {
+    for (const scenario of ["api-states", "meter-stopped", "first-day", "no-meter", "settings-unreadable", "degraded-editable", "single-claude", "renewal-orphans", "renewals-editable"]) {
       const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)
       assert.equal(reply.status, 200, scenario)
       for (const key of epochKeys(JSON.parse(reply.body))) assert.ok(EPOCH_FIELDS.has(key), `${scenario}: ${key} is not rebased`)
