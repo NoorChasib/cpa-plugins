@@ -80,7 +80,7 @@ Max and Team plans include a monthly Claude API credit, deposited into one Claud
 Requirements:
 
 - **CPA v8.0.4 or newer (verified on v8.0.22).** An older CPA can hand a retried request the earlier attempt's response headers, which attributes its spend to the wrong organization.
-- Every organization's API traffic goes through CPA as `claude-api-key` entries. Traffic that does not pass through CPA (the Console Workbench, other tools) is not counted. A personal key that is not scoped to a workspace needs an `anthropic-workspace-id` header for inference; a `claude-api-key` entry's `headers:` map can carry it.
+- Every organization's API traffic goes through CPA as `claude-api-key` entries. Traffic that does not pass through CPA (the Console Workbench, other tools) is not counted. A personal key that is not scoped to a workspace needs an `anthropic-workspace-id` header for inference; a `claude-api-key` entry's `headers:` map can carry it. A key created inside a Console workspace is already scoped and needs no header, which is simpler.
 - Update Quota Cache to 0.1.14 before adding `organization-id`. Quota Cache 0.1.13 marks such an item as misconfigured and does not read it; 0.1.12 and older reject `claude-api-credits` and stop polling altogether.
 
 Configure one item per organization. Two Team seats share one organization and one credit, so they are a single item: four personal Max organizations and one Team organization make five items.
