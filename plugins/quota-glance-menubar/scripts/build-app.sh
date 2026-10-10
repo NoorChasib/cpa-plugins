@@ -7,25 +7,17 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 
-version="${VERSION:-0.4.0}"
+version="${VERSION:-0.5.0}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo 'VERSION must have three numeric components, such as 0.4.0.' >&2
+    echo 'VERSION must have three numeric components, such as 0.5.0.' >&2
     exit 1
 fi
-read -r -a architectures <<< "${APP_ARCHS:-arm64 x86_64}"
-for arch in "${architectures[@]}"; do
-    case "$arch" in arm64|x86_64) ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
-done
 
+# Apple silicon (arm64) only; Intel and universal builds are not supported.
 swift_bin="$(xcrun --find swift)"
-executables=()
-sparkle_artifact=""
-for arch in "${architectures[@]}"; do
-    "$swift_bin" build -c release --arch "$arch" --scratch-path ".build/$arch" --product QuotaGlance
-    bin_path="$("$swift_bin" build -c release --arch "$arch" --scratch-path ".build/$arch" --show-bin-path)"
-    executables+=("$bin_path/QuotaGlance")
-    sparkle_artifact="$PWD/.build/$arch/artifacts/sparkle/Sparkle"
-done
+"$swift_bin" build -c release --arch arm64 --scratch-path .build/arm64 --product QuotaGlance
+bin_path="$("$swift_bin" build -c release --arch arm64 --scratch-path .build/arm64 --show-bin-path)"
+sparkle_artifact="$PWD/.build/arm64/artifacts/sparkle/Sparkle"
 
 # Stage separately so a failed build never removes the last usable bundle.
 mkdir -p dist
@@ -33,14 +25,13 @@ stage="$(mktemp -d "$PWD/dist/.bundle.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 app="$stage/Quota Glance.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-if [[ ${#executables[@]} -eq 1 ]]; then
-    cp "${executables[0]}" "$app/Contents/MacOS/QuotaGlance"
-else
-    xcrun lipo -create "${executables[@]}" -output "$app/Contents/MacOS/QuotaGlance"
-fi
+cp "$bin_path/QuotaGlance" "$app/Contents/MacOS/QuotaGlance"
 chmod +x "$app/Contents/MacOS/QuotaGlance"
 mkdir -p "$app/Contents/Frameworks"
-ditto "$sparkle_artifact/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
+# Sparkle ships only a universal framework. `ditto --arch arm64` thins every
+# Mach-O in it (Sparkle, Autoupdate, Updater.app and both XPC services) and
+# copies symlinks as links. sign-bundle.sh below re-signs all of them.
+ditto --arch arm64 "$sparkle_artifact/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp "$sparkle_artifact/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
 # Use the exact tools whose archive SwiftPM verified, also for signing appcasts.
 mkdir -p dist/sparkle-tools

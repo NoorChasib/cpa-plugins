@@ -9,13 +9,8 @@ import GlanceCore
 /// alphas are baked in, so the image is redrawn when the appearance or
 /// Increase Contrast changes.
 enum ReadoutRenderer {
-    struct Options: Equatable {
-        var style: ReadoutStyle
-        var badges: Bool
-        var appIcon: Bool
-        var dark: Bool
-        var increasedContrast: Bool
-    }
+    /// In GlanceCore, so the status item's comparable value can hold it.
+    typealias Options = ReadoutOptions
 
     /// The image is as tall as the menu bar's content area; the button centres it.
     static let height: CGFloat = 22
@@ -37,7 +32,7 @@ enum ReadoutRenderer {
     /// Today's Percent form (icon, then "59%"), for the Settings preview only;
     /// the status item itself keeps using the button title for it.
     static func percentImage(text: String) -> NSImage {
-        let icon = appIcon()
+        let icon = appIcon
         let glyphs = Glyphs(text, font: .monospacedDigitSystemFont(ofSize: 12, weight: .medium), alpha: 1)
         let iconWidth = icon?.size.width ?? 0
         let width = (iconWidth + 8 + glyphs.advance).rounded(.up)
@@ -55,11 +50,13 @@ enum ReadoutRenderer {
         return image
     }
 
-    static func appIcon() -> NSImage? {
+    /// Created once: the status item, the drawn readout and the Settings
+    /// preview share it.
+    static let appIcon: NSImage? = {
         let icon = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "Quota Glance")
         icon?.isTemplate = true
         return icon
-    }
+    }()
 
     // MARK: - Layout
 
@@ -125,7 +122,7 @@ enum ReadoutRenderer {
 
         var operations: [Operation] = []
         var x: CGFloat = 0
-        if options.appIcon, let icon = appIcon() {
+        if options.appIcon, let icon = appIcon {
             let size = icon.size
             operations.append(.icon(icon, CGRect(x: 0, y: snap((height - size.height) / 2), width: size.width, height: size.height)))
             x = (size.width + CGFloat(ReadoutMetrics.appIconGap)).rounded(.up)

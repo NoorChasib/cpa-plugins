@@ -3,12 +3,13 @@
 Your hosted Quota Glance page in a **400 × 620** menu bar popover. The app loads
 the page directly in WebKit, so its design and features stay in the web app.
 
-Requires macOS 13 or newer and a working
-[Quota Glance](../quota-glance/README.md) page. Supports Apple silicon and Intel.
+Requires a Mac with Apple silicon (M1 or later), macOS 13 or newer, and a
+working [Quota Glance](../quota-glance/README.md) page. Intel Macs are not
+supported; v0.4.0 was the last release that runs on them.
 
 ## Install from a DMG
 
-Open `Quota-Glance-0.4.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
+Open `Quota-Glance-0.5.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
 then eject the disk image and open the installed app. Right-click its menu bar
 icon, choose **Settings**, and enable **Open at login** to start it whenever you
 sign in, including after a restart. Your saved URL and session persist.
@@ -29,17 +30,21 @@ into automatic downloading and installation. Your dashboard and preferences
 are retained. If you are on v0.2.0 or earlier, install the new DMG once to get
 this updater.
 
+Intel Macs stop at v0.4.0: later releases are Apple silicon only, so the
+updater offers them nothing newer. An Intel Mac on an earlier version can
+install the v0.4.0 DMG from GitHub Releases.
+
 ## Build on your Mac
 
-On your Mac, install Xcode Command Line Tools if needed (`xcode-select --install`),
-then run these commands from this repository:
+On your Apple silicon Mac, install Xcode Command Line Tools if needed
+(`xcode-select --install`), then run these commands from this repository:
 
 ```sh
 cd plugins/quota-glance-menubar
 make install
 ```
 
-This builds a universal app, installs it at `~/Applications/Quota Glance.app`,
+This builds the arm64 app, installs it at `~/Applications/Quota Glance.app`,
 and opens it. SwiftPM downloads the pinned Sparkle updater dependency.
 
 To create the drag-to-Applications disk image instead:
@@ -48,7 +53,7 @@ To create the drag-to-Applications disk image instead:
 make dmg
 ```
 
-The image is written to `dist/Quota-Glance-0.4.0-macOS.dmg`.
+The image is written to `dist/Quota-Glance-0.5.0-macOS.dmg`.
 Local builds are ad-hoc signed; notarized release builds run through GitHub
 after the Apple signing secrets are configured.
 

@@ -3,47 +3,58 @@ import GlanceCore
 import Sparkle
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSPopoverDelegate {
     private let updaterController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     private let settings = AppSettings()
     private let dashboard = DashboardViewController()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem!
-    private var keyMonitor: Any?
-    private var appearanceObservation: NSKeyValueObservation?
+    private var readoutPresenter: StatusReadoutPresenter?
     private var contrastObserver: NSObjectProtocol?
+    /// When the popover last began closing (system uptime), and whether the
+    /// pointer was on the status item. The app's own closes clear it.
+    private var pressGuard = PopoverPressGuard()
     private let logos = ProviderLogos.bundled
-    private lazy var settingsWindow = SettingsWindowController(settings: settings, updater: updaterController.updater, logos: logos) { [weak self] location in
-        guard let self else { return }
-        self.dashboard.configure(location)
-        self.dashboard.readout.setEnabled(self.settings.readout.style != .iconOnly)
-        self.updateReadout()
-        self.installApplicationMenu()
-        self.showPopover()
+    /// Built on first use, so launch and readout updates never pay for a hidden window.
+    private var settingsController: SettingsWindowController?
+    private var settingsWindow: SettingsWindowController {
+        if let settingsController { return settingsController }
+        let controller = SettingsWindowController(settings: settings, updater: updaterController.updater, logos: logos) { [weak self] location in
+            guard let self else { return }
+            self.dashboard.configure(location)
+            self.dashboard.readout.setEnabled(self.settings.readout.style != .iconOnly)
+            self.updateReadout()
+            self.installApplicationMenu()
+            self.showPopover()
+        }
+        controller.onNeedsWindows = { [weak self] in self?.dashboard.readout.requestWindows() }
+        controller.updateQuotas(dashboard.readout.state)
+        settingsController = controller
+        return controller
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         updaterController.startUpdater()
         installApplicationMenu()
         dashboard.onSettings = { [weak self] in self?.showSettings() }
+        // The page sees Escape first, so its own dialogs close before the popover does.
+        dashboard.onEscape = { [weak self] in self?.closePopover() }
         popover.contentViewController = dashboard
         popover.contentSize = NSSize(width: 400, height: 620)
         popover.behavior = .transient
         popover.appearance = NSAppearance(named: .darkAqua)
+        popover.delegate = self
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "Quota Glance")
-            button.image?.isTemplate = true
-            button.toolTip = "Quota Glance — right-click for settings"
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = item
+        if let button = item.button {
             button.target = self
             button.action = #selector(statusItemClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            // Template alphas are baked into the drawn readout: redraw when the
-            // bar turns light or dark (on Tahoe, also when the wallpaper does).
-            appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
-                Task { @MainActor [weak self] in self?.updateReadout() }
-            }
+            // Act on the press, as system menu bar items do. A right-click acts
+            // on release: sent on right-mouse-down, the action can leave the
+            // button highlighted, and the next click then only clears it.
+            button.sendAction(on: [.leftMouseDown, .rightMouseUp])
+            readoutPresenter = StatusReadoutPresenter(button: button, logos: logos) { item.length = $0 }
         }
         contrastObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
@@ -54,28 +65,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard let self else { return }
             if self.settings.adoptFirstSummary(self.dashboard.readout.state.windows) {
                 // An open Settings window must not save the old default pair back.
-                self.settingsWindow.savedWindowsAdopted(self.settings.readout.windows)
+                self.settingsController?.savedWindowsAdopted(self.settings.readout.windows)
             }
             self.updateReadout()
         }
-        settingsWindow.onNeedsWindows = { [weak self] in self?.dashboard.readout.requestWindows() }
         if let location = settings.location { dashboard.configure(location) }
         dashboard.readout.setEnabled(settings.readout.style != .iconOnly)
         updateReadout()
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, self?.popover.isShown == true {
-                self?.popover.performClose(nil)
-                return nil
-            }
-            return event
-        }
         if settings.location == nil { showSettings() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         dashboard.readout.stop()
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        appearanceObservation?.invalidate()
+        readoutPresenter?.stop()
         if let contrastObserver { NSWorkspace.shared.notificationCenter.removeObserver(contrastObserver) }
     }
 
@@ -84,60 +86,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return true
     }
 
+    /// Settings, readings and Increase Contrast. Appearance changes go to the
+    /// presenter alone, and it writes only what changed.
     private func updateReadout() {
-        let readout = settings.readout
-        let state = dashboard.readout.state
-        if let button = statusItem.button {
-            switch readout.style {
-            case .iconOnly, .percent:
-                // Icon only and Percent keep 0.3's drawing: the symbol, plus " 59%" as the title.
-                let selection = readout.style == .percent ? readout.windows.first : nil
-                let value = state.presentation(for: selection)
-                statusItem.length = selection == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
-                button.image = ReadoutRenderer.appIcon()
-                button.title = value.text.isEmpty ? "" : " " + value.text
-                button.imagePosition = selection == nil ? .imageOnly : .imageLeading
-                button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-                button.toolTip = value.detail
-                button.setAccessibilityLabel("Quota Glance. " + value.detail)
-            case .letteredPair, .splitPill:
-                let cells = state.cells(for: readout.windows)
-                let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let options = ReadoutRenderer.Options(
-                    style: readout.style, badges: readout.badgeVisible, appIcon: readout.showsAppIcon, dark: dark,
-                    increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
-                statusItem.length = NSStatusItem.variableLength
-                button.title = ""
-                button.image = ReadoutRenderer.image(cells: cells, options: options, marks: marks(for: cells))
-                button.imagePosition = .imageOnly
-                button.toolTip = ReadoutText.tooltip(cells)
-                button.setAccessibilityLabel(ReadoutText.accessibilityLabel(cells))
-            }
-        }
-        settingsWindow.updateQuotas(state)
-    }
-
-    private func marks(for cells: [ReadoutCell]) -> [String: LogoMark] {
-        var marks: [String: LogoMark] = [:]
-        for provider in Set(cells.map(\.selection.providerID)) {
-            marks[provider] = logos.mark(for: provider)
-        }
-        return marks
+        readoutPresenter?.show(settings.readout, state: dashboard.readout.state)
+        settingsController?.updateQuotas(dashboard.readout.state)
     }
 
     @objc private func statusItemClicked() {
         let event = NSApp.currentEvent
+        // A close made here is this press's own, so a quick second press reopens.
+        defer { pressGuard.clear() }
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             popover.performClose(nil)
             guard let button = statusItem.button else { return }
             contextMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
         } else if popover.isShown {
             popover.performClose(nil)
+        } else if pressGuard.pressClosedPopover(pressedAt: event?.timestamp, now: ProcessInfo.processInfo.systemUptime) {
+            // The transient behaviour closed it for this press: leave it closed.
+            return
         } else if settings.location == nil {
             showSettings()
         } else {
             showPopover()
         }
+    }
+
+    /// Every close, whatever began it, so a press arriving just after the
+    /// transient behaviour's own close can tell it was that press's
+    /// (PopoverPressGuard). Event timestamps and system uptime both count
+    /// from startup.
+    func popoverWillClose(_ notification: Notification) {
+        pressGuard.recordClose(at: ProcessInfo.processInfo.systemUptime, pointerOnItem: pointerIsOnStatusItem)
+    }
+
+    private var pointerIsOnStatusItem: Bool {
+        guard let button = statusItem.button, let window = button.window else { return false }
+        return window.convertToScreen(button.convert(button.bounds, to: nil)).contains(NSEvent.mouseLocation)
+    }
+
+    /// A close for the app's own reason, such as Escape, is no press's, so a
+    /// click on the icon straight after it still opens the popover.
+    private func closePopover() {
+        popover.performClose(nil)
+        pressGuard.clear()
     }
 
     private func showPopover() {
@@ -152,17 +145,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showSettings() {
-        popover.performClose(nil)
+        closePopover()
         settingsWindow.present()
     }
 
     @objc private func openDashboard() {
-        dashboard.goToDashboard()
+        dashboard.showDashboard()
         showPopover()
     }
 
     @objc private func checkForUpdates() {
-        popover.performClose(nil)
+        closePopover()
         NSApp.activate(ignoringOtherApps: true)
         updaterController.checkForUpdates(nil)
     }

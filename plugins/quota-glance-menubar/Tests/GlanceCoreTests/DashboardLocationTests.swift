@@ -33,6 +33,38 @@ final class DashboardLocationTests: XCTestCase {
         }
     }
 
+    // A page load cannot carry the management key, so every load of one of
+    // these is a key-less request CPA counts toward its 30-minute ban.
+    func testRejectsManagementAPIAddresses() {
+        for value in [
+            "https://quota.example.com/v0/management/plugins/quota-glance/app",
+            "https://quota.example.com/cpa/v0/management/plugins/quota-glance/summary",
+            "http://127.0.0.1:8317/V0/Management/plugins/quota-glance/app",
+            "https://quota.example.com/v0%2Fmanagement/plugins/quota-glance/app",
+            "https://quota.example.com/v0/resource/../management/plugins/quota-glance/app",
+            "https://quota.example.com/v0/management",
+            "https://quota.example.com/v8/management/plugins/quota-glance/app",
+            "https://quota.example.com/cpa/V8/Management",
+        ] {
+            XCTAssertThrowsError(try DashboardLocation(value), value) { error in
+                XCTAssertEqual(error as? DashboardLocation.ValidationError, .managementRoute)
+                XCTAssertTrue((error as? LocalizedError)?.errorDescription?.contains("/v0/resource/plugins/quota-glance/app") == true)
+            }
+        }
+    }
+
+    func testResourcePagesAndLookalikePathsStayValid() {
+        for value in [
+            "https://quota.example.com/v0/resource/plugins/quota-glance/app",
+            "https://quota.example.com/management/v0/resource/plugins/quota-glance/app",
+            "https://quota.example.com/v0/management-ui/",
+            "https://quota.example.com/version/management/",
+            "https://quota.example.com/app?next=/v0/management/plugins/quota-glance/summary",
+        ] {
+            XCTAssertNoThrow(try DashboardLocation(value), value)
+        }
+    }
+
     func testConsoleAuthenticationStaysInTheEmbeddedBrowser() throws {
         let location = try DashboardLocation("https://quota.example.com/cpa/v0/resource/plugins/quota-glance/app")
         for value in ["https://quota.example.com/cpa/", "https://QUOTA.example.com:443/login", "https://quota.example.com/cpa/management.html"] {
