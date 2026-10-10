@@ -292,6 +292,7 @@ describe("the token door's spend route", () => {
       windowsReset: 2,
       remainingCount: 1,
       snapshotPending: true,
+      cooldown: "cleared",
     })
   })
 
@@ -302,6 +303,17 @@ describe("the token door's spend route", () => {
     assert.equal(first.headers["x-quota-glance-replayed"], undefined)
     assert.equal(second.headers["x-quota-glance-replayed"], "1")
     assert.equal(second.body, first.body)
+  })
+
+  test("a reset reports CPA's cooldown beside it, and only a reset does", async () => {
+    const cooldownOf = async (ending: string) =>
+      (JSON.parse((await call("GET", `${SPEND}?redeem=${ending}`, spendHeaders(press()))).body) as { cooldown?: string })
+        .cooldown
+    assert.equal(await cooldownOf("cooldown-failed"), "failed")
+    assert.equal(await cooldownOf("cooldown-unsupported"), "unsupported")
+    assert.equal(await cooldownOf("cooldown-unconfirmed"), "unconfirmed")
+    assert.equal(await cooldownOf("nothing-to-reset"), undefined)
+    assert.equal(await cooldownOf("cooldown"), undefined)
   })
 
   test("a dropped answer is the plugin's reset lost on the way back, and the same press hears it", async () => {

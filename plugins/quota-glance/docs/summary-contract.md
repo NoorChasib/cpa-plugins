@@ -578,6 +578,49 @@ floor rather than a fresh reading, and the next poll replaces it.
 quota-cache's snapshot and will not move until its next poll. Say so rather than
 letting the dashboard silently disagree with itself.
 
+##### CPA's cooldown after a reset
+
+CPA records a routing cooldown on a credential that hits its limit, and keeps
+skipping that credential until the cooldown ends, however the limit was lifted.
+So a reset the provider confirms is followed, in the same press, by clearing
+that one credential's cooldown through CPA's `host.routing.reset_cooldown`
+callback: the in-process equivalent of the console's **Clear cooldown**
+(`POST /v8/management/routing/cooldown/reset`). It contacts no provider, needs
+no management key, and leaves the token file alone. The result rides beside the
+outcome as `cooldown`:
+
+```json
+{ "provider": "claude", "outcome": "reset", "windowsReset": 2, "remainingCount": 1, "snapshotPending": true, "cooldown": "cleared" }
+```
+
+| `cooldown` | Meaning |
+| --- | --- |
+| absent | The outcome is not a confirmed reset, so CPA's cooldown was not touched. Every outcome but `reset` and `alreadyUsed`, and `alreadyUsed` on a fresh claim. |
+| `cleared` | CPA cleared the credential's cooldown, and its answer named that same credential. |
+| `failed` | **Partial success.** The reset is spent, but CPA did not confirm the clear: it refused, answered for another credential, or did not answer within five seconds. CPA may keep skipping the account until its cooldown ends. |
+| `unsupported` | **Partial success.** As `failed`, on a CPA older than v8.0.12, which has no such callback. |
+| `unconfirmed` | Codex accepted the spend but its answer did not say `reset` — a code this build does not know, or a body it could not read. The credit is gone, so the outcome is still `reset`, but that is not evidence enough to clear CPA's cooldown, so it was left alone. |
+
+Only two answers are authority to clear: the provider's own `reset`, and, on the
+press that repeats a claim left unknown, the provider saying that same claim
+(same credit or grant, same request id) was already spent. An unknown outcome,
+a refusal, a hold, `noCredit`, `nothingToReset`, and a fresh claim finding its
+grant already used clear nothing.
+
+The clear runs after the claim is settled and taken off the journal, so it can
+never turn into another spend. The press waits at most five seconds for it, with
+the credential still reserved: a press arriving in that time is
+`already_in_flight`, and a copy of the same press is handed the same answer from
+the ledger without clearing again. CPA serves the clear with no deadline of its
+own, so past five seconds the press answers `failed` rather than holding a spent
+reset's answer until the browser gives up; the credential is then free, even if
+CPA is still finishing the clear, and whatever CPA says later is discarded. The
+next press is a fresh claim either way, which checks the provider's inventory
+before it spends. A clear that did not happen is never retried by the plugin.
+The remedy for `failed` and `unsupported` is **Clear cooldown** on the credential
+in the CPA console; pressing **Use one** again would spend another reset and is
+not one.
+
 Failures carry a fixed code and never provider text:
 
 | Status | `error` | Meaning |

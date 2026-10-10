@@ -71,6 +71,9 @@ type Host interface {
 	// persisted.
 	GetAuth(context.Context, string) ([]byte, error)
 	HTTPDo(context.Context, protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error)
+	// ResetCooldown is used only by the redeem path, after a provider
+	// confirmed a reset, to clear CPA's routing cooldown on that credential.
+	ResetCooldown(context.Context, string) (protocol.HostRoutingResetCooldownResponse, error)
 }
 
 type settings struct {
@@ -615,7 +618,7 @@ func resolveToken(configured, dataDir string) (token string, generated bool, err
 	return token, true, nil
 }
 
-// hostRedeem adapts the plugin host to the two callbacks the redeem path needs,
+// hostRedeem adapts the plugin host to the three callbacks the redeem path needs,
 // and to nothing else. Passing the whole host would hand the provider client
 // ListAuth as well, which it has no business calling.
 type hostRedeem struct{ host Host }
@@ -632,6 +635,13 @@ func (h hostRedeem) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest
 		return protocol.HostHTTPResponse{}, errors.New("host unavailable")
 	}
 	return h.host.HTTPDo(ctx, request)
+}
+
+func (h hostRedeem) ResetCooldown(ctx context.Context, authIndex string) (protocol.HostRoutingResetCooldownResponse, error) {
+	if h.host == nil {
+		return protocol.HostRoutingResetCooldownResponse{}, errors.New("host unavailable")
+	}
+	return h.host.ResetCooldown(ctx, authIndex)
 }
 
 // saver is what the settings doors write through: the store, and the rebuild

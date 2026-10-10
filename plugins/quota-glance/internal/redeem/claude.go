@@ -122,7 +122,7 @@ func (r *Redeemer) claudeClaim(ctx context.Context, authIndex, token, org string
 		return r.host.HTTPDo(ctx, request)
 	}
 	return r.spend(ctx, authIndex, claim, isRetry, send, func(response protocol.HostHTTPResponse) answer {
-		return claudeAnswer(response, claim)
+		return claudeAnswer(response, claim, isRetry)
 	})
 }
 
@@ -154,7 +154,12 @@ func claudeClaimRequest(token string, claim pendingClaim) (protocol.HostHTTPRequ
 // it is acted on — and everything else is unknown: a 5xx, any other status,
 // and a 2xx this code cannot read, where the provider answered but not in a
 // shape that says what it did.
-func claudeAnswer(response protocol.HostHTTPResponse, claim pendingClaim) answer {
+//
+// A reset confirms itself. "already_used" confirms a reset only on the repeat
+// of an unresolved claim, where the grant and request id are the earlier
+// attempt's own; on a fresh claim it says someone else spent the grant, which
+// is no evidence about this account's limits.
+func claudeAnswer(response protocol.HostHTTPResponse, claim pendingClaim, isRetry bool) answer {
 	switch status := response.StatusCode; {
 	case status == 429:
 		return answer{kind: answerRefused, err: ErrRateLimited}
@@ -170,11 +175,11 @@ func claudeAnswer(response protocol.HostHTTPResponse, claim pendingClaim) answer
 	held := claim.others + claim.grantLeft
 	switch stringOf(root, "result") {
 	case "reset":
-		return answer{kind: answerSettled, result: Result{
+		return answer{kind: answerSettled, confirmed: true, result: Result{
 			Outcome: OutcomeReset, WindowsReset: clearedCount(root), RemainingCount: claim.leftAfterSpend(root),
 		}}
 	case "already_used":
-		return answer{kind: answerSettled, result: Result{Outcome: OutcomeAlreadyUsed, RemainingCount: claim.leftAfterSpend(root)}}
+		return answer{kind: answerSettled, confirmed: isRetry, result: Result{Outcome: OutcomeAlreadyUsed, RemainingCount: claim.leftAfterSpend(root)}}
 	case "not_limited":
 		return answer{kind: answerRefused, result: Result{Outcome: OutcomeNotLimited, RemainingCount: held}}
 	case "cooldown":
