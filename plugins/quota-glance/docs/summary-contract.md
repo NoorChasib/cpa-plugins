@@ -12,8 +12,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials and an OpenRouter balance. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. |
+| `summary.json` | Seven healthy credentials, an OpenRouter balance, and five Claude API credit organizations estimated from Quota Cache's usage meter (`seven-credentials.meter.json` beside the snapshot) with the dashboard's settings from `testdata/overrides/seven-credentials.json`: on the monthly credit, on a Console reading with a credit set on the dashboard, low, one with a cache-write difference worth showing, and one on Haiku 5.5's long-prompt tier refilled at midnight, plus an organization the meter saw that nothing names. A Claude credential under a CPA-style auth index carries a renewal date set on the dashboard equal to the build's own day, so it reads next month's. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state but `ok`, against a meter that has gone stale after a `shutdown` gap: out after a refusal, a lower bound because counting began after the cycle did, needing settings (one missing only its refill date, one missing its credit with an unpriced model), pending, misconfigured (`organization_id_invalid`), written by Quota Cache 0.1.13, an `item-<n>` for each reason one cannot be edited, an over-limit unlinked organization beside one nothing names, an orphaned API credit setting and an orphaned renewal date, with editing off (`allow-edit: false`). |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -296,26 +296,73 @@ outcome below, with nothing spent.
 ### `renewalAtEpoch` — when the subscription renews, or `null`
 
 The instant the account's subscription renews or ends. Codex reports its own;
-Claude's is an estimate, flagged by `renewalEstimated` below. `null` for every
-other provider, when quota-cache has read neither, and once a reported instant
-has passed: a renewal behind us is a poll that has not yet seen the next one,
-and counting down past zero to it would be wrong. Render it as a date with a
-countdown, ticking against your own clock.
+Claude's is a date set on the dashboard, or else an estimate, as
+`renewalSource` below says. `null` for every other provider, when there is
+none of the three, and once a reported instant has passed: a renewal behind us
+is a poll that has not yet seen the next one, and counting down past zero to it
+would be wrong. It is never in the past. Render it as a date with a countdown,
+ticking against your own clock.
+
+### `renewalSource` — where that renewal comes from
+
+`"reported"` (the provider's own date), `"dashboard"` (a date set on the
+dashboard), `"estimated"` (from when the subscription began, below), or `null`
+when `renewalAtEpoch` is `null`. The first that exists wins: **reported, then
+dashboard, then estimated**. Codex reports its own date and never takes one
+from the dashboard.
+
+A dashboard date `d` is 00:00 UTC of that day while it is still ahead. Once it
+has come, the renewal is the next one on the same day of the month, or of the
+year when the plan's `billing_period` is `annual`, strictly after the build,
+with the day clamped to a shorter month as an estimate's is. On the renewal day
+itself that is next month's, so a countdown never goes below zero.
+
+### `renewalEditable` and `renewalSetting`
+
+`renewalEditable` is `true` for a Claude credential whose renewal date the page
+may set, while editing is available (`apiCredits.editing`, below; the same rule
+applies when `apiCredits` is `null`). It is `false` for every other provider,
+when `allow-edit` is off or `settings.json` cannot be read, and for a credential
+whose id is not a CPA auth index of 16 hexadecimal digits, which is what
+`settings.json` keys a date by.
+
+`renewalSetting` is the date stored on the dashboard, `{"date": "2026-10-29",
+"revision": "5", "updatedAtEpoch": 1791547200}`, used or not, and `null` when
+there is none. `revision` is what a save sends back as `baseRevision`. Saving
+`date: null` ("Use estimate") deletes it.
+
+### `renewalEstimateAtEpoch` — the estimate beside whatever wins
+
+A Claude credential's estimated renewal, the next billing anniversary of when
+the subscription began (`renewalEstimated`, below), whatever `renewalSource`
+says. Beside a date set on the dashboard it is the date **Use estimate** returns
+to, which the editor names: `set here · estimate ~Oct 21 · Use estimate`.
+`null` for every other provider, and when Quota Cache has not read a start. A
+plugin older than this field omits it; read a missing field as `null`.
+
+### `renewalOrphans` — dates stored for credentials no longer listed
+
+A top-level array, always present: each renewal date stored on the dashboard
+whose credential is not in `credentials[]`, `{id, date, revision,
+updatedAtEpoch}`, oldest `updatedAtEpoch` first. The page lists them for
+removal; a save may only clear one (`date: null`). It is empty when the roster
+could not be read, since there is then nothing to tell an orphan from a
+credential the host failed to report.
 
 ### `renewalEstimated` — whether that renewal is an estimate
 
-Always present. `true` only when `renewalAtEpoch` is an estimate rather than the
-provider's own date, and `false` otherwise, including when `renewalAtEpoch` is
-`null`. A plugin older than this field omits it, so read a missing field as
-`false`.
+Always present. `true` only when `renewalSource` is `"estimated"`, and `false`
+otherwise, including when `renewalAtEpoch` is `null`. A plugin older than this
+field omits it, so read a missing field as `false`.
 
 Anthropic does not report when a Claude subscription renews: Claude Code and
 the CPA management centre show no renewal date either. It does report when the
 subscription was created, and Quota Cache 0.1.10 keeps that as
 `account_details.subscription_started_at` with the plan's `billing_period`
 (`monthly` or `annual`) beside it. When a credential has no reported renewal
-still ahead and has a start, `renewalAtEpoch` is the start's next anniversary
-strictly after the build, and `renewalEstimated` is `true`:
+still ahead, no date set on the dashboard, and has a start, `renewalAtEpoch` is
+the start's next anniversary strictly after the build, and `renewalEstimated`
+is `true`:
 
 - **Cadence**: yearly when `billing_period` is `annual`, and monthly otherwise,
   including when it is missing or `unknown`.
@@ -328,8 +375,9 @@ strictly after the build, and `renewalEstimated` is `true`:
 - **Boundary**: at the anniversary's own second, the next one is reported.
 - A start still in the future produces no estimate.
 
-A reported renewal always takes precedence and is never marked estimated. Codex
-reports its own date and has no start, so a Codex renewal is always `false`.
+A reported renewal and a dashboard date always take precedence and are never
+marked estimated. Codex reports its own date and has no start, so a Codex
+renewal is always `false`.
 
 **Say that it is an estimate wherever you print it.** The anniversary is correct
 for an account whose billing date has never moved. It is wrong by however far
@@ -672,6 +720,122 @@ front of CPA must allow at least 60 seconds and pass `Authorization` and
 `X-Quota-Glance-Spend` through; one that drops the header gets
 `400 invalid_request`, and nothing is spent.
 
+### Saving settings — `POST .../settings` and `GET .../save-settings`
+
+The dashboard's editor saves an API credit's monthly amount, refill date and
+Console reading, and a Claude credential's renewal date, to `settings.json` in
+`data-dir`. Nothing else is written and nothing is contacted. Two doors, each
+authenticated as `/summary` is on its tree, and both behind `allow-edit`
+(default `true`):
+
+| Route | Auth | The batch travels |
+| --- | --- | --- |
+| `POST /v0/management/plugins/quota-glance/settings` | CPA management key | as the JSON body |
+| `GET /v0/resource/plugins/quota-glance/save-settings` | `Authorization: Bearer <web-token>` | in one `X-Quota-Glance-Settings` header, base64url without padding |
+
+One **Save** sends one batch: every changed row of one card, applied all or
+nothing. A failure never leaves some rows saved.
+
+```json
+{"kind": "apiCredits", "items": [
+  {"id": "org-3f2a9c1d0b7e", "baseRevision": "7", "monthlyUsd": "260.50", "renews": null,
+   "reading": {"remainingUsd": "143.20", "at": "2026-10-09T13:20:00Z"}}
+]}
+{"kind": "renewals", "items": [{"id": "0123456789abcdef", "baseRevision": "", "date": "2026-10-29"}]}
+```
+
+Every value key is required, as a value or `null`; `null` is "not set", **Use
+config**, **Use estimate** or **Clear**. A row sends its full desired state and
+`baseRevision`, the `settings.revision` (or `renewalSetting.revision`) it was
+opened with, `""` when nothing was stored. At most 16 `apiCredits` rows or 32
+`renewals` rows, at most 4096 bytes of JSON.
+
+The checks run in this order, both doors unless marked, and the first that
+fails answers:
+
+1. **Switched off.** `503 disabled`.
+2. **GET only: fetch metadata and early data**, exactly as `/spend`:
+   `403 cross_site`, `425 too_early`, costing the limiter nothing.
+3. **GET only: the token.** A bare `401`, or `429` with `Retry-After: 60` past
+   20 failures a minute, from the shared limiter. The right token is never
+   throttled.
+4. **Editing.** `allow-edit: false`: `404 not_found`, so an unauthenticated
+   caller learns nothing about it. `settings.json` unreadable:
+   `503 settings_unavailable`.
+5. **POST only:** a `Content-Type` other than `application/json`:
+   `415 unsupported_media_type`.
+6. **Shape.** Over 4096 bytes, not exactly one header, not unpadded base64url,
+   not an object, an unknown or missing key, an unknown `kind`, no rows or too
+   many, a malformed `baseRevision`, or an id twice: `400 invalid_request`.
+7. **Values**, first failure only: `400 {"error": <code>, "id": <id>, "field":
+   <field>}`, `field` being `monthlyUsd`, `renews`, `reading.remainingUsd`,
+   `reading.at` or `date`.
+
+   | Value | Rule | Code |
+   | --- | --- | --- |
+   | `monthlyUsd` | 1 to 7 whole digits, at most 2 decimals, `0` allowed | `invalid_monthly_usd` |
+   | `renews`, `date` | `YYYY-MM-DD`, a real date in 2000 to 2099 | `invalid_renews`, `invalid_date` |
+   | `reading.remainingUsd` | as `monthlyUsd` | `invalid_reading_amount` |
+   | `reading.at`, new or changed reading | RFC 3339 in UTC with `Z`, whole seconds, from 48 hours before the server's clock to 5 minutes after | `invalid_reading_time` |
+   | `reading.at`, new or changed reading | not before the start of the cycle the batch's refill date (or, with `renews: null`, the configured one) gives | `reading_before_refill` |
+
+   A reading resent unchanged, the same `remainingUsd` and `at`, is not checked
+   against the clock again, so a credit can be changed on a row whose reading is
+   a week old.
+8. **Editable.** Every id must be offered by the served document:
+   `apiCredits.accounts[].settings.editable`, or
+   `credentials[].renewalEditable`. An id in `apiCredits.orphans` or
+   `renewalOrphans` may be cleared, every value `null`, and never set. Otherwise
+   `409 {"error": "not_editable", "ids": [...]}`.
+9. **Conflicts.** A row whose `baseRevision` is not the stored entry's revision,
+   asking for anything other than what is stored now:
+   `409 {"error": "conflict", "revision": "<file revision>", "conflicts": [ids],
+   "current": {id: <settings block or renewal setting>}}`, nothing written. A
+   batch whose every row already holds what it asks for is
+   `200 {"ok": true, "unchanged": true, "revision": "<file revision>"}`, with no
+   write. A resent request is therefore a no-op or a conflict, never a second
+   change, which is why no press id is needed.
+10. **Rate.** Past 30 committed saves in the last minute, both doors together:
+    `429 too_many_writes` with `Retry-After: 60`.
+11. **Commit.** A new reading takes its baseline from the meter: its usage from
+    00:00 UTC of the reading's day to the start of the reading's hour, from the
+    meter the last rebuild read. A meter that has not saved since, because
+    Quota Cache is stopped or behind, gives the hours it has: it counted
+    nothing after its last save, so the baseline is complete, or short, which
+    overstates the spend since the reading, the safe direction. A reading is
+    therefore saved while the card reads "incomplete"; the row stays a bound
+    until a reading taken after counting resumes. Only a meter that no longer
+    keeps 00:00 UTC of the reading's day, which within the 48 hours allowed
+    means a meter whose clock runs ahead, refuses it, with
+    `400 invalid_reading_time`. Usage under a model name or prompt class this
+    build does not know, as a newer Quota Cache may add, goes into the
+    baseline as `(other)`, which is never priced. A new reading for an account
+    whose `organizationId` is not in the form a stored reading holds is
+    `409 not_editable` with its id. Past a bound (64 API credit rows, 256
+    renewal dates, 1 MiB), renewal dates for credentials the document no
+    longer lists are evicted, oldest first; when that is not enough,
+    `409 settings_full`. A file this build could not load back is never
+    written: that, and a failed write, are `503 settings_unwritable`, and
+    nothing changed.
+12. **Answer.** The document is rebuilt before the answer:
+    `200 {"ok": true, "unchanged": false, "revision": "8", "settings": {id:
+    <the row's settings block, or the credential's renewalSetting, from the
+    rebuilt document; null for a row it no longer lists>}}`.
+
+Each committed batch logs one `info` line, `quota-glance settings changed`, with
+the batch's `kind`, the `door` (`console` or `password`), the `ids` and the
+names of the `fields` that changed. Never a value, never the token.
+
+`settings.json` is checked for shape when it is loaded; the time rules above
+apply only when saving, so a stored reading that has since aged past its use
+still loads, and the document reports it as unused. A file that fails a shape
+rule applies nothing, is never written over, and makes editing unavailable
+(`settingsUnreadable`) until it is moved aside and the configuration is saved
+again. `/health` reports `settings: {path, revision, api_credit_entries,
+renewal_entries, last_error}` and, for Quota Cache's meter file, `meter: {path,
+flushed_at, last_error}` (`last_error` is `""`, `"missing"` or `"unreadable"`),
+in the snake_case the rest of `/health` uses.
+
 ### `level` — computed server-side, on both rows and entries
 
 Judged on the whole percent the document prints (`remainingPercent`), so the
@@ -719,7 +883,11 @@ are distinguished by whether `resetAtEpoch` is null.
 
 On any of the last three the **last good document keeps being served**, marked
 stale. An empty response is indistinguishable from a broken install, so it is
-never sent in place of data that was valid a moment ago.
+never sent in place of data that was valid a moment ago. What the dashboard's
+settings decide in it, `apiCredits`, `renewalOrphans` and each credential's
+renewal fields, is rebuilt from the same snapshot and roster with the settings
+and Quota Cache's meter as they are now, so a value saved meanwhile shows at
+once.
 
 ## Rows
 
@@ -950,3 +1118,233 @@ describe the roster. Each balance carries its own instants and state instead.
 **It is never a bar.** OpenRouter reports lifetime totals, so a fraction would
 be a share of everything ever bought, which says nothing about whether the next
 request will be paid for. The amount is the headline, coloured by `level`.
+
+## API credits — Claude Console organizations
+
+`apiCredits` is the monthly Claude API credit that a Max or Team plan deposits
+into its linked Claude Console organization, for every organization in Quota
+Cache's `claude-api-credits` configuration, **estimated** from the API traffic
+those organizations sent through CPA, and pooled. It is an object, or **`null`
+when the snapshot has no `anthropic-api` entry**, which is every snapshot until
+that list is configured. It is never omitted, and `null` and an object with
+nothing counted are different facts: the first means "not configured", the
+second "configured, nothing counted yet".
+
+Like `balances`, it is not a credential and takes part in nothing above: it is
+not in `credentials[]` or `providers[]` (so the menu bar neither offers nor
+colours it), not counted in `counters`, and does not move `observedAtEpoch`,
+`nextAttemptEpoch`, or `staleReason`. Each account carries its own state.
+Adding it did not bump `schemaVersion`. An older plugin omits the key, so a
+client reads a missing `apiCredits` as `null`.
+
+### Where the figures come from
+
+- **Tokens** from Quota Cache 0.1.14's API meter, the file
+  `snapshot.meter.json` beside the snapshot. Quota Cache counts every Claude
+  API-key request CPA makes, per Console organization (by Anthropic's
+  `anthropic-organization-id` response header), per UTC day and hour and per
+  model. It never asks Anthropic anything. The meter's own format is in Quota
+  Cache's [cache format](../../quota-cache/docs/cache-format.md).
+- **Prices** from a table embedded in this plugin, read from Anthropic's
+  pricing page on the date in `pricing.asOf`. Cache writes are priced at the
+  5-minute rate; CPA does not say which were 1-hour writes.
+- **The credit and its refill date** from the dashboard when set there, else
+  from Quota Cache's configuration (`monthly-usd`, `renews`). Anthropic reports
+  neither.
+- **A Console reading** the operator types in: what Console showed as left, and
+  when. It is the anchor that corrects everything the meter cannot see.
+
+So every amount is an estimate, and one that may be missing spend says so with
+`lowerBound`. Print `≈` before an estimate and `≤` / `≥` before a bound.
+
+### Money
+
+Every amount is in US dollars (`currency: "USD"`), computed on exact rationals:
+a token's price is the table's dollars per million tokens divided by a million,
+so one Haiku 5.5 cache-read token is exactly $0.00000001. Nothing is computed
+in floating point. Each amount is emitted twice: a JSON number, converted once
+at the end, and the text the dashboard prints (`$1,234.56`, rounded to the cent
+half away from zero, never `-$0.00`). Print the text; size bars from the
+fractions.
+
+### The cycle
+
+An organization's cycle comes from its refill date through Quota Cache's
+`client.CreditCycleAt`, the one rule both plugins use. It starts at 00:00 UTC on
+the most recent occurrence of the refill day of the month and ends at the next,
+the day clamped to each month's length (a refill on the 31st falls on Feb 28,
+then Mar 31). The meter's day buckets start at 00:00 UTC too, so a cycle's spend
+is exact to them.
+
+### The estimate, account by account
+
+1. **Credit.** The dashboard's `monthlyUsd`, else the configured `monthly-usd`,
+   else unknown (`monthlyCreditSource`: `dashboard`, `config`, `none`).
+2. **Cycle.** From the dashboard's `renews`, else the configured one, else none
+   (`renewsSource` likewise).
+3. **Reading.** A stored Console reading is used when it was taken for this
+   account's current organization (else `otherOrganization`), is not in the
+   future (`future`), and, with a cycle, is from this cycle (`beforeRefill`) or,
+   without one, from the last 31 days (`tooOld`). An unused reading is kept and
+   reported with its reason. A reading taken in the first 24 hours of the
+   cycle adds `readingOnRefillDay`: credits arrive "shortly after" the plan's
+   payment, so Console may still have shown the old cycle's remainder.
+4. **Spend.** The cycle's spend is the meter's usage from the cycle's start,
+   priced. The spend since a reading is the meter's usage from 00:00 UTC of the
+   reading's day, less the baseline stored with the reading (that day's usage
+   up to the start of the reading's hour), priced. A reading anchors at the
+   start of its hour: spend earlier in that hour Console already reflected is
+   counted twice, which understates what is left by at most an hour's spend.
+   `spent` is the cycle's spend with a cycle, the spend since the reading
+   without one, and `spentSinceEpoch` says which.
+5. **Basis and left.** With a used reading of `R`: `basis: "reading"`, `left =
+   max(0, R - spent since)`. Else with a credit and a cycle: `basis: "credit"`,
+   `left = max(0, credit - cycle's spend)`. Else no basis and no `left`. `used`
+   is `credit - left`, clamped to the credit. Spend past the basis is `overage`
+   and adds `overCredit`: credit is spent first, so it is likely purchased
+   credit. A reading above the credit adds `readingAboveCredit`.
+6. **Refusals.** Since the anchor (the reading's time, else the cycle's start),
+   a low-credit refusal from Anthropic not followed by a success marks the
+   account **out** (`refused`). A refusal of a Claude Code-based client's request
+   (Claude Code, which the credit does not cover, or the Agent SDK, which it
+   does) marks it out only when the estimate already had a tenth of the credit
+   or less left (`refusedNearlySpent`); otherwise it is `claudeCodeRefused` and
+   not out. Out means `left` 0, `used` the credit, fraction 0, `critical`, and
+   `estimateLeftText` keeps what the estimate had.
+7. **Lower bound.** `lowerBound` is true when any of these happened after the
+   anchor: counting began late (`meterStartedLate`); Quota Cache stopped
+   counting for five minutes or more, or has been stopped that long now
+   (`meterGap`; a briefer stop, a restart or an update, is ignored everywhere);
+   it dropped records (`meterDropped`); its meter was full (`meterFull`); a
+   failed request with tokens could not be matched to an organization
+   (`meterUnattributed`); it could not read a record (`meterRejected`); the
+   window used a model the price table does not list (`unpricedModel`); or the
+   meter is stale.
+8. **No traffic.** Nothing ever seen adds `noTraffic`. With every request routed
+   through CPA, nothing seen is nothing spent, so it is not a bound by itself.
+9. **Stale.** A meter not saved within `stale-after`: Quota Cache saves at least
+   every ten minutes while it counts.
+10. **Fraction and level.** `left / credit`, clamped to 0..1, on the usual
+    thresholds. A credit of `0` has fraction 0, level `""` and `zeroCredit`.
+
+### `accounts[].state` — the first rule that matches
+
+| # | When | `state` | Counted |
+| --- | --- | --- | --- |
+| 1 | No configuration, or Quota Cache found a problem with the item | `misconfigured` | no |
+| 2 | Written by Quota Cache 0.1.13, which names no organization | `cacheTooOld` | no |
+| 3 | No meter file, or the organization is not in it yet, or is dormant (the meter has not saved since the configuration changed) | `pending` | no |
+| 4 | The credit is unknown, or there is no basis (no used reading and no cycle) | `needsSettings` | no |
+| 5 | Out (rule 6) | `out` | yes |
+| 6 | The meter is stale | `stale` | yes |
+| 7 | Otherwise | `ok` | yes |
+
+`misconfigured`, `cacheTooOld` and `pending` carry no amounts. `needsSettings`
+still carries `spent` when it has an anchor, and `left` with a used reading;
+`hasEstimate` says whether `left` and `used` mean anything.
+
+`dataIssues` is always an array, each issue at most once, in this order, and
+`issue` is the sentence for the first (`needsCredit` with `needsRefillDate`
+reads as one):
+
+| Issue | Sentence |
+| --- | --- |
+| `misconfigured` | The problem's own sentence, e.g. "Add this organization's organization-id, from Console under Settings, Organization." An unknown code, or one only 0.1.13 wrote, reads "This item's configuration has a problem." |
+| `cacheTooOld` | Quota Cache 0.1.13 reads Anthropic's cost report, which Quota Glance no longer uses. Update Quota Cache to 0.1.14 and add this organization's organization-id. |
+| `meterMissing` | Quota Cache has not saved an API meter yet. Update it to 0.1.14 or newer; counting starts when it next loads. |
+| `orgNotCounted` | Counting starts at Quota Cache's next save. |
+| `needsCredit` | Set this organization's monthly credit to count it in the total. (With `needsRefillDate`: Set this organization's monthly credit and refill date.) |
+| `needsRefillDate` | Set the refill date, or enter a Console reading. |
+| `refused` | Anthropic refused a request for low credit, so this credit is spent. With an estimate above zero: … The estimate had $35.00 left; enter a Console reading to correct it. |
+| `refusedNearlySpent` | Anthropic refused requests from a Claude Code-based client for low credit, and the estimate is nearly spent, so this credit is shown as spent. Enter a Console reading to check. |
+| `stale` | Quota Cache has not saved its meter recently, so recent spend may be missing. |
+| `meterStartedLate` | By basis: Counting began after this cycle started, so earlier spend is missing. Enter a Console reading to correct it. / Counting began after your Console reading, so spend in between is missing. / Counting began recently, so earlier spend is missing. |
+| `meterGap` | Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter a Console reading to correct it. |
+| `meterDropped` | Quota Cache dropped usage records it could not keep up with, so some spend is missing. |
+| `meterFull` | Quota Cache's meter was full, so some spend is missing. |
+| `meterUnattributed` | Some failed requests could not be matched to an organization, so some spend may be missing. |
+| `meterRejected` | Quota Cache could not read some usage records from CPA, so some spend may be missing. |
+| `unpricedModel` | Some requests used a model with no listed price and are left out: claude-mythos-preview (1.0M tokens). At most three, most tokens first, then "and N more". |
+| `zeroCredit` | This organization's monthly credit is set to $0.00. |
+| `overCredit` | Spend is $40.10 past the monthly credit. Anthropic bills purchased credit after the monthly credit; if there is none, enter a Console reading. |
+| `readingAboveCredit` | Your Console reading is more than the monthly credit; check the monthly credit. |
+| `readingOnRefillDay` | This Console reading was taken on the refill day. If Console did not show the new credit yet, enter a new reading once it does. |
+| `readingUnused` | By reason: Your Console reading of $143.20 on Sep 30 was before the last refill, so it is not used. / … was for a different organization-id … / … is over 31 days old and there is no refill date … / … is dated in the future … |
+| `claudeCodeRefused` | Anthropic refused requests from a Claude Code-based client (Claude Code or the Agent SDK) for low credit. If they were Agent SDK requests, this credit may be spent; enter a Console reading. |
+| `noTraffic` | No API traffic for this organization has reached CPA since counting began. |
+| `configMonthlyUsdInvalid`, `configRenewsInvalid` | monthly-usd (renews) in Quota Cache's config is not a dollar amount (a date), so it is ignored. |
+| `adminKeyIgnored` | Quota Cache no longer uses this item's admin-key. Delete it from the config. |
+
+### The object
+
+| Field | Meaning |
+| --- | --- |
+| `title`, `currency` | `Monthly API Credit`, `USD`. |
+| `pricing` | `{asOf, source, cacheWrites}`: the day the price table was read, the page, and `"5m"`. |
+| `meter` | Quota Cache's meter, or `null` without a readable meter file: `sinceEpoch`, `updatedAtEpoch` (when it was saved), `stale`, `stoppedAtEpoch` and `stopReason` while it is stopped, `dropped`, `unattributed`, `rejected` and `foreign` counts with the last instant of the first three, and `gaps` (`[{fromEpoch, toEpoch, reason}]`, oldest first, leaving out every gap under five minutes). |
+| `editing` | `{available, reason}`; `reason` is `""`, `disabled` (`allow-edit: false`; stored values still apply) or `settingsUnreadable` (stored values do not apply). |
+| `pool` | Below. |
+| `accounts` | Every configured organization, counted or not, sorted by `order`, then `label`, then `id`. Do not re-sort. |
+| `unlinked` | Organizations that sent API traffic through CPA while no counted item names them, from the meter, newest `lastSeenEpoch` first: `{organizationId, firstSeenEpoch, lastSeenEpoch, requests, reason}`, `reason` being `overLimit` (an item past the first 16 names it) or `notConfigured`. Always an array. |
+| `orphans` | Values stored on the dashboard for an account no longer listed, `{id, monthlyUsd, renews, hasReading, revision, updatedAtEpoch}`, oldest first. A save may only clear one. Always an array. |
+
+### `pool`
+
+The counted accounts (`ok`, `stale`, `out`) summed. `hasEstimate` is `false`
+when none is counted: every amount is then `0` with `""` text, `level` is `""`,
+and `nextRefill` and `fullAtEpoch` are `null`. `lowerBound` is true when any
+counted account's is.
+
+`monthlyCredit`, `used`, `left` and `overage` are the counted accounts' own,
+summed, so one organization's overage never consumes another's credit.
+`remainingFraction`, `remainingPercent` and `level` are `left / monthlyCredit`
+(level `""` when that credit is 0). `nextRefill` is `{accountIds,
+refillAtEpoch, refillInSeconds, gain, gainText, gainFraction, gainPercent}`:
+the soonest refill among counted accounts with a cycle that have used any
+credit, every account refilling at that second, and the credit they have used,
+which the refill restores. `fullAtEpoch` and `fullInSeconds` are the latest
+such refill. `accountCount == countedCount + missingCount`.
+
+### `accounts[]`
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `org-<12 hex>` from the item's organization, or `item-<n>` for an item Quota Cache could not link to one. Dashboard values are keyed by it, so a label rename keeps them and a different organization does not. |
+| `label`, `order`, `organizationId` | As configured; `organizationId` is `""` when missing or invalid. |
+| `state`, `counted`, `hasEstimate`, `basis`, `lowerBound` | Above. |
+| `monthlyCredit`, `monthlyCreditText`, `monthlyCreditSource` | The credit in force and where it comes from; `""` text when unknown. |
+| `spent`, `spentText`, `spentSinceEpoch` | Metered spend since the cycle's start, or the reading's time without a cycle; `null` and `""` without either. |
+| `used`, `left`, `overage` (each with `…Text`) | As above; `""` text when not meaningful. |
+| `estimateLeftText` | What the estimate had left before a refusal marked the account out; `""` unless it is out. |
+| `remainingFraction`, `remainingPercent`, `level` | Rule 10. |
+| `cycleStartEpoch`, `renewsAtEpoch`, `renewsInSeconds`, `renewsSource` | The cycle containing the build instant, `null` without a refill date. |
+| `reading` | The reading in use, `{remaining, remainingText, atEpoch, enteredAtEpoch, spentSince, spentSinceText}`, or `null`. |
+| `cacheWriteExtra`, `cacheWriteExtraText` | How much more the estimated window would cost were every cache write a 1-hour one; the text (`$6.00`) is `""` below $0.01. The page words it: "Cache writes are priced at the 5-minute rate; at the 1-hour rate this would be $6.00 more." |
+| `unpriced` | `[{model, tokens}]` for every model in the estimated window the table has no price for, most tokens first. `(other)`, the meter's overflow, is never listed. Always an array. |
+| `refusals` | `{total, lastAtEpoch, claudeCodeTotal, claudeCodeLastAtEpoch}`. |
+| `meterSinceEpoch`, `lastSeenEpoch` | When the meter began counting the organization, and its latest request. |
+| `dataIssues`, `issue` | Above. |
+| `settings` | The editor's view, below. |
+
+### `accounts[].settings`
+
+| Field | Meaning |
+| --- | --- |
+| `editable`, `notEditableReason` | `notEditableReason` is `overLimit` (an `item-<n>` past the first 16), `duplicateOrganization`, `noOrganization` (any other `item-<n>`), `cacheTooOld`, or, when editing is unavailable altogether, `editing.reason`. |
+| `revision` | The stored entry's revision, `""` with nothing stored; a save sends it back as `baseRevision`. |
+| `monthlyUsd`, `renews` | The dashboard's values, `""` when none. |
+| `configMonthlyUsd`, `configMonthlyUsdInvalid`, `configRenews`, `configRenewsInvalid` | Quota Cache's configured values, always present so the page can show them beside an override and offer **Use config**; `configRenews` is `YYYY-MM-DD`. |
+| `reading` | The stored reading, used or not, `{remainingUsd, atEpoch, enteredAtEpoch}`, or `null`. |
+| `readingUnusedReason` | `beforeRefill`, `otherOrganization`, `tooOld`, `future`, or `""`. |
+| `updatedAtEpoch` | When the entry was last saved, or `null`. |
+
+### What the estimate cannot see
+
+Traffic not routed through CPA; web search, code execution hours, fast mode
+and US-only inference, none of which the usage record carries; whether a cache
+write was a 1-hour one; spend while Quota Cache was stopped for five minutes or
+more (flagged as a gap) or between a crash and its last save (at most a
+minute); a prompt-length tier added to a model after the table was read; and
+Claude Code requests in an organization that also holds purchased credit, which
+Anthropic bills to the purchased credit but the meter counts against the
+monthly one. A Console reading resets all of these.

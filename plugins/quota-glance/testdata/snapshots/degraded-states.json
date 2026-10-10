@@ -345,6 +345,156 @@
           }
         }
       }
+    },
+    "anthropic-api:org-11e594f48195": {
+      "provider": "anthropic-api",
+      "auth_index": "org-11e594f48195",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "alpha",
+        "position": 0,
+        "monthly_usd": "200",
+        "renews": "2026-09-29",
+        "organization_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "anthropic-api:org-e79acd97ac88": {
+      "provider": "anthropic-api",
+      "auth_index": "org-e79acd97ac88",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "bravo",
+        "position": 1,
+        "monthly_usd": "100",
+        "renews": "2026-09-20",
+        "organization_id": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    "anthropic-api:org-993224b4fe85": {
+      "provider": "anthropic-api",
+      "auth_index": "org-993224b4fe85",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "charlie",
+        "position": 2,
+        "monthly_usd": "100",
+        "organization_id": "00000000-0000-4000-8000-000000000003"
+      }
+    },
+    "anthropic-api:org-008bf60b9309": {
+      "provider": "anthropic-api",
+      "auth_index": "org-008bf60b9309",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "delta",
+        "position": 3,
+        "renews": "2026-09-25",
+        "organization_id": "00000000-0000-4000-8000-000000000004",
+        "monthly_usd_invalid": true
+      }
+    },
+    "anthropic-api:org-3303f939347e": {
+      "provider": "anthropic-api",
+      "auth_index": "org-3303f939347e",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "echo",
+        "position": 4,
+        "monthly_usd": "50",
+        "renews": "2026-09-18",
+        "organization_id": "00000000-0000-4000-8000-000000000005"
+      }
+    },
+    "anthropic-api:item-6": {
+      "provider": "anthropic-api",
+      "auth_index": "item-6",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "foxtrot",
+        "position": 5,
+        "monthly_usd": "100",
+        "problem": "organization_id_invalid"
+      }
+    },
+    "anthropic-api:item-7": {
+      "provider": "anthropic-api",
+      "auth_index": "item-7",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "golf",
+        "position": 6,
+        "monthly_usd": "100",
+        "problem": "organization_id_duplicate",
+        "organization_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "anthropic-api:item-17": {
+      "provider": "anthropic-api",
+      "auth_index": "item-17",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "hotel",
+        "position": 16,
+        "problem": "too_many_items",
+        "organization_id": "00000000-0000-4000-8000-00000000000f"
+      }
+    },
+    "anthropic-api:label-7c2f0f8e5d1a": {
+      "provider": "anthropic-api",
+      "auth_index": "label-7c2f0f8e5d1a",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "india",
+        "position": 7,
+        "monthly_usd": "200",
+        "renews": "2026-09-08",
+        "key_fingerprint": "key-000000000009"
+      }
     }
   }
 }

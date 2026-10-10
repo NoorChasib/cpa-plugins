@@ -25,6 +25,16 @@
         <table><thead><tr><th scope="col">Account</th><th scope="col">Quota used</th><th scope="col">Observation</th><th scope="col">Last attempt</th><th scope="col">Next eligible</th><th scope="col">Status</th></tr></thead><tbody id="accounts"></tbody></table>
       </div><p id="accounts-empty" class="empty" hidden>No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add Claude API credits (claude-api-credits) to this plugin’s configuration; the next scheduled scan will discover it.</p></div>
     </section>
+    <section id="meter-section" class="section" aria-labelledby="meter-heading" hidden>
+      <div class="section-head"><h2 id="meter-heading">Claude API meter</h2><span id="meter-status" class="hint"></span></div>
+      <div class="card settings">
+        <dl id="meter" class="detail-grid"></dl>
+        <h3>Gaps</h3>
+        <ul id="meter-gaps" class="meter-list"></ul><p id="meter-gaps-empty" class="empty" hidden>No gaps recorded: the meter has counted without a stop since it began.</p>
+        <h3>Organizations no item names</h3>
+        <ul id="meter-unlinked" class="meter-list"></ul><p id="meter-unlinked-empty" class="empty" hidden>None seen. An organization listed here sent Claude API-key traffic through CPA while no claude-api-credits item named it.</p>
+      </div>
+    </section>
     <section class="section" aria-labelledby="history-heading">
       <div class="section-head"><h2 id="history-heading">Recent polling activity</h2><span id="history-count" class="hint"></span></div>
       <div class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Polling history">
@@ -39,6 +49,7 @@
       <p>Refreshing this view reads cached information only. It never requests a provider refresh. Times use your browser’s time zone.</p>
       <p>Account Health and Reset Priority opt in through their configuration and wait when fresh data is unavailable. Their direct file reads cannot be counted here. CPA’s stock quota dashboard polls independently.</p>
       <p>The latest 100 completed polls and cumulative totals persist across restarts. No credentials, request headers, or provider response bodies are stored in this history.</p>
+      <p>Claude API credit items are never polled. The Claude API meter counts the tokens of Claude API-key traffic CPA serves, per Console organization, from CPA's usage records, and sends nothing to Anthropic. Quota Glance prices them.</p>
     </footer>
   </div>
 </main>

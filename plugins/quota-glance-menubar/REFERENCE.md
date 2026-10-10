@@ -39,33 +39,113 @@ network failures do not echo potentially sensitive URLs. Web content process
 termination offers recovery instead of leaving an empty popover. Errors in the
 page's own quota API continue to use the page's existing UI.
 
-## Menu bar percentage
+## Menu bar readout
 
-After signing in, choose **Settings → Menu bar quota**. Choices use the page’s
-provider and row labels, for example **Claude · Weekly (Fable)**. The percentage
-is the aggregate **remaining** quota, matching the page. **Icon only** is the
-default. Selection persists between launches independently of Open at login.
+**Settings → Menu bar** chooses what the status item shows. The design is the
+signed-off round 2 board,
+`../quota-glance/web/design/menubar-readout/refined.html`.
 
-While a quota is selected, a native timer requests the existing cached summary
-every 60 seconds (with up to five seconds of timer tolerance), even when the
-popover is closed. It does not invoke provider polling, navigate, or reload the
-page. The bridge reuses the page’s successful same-origin GET request, including
-its authentication, proxy prefix, and ETag. Native messages contain only quota
-IDs, labels, percentages, and freshness state. Unauthorized responses stop
-background credential retries until the page signs in successfully again.
+| Show | Draws |
+| --- | --- |
+| Icon only | the chart icon; no background timer |
+| Percent | the icon and the first window's remaining percentage, `59%` (0.3's form) |
+| Lettered pair | one to three windows as letter + number, `S94 W59`, plain text |
+| Split pill | the same windows in round 1's box, one half per window, `S94 \| W59` |
+
+The percentage is the aggregate **remaining** quota, matching the page.
+Windows are chosen from every row the dashboard summary lists, grouped by
+provider, in any order (drag to reorder) and from any provider: one to three,
+no duplicates. A chosen window that leaves the summary stays in the list,
+marked unavailable, and reads **—** until it returns; it keeps the title the
+dashboard gives it (Claude · Weekly (Fable), using quota-glance's own provider
+and row titles). Until the first summary arrives, chosen windows have no
+reading yet and are not reported as missing.
+
+### Letters
+
+The letter belongs to the window, not to its slot, and comes from the
+summary's `rowId`:
+
+| rowId | Letter |
+| --- | --- |
+| `session`, `weekly`, `weekly_fable`, `credits`, `monthly` | S, W, F, C, M |
+| `model_session:<model>`, `model_weekly:<model>` | S or W plus the model's first letter: `Ss`, `Ws` (a lowercase `l` is skipped) |
+| `raw:<provider>:<id>` | the id's initial, or two letters when that is S, W, F, C, M or digit-like (O, Q, I) |
+
+Letters are compared only within one provider. If two rows of one provider
+share a form (two models starting with the same letter), both take one more
+letter (`Wsp`, `Wsa`), so a new row in the summary can lengthen an existing
+letter. Across providers letters may repeat (Codex W, Claude W); the badge
+tells them apart. Settings warns, below the preview, when two chosen windows
+would still look alike: same letters and same provider, or same letters with
+no badge drawn on either (badges off, or a provider without a bundled logo).
+Saving is still allowed. The rules are in
+`Sources/GlanceCore/ReadoutLetters.swift`; `scripts/letters-fixture.mjs`
+holds the board's own copy and generates the fixture the Swift tests check.
+
+### Badges
+
+**Badge** draws the provider's logo, 9pt square, 1pt after each number with
+its top 3pt above the digits' cap height. **Always** is the default; **When
+providers differ** draws badges only when the chosen windows span more than
+one provider; **Off** draws letters only. A provider without a bundled logo
+draws no badge and is spaced as if badges were off (Lettered pair slots 7pt
+apart, not 6pt). Logos are bundled SVG files (Claude, OpenAI for Codex, Grok for xAI); replacing them is described in
+[docs/logos.md](docs/logos.md).
+
+### Drawing
+
+Lettered pair and Split pill are drawn into one template image per update,
+so letters, numbers, badges and the pill's fill share one ink and macOS
+supplies white or black, the highlight and the inactive-display fade. There
+is **one ink at every level**: no colour or dimming for a low reading, and a
+stale or missing reading is **—** in the same ink. Letters are a fixed amount
+lighter than their numbers. The image is redrawn when the menu bar's
+appearance changes (on macOS 26, also when the wallpaper behind it changes
+brightness) and when Increase Contrast changes; with Increase Contrast,
+letters are drawn in full ink (Lettered pair: semibold) and the pill's fill
+is stronger.
+
+- **Lettered pair**: letter and number in 12pt medium, 1pt apart. Each
+  number has a two-digit slot, so 94, 6 and — keep the width; a 100 widens
+  its own slot by one digit. Slots are 6pt apart with badges, 7pt without.
+- **Split pill**: round 1's box, 18pt tall, 5pt outer corners, square inner
+  corners, a 1pt clear divider. Letter 12.5pt semibold, number 12.5pt bold.
+  The halves are equal: each is as wide as the widest half's two-digit ink
+  (letter to badge, or to the number without badges) plus 5.5pt each side,
+  rounded to a whole point. A 100 fits in that padding, so the pill keeps
+  its width at every reading; other readings are centred by their ink.
+- **Show the Quota Glance icon** adds the chart icon, 7.5pt before either
+  style. It is off for a new install and on for anyone updating from 0.3.
+
+The status item's tooltip has one line per window; VoiceOver reads, for
+example, "Quota Glance. Claude session 94 percent remaining, Codex weekly 66
+percent remaining", or "no current reading" for a dash.
+
+### Updates and freshness
+
+Whenever Show is not Icon only, a native timer requests the existing cached
+summary every 60 seconds (with up to five seconds of timer tolerance), even
+when the popover is closed. It does not invoke provider polling, navigate, or
+reload the page. The bridge reuses the page’s successful same-origin GET
+request, including its authentication, proxy prefix, and ETag. Native
+messages contain only quota IDs, labels, percentages, and freshness state.
+Unauthorized responses stop background credential retries until the page
+signs in successfully again. With Icon only no timer runs; opening Settings
+before any summary has loaded requests it once (now, or when the page next
+finishes loading) so the windows can be chosen.
 
 A scoped App Nap activity keeps this user-requested readout active while the
 Mac is awake; it permits normal system sleep. Wake requests a fresh reading.
 Icon-only mode stops the native timer and activity. macOS scheduling and network
 availability may delay updates. Missing quota data, stale server data, failed
-requests, and readings older than 150 seconds display **—%**. A Claude session
-whose every reporting account has spent its weekly limit shows **0%**, because
-Quota Glance 0.6.0 and newer report those accounts as held out rather than
-missing.
+requests, and readings older than 150 seconds display **—** (**—%** in
+Percent). A Claude session whose every reporting account has spent its weekly
+limit shows **0**, because Quota Glance 0.6.0 and newer report those accounts
+as held out rather than missing.
 The last quota list remains available in Settings across temporary failures.
-Hover over the icon for the selected quota and status. A failed document or
-terminated WebKit process is retried by the background timer when a quota is
-selected.
+A failed document or terminated WebKit process is retried by the background
+timer while the readout is on.
 
 The normal page continues using its own refresh behavior. Background readout
 requests do not rewrite the dashboard’s UI or affect its open dialogs. No
@@ -108,8 +188,31 @@ session or password. You may need to sign in separately in that browser.
 
 The bundle ID is `com.noorchasib.quota-glance-menubar` and the executable is
 `QuotaGlance`. The `dashboardURL` preference is stored in that app's standard
-UserDefaults domain. The optional `menuBarQuota` preference stores the provider
-and row IDs; changing the dashboard URL clears this selection.
+UserDefaults domain. `menuBarReadout` stores the menu bar choice as one JSON
+value: `style` (`iconOnly`, `percent`, `letteredPair` or `splitPill`), the
+ordered `windows` (one to three `{providerID, rowID}`), `badge` (`always`,
+`whenProvidersDiffer` or `off`) and `showsAppIcon`. Unknown or malformed
+values fall back to their defaults. Saving Settings always stores it; saving
+a different dashboard URL resets the windows to Claude Session + Claude
+Weekly and keeps the style. If a dashboard's first summary has no Claude
+rows and the windows are still that default pair, they become its first
+provider's first two rows (recorded per URL in `menuBarReadoutFirstSummary`,
+so this happens once).
+
+On the first launch of 0.4.0 the value is resolved once and written back,
+first match wins:
+
+1. a stored `menuBarReadout`, as is;
+2. 0.3's `menuBarQuota` → Percent with that window, badge Always, icon on
+   (nothing visible changes);
+3. a saved `dashboardURL` without `menuBarQuota` (Icon only in 0.3) → Icon
+   only, with Claude Session + Claude Weekly ready, icon on;
+4. nothing saved (a new install) → Lettered pair, Claude Session + Claude
+   Weekly, badge Always, icon off.
+
+`menuBarQuota` is left in place, so reinstalling 0.3.1 shows what it showed
+before. To repeat the migration, quit the app and run
+`defaults delete com.noorchasib.quota-glance-menubar menuBarReadout`.
 `WKWebsiteDataStore.default()` keeps website data on disk
 under the app's WebKit storage, including the page's saved sign-in. Replacing
 the app in place retains these stores. Changing the URL does not delete the
@@ -134,7 +237,7 @@ Run from this directory on macOS with Xcode Command Line Tools (Swift 5.9+).
 The test suite also requires Node.js 20+; the installed app does not.
 
 ```sh
-make test           # core state, lifecycle, hidden WebKit, and JS bridge tests
+make test           # core state, readout, logos, lifecycle, hidden WebKit, and JS tests
 make build          # arm64 + x86_64, merged into a universal .app
 make verify-bundle  # bundle metadata, architectures, and signature
 make install        # build, copy to ~/Applications, open
@@ -146,14 +249,15 @@ make appcast        # after signing: generate, sign, and test the update feed
 make ci             # scripts, tests, universal build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.3.1` and must be three numeric components. For a faster
+`VERSION` defaults to `0.4.0` and must be three numeric components. For a faster
 local build, use `make build ARCHS=arm64` or `ARCHS=x86_64`. `INSTALL_DIR` can
 override the default `~/Applications` install directory. Quit a running copy
 before installing its replacement.
 
 Builds use a separate SwiftPM scratch directory per architecture and `lipo` to
 merge them. An AppKit script renders the app icon, and `iconutil` creates its
-ICNS. SwiftPM verifies the checksum of the pinned Sparkle 2.10.0 binary
+ICNS. The provider logos in `Resources/Logos/` are copied into
+`Contents/Resources/Logos/`, and `verify-bundle.sh` checks all three. SwiftPM verifies the checksum of the pinned Sparkle 2.10.0 binary
 package. The build embeds its universal framework and license with symlinks
 preserved. All nested helpers, the framework, and the app are signed inside
 out. The local bundle is ad-hoc signed; no signing account or provisioning
@@ -214,8 +318,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.3.1 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.3.1
+git tag quota-glance-menubar/v0.4.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.4.0
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed
@@ -246,10 +350,18 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The dashboard suite contains 18 Swift tests and 12 JavaScript bridge tests. It
-covers actual popover reopening without reload, preference persistence, quota
-selection/freshness, and a native refresh through the full message bridge in a
-real WebKit view with no window attached. Bridge fixtures also exercise
+The suite contains 67 Swift tests and 14 JavaScript tests. GlanceCore (49
+tests, which also run on Linux) covers the readout preference and its
+migration, letters against the board-generated fixture and the look-alike
+warning, cells before and after the first summary, fallback titles,
+accessibility and tooltip text, the pill and slot arithmetic, and the SVG logo reader
+against the three bundled files. The app tests (18, macOS only) cover
+popover reopening without reload, migration and first-summary adoption through
+real UserDefaults, rendering (template images, stable widths for any two-digit
+reading, a 100 that fits the pill, one ink at every level, providers without a
+logo, light versus dark and Increase Contrast drawings), and a
+native refresh through the full message bridge in a real WebKit view with no
+window attached. Bridge fixtures also exercise
 conditional responses, authentication fallback, failures/recovery, concurrent
 refreshes, and preservation of dashboard action request bodies. Multi-minute
 updates, sleep/wake, and native Settings interaction still need a user session
@@ -286,10 +398,14 @@ Before treating a Mac build as ready to use:
 5. Deploy a visible page change or use **Reload Page**; verify the next dashboard
    reload shows it. Test an unreachable server, a wrong path, and recovery with
    **Try Again**. Verify Settings remains accessible.
-6. Select a quota in Settings, close the popover for several minutes, and verify
-   the readout updates. Reopen and check scroll position is preserved. Try an
-   unreachable server, sign-out/sign-in, sleep/wake, changing quotas, and Icon
-   only. Unavailable data should show —%, and valid zero quota should show 0%.
+6. In Settings → Menu bar, try each Show style, one to three windows from
+   different providers, reordering by drag, and each Badge mode; check the
+   preview and the clash warning (Codex Weekly + Claude Weekly with badges
+   Off). Save, close the popover for several minutes, and verify the readout
+   updates on a light and a dark menu bar, with Increase Contrast, and with
+   VoiceOver and the tooltip. Try an unreachable server, sign-out/sign-in,
+   sleep/wake, and Icon only. Unavailable data should show —, and valid zero
+   quota should show 0.
 7. Enable Open at login from the installed app and verify macOS registration.
    Test login itself on a Mac with a user session; CI cannot establish it.
 8. Run `make dmg`, open the resulting image, and drag the app to Applications.

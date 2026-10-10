@@ -98,32 +98,50 @@ func TestStatusPageNeverPresentsAMissingOrRefusedKey(t *testing.T) {
 	}
 }
 
-// Claude API credit entries have a name, a filter, an endpoint and a reading
-// of their own, and the page prints Anthropic's amounts without adding them up.
+// Claude API credit entries have a name, a filter, a source and a reading of
+// their own: they are metered from CPA's usage records, never polled, and
+// the page prints the meter's counts without adding them up.
 func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 	script := sidebarScript
 	for _, rule := range []string{
 		"'anthropic-api': 'Claude API credits'",
-		"'anthropic-api': 'api.anthropic.com/v1/organizations/cost_report'",
+		"'anthropic-api': 'CPA usage meter (no requests)'",
 		"item.api_credit.label",
 		"const noWeekly = ['openrouter', 'anthropic-api'];",
-		"const label = problem ? 'Not polled' :",
-		"if (entry.provider === 'anthropic-api') return creditDetails(entry, now);",
-		"' (lowest units)'",
-		"'Today not reported yet'",
+		"const label = problem ? 'Not polled' : credit ? 'Metered' :",
+		"const polled = all.filter(e => e.provider !== 'anthropic-api');",
+		"problem ? node('span', 'Not polled', 'secondary') : credit ? '—' :",
+		"const flushed = date(s.api_meter && s.api_meter.flushed_at);",
+		"now - flushed <= 30 * 60000",
+		"if (entry.provider === 'anthropic-api') return creditDetails(entry, now, s);",
+		"'Organization: ' + (c.organization_id || 'not set')",
+		"c.monthly_usd_invalid", "c.renews_invalid", "c.admin_key_ignored",
+		"m.organizations[c.organization_id]",
+		"' ok, ' + (u.failed || 0) + ' failed, in ' + (u.input || 0) + ', out ' + (u.output || 0) + ', cache read ' + (u.cache_read || 0) + ', cache write ' + (u.cache_write || 0) + ' tokens'",
+		"function meterPanel(s, now)",
+		"['Records received', String(m.received || 0)], ['Counted', String(m.counted || 0)], ['Foreign (not Anthropic)', String(m.foreign || 0)]",
+		"['Rejected', String(m.rejected || 0)], ['Dropped', String(m.dropped || 0)], ['Unattributed', String(m.unattributed || 0)]",
+		"$('meter-gaps')", "$('meter-unlinked')",
 		"claude-api-credits",
 	} {
 		if !strings.Contains(script, rule) {
 			t.Fatalf("page script lost %q", rule)
 		}
 	}
-	credit := script[strings.Index(script, "function creditDetails("):strings.Index(script, "function extendedQuota(")]
-	for _, arithmetic := range []string{"Number(", "parseFloat", "reduce(", " + Number", "+= "} {
-		if strings.Contains(credit, arithmetic) {
-			t.Fatalf("the credit reading does arithmetic (%q); totals are Quota Glance's", arithmetic)
+	for _, gone := range []string{"cost_report", "key_fingerprint", "(lowest units)", "Today not reported yet"} {
+		if strings.Contains(script, gone) {
+			t.Fatalf("page script still reads the cost report (%q)", gone)
 		}
 	}
-	if !strings.Contains(sidebarHTML, `<option value="anthropic-api">Claude API credits</option>`) || !strings.Contains(sidebarHTML, "claude-api-credits") {
-		t.Fatal("the provider filter or the empty state lacks Claude API credits")
+	credit := script[strings.Index(script, "function creditDetails("):strings.Index(script, "function render(")]
+	for _, arithmetic := range []string{"Number(", "parseFloat", "reduce(", " + Number", "+= "} {
+		if strings.Contains(credit, arithmetic) {
+			t.Fatalf("the credit reading or the meter panel does arithmetic (%q); totals are Quota Glance's", arithmetic)
+		}
+	}
+	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, "claude-api-credits", `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
+		if !strings.Contains(sidebarHTML, rule) {
+			t.Fatalf("the page lost %q", rule)
+		}
 	}
 }

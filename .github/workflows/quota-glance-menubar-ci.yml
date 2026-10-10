@@ -127,7 +127,7 @@ jobs:
 
           To start automatically after restarting your Mac, right-click the menu bar icon, choose Settings, and enable Open at login. Your URL and saved web session persist between launches.
 
-          Opening the popover preserves the page and scroll position. In Settings → Menu bar quota, choose a quota window to show its remaining percentage beside the icon. It updates every minute while your Mac is awake, even with the popover closed. Choose Icon only to disable it.
+          Opening the popover preserves the page and scroll position. In Settings → Menu bar, Show offers Icon only, Percent, Lettered pair ("S94 W59") and Split pill. Choose one to three windows from any provider, in your order, each with a letter (S session, W weekly, F Fable, C credits), and an optional provider badge on each number (Always, When providers differ, Off). Readings update every minute while your Mac is awake, even with the popover closed. Updating keeps your menu bar as it was: a chosen quota stays Percent and Icon only stays Icon only.
 
           Starting with v0.3.0, right-click the menu bar icon and choose Check for Updates… to download and install future releases in the app. Automatic checks are enabled by default; Settings also offers automatic installation. Users on older versions need to install this DMG once to get the updater.
 

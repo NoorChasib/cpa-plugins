@@ -1,8 +1,18 @@
 import { useId } from "react"
 
 import { CredentialRow } from "./CredentialRow"
+import { Flags, FoldButton } from "./Fold"
 import { useNowSeconds } from "../lib/now"
-import { type AccountName, foldNotes, nameText, recoveryNames, shortName, weeklyNote } from "../lib/pool"
+import {
+  type AccountName,
+  cappedByWeekly,
+  foldFlags,
+  foldNotes,
+  nameText,
+  recoveryNames,
+  shortName,
+  weeklyNote,
+} from "../lib/pool"
 import { formatDuration, secondsUntil } from "../lib/time"
 import type { Credential, Row } from "../lib/types"
 
@@ -48,26 +58,6 @@ function TrendChip({ trend }: { trend: string }) {
   )
 }
 
-/**
- * The fold marker: pointing down when the accounts are showing, right when
- * they are folded away. `aria-hidden` because the button around it announces
- * its state through `aria-expanded`.
- */
-function Chevron() {
-  return (
-    <svg viewBox="0 0 10 10" aria-hidden="true" className="qg-chev">
-      <path
-        d="M1.5 3.5 L5 7 L8.5 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
 /** What a row's readers call its accounts, in entry order. */
 type Named = { name: string }
 
@@ -83,16 +73,28 @@ type Named = { name: string }
  * Every width is a field the server wrote, so the bar cannot disagree with
  * the number under it. A plugin too old to report the projected gain draws
  * no hatching rather than guessing at it.
+ *
+ * Shared with the Monthly API Credit card, whose pool is money rather than a
+ * percentage but is drawn the same way: what is left, then what the next
+ * refill restores.
  */
-function PoolBar({ row, label }: { row: Row; label: string }) {
-  const aggregate = row.aggregate
-  const gain = typeof aggregate.projectedGainFraction === "number" ? aggregate.projectedGainFraction : 0
+export function PoolBar({
+  level,
+  fraction,
+  gain,
+  gainTitle,
+  label,
+}: {
+  level: string
+  fraction: number
+  gain: number
+  gainTitle: string
+  label: string
+}) {
   return (
-    <div className={`qg-bar qg-lvl-${aggregate.level}`} role="img" aria-label={label}>
-      {aggregate.remainingFraction > 0 && (
-        <i className="qg-fill" style={{ width: `${aggregate.remainingFraction * 100}%` }} />
-      )}
-      {gain > 0 && <i className="qg-ghost" style={{ width: `${gain * 100}%` }} title="back at the next reset" />}
+    <div className={`qg-bar qg-lvl-${level}`} role="img" aria-label={label}>
+      {fraction > 0 && <i className="qg-fill" style={{ width: `${fraction * 100}%` }} />}
+      {gain > 0 && <i className="qg-ghost" style={{ width: `${gain * 100}%` }} title={gainTitle} />}
     </div>
   )
 }
@@ -150,26 +152,53 @@ function recoverySentence(row: Row, named: Named[], now: number): string {
 }
 
 /**
+ * Why a lone account's reading is not the whole story, as the line under its
+ * figures says it. The words the expanded row used to carry, now that a card
+ * with one account has no rows.
+ */
+const SOLO_STATE: Record<string, string> = {
+  error: "the last reading failed · these figures are from the one before",
+  noData: "not reported for this account",
+  pending: "not polled yet",
+  unsupported: "quota-cache does not poll this provider",
+}
+
+/** The state chip beside a lone account's title, where a row's state word used to be. */
+const SOLO_CHIP: Record<string, { word: string; tone: string }> = {
+  error: { word: "failed", tone: "qg-chip-critical" },
+  stale: { word: "stale", tone: "" },
+}
+
+/**
  * One window across a provider's credentials: the pool first, its accounts
- * after, foldable.
+ * after, folded shut.
  *
  * What folds is the per-account detail; the pool stays. The bar, the number
  * and when it recovers are all still there when the card is shut,
  * because those are what a reader scanning the page came for — a fold that hid
- * the number would just be a card that was gone.
+ * the number would just be a card that was gone. The fold line names the
+ * accounts worth opening it for, so a shut card still says which.
+ *
+ * On a provider with one account a window has no fold: the pool is that
+ * account, and what its row would add — a state, a weekly cap — is said under
+ * the figures. A window only one of several accounts reports keeps its fold,
+ * which is what names the account.
  */
 export function WindowCard({
   row,
   credentials,
   names,
-  collapsed,
+  single,
+  open,
   onToggle,
 }: {
   row: Row
   credentials: Map<string, Credential>
   /** What the provider's section calls each account; see accountNames. */
   names: Map<string, AccountName>
-  collapsed: boolean
+  /** The provider holds one account, so there is no one else to tell it from. */
+  single: boolean
+  open: boolean
   onToggle: () => void
 }) {
   // Ties the fold to what it folds, so assistive technology can follow the
@@ -212,13 +241,25 @@ export function WindowCard({
   // ahead of a list of five reads as a miscount, so it says why instead —
   // "reporting", because accounts with no reading can sit beside them.
   const heldOut = typeof aggregate.heldOutCount === "number" ? aggregate.heldOutCount : 0
+  // One account on the provider: the pool is that account, so there is
+  // nothing to unfold. Its state and any weekly cap go under the figures.
+  const solo = single && row.entries.length === 1 ? row.entries[0]! : null
   const scope =
-    row.entries.length <= 1
+    solo || row.entries.length === 0
       ? ""
       : aggregate.memberCount === 0 && heldOut > 0
         ? ": every reporting account's weekly is spent"
         : ` across ${plural(aggregate.memberCount, "account")}`
-  const foldNote = foldNotes(aggregate)
+  // The mean is over the accounts with a reading that it does not hold out.
+  // Saying how many it leaves out, and why, is what explains a pool that looks
+  // smaller than its rows — most of all a session pool at 0% over accounts
+  // each reading 100% — and on Fable, how many it counts at their weekly.
+  const capped = cappedByWeekly(row.entries)
+  const foldNote = [...foldNotes(aggregate), ...(capped > 0 ? [`${capped} capped by weekly`] : [])]
+  const flags = foldFlags(
+    row.entries,
+    named.map((item) => item.name),
+  )
   // The far end of the recovery: when every account below full has reset.
   // Shown only when it says something the recovery line has not — with one
   // account, or one account below full, it is the same instant.
@@ -227,35 +268,57 @@ export function WindowCard({
       ? secondsUntil(aggregate.fullAtEpoch, now)
       : 0
 
+  const soloChip = solo ? SOLO_CHIP[solo.state] : undefined
+  const soloWeekly = solo ? weeklyNote(solo) : null
+  const soloNote = solo
+    ? [
+        solo.state === "stale"
+          ? `observed ${formatDuration(now - solo.observedAtEpoch)} ago, past quota-cache's stale-after`
+          : SOLO_STATE[solo.state],
+        soloWeekly ? `own figure ${solo.remainingPercent}% · ${soloWeekly.text}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : ""
+
   // Everything the hidden line under the bar shows, so that line can stay
   // hidden from assistive technology without taking a figure with it.
   const label = [
     `${aggregate.remainingPercent}% left${levelWord ? `, ${levelWord}` : ""}${scope}.`,
-    row.entries.length > 1 ? `${figures}.` : "",
+    !solo && row.entries.length > 0 ? `${figures}.` : "",
+    capped > 0 ? `${plural(capped, "account")} capped by the weekly limit.` : "",
+    soloNote ? `${soloNote.charAt(0).toUpperCase()}${soloNote.slice(1)}.` : "",
     recoverySentence(row, named, now),
     full > 0 ? `Full again in ${formatDuration(full)}.` : "",
   ]
     .filter(Boolean)
     .join(" ")
-  // One account: the pool bar above is that account's bar, so its row carries
-  // who it is and what it is doing, not the same bar and figure again.
-  const solo = row.entries.length === 1
 
   return (
     // A critical pool says so at the card's edge as well as in its bar, its
     // number and its chip.
-    <article className={`qg-win ${aggregate.level === "critical" ? "is-crit" : ""}`} aria-label={row.title}>
+    <article
+      className={`qg-win ${solo ? "is-plain" : ""} ${aggregate.level === "critical" ? "is-crit" : ""}`}
+      aria-label={row.title}
+    >
       <div className="qg-whead">
         <h3 id={titleID} className="qg-wtitle">
           {row.title}
         </h3>
         <span className="qg-chips">
           <TrendChip trend={aggregate.trend} />
+          {soloChip && <span className={`qg-chip ${soloChip.tone}`}>{soloChip.word}</span>}
           {levelWord && <span className={`qg-chip qg-chip-${aggregate.level}`}>{levelWord}</span>}
         </span>
       </div>
 
-      <PoolBar row={row} label={label} />
+      <PoolBar
+        level={aggregate.level}
+        fraction={aggregate.remainingFraction}
+        gain={typeof aggregate.projectedGainFraction === "number" ? aggregate.projectedGainFraction : 0}
+        gainTitle="back at the next reset"
+        label={label}
+      />
 
       <div className="qg-hfig">
         <span className={`qg-big ${LEVEL_CLASS[aggregate.level] ?? ""}`}>
@@ -265,53 +328,50 @@ export function WindowCard({
         <Recovery row={row} named={named} now={now} />
       </div>
 
-      {full > 0 && (
+      {(full > 0 || soloNote) && (
         // The bar's label already carries this, so assistive technology is
         // not read it twice.
         <div className="qg-hsub" aria-hidden="true">
-          <span className="qg-full">
-            full again in <b className="num">{formatDuration(full)}</b>
-          </span>
+          {soloNote && <span>{soloNote}</span>}
+          {full > 0 && (
+            <span className="qg-full">
+              full again in <b className="num">{formatDuration(full)}</b>
+            </span>
+          )}
         </div>
       )}
 
-      <button
-        type="button"
-        className="qg-fold"
-        aria-expanded={!collapsed}
-        aria-controls={bodyID}
-        aria-labelledby={`${titleID} ${countID}`}
-        onClick={onToggle}
-      >
-        <Chevron />
-        <span id={countID}>
-          {plural(row.entries.length, "account")}
-          {/* The mean is over the accounts with a reading that it does not
-            * hold out. Saying how many it leaves out, and why, is what
-            * explains a pool that looks smaller than its rows — most of all
-            * a session pool at 0% over accounts each reading 100%. */}
-          {foldNote.length > 0 && <span className="qg-fold-note"> · {foldNote.join(" · ")}</span>}
-        </span>
-      </button>
+      {!solo && (
+        <>
+          <FoldButton open={open} controls={bodyID} labelledBy={`${titleID} ${countID}`} onToggle={onToggle}>
+            <span id={countID} className="qg-fold-line">
+              <span className="qg-fold-count">{plural(row.entries.length, "account")}</span>
+              {foldNote.length > 0 && <span className="qg-fold-note">· {foldNote.join(" · ")}</span>}
+              <Flags flags={flags} />
+            </span>
+          </FoldButton>
 
-      {/* Rendered in the order received. credentials[] is pre-sorted by soonest
-        * weekly reset and every row repeats that order, so the top line is the
-        * credential that recovers next — in this card and in every other.
-        *
-        * Unmounted rather than hidden when folded. Each row runs its own
-        * countdown off the shared clock, and keeping a dozen invisible ones
-        * ticking is work nobody can see. */}
-      <div id={bodyID} hidden={collapsed} className="qg-rows">
-        {!collapsed &&
-          row.entries.map((entry) => (
-            <CredentialRow
-              key={entry.credentialId}
-              entry={entry}
-              credential={credentials.get(entry.credentialId)}
-              solo={solo}
-            />
-          ))}
-      </div>
+          {/* Rendered in the order received. credentials[] is pre-sorted by
+            * soonest weekly reset and every row repeats that order, so the top
+            * line is the credential that recovers next — in this card and in
+            * every other.
+            *
+            * Unmounted rather than hidden when folded. Each row runs its own
+            * countdown off the shared clock, and keeping a dozen invisible ones
+            * ticking is work nobody can see. */}
+          <div id={bodyID} hidden={!open} className="qg-rows">
+            {open &&
+              row.entries.map((entry, index) => (
+                <CredentialRow
+                  key={entry.credentialId}
+                  entry={entry}
+                  credential={credentials.get(entry.credentialId)}
+                  name={named[index]!.name}
+                />
+              ))}
+          </div>
+        </>
+      )}
     </article>
   )
 }

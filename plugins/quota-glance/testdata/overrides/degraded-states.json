@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "revision": 9,
+  "apiCredits": {
+    "org-3f2a9c1d0b7e": {
+      "monthlyUsd": "260.50",
+      "renews": "2026-09-29",
+      "rev": 4,
+      "updatedAt": "2026-08-30T10:00:00Z"
+    }
+  },
+  "renewals": {
+    "0123456789abcdef": {
+      "date": "2026-09-29",
+      "rev": 9,
+      "updatedAt": "2026-09-01T12:00:00Z"
+    }
+  }
+}

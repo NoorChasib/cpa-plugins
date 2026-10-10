@@ -8,3 +8,7 @@
 .quota-details summary { cursor: pointer; font-weight: 600; }
 .quota-details ul { padding-left: 1.1rem; }
 .quota-details li { margin: .6rem 0; }
+.settings h3 { font-size: 13px; font-weight: 600; margin: 18px 0 6px; }
+.meter-list { margin: 0; padding-left: 1.1rem; overflow-wrap: anywhere; }
+.meter-list li { margin: .4rem 0; }
+.meter-list .secondary { display: inline; }

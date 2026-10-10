@@ -17,6 +17,9 @@ final class QuotaReadoutController: NSObject {
     private var wakeObserver: NSObjectProtocol?
     private var poll = 0
     private var polling = false
+    /// Settings asked for the window list while the clock is off (Icon only):
+    /// one refresh, now or when the page next finishes loading.
+    private var windowsRequested = false
 
     init(webView: WKWebView) {
         self.webView = webView
@@ -108,7 +111,15 @@ final class QuotaReadoutController: NSObject {
     }
 
     func refreshIfEnabled() {
-        if timer != nil { refresh() }
+        if timer != nil || windowsRequested { refresh() }
+    }
+
+    /// Loads the summary's window list once without starting the clock, so
+    /// Settings can offer windows to someone on Icon only.
+    func requestWindows() {
+        guard !state.hasSummary else { return }
+        windowsRequested = true
+        refresh()
     }
 
     func markUnavailable() {
@@ -159,6 +170,7 @@ final class QuotaReadoutController: NSObject {
         guard (originPort == 0 ? (location.url.scheme?.lowercased() == "https" ? 443 : 80) : originPort) == expectedPort else { return }
         if envelope.kind == "snapshot", let snapshot = envelope.snapshot {
             state.receive(snapshot)
+            if state.hasSummary { windowsRequested = false }
             onChange?()
         } else if envelope.kind == "unavailable" {
             markUnavailable()

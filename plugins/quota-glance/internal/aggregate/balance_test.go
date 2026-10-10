@@ -168,6 +168,7 @@ func TestBalanceRefusesWhatIsNotTwoDollarTotals(t *testing.T) {
 func TestBalanceIsNotACredential(t *testing.T) {
 	plain := buildFixture(t)
 	snapshot := loadSnapshot(t, "seven-credentials.json")
+	meter, values := fixtureExtras(t, "seven-credentials")
 	withoutBalance := Build(Input{
 		Snapshot: func() qc.Snapshot {
 			entries := map[string]qc.Entry{}
@@ -180,6 +181,7 @@ func TestBalanceIsNotACredential(t *testing.T) {
 			return snapshot
 		}(),
 		Identities: fixtureRoster(), StaleAfter: 45 * time.Minute, Redeemable: true, BalanceWarnBelow: 5,
+		Meter: meter, Overrides: values, AllowEdit: true,
 	}, at(t, 0))
 	if len(plain.Balances) != 1 || len(withoutBalance.Balances) != 0 {
 		t.Fatalf("balances: with=%d without=%d", len(plain.Balances), len(withoutBalance.Balances))

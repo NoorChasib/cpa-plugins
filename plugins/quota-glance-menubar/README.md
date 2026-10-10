@@ -8,7 +8,7 @@ Requires macOS 13 or newer and a working
 
 ## Install from a DMG
 
-Open `Quota-Glance-0.3.1-macOS.dmg`, drag **Quota Glance** to **Applications**,
+Open `Quota-Glance-0.4.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
 then eject the disk image and open the installed app. Right-click its menu bar
 icon, choose **Settings**, and enable **Open at login** to start it whenever you
 sign in, including after a restart. Your saved URL and session persist.
@@ -48,7 +48,7 @@ To create the drag-to-Applications disk image instead:
 make dmg
 ```
 
-The image is written to `dist/Quota-Glance-0.3.1-macOS.dmg`.
+The image is written to `dist/Quota-Glance-0.4.0-macOS.dmg`.
 Local builds are ad-hoc signed; notarized release builds run through GitHub
 after the Apple signing secrets are configured.
 
@@ -65,14 +65,35 @@ of adding `?token=` to the saved URL. Once signed in with the dashboard
 password, **Use one** spends a banked reset from the popover just as it does on
 the page (Quota Glance 0.5.0 or newer).
 
-Click the menu bar chart icon to open or close the page. Scroll inside the
-popover to see more. Right-click or Control-click the icon for **Settings**,
+Click the menu bar item to open or close the page. Scroll inside the
+popover to see more. Right-click or Control-click the item for **Settings**,
 **Show Dashboard**, **Reload Page**, **Open in Browser**, **Check for Updates…**,
 and **Quit**.
-In **Settings → Menu bar quota**, choose a window such as **Claude · Weekly
-(Fable)** to show its remaining percentage beside the icon. It updates every
-minute while your Mac is awake, including when the popover is closed. Choose
-**Icon only** to hide it. Enable **Open at login** if desired.
+
+## Choose what the menu bar shows
+
+In **Settings → Menu bar**, **Show** picks one of four styles:
+
+- **Icon only**: the chart icon.
+- **Percent**: the icon and one window's remaining percentage, for example
+  `59%` (the form before 0.4.0).
+- **Lettered pair**: one to three windows as a letter and a number, for
+  example `S94 W59`.
+- **Split pill**: the same windows in a rounded box with one half per window.
+
+Under **Windows**, pick one to three windows from any provider and drag them
+into order. The letter beside each is the one the menu bar draws: **S**
+session, **W** weekly, **F** weekly (Fable), **C** credits. **Badge** adds a
+small provider logo to each number: **Always** (the default), **When
+providers differ**, or **Off**. The preview shows the result on a dark and a
+light menu bar; the menu bar changes when you click **Save and Open**.
+Readings update every minute while your Mac is awake, including when the
+popover is closed. A missing or out-of-date reading shows **—**.
+
+Updating from 0.3 keeps your menu bar as it was: a chosen quota stays
+**Percent** and Icon only stays **Icon only**. A new install starts with
+Lettered pair, Claude Session and Claude Weekly. Enable **Open at login** if
+desired.
 
 See [REFERENCE.md](REFERENCE.md) for refresh behavior, builds, stored data,
 and Mac verification steps.

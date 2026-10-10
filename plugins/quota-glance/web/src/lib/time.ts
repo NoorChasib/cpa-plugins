@@ -80,3 +80,29 @@ export function formatClock(epoch: number): string {
 export function formatDate(epoch: number): string {
   return new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric" })
 }
+
+/**
+ * A calendar day as UTC sees it: "Oct 29". For the API credit's refill
+ * dates, which the reader configured as dates and quota-cache turns into
+ * 00:00 UTC on that day. In the reader's own zone west of Greenwich that
+ * instant falls on the evening before, and "refills Oct 28" beside a refill
+ * configured for the 29th would read as a mistake.
+ */
+export function formatUTCDate(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" })
+}
+
+/**
+ * Calendar days from today to an instant's day, both in the reader's own
+ * zone: what "in 20d" beside formatDate's "Oct 29" has to count for the two
+ * to agree. Elapsed time rounded down is a day short for most of every day.
+ * Through local midnights rather than 86400s apart, so a DST change between
+ * them does not move the count.
+ */
+export function calendarDaysUntil(epoch: number, nowSeconds: number): number {
+  const midnight = (seconds: number) => {
+    const day = new Date(seconds * 1000)
+    return new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
+  }
+  return Math.round((midnight(epoch) - midnight(nowSeconds)) / 86_400_000)
+}
