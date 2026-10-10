@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -588,11 +590,13 @@ func TestXAIProductWindowFoldsIntoCredits(t *testing.T) {
 	now := at(t, 0)
 	observed := now.Add(-5 * time.Minute)
 	const grok = "xai-noorchasib@example.com.json"
+	// The product first, so filtering in place would overwrite the snapshot's
+	// own windows rather than only shorten a copy of its slice header.
+	windows := grokWindows(50, 50, now.Add(3*24*time.Hour), observed)
+	windows[0], windows[1] = windows[1], windows[0]
+	before := slices.Clone(windows)
 	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
-		"xai:" + grok: {
-			Provider: "xai", AuthIndex: grok, ObservedAt: observed,
-			Windows: grokWindows(50, 50, now.Add(3*24*time.Hour), observed),
-		},
+		"xai:" + grok: {Provider: "xai", AuthIndex: grok, ObservedAt: observed, Windows: windows},
 	}}
 	// Written while the product still had a row of its own.
 	samples := []Sample{
@@ -628,8 +632,8 @@ func TestXAIProductWindowFoldsIntoCredits(t *testing.T) {
 			t.Fatalf("sampled %q; only the Credits row exists", sample.WindowKey)
 		}
 	}
-	if got := len(snapshot.Entries["xai:"+grok].Windows); got != 2 {
-		t.Fatalf("the snapshot's windows were modified: %d left", got)
+	if !reflect.DeepEqual(windows, before) {
+		t.Fatalf("the snapshot's windows were modified: %+v", windows)
 	}
 }
 
