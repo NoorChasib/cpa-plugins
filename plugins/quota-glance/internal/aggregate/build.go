@@ -212,13 +212,21 @@ func emailOf(id Identity) string {
 	return derived
 }
 
-// windowsOf falls back to a single weekly window synthesized from the
-// entry's top-level fields. That is what lets this plugin work against a
-// snapshot written before canonical windows existed; the remaining rows appear
-// on their own once the writer supplies them.
+// xaiProductPrefix is the raw window quota-cache writes for each item in
+// Grok's productUsage list: raw:xai:product/<id>.
+const xaiProductPrefix = qc.WindowRawPrefix + "xai:product/"
+
+// windowsOf is the windows a credential reports, and the only place they are
+// read from, so every row and entry, and through the rows every trend sample,
+// agrees on what a credential has.
+//
+// It falls back to a single weekly window synthesized from the entry's
+// top-level fields. That is what lets this plugin work against a snapshot
+// written before canonical windows existed; the remaining rows appear on their
+// own once the writer supplies them.
 func windowsOf(entry qc.Entry) []qc.EntryWindow {
 	if len(entry.Windows) > 0 {
-		return entry.Windows
+		return withoutXAIProducts(entry)
 	}
 	if entry.ObservedAt.IsZero() {
 		return nil
@@ -227,6 +235,33 @@ func windowsOf(entry qc.Entry) []qc.EntryWindow {
 		Key: qc.WindowWeekly, Title: "Weekly",
 		UsedPercent: entry.Percent, ResetAt: entry.ResetAt, ObservedAt: entry.ObservedAt,
 	}}
+}
+
+// withoutXAIProducts folds a Grok credential's per-product windows into its
+// Credits window.
+//
+// xAI's credits response carries one allowance: creditUsagePercent, the shared
+// pool quota-cache writes as credits. Each productUsage item has a percentage
+// and no limit of its own — it is one product's slice of that same pool, read
+// with the pool's period and reset. A row of its own printed a "% left" that
+// cannot be spent on its own, and with a single product it was the Credits bar
+// again, figure for figure. So whenever the pool is there, its slices are not.
+//
+// A credential that reports products and no pool keeps them, rather than
+// vanishing from every row, and every other provider's raw: windows pass
+// through untouched. The snapshot's own slice is never modified.
+func withoutXAIProducts(entry qc.Entry) []qc.EntryWindow {
+	hasPool := slices.ContainsFunc(entry.Windows, func(w qc.EntryWindow) bool { return w.Key == qc.WindowCredits })
+	if entry.Provider != "xai" || !hasPool {
+		return entry.Windows
+	}
+	kept := make([]qc.EntryWindow, 0, len(entry.Windows))
+	for _, w := range entry.Windows {
+		if !strings.HasPrefix(w.Key, xaiProductPrefix) {
+			kept = append(kept, w)
+		}
+	}
+	return kept
 }
 
 // humanDuration renders a countdown the way the design prints it.
