@@ -23,6 +23,7 @@ import {
   creditRow,
   cycleOn,
   cycleText,
+  dropConflicts,
   EMPTY_CREDIT_DRAFT,
   EMPTY_RENEWAL_DRAFT,
   editCredit,
@@ -518,6 +519,27 @@ describe("what a Save came to (E.8)", () => {
       "renews",
     ])
     assert.equal(CONFLICT_FIELD, "Changed from another device. Showing the latest; check and save again.")
+  })
+})
+
+describe("the draft after a conflict (must-fix 3)", () => {
+  const edit = (text: string) => ({ baseRevision: "2", name: "x", monthlyUsd: { kind: "set" as const, text } })
+
+  test("drops each conflicting row and keeps the rest, so Try again resends them", () => {
+    const draft = { rows: { alpha: edit("250"), bravo: edit("310") }, remove: { "org-3f2a9c1d0b7e": "1" } }
+    const next = dropConflicts(draft, ["alpha"])
+    assert.deepEqual(Object.keys(next.draft.rows), ["bravo"])
+    assert.deepEqual(next.draft.remove, { "org-3f2a9c1d0b7e": "1" })
+    assert.equal(next.retry, true)
+    assert.deepEqual(Object.keys(draft.rows), ["alpha", "bravo"], "the draft it was given is not changed")
+  })
+
+  test("with every edited row in conflict nothing is left, so there is nothing to try again", () => {
+    const next = dropConflicts({ rows: { alpha: edit("250"), bravo: edit("310") }, remove: {} }, ["alpha", "bravo"])
+    assert.deepEqual(next.draft, { rows: {}, remove: {} })
+    assert.equal(next.retry, false)
+    const orphan = dropConflicts({ rows: {}, remove: { "0123456789abcdef": "2" } }, ["0123456789abcdef"])
+    assert.equal(orphan.retry, false)
   })
 })
 

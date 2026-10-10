@@ -5,6 +5,7 @@ import { Flags, FoldButton } from "./Fold"
 import {
   accountFlags,
   renewalFoot,
+  renewalEstimateAt,
   renewalMark,
   renewalOrphanText,
   ROUTING_LABELS,
@@ -17,6 +18,7 @@ import { canSaveHere, saveSettings } from "../lib/save"
 import {
   CONFLICT_FIELD,
   dateEpoch,
+  dropConflicts,
   EMPTY_RENEWAL_DRAFT,
   editRenewal,
   FIELD_FOOT,
@@ -262,8 +264,8 @@ function RenewalCap({
   busy: boolean
   onEdit: (edit: FieldEdit | undefined) => void
 }) {
-  const shown = renewalMark(credential)
-  const estimate = shown?.estimated ? `~${formatDate(shown.atEpoch)}` : null
+  const estimateAt = renewalEstimateAt(credential)
+  const estimate = estimateAt === null ? null : `~${formatDate(estimateAt)}`
   const undo = (
     <EditLink disabled={busy} onClick={() => onEdit(undefined)}>
       Undo
@@ -305,6 +307,14 @@ function RenewalCap({
             <SetHereDot lead />
             set here
           </span>
+          {estimate && (
+            <>
+              <Dot />
+              <span>
+                estimate <b>{estimate}</b>
+              </span>
+            </>
+          )}
           <Dot />
           <EditLink disabled={busy} onClick={() => onEdit({ kind: "drop" })}>
             Use estimate
@@ -534,20 +544,18 @@ export function AccountsCard({
       case "conflict": {
         const nextOverlay = { ...overlay }
         const nextMarks: Record<string, string> = {}
-        const rows = { ...draft.rows }
-        const remove = { ...draft.remove }
         for (const id of outcome.ids) {
           const current = outcome.current[id]
           nextOverlay[id] = current && typeof current === "object" ? (current as RenewalSetting) : null
           nextMarks[id] = CONFLICT_FIELD
-          delete rows[id]
-          delete remove[id]
         }
-        setDraft({ rows, remove })
+        const next = dropConflicts(draft, outcome.ids)
+        setDraft(next.draft)
         setOverlay(nextOverlay)
         setMarks(nextMarks)
         setStatus({ tone: "bad", text: outcome.text })
-        setFailed(true)
+        // Try again only while a kept row is left to send.
+        setFailed(next.retry)
         onSaved()
         return
       }

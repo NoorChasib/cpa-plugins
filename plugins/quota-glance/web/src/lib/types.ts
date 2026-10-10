@@ -69,6 +69,13 @@ export interface Credential {
    * older plugin sends none.
    */
   renewalSource?: "reported" | "dashboard" | "estimated" | (string & {}) | null
+  /**
+   * A Claude credential's estimate, the next billing anniversary of when the
+   * subscription began, whatever `renewalSource` says: what Use estimate
+   * returns to beside a date set on the dashboard. Null for any other
+   * provider and when no start is known; absent from an older plugin.
+   */
+  renewalEstimateAtEpoch?: number | null
   /** The page may set this credential's renewal date: a Claude credential, while editing is available. */
   renewalEditable?: boolean
   /** The renewal date stored on the dashboard, used or not; null when none. */

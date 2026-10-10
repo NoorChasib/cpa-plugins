@@ -13,6 +13,7 @@ import {
   accountFlags,
   accountsCardNeeded,
   lastFailure,
+  renewalEstimateAt,
   renewalFoot,
   renewalMark,
   renewalOrphanText,
@@ -127,6 +128,18 @@ describe("renewal marks (F.3)", () => {
     assert.equal(renewalMark({ renewalAtEpoch: undefined as unknown as null }), null)
     // A plugin before renewalSource: renewalEstimated alone still says estimate.
     assert.equal(renewalMark({ renewalAtEpoch: 1, renewalEstimated: true })?.estimated, true)
+  })
+
+  test("a date set here names the estimate Use estimate returns to (F.3)", () => {
+    // set here · estimate ~Oct 3 · Use estimate
+    assert.equal(renewalEstimateAt(credential("5f2b8c41d09e7a36")), Date.UTC(2026, 9, 3, 11, 20) / 1000)
+    // An estimate names itself; a known date with no start names none.
+    const estimated = credential("claude-siphorchannel@example.com.json")
+    assert.equal(renewalEstimateAt(estimated), estimated.renewalAtEpoch)
+    assert.equal(renewalEstimateAt(credential("codex-noor@example.com.json")), null)
+    assert.equal(renewalEstimateAt(credential("claude-noor@example.com.json")), null)
+    // A plugin too old to send one beside a date set here: none to name.
+    assert.equal(renewalEstimateAt({ renewalAtEpoch: 1791590400, renewalSource: "dashboard" }), null)
   })
 
   test("an estimate more than a month off is a yearly plan's", () => {

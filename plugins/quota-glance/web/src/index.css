@@ -1140,6 +1140,15 @@
     column-gap: 14px;
   }
 
+  /* A level chip and a condition chip together ("$32.00 low", "incomplete")
+   * fill most of the column. The chips wrap under the name rather than leave
+   * it one letter and an ellipsis; a name and a chip that fit stay on one
+   * line. */
+  .qg-crow > .qg-awho {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
   .qg-chead {
     align-items: end;
     padding: 8px 0 7px;

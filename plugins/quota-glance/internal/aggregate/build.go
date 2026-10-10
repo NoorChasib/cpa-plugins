@@ -3,6 +3,7 @@ package aggregate
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -514,20 +515,21 @@ func Build(in Input, now time.Time) Document {
 		}
 		renewal, source := renewalFor(r, setting, now)
 		doc.Credentials = append(doc.Credentials, Credential{
-			ID:                r.identity.AuthIndex,
-			Email:             emailOf(r.identity),
-			Provider:          r.identity.Provider,
-			Plan:              planLabelOf(r.identity.Provider, r.entry.Plan, in.PlanLabels),
-			Status:            r.status,
-			LastObservedEpoch: epochOf(r.freshest),
-			Activity:          activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
-			ResetCredits:      resetCreditsOf(r, in.Redeemable, now),
-			RenewalAtEpoch:    renewal,
-			RenewalEstimated:  source != nil && *source == renewalEstimated,
-			RenewalSource:     source,
-			RenewalEditable:   renewalsEditable && renewalEditable(r.identity),
-			RenewalSetting:    renewalSettingOf(setting),
-			Credits:           accountCreditsOf(r),
+			ID:                     r.identity.AuthIndex,
+			Email:                  emailOf(r.identity),
+			Provider:               r.identity.Provider,
+			Plan:                   planLabelOf(r.identity.Provider, r.entry.Plan, in.PlanLabels),
+			Status:                 r.status,
+			LastObservedEpoch:      epochOf(r.freshest),
+			Activity:               activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
+			ResetCredits:           resetCreditsOf(r, in.Redeemable, now),
+			RenewalAtEpoch:         renewal,
+			RenewalEstimated:       source != nil && *source == renewalEstimated,
+			RenewalSource:          source,
+			RenewalEstimateAtEpoch: renewalEstimateOf(r, now),
+			RenewalEditable:        renewalsEditable && renewalEditable(r.identity),
+			RenewalSetting:         renewalSettingOf(setting),
+			Credits:                accountCreditsOf(r),
 		})
 	}
 
@@ -541,6 +543,30 @@ func Build(in Input, now time.Time) Document {
 	}
 	doc.NextAttemptEpoch = epochPointerOf(soonestAttempt)
 	applyStaleness(&doc, in, newestObservation, now)
+	return doc
+}
+
+// WithSettings is doc with every part the dashboard's settings decide taken
+// from fresh: the API credit card, the renewal orphans, and each credential's
+// renewal. doc is a document served again while its source is failing, and
+// fresh is built from the same snapshot and roster with the settings as they
+// are now, so a value saved meanwhile shows at once and the page's next save
+// starts from its revision. doc itself is not modified.
+func WithSettings(doc, fresh Document) Document {
+	doc.APICredits = fresh.APICredits
+	doc.RenewalOrphans = fresh.RenewalOrphans
+	now := make(map[string]Credential, len(fresh.Credentials))
+	for _, credential := range fresh.Credentials {
+		now[credential.ID] = credential
+	}
+	doc.Credentials = slices.Clone(doc.Credentials)
+	for i := range doc.Credentials {
+		c := &doc.Credentials[i]
+		if f, ok := now[c.ID]; ok {
+			c.RenewalAtEpoch, c.RenewalEstimated, c.RenewalSource = f.RenewalAtEpoch, f.RenewalEstimated, f.RenewalSource
+			c.RenewalEstimateAtEpoch, c.RenewalEditable, c.RenewalSetting = f.RenewalEstimateAtEpoch, f.RenewalEditable, f.RenewalSetting
+		}
+	}
 	return doc
 }
 

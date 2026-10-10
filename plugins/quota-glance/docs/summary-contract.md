@@ -331,6 +331,15 @@ whose id is not a CPA auth index of 16 hexadecimal digits, which is what
 there is none. `revision` is what a save sends back as `baseRevision`. Saving
 `date: null` ("Use estimate") deletes it.
 
+### `renewalEstimateAtEpoch` — the estimate beside whatever wins
+
+A Claude credential's estimated renewal, the next billing anniversary of when
+the subscription began (`renewalEstimated`, below), whatever `renewalSource`
+says. Beside a date set on the dashboard it is the date **Use estimate** returns
+to, which the editor names: `set here · estimate ~Oct 21 · Use estimate`.
+`null` for every other provider, and when Quota Cache has not read a start. A
+plugin older than this field omits it; read a missing field as `null`.
+
 ### `renewalOrphans` — dates stored for credentials no longer listed
 
 A top-level array, always present: each renewal date stored on the dashboard
@@ -745,12 +754,26 @@ fails answers:
    change, which is why no press id is needed.
 10. **Rate.** Past 30 committed saves in the last minute, both doors together:
     `429 too_many_writes` with `Retry-After: 60`.
-11. **Commit.** A new reading takes its baseline from the meter (below); a meter
-    that does not keep the hours it needs is `400 invalid_reading_time`. Past a
-    bound (64 API credit rows, 256 renewal dates, 1 MiB), renewal dates for
-    credentials the document no longer lists are evicted, oldest first; when
-    that is not enough, `409 settings_full`. A failed write is
-    `503 settings_unwritable`, and nothing changed.
+11. **Commit.** A new reading takes its baseline from the meter: its usage from
+    00:00 UTC of the reading's day to the start of the reading's hour, from the
+    meter the last rebuild read. A meter that has not saved since, because
+    Quota Cache is stopped or behind, gives the hours it has: it counted
+    nothing after its last save, so the baseline is complete, or short, which
+    overstates the spend since the reading, the safe direction. A reading is
+    therefore saved while the card reads "incomplete"; the row stays a bound
+    until a reading taken after counting resumes. Only a meter that no longer
+    keeps 00:00 UTC of the reading's day, which within the 48 hours allowed
+    means a meter whose clock runs ahead, refuses it, with
+    `400 invalid_reading_time`. Usage under a model name or prompt class this
+    build does not know, as a newer Quota Cache may add, goes into the
+    baseline as `(other)`, which is never priced. A new reading for an account
+    whose `organizationId` is not in the form a stored reading holds is
+    `409 not_editable` with its id. Past a bound (64 API credit rows, 256
+    renewal dates, 1 MiB), renewal dates for credentials the document no
+    longer lists are evicted, oldest first; when that is not enough,
+    `409 settings_full`. A file this build could not load back is never
+    written: that, and a failed write, are `503 settings_unwritable`, and
+    nothing changed.
 12. **Answer.** The document is rebuilt before the answer:
     `200 {"ok": true, "unchanged": false, "revision": "8", "settings": {id:
     <the row's settings block, or the credential's renewalSetting, from the
@@ -817,7 +840,11 @@ are distinguished by whether `resetAtEpoch` is null.
 
 On any of the last three the **last good document keeps being served**, marked
 stale. An empty response is indistinguishable from a broken install, so it is
-never sent in place of data that was valid a moment ago.
+never sent in place of data that was valid a moment ago. What the dashboard's
+settings decide in it, `apiCredits`, `renewalOrphans` and each credential's
+renewal fields, is rebuilt from the same snapshot and roster with the settings
+and Quota Cache's meter as they are now, so a value saved meanwhile shows at
+once.
 
 ## Rows
 

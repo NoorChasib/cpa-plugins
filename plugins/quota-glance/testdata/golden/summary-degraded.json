@@ -23,6 +23,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -39,6 +40,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -62,6 +64,7 @@
       "renewalAtEpoch": 1803801600,
       "renewalEstimated": true,
       "renewalSource": "estimated",
+      "renewalEstimateAtEpoch": 1803801600,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -78,6 +81,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -101,6 +105,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -233,6 +238,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -325,6 +331,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": {
@@ -346,6 +353,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -362,6 +370,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -378,6 +387,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": {

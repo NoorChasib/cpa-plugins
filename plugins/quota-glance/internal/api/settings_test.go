@@ -486,6 +486,46 @@ func TestAnUncoveredBaselineIsAReadingTimeError(t *testing.T) {
 	}
 }
 
+// A meter stopped hours ago is when the page asks for a reading, so a reading
+// saves then, and the rest of its batch with it.
+func TestAReadingSavesWhileTheMeterIsStopped(t *testing.T) {
+	a, saver := settingsAPI(t)
+	stopped := settingsNow.Add(-4 * time.Hour)
+	saver.in.Meter.FlushedAt, saver.in.Meter.StoppedAt, saver.in.Meter.StopReason = stopped, &stopped, "disabled"
+	res := postSettings(a, batchOf(overrides.KindAPICredits,
+		creditRow(editableAccount, "", "300", nil, map[string]any{"remainingUsd": "143.20", "at": "2026-10-09T13:55:00Z"})))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", res.StatusCode, res.Body)
+	}
+	stored := saver.store.Current().APICredits[editableAccount]
+	if stored.MonthlyUSD != "300" || stored.Reading == nil || len(stored.Reading.Baseline.Usage) != 1 || stored.Reading.Baseline.Usage[0].Input != 1_000_000 {
+		t.Fatalf("stored: %+v %+v", stored, stored.Reading)
+	}
+}
+
+// A new reading stores the account's organization. One the document gives in
+// a form a stored reading may not hold is refused as not editable, and nothing
+// in the batch is saved.
+func TestAReadingWithoutAUsableOrganizationIsNotEditable(t *testing.T) {
+	a, saver := settingsAPI(t)
+	key := qc.Key(qc.ProviderAnthropicAPI, editableAccount)
+	entry := saver.in.Snapshot.Entries[key]
+	credit := *entry.APICredit
+	credit.OrganizationID = strings.ToUpper(settingsOrg)
+	entry.APICredit = &credit
+	saver.in.Snapshot.Entries[key] = entry
+	saver.rebuild()
+	body := wantError(t, "unnormalized", postSettings(a, batchOf(overrides.KindAPICredits,
+		creditRow(editableAccount, "", "300", nil, map[string]any{"remainingUsd": "1.00", "at": "2026-10-09T13:20:00Z"}))),
+		http.StatusConflict, "not_editable")
+	if !reflect.DeepEqual(body["ids"], []any{editableAccount}) {
+		t.Fatalf("ids %v", body["ids"])
+	}
+	if saver.store.Current().Revision != 2 {
+		t.Fatal("part of the batch was saved")
+	}
+}
+
 // Thirty committed saves a minute across both doors, then 429.
 func TestCommittedSavesAreThrottled(t *testing.T) {
 	a, _ := settingsAPI(t)

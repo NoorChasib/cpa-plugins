@@ -85,6 +85,8 @@ export const EPOCH_FIELDS: ReadonlySet<string> = new Set([
   // clock, so moving it with the rest keeps it ahead here too.
   "holdUntilEpoch",
   "renewalAtEpoch",
+  // The estimate a Claude credential carries beside a date set here.
+  "renewalEstimateAtEpoch",
   // When a card's pool is full again, which the card counts down to beside
   // its legend.
   "fullAtEpoch",
@@ -1269,9 +1271,12 @@ function applyStore(doc: Doc, store: SettingsStore, now: number): Doc {
     const entry = store.renewals.get(id)
     const setting = entry ? { date: entry.date, revision: String(entry.rev), updatedAtEpoch: entry.updatedAt } : null
     if (credential.renewalSource === "reported") return { ...credential, renewalSetting: setting }
+    // Without a date set here, the estimate the credential carries applies,
+    // as the plugin's precedence has it: dashboard over estimated.
+    const estimate = typeof credential.renewalEstimateAtEpoch === "number" ? credential.renewalEstimateAtEpoch : null
     return entry
       ? { ...credential, renewalSetting: setting, renewalSource: "dashboard", renewalEstimated: false, renewalAtEpoch: nextRenewal(entry.date, now) }
-      : { ...credential, renewalSetting: null, renewalSource: null, renewalEstimated: false, renewalAtEpoch: null }
+      : { ...credential, renewalSetting: null, renewalSource: estimate === null ? null : "estimated", renewalEstimated: estimate !== null, renewalAtEpoch: estimate }
   })
   const renewalOrphans = ((next.renewalOrphans as Doc[] | undefined) ?? []).filter((orphan) =>
     store.renewals.has(orphan.id as string),

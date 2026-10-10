@@ -36,6 +36,7 @@ import {
   cycleOn,
   cycleText,
   dateEpoch,
+  dropConflicts,
   EMPTY_CREDIT_DRAFT,
   editCredit,
   FIELD_FOOT,
@@ -961,7 +962,6 @@ export function APICreditsCard({
         // the fields that moved; every other row's draft is kept.
         const nextMarks: Marks = {}
         const nextOverlay = { ...overlay }
-        let next = draft
         for (const id of outcome.ids) {
           const account = accounts.find((item) => item.id === id)
           const current = outcome.current[id]
@@ -972,17 +972,14 @@ export function APICreditsCard({
             }
             nextOverlay[id] = block
           }
-          const rows = { ...next.rows }
-          delete rows[id]
-          const remove = { ...next.remove }
-          delete remove[id]
-          next = { rows, remove }
         }
-        setDraft(next)
+        const next = dropConflicts(draft, outcome.ids)
+        setDraft(next.draft)
         setOverlay(nextOverlay)
         setMarks(nextMarks)
         setStatus({ tone: "bad", text: outcome.text })
-        setFailed(true)
+        // Try again only while a kept row is left to send.
+        setFailed(next.retry)
         onSaved()
         return
       }

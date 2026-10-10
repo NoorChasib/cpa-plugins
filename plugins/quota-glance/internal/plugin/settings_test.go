@@ -3,12 +3,14 @@ package plugin
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -387,5 +389,120 @@ func TestAMeterWriteRebuildsWithoutAddingHistory(t *testing.T) {
 	})
 	if got := samplesOn(t, dataDir); got != before {
 		t.Fatalf("a meter write changed history from %d to %d samples", before, got)
+	}
+}
+
+// Rebuilds publish in the order they read. A rebuild that read the values
+// before a save, and is slow to publish, must not publish after the save's
+// own rebuild: the served document would undo the save, and the page's next
+// save would be refused as a conflict with itself.
+func TestARebuildThatReadBeforeASaveNeverPublishesAfterIt(t *testing.T) {
+	p, _, _, _ := newMeteredPlugin(t, "")
+	waitForDocument(t, p, meteredDocument)
+	parked, release := make(chan struct{}), make(chan struct{})
+	// Only the first rebuild parks; any other runs straight through.
+	var first atomic.Bool
+	hook := func() {
+		if first.CompareAndSwap(false, true) {
+			close(parked)
+			<-release
+		}
+	}
+	p.afterRead.Store(&hook)
+	rebuilt := make(chan struct{})
+	go func() {
+		p.Rebuild()
+		close(rebuilt)
+	}()
+	<-parked
+
+	saved := make(chan protocol.ManagementResponse, 1)
+	go func() { saved <- saveMonthly(t, p, "", "312.40") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for p.overrides.Current().Revision != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the save never committed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Give the save every chance to rebuild and answer while the parked
+	// rebuild still holds the values it read before the commit. It must wait
+	// instead; only then is the parked one let go.
+	var res protocol.ManagementResponse
+	answered := false
+	select {
+	case res = <-saved:
+		answered = true
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-rebuilt:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the parked rebuild never finished")
+	}
+	if !answered {
+		select {
+		case res = <-saved:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the save never answered")
+		}
+	}
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(res.Body), `"monthlyUsd":"312.40"`) {
+		t.Fatalf("save: %d %s", res.StatusCode, res.Body)
+	}
+	alpha := alphaOf(t, decode(t, summary(t, p)))
+	if alpha["monthlyCreditText"] != "$312.40" || alpha["settings"].(map[string]any)["revision"] != "1" {
+		t.Fatalf("a rebuild that read before the save published after it: %v %v", alpha["monthlyCreditText"], alpha["settings"])
+	}
+	if res := saveMonthly(t, p, "1", "320"); res.StatusCode != http.StatusOK {
+		t.Fatalf("the next save: %d %s", res.StatusCode, res.Body)
+	}
+}
+
+// While the source is failing, the last good document is served, marked
+// stale. What the dashboard's settings decide in it follows the settings as
+// they are now, so a save made meanwhile shows at once, and the next save
+// starts from its revision.
+func TestASaveWhileTheSourceFailsShowsInTheServedDocument(t *testing.T) {
+	p, host, _, _ := newMeteredPlugin(t, "")
+	waitForDocument(t, p, meteredDocument)
+	host.mu.Lock()
+	host.err = errors.New("host unavailable")
+	host.mu.Unlock()
+	p.Rebuild()
+	if doc := decode(t, summary(t, p)); doc["staleReason"] != "rosterUnavailable" {
+		t.Fatalf("staleReason = %v", doc["staleReason"])
+	}
+
+	res := saveMonthly(t, p, "", "312.40")
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(res.Body), `"monthlyUsd":"312.40"`) || !strings.Contains(string(res.Body), `"revision":"1"`) {
+		t.Fatalf("save: %d %s", res.StatusCode, res.Body)
+	}
+	batch, _ := json.Marshal(map[string]any{"kind": "renewals", "items": []any{map[string]any{"id": "5f2b8c41d09e7a36", "baseRevision": "", "date": "2026-10-29"}}})
+	res = handle(t, p, protocol.ManagementRequest{Method: "POST", Path: "/v0/management/plugins/quota-glance/settings",
+		Headers: http.Header{"Content-Type": {"application/json"}}, Body: batch})
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(res.Body), `"date":"2026-10-29"`) {
+		t.Fatalf("renewal save: %d %s", res.StatusCode, res.Body)
+	}
+	doc := decode(t, summary(t, p))
+	if doc["stale"] != true || doc["staleReason"] != "rosterUnavailable" {
+		t.Fatalf("stale=%v reason=%v", doc["stale"], doc["staleReason"])
+	}
+	alpha := alphaOf(t, doc)
+	if alpha["monthlyCreditText"] != "$312.40" || alpha["monthlyCreditSource"] != "dashboard" || alpha["settings"].(map[string]any)["revision"] != "1" {
+		t.Fatalf("served alpha: %v %v %v", alpha["monthlyCreditText"], alpha["monthlyCreditSource"], alpha["settings"])
+	}
+	var renewal map[string]any
+	for _, c := range doc["credentials"].([]any) {
+		if credential := c.(map[string]any); credential["id"] == "5f2b8c41d09e7a36" {
+			renewal = credential
+		}
+	}
+	if renewal == nil || renewal["renewalSource"] != "dashboard" || renewal["renewalSetting"].(map[string]any)["revision"] != "2" {
+		t.Fatalf("served credential: %v", renewal)
+	}
+	if res := saveMonthly(t, p, "1", "320"); res.StatusCode != http.StatusOK {
+		t.Fatalf("the next save: %d %s", res.StatusCode, res.Body)
 	}
 }

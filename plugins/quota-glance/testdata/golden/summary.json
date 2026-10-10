@@ -139,6 +139,7 @@
       "renewalAtEpoch": 1790759700,
       "renewalEstimated": true,
       "renewalSource": "estimated",
+      "renewalEstimateAtEpoch": 1790759700,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -271,6 +272,7 @@
       "renewalAtEpoch": 1804873200,
       "renewalEstimated": true,
       "renewalSource": "estimated",
+      "renewalEstimateAtEpoch": 1804873200,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -396,6 +398,7 @@
       "renewalAtEpoch": 1790085900,
       "renewalEstimated": true,
       "renewalSource": "estimated",
+      "renewalEstimateAtEpoch": 1790085900,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -521,6 +524,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": null
@@ -646,6 +650,7 @@
       "renewalAtEpoch": 1791590400,
       "renewalEstimated": false,
       "renewalSource": "dashboard",
+      "renewalEstimateAtEpoch": 1791026400,
       "renewalEditable": true,
       "renewalSetting": {
         "date": "2026-09-10",
@@ -782,6 +787,7 @@
       "renewalAtEpoch": 1791604800,
       "renewalEstimated": false,
       "renewalSource": "reported",
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": {
@@ -803,6 +809,7 @@
       "renewalAtEpoch": null,
       "renewalEstimated": false,
       "renewalSource": null,
+      "renewalEstimateAtEpoch": null,
       "renewalEditable": false,
       "renewalSetting": null,
       "credits": {

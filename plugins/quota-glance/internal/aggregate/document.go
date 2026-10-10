@@ -548,6 +548,12 @@ type Credential struct {
 	// start; null when there is no renewal. A reported date wins over the
 	// dashboard's, and the dashboard's over the estimate.
 	RenewalSource *string `json:"renewalSource"`
+	// RenewalEstimateAtEpoch is the estimate for a Claude credential, the next
+	// billing anniversary of the subscription's start, whatever RenewalSource
+	// says, so the page can show what Use estimate returns to beside a date
+	// set on the dashboard. Null for any other provider, and when quota-cache
+	// has not read a start.
+	RenewalEstimateAtEpoch *int64 `json:"renewalEstimateAtEpoch"`
 	// RenewalEditable is true for a Claude credential whose renewal date the
 	// page may set, while editing is available; false otherwise.
 	RenewalEditable bool `json:"renewalEditable"`

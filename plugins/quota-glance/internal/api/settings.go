@@ -139,6 +139,7 @@ func (a *API) save(saver Saver, raw []byte, door string, now time.Time) protocol
 	result, err := saver.Save(batch, now)
 	var conflict *overrides.ConflictError
 	var field *overrides.FieldError
+	var refused *overrides.NotEditableError
 	switch {
 	case errors.As(err, &conflict):
 		return jsonResponse(http.StatusConflict, map[string]any{
@@ -146,6 +147,8 @@ func (a *API) save(saver Saver, raw []byte, door string, now time.Time) protocol
 		})
 	case errors.As(err, &field):
 		return fieldRefusal(field)
+	case errors.As(err, &refused):
+		return jsonResponse(http.StatusConflict, map[string]any{"error": "not_editable", "ids": refused.IDs})
 	case errors.Is(err, overrides.ErrTooManyWrites):
 		res := jsonResponse(http.StatusTooManyRequests, map[string]string{"error": "too_many_writes"})
 		res.Headers.Set("Retry-After", "60")
