@@ -24,8 +24,9 @@ const FLAG_TONE: Record<string, string> = { low: "qg-chip-low", critical: "qg-ch
 
 /**
  * The accounts a shut fold names, at the right end of its line: the name,
- * the figure in the figures' face, and the word for it. Nothing when every
- * account is fine, so a calm card has a calm fold line.
+ * the figure in the figures' face, and the word for it. A flag for several
+ * accounts at once has no name, its count as the figure: "5 incomplete".
+ * Nothing when every account is fine, so a calm card has a calm fold line.
  */
 export function Flags({ flags }: { flags: Pick<FoldFlag, "id" | "name" | "figure" | "word" | "tone">[] }) {
   if (flags.length === 0) return null
@@ -35,7 +36,7 @@ export function Flags({ flags }: { flags: Pick<FoldFlag, "id" | "name" | "figure
         <span key={flag.id} className={`qg-chip ${FLAG_TONE[flag.tone] ?? ""}`}>
           {/* Each its own item, so the chip's gap spaces them: adjacent text
             * would run together as one. */}
-          <span>{flag.name}</span>
+          {flag.name && <span>{flag.name}</span>}
           {flag.figure && <b className="num">{flag.figure}</b>}
           {flag.word && <span>{flag.word}</span>}
         </span>

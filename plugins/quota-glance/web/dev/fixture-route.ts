@@ -647,6 +647,54 @@ function withMeterStopped(doc: Doc): Doc {
 }
 
 /**
+ * The owner's first day: Quota Cache began counting three hours ago, after
+ * every organization's cycle had started, and no Console reading has been
+ * entered. Each organization counts only what it spent since then, so each
+ * is a lower bound for the same reason, in the server's one sentence for it
+ * (D.4 `meterStartedLate`, basis credit).
+ */
+function withFirstDay(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  const credits = doc.apiCredits as Doc
+  const since = built - 3 * HOUR
+  const spentSince: Record<string, number> = { alpha: 3.1, bravo: 1.25, charlie: 0.4, delta: 5.8, echo: 2.15 }
+  const accounts = (credits.accounts as Doc[]).map((account) => {
+    const credit = account.monthlyCredit as number
+    const spent = spentSince[account.label as string] ?? 0
+    const left = Math.max(0, credit - spent)
+    const fraction = credit > 0 ? left / credit : 0
+    return {
+      ...account,
+      basis: "credit",
+      lowerBound: true,
+      spent,
+      spentText: usd(spent),
+      spentSinceEpoch: account.cycleStartEpoch,
+      used: spent,
+      usedText: usd(spent),
+      left,
+      leftText: usd(left),
+      overage: 0,
+      overageText: "$0.00",
+      remainingFraction: fraction,
+      remainingPercent: Math.round(fraction * 100),
+      level: levelOf(fraction),
+      reading: null,
+      cacheWriteExtra: 0,
+      cacheWriteExtraText: "",
+      meterSinceEpoch: since,
+      lastSeenEpoch: Math.max(account.lastSeenEpoch as number, since + 20 * 60),
+      dataIssues: ["meterStartedLate"],
+      issue: "Counting began after this cycle started, so earlier spend is missing. Enter a Console reading to correct it.",
+      settings: { ...(account.settings as Doc), reading: null, readingUnusedReason: "" },
+    }
+  })
+  const meter = { ...(credits.meter as Doc), sinceEpoch: since, foreign: 0, gaps: [] }
+  const unlinked = (credits.unlinked as Doc[]).map((org) => ({ ...org, firstSeenEpoch: since + 40 * 60, requests: 6 }))
+  return { ...doc, apiCredits: recountPool({ ...credits, meter, accounts, unlinked }, built) }
+}
+
+/**
  * No meter file at all: Quota Cache older than 0.1.14, or not loaded since.
  * Every organization waits for one, and nothing is counted.
  */
@@ -826,6 +874,7 @@ function scenarios(): Record<string, () => Outcome> {
     // The Monthly API Credit card's states the golden documents do not hold.
     "api-states": () => withAPIStates(golden()),
     "meter-stopped": () => withMeterStopped(golden()),
+    "first-day": () => withFirstDay(golden()),
     "no-meter": () => withoutMeter(golden()),
     "settings-unreadable": () => withSettingsUnreadable(golden()),
     "degraded-editable": () => withEditing(degraded()),

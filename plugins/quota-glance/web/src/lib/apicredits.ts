@@ -51,6 +51,8 @@ export interface CreditNote {
   since?: number
   at?: number
   reading?: boolean
+  /** A pool line's link: the account whose Console reading it opens the editor on. */
+  readingFor?: string
 }
 
 /** A stop shorter than this is a restart or an update, not a gap: client.MeterBriefGap. */
@@ -125,6 +127,14 @@ export function markText(mark: CreditMark, age: string): string {
   return mark.word ? `${mark.word} · ${age} old` : `${age} old`
 }
 
+/**
+ * A condition as one word, whoever carries it: its word, or "stale" for a
+ * figure that has aged, whose own chip says only how long ago.
+ */
+export function conditionKey(mark: CreditMark): string {
+  return mark.word || (mark.since !== undefined ? "stale" : "")
+}
+
 /** A mark's tone, as a shut fold's chip can colour it. */
 const FLAG_TONE: Record<CreditTone, FoldFlag["tone"]> = {
   low: "low",
@@ -140,16 +150,31 @@ const FLAG_TONE: Record<CreditTone, FoldFlag["tone"]> = {
  * "bravo 2h old", "echo incomplete". One not counted yet is not named:
  * nothing is wrong with it, and the pool's line already says it is not
  * counted. `age` prints how long ago an instant was.
+ *
+ * A level is always its account's own chip. A condition two or more
+ * accounts share is one chip with a count — "5 incomplete" — after the
+ * accounts' own chips, and a level chip whose account is among them no
+ * longer repeats it.
  */
 export function creditFlags(
   accounts: APICreditAccount[],
   meter: Pick<APICreditMeter, "updatedAtEpoch"> | null,
   age: (since: number) => string,
 ): FoldFlag[] {
-  return accounts.flatMap((account) => {
-    const marks = [creditLevel(account), creditCondition(account, meter)].filter(
-      (mark): mark is CreditMark => mark !== null && mark.tone !== "quiet",
-    )
+  const loud = (mark: CreditMark | null): mark is CreditMark => mark !== null && mark.tone !== "quiet"
+  const rows = accounts.map((account) => ({ account, level: creditLevel(account), condition: creditCondition(account, meter) }))
+  const shared = new Map<string, { mark: CreditMark; count: number }>()
+  for (const { condition } of rows) {
+    if (!loud(condition)) continue
+    const key = conditionKey(condition)
+    const held = shared.get(key)
+    if (held) held.count++
+    else shared.set(key, { mark: condition, count: 1 })
+  }
+  const merged = (mark: CreditMark) => (shared.get(conditionKey(mark))?.count ?? 0) >= 2
+
+  const own = rows.flatMap(({ account, level, condition }): FoldFlag[] => {
+    const marks = [level, condition].filter(loud).filter((mark) => mark === level || !merged(mark))
     if (marks.length === 0) return []
     const worst = marks.find((mark) => mark.tone === "critical" || mark.tone === "bad") ?? marks[0]!
     return [
@@ -165,6 +190,16 @@ export function creditFlags(
       },
     ]
   })
+  const counted = [...shared.entries()]
+    .filter(([, { count }]) => count >= 2)
+    .map(([key, { mark, count }]): FoldFlag => ({
+      id: `condition:${key}`,
+      name: "",
+      figure: String(count),
+      word: key,
+      tone: FLAG_TONE[mark.tone],
+    }))
+  return [...own, ...counted]
 }
 
 /** What stands in a row's bar column: the bar itself, or the reason there is none. */
@@ -320,23 +355,117 @@ export function wantsReading(account: Pick<APICreditAccount, "state" | "counted"
 }
 
 /**
- * The lines a row earns under itself: the server's own sentence about the
- * account, toned by the issue it is about, then the cache-write note when the
- * 1-hour rate would add a cent or more. An account Anthropic refused has the
+ * The server's own sentence about the account, toned by the issue it is
+ * about; null when it has none. An account Anthropic refused has the
  * refusal's time after its sentence.
  */
-export function creditNotes(account: APICreditAccount): CreditNote[] {
-  const notes: CreditNote[] = []
-  if (account.issue) {
-    const first = account.dataIssues[0] ?? ""
-    const note: CreditNote = { text: account.issue, tone: ISSUE_TONE[first] ?? "quiet" }
-    if (account.state === "out") {
-      const at = has(account, "refusedNearlySpent") ? account.refusals.claudeCodeLastAtEpoch : account.refusals.lastAtEpoch
-      if (at !== null) note.at = at
-    }
-    if (wantsReading(account)) note.reading = true
-    notes.push(note)
+function issueNote(account: APICreditAccount): CreditNote | null {
+  if (!account.issue) return null
+  const first = account.dataIssues[0] ?? ""
+  const note: CreditNote = { text: account.issue, tone: ISSUE_TONE[first] ?? "quiet" }
+  if (account.state === "out") {
+    const at = has(account, "refusedNearlySpent") ? account.refusals.claudeCodeLastAtEpoch : account.refusals.lastAtEpoch
+    if (at !== null) note.at = at
   }
+  if (wantsReading(account)) note.reading = true
+  return note
+}
+
+/**
+ * A sentence two or more rows carry word for word, said once among the
+ * pool's lines instead of under each of them.
+ */
+export interface SharedIssue {
+  /** The line as each of its rows would have shown it. */
+  note: CreditNote
+  /** The issue the server wrote it for: the first of its rows' issues. */
+  issue: string
+  /** The accounts that carry it, in the card's order. */
+  ids: string[]
+  /** Whose Console reading its link opens: the first of them a row link would have offered, else null. */
+  readingFor: string | null
+}
+
+/**
+ * The rows' sentences that more than one row carries, grouped by exact
+ * string, in the order of the first row to carry each. A refusal's time is
+ * part of what its row says, so two refusals group only at the same instant.
+ * A sentence one row carries stays on that row.
+ */
+export function sharedIssues(accounts: APICreditAccount[]): SharedIssue[] {
+  const groups = new Map<string, SharedIssue>()
+  for (const account of accounts) {
+    const note = issueNote(account)
+    if (note === null) continue
+    const key = `${note.at ?? ""}|${note.text}`
+    let group = groups.get(key)
+    if (!group) {
+      group = { note, issue: account.dataIssues[0] ?? "", ids: [], readingFor: null }
+      groups.set(key, group)
+    }
+    group.ids.push(account.id)
+    if (note.reading && account.settings.editable && group.readingFor === null) group.readingFor = account.id
+  }
+  return [...groups.values()].filter((group) => group.ids.length >= 2)
+}
+
+/**
+ * Who a shared sentence is about, ahead of it: every account on the card,
+ * every one the pool counts when some are left out, else their names —
+ * "alpha and bravo", "alpha, bravo and charlie".
+ */
+export function sharedWho(ids: string[], accounts: Pick<APICreditAccount, "id" | "label" | "counted">[]): string {
+  const every = (count: number, what: string) => (count === 2 ? `Both ${what}` : `All ${count} ${what}`)
+  const carries = new Set(ids)
+  if (accounts.length === carries.size && accounts.every((account) => carries.has(account.id))) return every(carries.size, "accounts")
+  const counted = accounts.filter((account) => account.counted)
+  if (counted.length === carries.size && counted.every((account) => carries.has(account.id))) {
+    return every(carries.size, "counted accounts")
+  }
+  return listNames(accounts.filter((account) => carries.has(account.id)).map(creditName))
+}
+
+/**
+ * The conditions a row's chip need not repeat: those every counted account
+ * carries — or every account, when none is counted — and whose every
+ * carrier's sentence the pool says once. The ≤ and ≥ beside each figure,
+ * the aged ink, or the words in the bar's place already mark the row; the
+ * pool's line says why. A condition only some rows carry keeps its chips, so
+ * the reader can see which.
+ */
+export function conditionsSaidOnce(
+  accounts: APICreditAccount[],
+  meter: Pick<APICreditMeter, "updatedAtEpoch"> | null,
+  shared: SharedIssue[],
+): Set<string> {
+  const said = new Set(shared.flatMap((group) => group.ids))
+  const carriers = new Map<string, string[]>()
+  for (const account of accounts) {
+    const mark = creditCondition(account, meter)
+    if (mark === null) continue
+    const key = conditionKey(mark)
+    carriers.set(key, [...(carriers.get(key) ?? []), account.id])
+  }
+  const counted = accounts.filter((account) => account.counted).map((account) => account.id)
+  const scope = counted.length > 0 ? counted : accounts.map((account) => account.id)
+  const keys = new Set<string>()
+  for (const [key, ids] of carriers) {
+    const sameRows = ids.length === scope.length && scope.every((id) => ids.includes(id))
+    if (ids.length >= 2 && sameRows && ids.every((id) => said.has(id))) keys.add(key)
+  }
+  return keys
+}
+
+/**
+ * The lines a row earns under itself: the server's own sentence about the
+ * account, toned by the issue it is about, unless the pool says it once for
+ * several rows (`shared`); then the cache-write note when the 1-hour rate
+ * would add a cent or more.
+ */
+export function creditNotes(account: APICreditAccount, shared: SharedIssue[] = []): CreditNote[] {
+  const notes: CreditNote[] = []
+  const note = issueNote(account)
+  if (note !== null && !shared.some((group) => group.ids.includes(account.id))) notes.push(note)
   if (account.cacheWriteExtraText) {
     notes.push({
       text: `Cache writes are priced at the 5-minute rate; at the 1-hour rate this would be ${account.cacheWriteExtraText} more.`,
@@ -455,14 +584,19 @@ const UNLINKED_LINES = 3
 
 /**
  * The lines under the pool's figure when it is not the whole story, in this
- * order: which accounts it leaves out and why; each Console organization CPA
- * sent traffic from that no counted item names; a stretch the meter was not
- * counting; and records it dropped, could not match, or could not read. The
- * last two only when they fall after the oldest anchor the pool counts from,
- * where they can have touched its figures. Empty when there is nothing to
- * add.
+ * order: which accounts it leaves out and why; each sentence several rows
+ * share (`shared`), once, after whom it is about; each Console organization
+ * CPA sent traffic from that no counted item names; a stretch the meter was
+ * not counting; and records it dropped, could not match, or could not read.
+ * The last two only when they fall after the oldest anchor the pool counts
+ * from, where they can have touched its figures, and not when a shared
+ * sentence already says so. Empty when there is nothing to add.
  */
-export function poolNotes(credits: Pick<APICredits, "pool" | "accounts" | "unlinked" | "meter">, now: number): CreditNote[] {
+export function poolNotes(
+  credits: Pick<APICredits, "pool" | "accounts" | "unlinked" | "meter">,
+  now: number,
+  shared: SharedIssue[] = sharedIssues(credits.accounts),
+): CreditNote[] {
   const notes: CreditNote[] = []
   const { pool, accounts, unlinked, meter } = credits
 
@@ -474,6 +608,18 @@ export function poolNotes(credits: Pick<APICredits, "pool" | "accounts" | "unlin
     else clauses.push(`${out.length} are left out`)
     notes.push({ text: clauses.join(" · "), tone: "warn" })
   }
+
+  for (const group of shared) {
+    const note: CreditNote = { text: `${sharedWho(group.ids, accounts)}: ${group.note.text}`, tone: group.note.tone }
+    if (group.note.at !== undefined) note.at = group.note.at
+    // One link for them all, as each row's was: the editor, on the first one's reading.
+    if (group.readingFor !== null) {
+      note.reading = true
+      note.readingFor = group.readingFor
+    }
+    notes.push(note)
+  }
+  const sharedSays = (issue: string) => shared.some((group) => group.issue === issue)
 
   for (const org of unlinked.slice(0, UNLINKED_LINES)) {
     const sent = `CPA sent traffic from Console organization ${shortOrganization(org.organizationId)} (${org.requests} ${
@@ -500,17 +646,18 @@ export function poolNotes(credits: Pick<APICredits, "pool" | "accounts" | "unlin
   if (meter !== null && anchors.length > 0) {
     const oldest = Math.min(...anchors)
     const after = (epoch: number | null) => epoch !== null && epoch > oldest
-    if (meter.gaps.some((gap) => gap.toEpoch - gap.fromEpoch >= BRIEF_GAP_SECONDS && gap.toEpoch > oldest) || meterStopped(meter, now)) {
+    const gap = meter.gaps.some((gap) => gap.toEpoch - gap.fromEpoch >= BRIEF_GAP_SECONDS && gap.toEpoch > oldest)
+    if ((gap || meterStopped(meter, now)) && !sharedSays("meterGap")) {
       notes.push({ text: "Quota Cache was not counting for part of this period, so some spend may be missing.", tone: "warn" })
     }
-    const lost = after(meter.lastDroppedEpoch)
-      ? "Quota Cache dropped usage records it could not keep up with, so some spend is missing."
+    const lost: [string, string] | null = after(meter.lastDroppedEpoch)
+      ? ["meterDropped", "Quota Cache dropped usage records it could not keep up with, so some spend is missing."]
       : after(meter.lastUnattributedEpoch)
-        ? "Some failed requests could not be matched to an organization, so some spend may be missing."
+        ? ["meterUnattributed", "Some failed requests could not be matched to an organization, so some spend may be missing."]
         : after(meter.lastRejectedEpoch)
-          ? "Quota Cache could not read some usage records from CPA, so some spend may be missing."
+          ? ["meterRejected", "Quota Cache could not read some usage records from CPA, so some spend may be missing."]
           : null
-    if (lost) notes.push({ text: lost, tone: "warn" })
+    if (lost && !sharedSays(lost[0])) notes.push({ text: lost[1], tone: "warn" })
   }
   return notes
 }
