@@ -136,9 +136,13 @@ func response(status int, value any) protocol.ManagementResponse {
 }
 
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
+	// Held from the first check: an answer CPA rejects stops the meter, and
+	// stopMeter runs under p.mu.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var req protocol.LifecycleRequest
 	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
-		return protocol.Registration{}, errors.New("schema 4 or newer required")
+		return p.reject(errors.New("schema 4 or newer required"))
 	}
 	cfg := struct {
 		Path          string `yaml:"cache-path"`
@@ -157,28 +161,26 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
 		decoder.KnownFields(true)
 		if decoder.Decode(&cfg) != nil {
-			return protocol.Registration{}, errors.New("invalid quota-cache configuration")
+			return p.reject(errors.New("invalid quota-cache configuration"))
 		}
 	}
 	interval, e1 := time.ParseDuration(cfg.Interval)
 	spacing, e2 := time.ParseDuration(cfg.Spacing)
 	if e1 != nil || e2 != nil || interval < time.Minute || interval > 24*time.Hour || spacing < time.Second || spacing > time.Hour || cfg.Path == "" {
-		return protocol.Registration{}, errors.New("invalid cache schedule or path")
+		return p.reject(errors.New("invalid cache schedule or path"))
 	}
 	opts := cache.Options{Path: cfg.Path, Interval: interval, Spacing: spacing}
 	// Compare locations, not the spelling of the path. CPA can rewrite a
 	// relative default as an absolute path when saving user configuration.
 	opts.Path, e1 = filepath.Abs(opts.Path)
 	if e1 != nil {
-		return protocol.Registration{}, errors.New("cache path cannot be resolved")
+		return p.reject(errors.New("cache path cannot be resolved"))
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.terminal {
-		return protocol.Registration{}, errors.New("cache shut down")
+		return p.reject(errors.New("cache shut down"))
 	}
 	if p.cache != nil && p.opts.Path != opts.Path {
-		return protocol.Registration{}, errors.New("cache path changes require native restart")
+		return p.reject(errors.New("cache path changes require native restart"))
 	}
 	if p.cache != nil && p.opts != opts {
 		p.cache.SetSchedule(interval, spacing)
@@ -211,7 +213,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
 		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits})
 		if err != nil {
-			return protocol.Registration{}, err
+			return p.reject(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		p.opts, p.cache, p.cancel, p.done = opts, current, cancel, make(chan struct{})
@@ -255,6 +257,20 @@ func (p *Plugin) stopMeter(reason string) {
 	if m := p.meter.Swap(nil); m != nil {
 		m.Stop(reason, time.Now().UTC())
 	}
+}
+
+// reject answers a configure with the error CPA is given. From that answer
+// until a later configure succeeds, CPA keeps the plugin loaded but delivers
+// it no usage records, so a meter left running would heartbeat as if it
+// counted and the traffic of that window would vanish from the estimate.
+// Instead the meter stops here, and the next good configure reopens it from
+// its file, which records the window as a gap. The reason is disabled, the
+// one of the fixed set that fits: to CPA the plugin is as good as switched
+// off. The cache carries on; it needs no usage records. It is called under
+// p.mu.
+func (p *Plugin) reject(err error) (protocol.Registration, error) {
+	p.stopMeter(client.MeterStopDisabled)
+	return protocol.Registration{}, err
 }
 
 func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct{}, wake <-chan time.Duration, spacing time.Duration) {

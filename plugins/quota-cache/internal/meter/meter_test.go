@@ -349,12 +349,7 @@ func TestOfferNeverBlocksAndDropsAreWarnedSparingly(t *testing.T) {
 	m.flushIfDue(base.Add(9 * time.Minute))
 	m.flushIfDue(base.Add(11 * time.Minute))
 	m.flushIfDue(base.Add(12 * time.Minute))
-	warnings := []logLine{}
-	for _, line := range log.logged() {
-		if strings.Contains(line.message, "dropping") {
-			warnings = append(warnings, line)
-		}
-	}
+	warnings := dropWarnings(log)
 	if len(warnings) != 2 || warnings[0].level != "warn" || warnings[0].fields["dropped"] != uint64(1) || warnings[1].fields["dropped"] != uint64(2) ||
 		warnings[0].message != "quota-cache API meter is dropping usage records; Claude API credit estimates will be low" {
 		t.Fatalf("warnings=%+v", warnings)
@@ -362,6 +357,34 @@ func TestOfferNeverBlocksAndDropsAreWarnedSparingly(t *testing.T) {
 	if meter := load(t, m.path); meter.Dropped != 2 || meter.LastDroppedAt == nil {
 		t.Fatalf("file: dropped=%d at=%v", meter.Dropped, meter.LastDroppedAt)
 	}
+	// A restart carries the file's drops on, but not the warning: they were
+	// warned about when they happened. The next warning needs a drop in
+	// this run, and then names the whole count.
+	restarted := &fakeLog{}
+	again := newMeter(m.path, restarted)
+	again.restore([]string{orgA}, base.Add(time.Hour))
+	again.flushIfDue(base.Add(time.Hour + time.Minute))
+	if warned := dropWarnings(restarted); len(warned) != 0 || again.dropped.Load() != 2 {
+		t.Fatalf("warned about the file's drops: %+v dropped=%d", warned, again.dropped.Load())
+	}
+	for i := 0; i <= intakeSize; i++ {
+		again.Offer(raw, base.Add(time.Hour+2*time.Second))
+	}
+	again.flushIfDue(base.Add(time.Hour + 2*time.Minute))
+	if warned := dropWarnings(restarted); len(warned) != 1 || warned[0].fields["dropped"] != uint64(3) {
+		t.Fatalf("warnings after a drop in this run: %+v", warned)
+	}
+}
+
+// dropWarnings is every drop warning log holds, in order.
+func dropWarnings(log *fakeLog) []logLine {
+	warnings := []logLine{}
+	for _, line := range log.logged() {
+		if strings.Contains(line.message, "dropping") {
+			warnings = append(warnings, line)
+		}
+	}
+	return warnings
 }
 
 func TestOfferDuringStopNeitherPanicsNorRaces(t *testing.T) {
