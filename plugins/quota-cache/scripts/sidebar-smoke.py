@@ -51,23 +51,34 @@ for index,(provider,status) in enumerate((('claude',429),('codex',200),('xai',50
                                'finished_at':entry['last_attempt'],'duration_ms':125,'request_sent':True,'http_status':status,
                                'outcome':'success' if status==200 else 'rate_limited' if status==429 else 'failed','error':entry['last_error']})
 fixture['totals'] = {'attempts':3,'requests':3,'successes':1,'failures':2,'rate_limits':1}
-# Claude API credit entries, served only in the 'credits' mode: one read and
-# one misconfigured, which is listed but never polled.
+# Claude API credit entries and the meter file, served only in the 'credits'
+# mode: one metered organization and one misconfigured item, which is listed
+# but never counted. Neither is ever polled. The organization ids are the
+# spec's fakes.
 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+this_hour = now.replace(minute=0, second=0, microsecond=0)
+fake_org = '00000000-0000-4000-8000-00000000000a'
 credits = {
-    'anthropic-api:label-9611d9ba844a': {'provider':'anthropic-api','auth_index':'label-9611d9ba844a','used_percent':0,
-        'reset_at':'0001-01-01T00:00:00Z','observed_at':'0001-01-01T00:00:00Z','last_attempt':iso(now-timedelta(minutes=2)),
-        'next_attempt':iso(now+timedelta(minutes=13)),'failures':0,
-        'api_credit':{'label':'siphorchannel','position':0,'monthly_usd':'200','renews':'2026-10-29','key_fingerprint':'key-000000000001'},
-        'quota':{'schema':1,'observed_at':iso(now-timedelta(minutes=2)),'cost_report':{'organization_id':'5b1e3c9a-0d1f-4c8e-9a51-7d0c2b6e4f10',
-            'key_fingerprint':'key-000000000001','starting_at':iso(midnight-timedelta(days=2)),'ending_at':iso(midnight+timedelta(days=1)),
-            'days':[{'starting_at':iso(midnight-timedelta(days=2)),'amounts':[{'amount':'1250','currency':'USD'}]},
-                    {'starting_at':iso(midnight-timedelta(days=1)),'amounts':[]},
-                    {'starting_at':iso(midnight),'amounts':[{'amount':'912.125','currency':'USD'}]}]}}},
+    'anthropic-api:org-1ad35d608dd7': {'provider':'anthropic-api','auth_index':'org-1ad35d608dd7','used_percent':0,
+        'reset_at':'0001-01-01T00:00:00Z','observed_at':'0001-01-01T00:00:00Z','last_attempt':'0001-01-01T00:00:00Z',
+        'next_attempt':'0001-01-01T00:00:00Z','failures':0,
+        'api_credit':{'label':'siphorchannel','position':0,'monthly_usd':'200','renews':'2026-10-29','organization_id':fake_org,'admin_key_ignored':True}},
     'anthropic-api:item-2': {'provider':'anthropic-api','auth_index':'item-2','used_percent':0,'reset_at':'0001-01-01T00:00:00Z',
         'observed_at':'0001-01-01T00:00:00Z','last_attempt':'0001-01-01T00:00:00Z','next_attempt':'0001-01-01T00:00:00Z','failures':0,
-        'api_credit':{'label':'','position':1,'monthly_usd':'500','key_fingerprint':'key-000000000002','problem':'renews_missing'}},
+        'api_credit':{'label':'','position':1,'monthly_usd':'500','problem':'organization_id_missing'}},
 }
+usage = [{'model':'claude-sonnet-5-5','requests':3,'failed':1,'input':1200,'output':800,'cache_read':50,'cache_write':10},
+         {'model':'claude-haiku-5-5','prompt':'over_100k','requests':1,'input':150000}]
+meter = {'schema':1,'since':iso(now-timedelta(days=3)),'started_at':iso(now-timedelta(hours=2)),'flushed_at':iso(now-timedelta(minutes=2)),
+    'restarts':1,'received':120,'counted':100,'foreign':3,'rejected':1,'last_rejected_at':iso(now-timedelta(hours=1)),'unattributed':2,
+    'last_unattributed_at':iso(now-timedelta(minutes=30)),
+    'gaps':[{'from':iso(now-timedelta(hours=3)),'to':iso(now-timedelta(hours=2)),'reason':'shutdown'}],
+    'organizations':{fake_org:{'since':iso(now-timedelta(days=3)),'last_seen_at':iso(now-timedelta(minutes=5)),'last_success_at':iso(now-timedelta(minutes=5)),
+        'refusals':1,'last_refusal_at':iso(now-timedelta(hours=1)),
+        'days':[{'start':iso(midnight-timedelta(days=1)),'usage':[{'model':'claude-sonnet-5-5','requests':9,'input':9000,'output':900}]},{'start':iso(midnight),'usage':usage}],
+        'hours':[{'start':iso(this_hour),'usage':usage}]}},
+    'unlinked':[{'organization_id':'00000000-0000-4000-8000-00000000000e','first_seen_at':iso(now-timedelta(days=1)),'last_seen_at':iso(now-timedelta(hours=2)),'requests':37}],
+    'auths':{'0123456789abcdef':{'organization_id':fake_org,'seen_at':iso(now-timedelta(minutes=5))}}}
 fixture['activity'] = {'last_scan':iso(now),'accounts':3}
 
 class Handler(BaseHTTPRequestHandler):
@@ -120,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                     data.update(entries={},history=[],provider_cooldown={})
                 if state['mode']=='credits':
                     data['entries'].update(copy.deepcopy(credits))
+                    data['api_meter'] = copy.deepcopy(meter)
                 if state['mode']=='untrusted':
                     data['entries']['codex:synthetic-codex']['last_error'] = '<img src=x onerror="window.injected=true">'
                 data['status_reads'] = state['reads']
@@ -291,22 +303,26 @@ try:
     browser('screenshot',str(args.artifacts/'mobile.png'),'--full')
     state['mode']='untrusted';browser('click','#refresh')
     check("document.body.innerText.includes('<img src=x') && !window.injected && !document.querySelector('#accounts img')")
-    # Claude API credits: named by label, a misconfigured item says so and is
-    # not polled, and Anthropic's amounts are printed as sent, in cents.
+    # Claude API credits: named by label, metered rather than polled, a
+    # misconfigured item says so, and the meter's counts are printed as
+    # counted, never priced or added up.
     state['mode']='credits';browser('click','#refresh')
     browser('select','#provider','anthropic-api')
-    check("document.querySelectorAll('#accounts tr').length === 2 && document.querySelector('#accounts').innerText.includes('siphorchannel') && document.querySelector('#accounts').innerText.includes('Not polled') && document.querySelector('#accounts').innerText.includes('renews_missing')")
-    # The misconfigured item has no next poll, and it does not pull the
-    # header's next eligible poll forward to now: every polled entry is due
-    # twelve minutes or more from now.
-    check("[...document.querySelectorAll('#accounts tr')].find(r => r.textContent.includes('renews_missing')).cells[4].textContent === 'Not polled'")
+    check("document.querySelectorAll('#accounts tr').length === 2 && document.querySelector('#accounts').innerText.includes('siphorchannel') && document.querySelector('#accounts').innerText.includes('Metered') && document.querySelector('#accounts').innerText.includes('Not polled') && document.querySelector('#accounts').innerText.includes('organization_id_missing')")
+    # Neither credit item has a next poll, and neither pulls the header's
+    # next eligible poll forward to now: every polled entry is due twelve
+    # minutes or more from now.
+    check("[...document.querySelectorAll('#accounts tr')].find(r => r.textContent.includes('organization_id_missing')).cells[4].textContent === 'Not polled'")
+    check("[...document.querySelectorAll('#accounts tr')].find(r => r.textContent.includes('siphorchannel')).cells[4].textContent === '—'")
     check("Date.parse(document.querySelector('#next-call time').dateTime) - Date.now() > 5 * 60000")
-    check("(t => t.includes('Monthly credit: 200 USD (configured)') && t.includes('Renews: 2026-10-29 (configured)') && t.includes('Key: key-000000000001') && t.includes('Organization: 5b1e3c9a') && t.includes('Days read: 3') && t.includes(': 1250 USD (lowest units)') && t.includes(': no cost') && t.includes(': 912.125 USD (lowest units)') && !t.includes('Today not reported yet') && t.includes('Configuration problem: renews_missing'))(document.querySelector('#accounts').textContent)")
+    check("(t => t.includes('Organization: 00000000-0000-4000-8000-00000000000a') && t.includes('Monthly credit: 200 USD (configured)') && t.includes('Renews: 2026-10-29 (configured)') && t.includes('admin-key is no longer used') && t.includes('Low-credit refusals: 1') && t.includes('claude-sonnet-5-5: 3 ok, 1 failed, in 1200, out 800, cache read 50, cache write 10 tokens') && t.includes('claude-haiku-5-5 over_100k: 1 ok, 0 failed, in 150000, out 0, cache read 0, cache write 0 tokens') && !t.includes('9000') && t.includes('Configuration problem: organization_id_missing') && !t.includes('key-'))(document.querySelector('#accounts').textContent)")
+    # The meter panel: counters, the gap and the organization no item names.
+    check("!document.querySelector('#meter-section').hidden && (t => t.includes('Saved within 30 minutes') && t.includes('Records received') && t.includes('120') && t.includes('Counting') && t.includes('shutdown') && t.includes('00000000-0000-4000-8000-00000000000e') && t.includes('37 requests'))(document.querySelector('#meter-section').textContent)")
     audit = browser('a11y','--tags','wcag2a,wcag2aa')
     assert audit.get('violations') == [], audit
     browser('select','#provider','all')
     state['mode']='empty';browser('click','#refresh')
-    check("!document.querySelector('#accounts-empty').hidden && !document.querySelector('#history-empty').hidden")
+    check("!document.querySelector('#accounts-empty').hidden && !document.querySelector('#history-empty').hidden && document.querySelector('#meter-section').hidden")
     state['mode']='unavailable';browser('click','#refresh')
     check("document.querySelector('#content').hidden && document.querySelector('#error').textContent.includes('503')")
     state['mode']='unauthorized';browser('click','#refresh')

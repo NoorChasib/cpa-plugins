@@ -5,19 +5,20 @@ import XCTest
 @testable import QuotaGlance
 
 final class ReadoutIntegrationTests: XCTestCase {
-    func testSelectionPersistsAndChangingDashboardClearsIt() throws {
+    func testSelectionPersistsAndChangingDashboardResetsItsWindows() throws {
         let name = "QuotaGlanceTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         let settings = AppSettings(defaults: defaults)
         let location = try DashboardLocation("https://quota.example.com/app")
         settings.save(location)
-        let choice = QuotaSelection(providerID: "claude", rowID: "weekly_fable")
-        settings.quotaSelection = choice
-        settings.save(location)
-        XCTAssertEqual(AppSettings(defaults: defaults).quotaSelection, choice)
-        settings.save(try DashboardLocation("https://other.example.com/app"))
-        XCTAssertNil(settings.quotaSelection)
+        let fable = QuotaSelection(providerID: "claude", rowID: "weekly_fable")
+        let choice = MenuBarReadout(style: .splitPill, windows: [fable], badge: .off, showsAppIcon: true)
+        settings.save(location, readout: choice)
+        XCTAssertEqual(AppSettings(defaults: defaults).readout, choice)
+        // A different dashboard resets the windows to the default pair and keeps the style.
+        settings.save(try DashboardLocation("https://other.example.com/app"), readout: choice)
+        XCTAssertEqual(settings.readout, MenuBarReadout(style: .splitPill, windows: MenuBarReadout.defaultWindows, badge: .off, showsAppIcon: true))
     }
 
     @MainActor

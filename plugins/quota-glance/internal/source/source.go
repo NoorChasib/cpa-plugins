@@ -23,14 +23,26 @@ type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
 }
 
-// Result is one read of both inputs. Reason is empty on success and otherwise
+// Result is one read of every input. Reason is empty on success and otherwise
 // carries an aggregate stale reason, so a schema bump in quota-cache surfaces
 // as itself rather than as a generic read failure.
 type Result struct {
 	Snapshot   qc.Snapshot
 	Reason     string
 	Identities []aggregate.Identity
+	// Meter is quota-cache's API meter from the file beside the snapshot, and
+	// nil when MeterError says why not: MeterMissing or MeterUnreadable. It
+	// never sets Reason: only the API credit card depends on it, and that card
+	// says so itself.
+	Meter      *qc.APIMeter
+	MeterError string
 }
+
+// MeterError values, as health reports them.
+const (
+	MeterMissing    = "missing"
+	MeterUnreadable = "unreadable"
+)
 
 var ErrUnreadable = errors.New("quota-cache snapshot cannot be read at the configured cache-path")
 
@@ -79,7 +91,7 @@ func snapshotSchema(path string) (int, bool) {
 	return envelope.Schema, true
 }
 
-// Read loads the snapshot and roster.
+// Read loads the snapshot, the API meter beside it, and the roster.
 //
 // qc.Load is used deliberately in place of qc.ReadFresh. ReadFresh reports
 // unavailable when an entry is stale, carries an error, or has a reset in the
@@ -102,6 +114,7 @@ func Read(ctx context.Context, host Host, path string) Result {
 	} else {
 		result.Snapshot = snapshot
 	}
+	result.Meter, result.MeterError = meterAt(path)
 	identities, rosterErr := identities(ctx, host)
 	result.Identities = identities
 	// A roster the host could not supply is a source failure, not an empty
@@ -112,6 +125,20 @@ func Read(ctx context.Context, host Host, path string) Result {
 		result.Reason = aggregate.ReasonRosterUnavailable
 	}
 	return result
+}
+
+// meterAt reads the meter quota-cache saves beside the snapshot at path.
+// qc.LoadMeter refuses anything that is not a regular file before opening it,
+// so a FIFO there cannot wedge the watcher goroutine this runs on.
+func meterAt(path string) (*qc.APIMeter, string) {
+	meter, err := qc.LoadMeter(qc.MeterPath(path))
+	switch {
+	case errors.Is(err, qc.ErrMeterMissing):
+		return nil, MeterMissing
+	case err != nil:
+		return nil, MeterUnreadable
+	}
+	return meter, ""
 }
 
 // identities converts the host roster. A credential whose provider quota-cache

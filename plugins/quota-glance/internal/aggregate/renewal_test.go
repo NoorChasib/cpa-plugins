@@ -7,6 +7,7 @@ import (
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
 
 func utc(year int, month time.Month, day, hour, minute, second int) time.Time {
@@ -281,6 +282,224 @@ func TestTheGoldenContractsCarryEstimatedRenewals(t *testing.T) {
 	if c := byID["codex-noor@example.com.json"]; c.RenewalAtEpoch == nil || c.RenewalEstimated {
 		t.Errorf("codex: renewal = %v estimated = %v; want its own date, not estimated", c.RenewalAtEpoch, c.RenewalEstimated)
 	}
+	// A date set on the dashboard wins, and its estimate rides beside it for
+	// the editor's "set here · estimate ~Oct 3 · Use estimate".
+	if c := byID["5f2b8c41d09e7a36"]; c.RenewalSource == nil || *c.RenewalSource != renewalDashboard || c.RenewalEstimated ||
+		c.RenewalEstimateAtEpoch == nil || *c.RenewalEstimateAtEpoch != utc(2026, time.October, 3, 11, 20, 0).Unix() {
+		t.Errorf("dashboard: source = %v estimated = %v estimate = %v", c.RenewalSource, c.RenewalEstimated, c.RenewalEstimateAtEpoch)
+	}
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// withRenewal builds one credential's document with a renewal date stored for
+// it on the dashboard, editing on.
+func withRenewal(t *testing.T, identity Identity, entry qc.Entry, date string) Credential {
+	t.Helper()
+	now := at(t, 0)
+	entry.Provider, entry.AuthIndex = identity.Provider, identity.AuthIndex
+	entry.ObservedAt = now.Add(-2 * time.Minute)
+	values := overrides.Values{Renewals: map[string]overrides.Renewal{}}
+	if date != "" {
+		values.Renewals[identity.AuthIndex] = overrides.Renewal{Date: date, Rev: 6, UpdatedAt: now.Add(-time.Hour)}
+	}
+	doc := Build(Input{
+		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{qc.Key(identity.Provider, identity.AuthIndex): entry}},
+		Identities: []Identity{identity},
+		Overrides:  values,
+		AllowEdit:  true,
+	}, now)
+	return doc.Credentials[0]
+}
+
+// A renewal the provider reports wins over the dashboard's, and the
+// dashboard's over the estimate; each says which it is.
+func TestRenewalPrecedence(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	now := at(t, 0) // 2026-09-10T04:00:00Z
+	reported := now.Add(19 * 24 * time.Hour)
+	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	withReported := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	withReported.RenewalAt = &reported
+	for name, tc := range map[string]struct {
+		entry  qc.Entry
+		date   string
+		want   time.Time
+		source string
+	}{
+		"reported over dashboard":  {withReported, "2026-10-01", reported, "reported"},
+		"dashboard over estimated": {started, "2026-10-01", utc(2026, time.October, 1, 0, 0, 0), "dashboard"},
+		"estimated without either": {started, "", utc(2026, time.September, 30, 9, 15, 0), "estimated"},
+	} {
+		got := withRenewal(t, claude, tc.entry, tc.date)
+		if got.RenewalAtEpoch == nil || *got.RenewalAtEpoch != tc.want.Unix() || got.RenewalSource == nil || *got.RenewalSource != tc.source ||
+			got.RenewalEstimated != (tc.source == "estimated") {
+			t.Errorf("%s: renewal %v source %v estimated %v; want %s from %s", name, got.RenewalAtEpoch, got.RenewalSource, got.RenewalEstimated, tc.want, tc.source)
+		}
+	}
+	if got := withRenewal(t, claude, qc.Entry{}, ""); got.RenewalSource != nil || got.RenewalSetting != nil {
+		t.Errorf("nothing at all: source %v setting %v", got.RenewalSource, got.RenewalSetting)
+	}
+	raw, _ := json.Marshal(withRenewal(t, claude, qc.Entry{}, ""))
+	if !strings.Contains(string(raw), `"renewalSource":null`) || !strings.Contains(string(raw), `"renewalSetting":null`) {
+		t.Errorf("absent renewal fields must be null: %s", raw)
+	}
+}
+
+// A Claude credential carries its estimate whatever wins, so the page can say
+// what Use estimate returns to beside a date set on the dashboard. Codex has
+// no estimate to return to.
+func TestTheEstimateIsCarriedBesideADashboardDate(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	estimate := utc(2026, time.September, 30, 9, 15, 0).Unix()
+	for name, tc := range map[string]struct {
+		date   string
+		source string
+	}{
+		"set on the dashboard": {"2026-10-01", "dashboard"},
+		"estimated":            {"", "estimated"},
+	} {
+		got := withRenewal(t, claude, started, tc.date)
+		if got.RenewalSource == nil || *got.RenewalSource != tc.source || got.RenewalEstimateAtEpoch == nil || *got.RenewalEstimateAtEpoch != estimate {
+			t.Errorf("%s: source %v estimate %v, want %d", name, got.RenewalSource, got.RenewalEstimateAtEpoch, estimate)
+		}
+	}
+	if got := withRenewal(t, claude, qc.Entry{}, "2026-10-01"); got.RenewalEstimateAtEpoch != nil {
+		t.Errorf("no subscription start: estimate %v", *got.RenewalEstimateAtEpoch)
+	}
+	codex := Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}
+	if got := withRenewal(t, codex, started, ""); got.RenewalEstimateAtEpoch != nil {
+		t.Errorf("codex: estimate %v", *got.RenewalEstimateAtEpoch)
+	}
+	raw, _ := json.Marshal(withRenewal(t, claude, qc.Entry{}, ""))
+	if !strings.Contains(string(raw), `"renewalEstimateAtEpoch":null`) {
+		t.Errorf("an absent estimate must be null: %s", raw)
+	}
+}
+
+// A document served again while its source fails takes every part the
+// settings decide from one built with the settings as they are now, and
+// keeps the rest as it was.
+func TestWithSettingsTakesOnlyWhatTheSettingsDecide(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	before := withRenewal(t, claude, started, "")
+	after := withRenewal(t, claude, started, "2026-10-01")
+	old := Document{Credentials: []Credential{before}, RenewalOrphans: []RenewalOrphan{}, Providers: []Provider{{ID: "claude"}}}
+	fresh := Document{Credentials: []Credential{after}, RenewalOrphans: []RenewalOrphan{{ID: "fedcba9876543210"}},
+		APICredits: &APICredits{Title: "Monthly API Credit"}, Providers: []Provider{}}
+	got := WithSettings(old, fresh)
+	c := got.Credentials[0]
+	if c.RenewalSource == nil || *c.RenewalSource != "dashboard" || c.RenewalSetting == nil || c.RenewalSetting.Date != "2026-10-01" ||
+		*c.RenewalAtEpoch != *after.RenewalAtEpoch || c.RenewalEstimated || *c.RenewalEstimateAtEpoch != *after.RenewalEstimateAtEpoch {
+		t.Errorf("credential: %+v", c)
+	}
+	if got.APICredits != fresh.APICredits || len(got.RenewalOrphans) != 1 || len(got.Providers) != 1 {
+		t.Errorf("document: %+v", got)
+	}
+	if old.Credentials[0].RenewalSetting != nil {
+		t.Error("the document served before was modified")
+	}
+}
+
+// A dashboard date is 00:00 UTC of that day while it is ahead, and once it
+// has come, the next one on the same day of the month, or of the year on an
+// annual plan, strictly after now: on the day itself, next month's.
+func TestADashboardRenewalIsNeverInThePast(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	now := at(t, 0) // 2026-09-10T04:00:00Z
+	annual := qc.Entry{Quota: &qc.Quota{Schema: 1, BillingPeriod: qc.BillingAnnual}}
+	for name, tc := range map[string]struct {
+		entry qc.Entry
+		date  string
+		want  time.Time
+	}{
+		"ahead":                  {qc.Entry{}, "2026-09-29", utc(2026, time.September, 29, 0, 0, 0)},
+		"past, monthly":          {qc.Entry{}, "2026-08-31", utc(2026, time.September, 30, 0, 0, 0)},
+		"past, yearly":           {annual, "2025-11-02", utc(2026, time.November, 2, 0, 0, 0)},
+		"today, so next month":   {qc.Entry{}, "2026-09-10", utc(2026, time.October, 10, 0, 0, 0)},
+		"today on a yearly plan": {annual, "2025-09-10", utc(2027, time.September, 10, 0, 0, 0)},
+	} {
+		got := withRenewal(t, claude, tc.entry, tc.date)
+		if got.RenewalAtEpoch == nil || *got.RenewalAtEpoch != tc.want.Unix() || *got.RenewalAtEpoch <= now.Unix() {
+			t.Errorf("%s: renewal %v, want %s", name, got.RenewalAtEpoch, tc.want)
+		}
+		if got.RenewalSetting == nil || got.RenewalSetting.Date != tc.date || got.RenewalSetting.Revision != "6" {
+			t.Errorf("%s: setting %+v", name, got.RenewalSetting)
+		}
+	}
+}
+
+// Codex reports its own renewal and never takes one from the dashboard, nor
+// offers to.
+func TestCodexIgnoresADashboardRenewal(t *testing.T) {
+	codex := Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}
+	got := withRenewal(t, codex, qc.Entry{}, "2026-09-29")
+	if got.RenewalAtEpoch != nil || got.RenewalSource != nil || got.RenewalEditable {
+		t.Errorf("codex: renewal %v source %v editable %v", got.RenewalAtEpoch, got.RenewalSource, got.RenewalEditable)
+	}
+}
+
+// Only a Claude credential under an auth index settings.json can key, while
+// editing is available, is offered for editing.
+func TestRenewalEditable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		identity Identity
+		allow    bool
+		want     bool
+	}{
+		"claude":                   {Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}, true, true},
+		"editing off":              {Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}, false, false},
+		"codex":                    {Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}, true, false},
+		"an index that cannot key": {Identity{AuthIndex: "claude-a@example.com.json", Provider: "claude"}, true, false},
+	} {
+		doc := Build(Input{
+			Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
+			Identities: []Identity{tc.identity},
+			AllowEdit:  tc.allow,
+		}, at(t, 0))
+		if got := doc.Credentials[0].RenewalEditable; got != tc.want {
+			t.Errorf("%s: renewalEditable = %v", name, got)
+		}
+	}
+	// Unreadable settings apply nothing and edit nothing.
+	doc := Build(Input{
+		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
+		Identities: []Identity{{AuthIndex: "0123456789abcdef", Provider: "claude"}},
+		Overrides:  overrides.Values{Unreadable: true},
+		AllowEdit:  true,
+	}, at(t, 0))
+	if doc.Credentials[0].RenewalEditable {
+		t.Error("an unreadable settings.json left renewals editable")
+	}
+}
+
+// A stored date for a credential the roster no longer lists is offered for
+// removal, oldest first; without a roster, none is.
+func TestRenewalOrphans(t *testing.T) {
+	now := at(t, 0)
+	values := overrides.Values{Renewals: map[string]overrides.Renewal{
+		"0123456789abcdef": {Date: "2026-10-29", Rev: 5, UpdatedAt: now.Add(-time.Hour)},
+		"fedcba9876543210": {Date: "2026-09-29", Rev: 2, UpdatedAt: now.Add(-48 * time.Hour)},
+		"1111111111111111": {Date: "2026-09-12", Rev: 3, UpdatedAt: now.Add(-24 * time.Hour)},
+	}}
+	in := Input{
+		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
+		Identities: []Identity{{AuthIndex: "1111111111111111", Provider: "claude"}},
+		Overrides:  values,
+		AllowEdit:  true,
+	}
+	got := Build(in, now).RenewalOrphans
+	want := []RenewalOrphan{
+		{ID: "fedcba9876543210", Date: "2026-09-29", Revision: "2", UpdatedAtEpoch: now.Add(-48 * time.Hour).Unix()},
+		{ID: "0123456789abcdef", Date: "2026-10-29", Revision: "5", UpdatedAtEpoch: now.Add(-time.Hour).Unix()},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("orphans = %+v", got)
+	}
+	in.SourceReason = ReasonRosterUnavailable
+	if got := Build(in, now).RenewalOrphans; got == nil || len(got) != 0 {
+		t.Errorf("without a roster: %+v", got)
+	}
+}

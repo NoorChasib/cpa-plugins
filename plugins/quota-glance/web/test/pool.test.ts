@@ -13,7 +13,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 
-import { foldNotes, weeklyNote } from "../src/lib/pool.ts"
+import { cappedByWeekly, foldFlags, foldNotes, weeklyNote } from "../src/lib/pool.ts"
 import type { RowEntry } from "../src/lib/types.ts"
 
 /** An entry as an older plugin sends it: none of heldOut, pooledFraction, pooledPercent. */
@@ -176,5 +176,71 @@ describe("foldNotes", () => {
   test("every account held out still counts them, not a missing reading", () => {
     // The user's "0% session": five accounts reporting, every weekly spent.
     assert.deepEqual(foldNotes({ excludedCount: 5, heldOutCount: 5 }), ["5 weekly spent"])
+  })
+})
+
+describe("cappedByWeekly", () => {
+  test("counts the Fable accounts the pool counts at their weekly", () => {
+    // The golden Fable row: chasibnoor 45% capped at 24%, noor 70% at 60%.
+    const fable = [
+      entry({ remainingPercent: 0, pooledPercent: 0 }),
+      entry({ remainingPercent: 88, pooledPercent: 88 }),
+      entry({ remainingPercent: 45, pooledPercent: 24 }),
+      entry({ remainingPercent: 70, pooledPercent: 60 }),
+      entry({ remainingPercent: 10, pooledPercent: 10 }),
+    ]
+    assert.equal(cappedByWeekly(fable), 2)
+  })
+
+  test("a held-out session is not a cap, and an older plugin caps nothing", () => {
+    assert.equal(cappedByWeekly([entry({ heldOut: true, pooledPercent: 100 })]), 0)
+    assert.equal(cappedByWeekly([entry(), entry({ remainingPercent: 30 })]), 0)
+  })
+})
+
+describe("foldFlags", () => {
+  const names = ["siphorchannel", "agency", "chasibnoor"]
+
+  test("a card whose accounts are all fine names nobody", () => {
+    assert.deepEqual(foldFlags([entry(), entry(), entry()], names), [])
+  })
+
+  test("names low and out accounts with the level in words", () => {
+    const flags = foldFlags(
+      [
+        entry({ credentialId: "a", remainingPercent: 0, level: "critical" }),
+        entry({ credentialId: "b", remainingPercent: 76 }),
+        entry({ credentialId: "c", remainingPercent: 24, level: "low" }),
+      ],
+      names,
+    )
+    assert.deepEqual(flags, [
+      { id: "a", name: "siphorchannel", figure: "0%", word: "out", tone: "critical" },
+      { id: "c", name: "chasibnoor", figure: "24%", word: "low", tone: "low" },
+    ])
+  })
+
+  test("critical above zero says critical, not out", () => {
+    const [flag] = foldFlags([entry({ remainingPercent: 10, level: "critical" })], ["noorchasib"])
+    assert.equal(flag?.word, "critical")
+    assert.equal(flag?.figure, "10%")
+  })
+
+  test("a reading the server no longer vouches for is named, with its state", () => {
+    assert.deepEqual(foldFlags([entry({ credentialId: "s", state: "stale" })], ["stale"]), [
+      { id: "s", name: "stale", figure: "", word: "stale", tone: "" },
+    ])
+    const [failing] = foldFlags([entry({ remainingPercent: 5, level: "critical", state: "error" })], ["failing"])
+    assert.equal(failing?.word, "critical · failed")
+  })
+
+  test("an account with no reading is left to the fold's count", () => {
+    const none = entry({ hasReading: false, remainingPercent: 0, level: "", state: "pending" })
+    assert.deepEqual(foldFlags([none], ["pending"]), [])
+  })
+
+  test("falls back to the id when a name is missing", () => {
+    const [flag] = foldFlags([entry({ credentialId: "x", remainingPercent: 20, level: "low" })], [])
+    assert.equal(flag?.name, "x")
   })
 })

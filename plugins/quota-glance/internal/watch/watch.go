@@ -1,10 +1,11 @@
 // Package watch decides when the document is rebuilt.
 //
-// Mostly that means turning quota-cache's snapshot writes into reload events:
-// there is no event bus between CPA plugins and no host callback that reports a
-// cache refresh, so the file itself is the signal. The heartbeat covers the
-// half of the document the file does not carry — request activity, which the
-// host roster reports and which moves between writes.
+// Mostly that means turning quota-cache's writes into reload events: there is
+// no event bus between CPA plugins and no host callback that reports a cache
+// refresh, so the files themselves are the signal. quota-cache writes two, the
+// snapshot and its API meter beside it, and a write to either reloads. The
+// heartbeat covers the half of the document the files do not carry — request
+// activity, which the host roster reports and which moves between writes.
 package watch
 
 import (
@@ -47,7 +48,12 @@ const (
 )
 
 type Options struct {
-	Path      string
+	Path string
+	// MeterPath is quota-cache's API meter, which it saves beside the snapshot
+	// and on its own schedule: a write to it reloads as a write to Path does.
+	// Optional. Only Path's directory is watched, so a meter anywhere else is
+	// noticed by the backstop alone.
+	MeterPath string
 	Debounce  time.Duration
 	Backstop  time.Duration
 	Heartbeat time.Duration
@@ -110,6 +116,11 @@ func Start(opts Options) (*Watcher, error) {
 		return nil, errors.New("cache path cannot be resolved")
 	}
 	opts.Path = path
+	if opts.MeterPath != "" {
+		if opts.MeterPath, err = filepath.Abs(opts.MeterPath); err != nil {
+			return nil, errors.New("meter path cannot be resolved")
+		}
+	}
 	fs, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, errors.New("filesystem watcher cannot be created")
@@ -187,11 +198,28 @@ type fingerprint struct {
 }
 
 func fingerprintOf(path string) fingerprint {
+	if path == "" {
+		return fingerprint{}
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return fingerprint{}
 	}
 	return fingerprint{size: info.Size(), modTime: info.ModTime(), present: true}
+}
+
+// fingerprints is every watched file's version at once, so the backstop
+// notices a missed write to either.
+type fingerprints struct{ snapshot, meter fingerprint }
+
+func (w *Watcher) fingerprints() fingerprints {
+	return fingerprints{snapshot: fingerprintOf(w.opts.Path), meter: fingerprintOf(w.opts.MeterPath)}
+}
+
+// watched reports whether an event names one of the watched files.
+func (w *Watcher) watched(name string) bool {
+	name = filepath.Clean(name)
+	return name == w.opts.Path || (w.opts.MeterPath != "" && name == w.opts.MeterPath)
 }
 
 func (w *Watcher) run() {
@@ -212,7 +240,7 @@ func (w *Watcher) run() {
 	}
 	// Read once before any event so a restart serves data immediately rather
 	// than waiting for the next poll to change something.
-	seen := fingerprintOf(w.opts.Path)
+	seen := w.fingerprints()
 	w.fire(reloadDirect)
 
 	debounce := time.NewTimer(time.Hour)
@@ -245,9 +273,11 @@ func (w *Watcher) run() {
 				continue
 			}
 			// A rename surfaces as Create on the destination, and can arrive
-			// alongside Chmod and Write. Anything touching our file or its
-			// directory collapses into one debounced reload.
-			if filepath.Clean(event.Name) != w.opts.Path {
+			// alongside Chmod and Write. Anything touching either file
+			// collapses into one debounced reload: quota-cache can save the
+			// snapshot and the meter within the same moment, and one rebuild
+			// reads both.
+			if !w.watched(event.Name) {
 				continue
 			}
 			w.stateMu.Lock()
@@ -273,7 +303,7 @@ func (w *Watcher) run() {
 
 		case <-debounce.C:
 			pending = false
-			seen = fingerprintOf(w.opts.Path)
+			seen = w.fingerprints()
 			w.fire(reloadDirect)
 
 		case <-heartbeat.C:
@@ -296,7 +326,7 @@ func (w *Watcher) run() {
 			} else {
 				w.setWatching(true)
 			}
-			current := fingerprintOf(w.opts.Path)
+			current := w.fingerprints()
 			if current != seen {
 				seen = current
 				w.fire(reloadBackstop)

@@ -7,22 +7,25 @@ import { formatDuration } from "../lib/time"
 import type { Credential } from "../lib/types"
 
 /**
- * Banked rate-limit resets, as one tile per account in its provider's band.
+ * Banked rate-limit resets, as one card at the foot of its provider's section
+ * with a row per account holding any.
  *
- * They sit in the provider's band rather than on any window card because a
- * banked reset is a fact about the account, not about a window: spending one
- * clears the session and weekly windows together. Repeating it on every card
- * would put three buttons on screen for one irreversible action.
+ * A card of their own rather than a line on any window card because a banked
+ * reset is a fact about the account, not about a window: spending one clears
+ * the session and weekly windows together. Repeating it on every card would
+ * put three buttons on screen for one irreversible action. Last in the
+ * section, below everything it would change, so the figures are read before
+ * the button that moves them.
  *
  * Nothing at all is drawn when no credential in the provider holds one, which
- * is the ordinary case and leaves the band carrying only the provider's name.
+ * is the ordinary case.
  */
 
 const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`
 
 /**
  * What spending one does, per provider, in the two places that say so: the
- * band's label and the dialog that asks.
+ * card's subtitle and the dialog that asks.
  *
  * Codex and Claude clear different things under different rules, and a
  * sentence vague enough to cover both would tell the reader nothing they could
@@ -34,18 +37,18 @@ type Effect = { subtitle: string; clears: string; rule?: string }
 
 const EFFECTS: Record<string, Effect> = {
   codex: {
-    subtitle: "clears the session and weekly windows when spent",
+    subtitle: "Clears the session and weekly windows when spent.",
     clears: "It clears that account’s session and weekly Codex windows and moves its weekly reset date.",
   },
   claude: {
-    subtitle: "clears the 5-hour and weekly limits, once at a limit",
+    subtitle: "Clears the 5-hour and weekly limits, once at a limit.",
     clears: "It clears that account’s Claude usage limits — the 5-hour and the weekly.",
     rule: "Claude allows a reset only once the account has hit a limit, and makes it wait out a cooldown between resets.",
   },
 }
 
 const ANY_PROVIDER: Effect = {
-  subtitle: "clears this account’s windows when spent",
+  subtitle: "Clears the account’s windows when spent.",
   clears: "It clears that account’s current windows.",
 }
 
@@ -54,30 +57,28 @@ const effectOf = (provider: string): Effect => EFFECTS[provider] ?? ANY_PROVIDER
 /**
  * The provider's reason, at the last poll, that a press would be refused.
  *
- * Printed on the tile and never instead of it. The reading can be a poll old
+ * Printed on the row and never instead of its button. The reading can be a poll old
  * and the plugin checks the provider afresh before spending anything, so hiding
- * the tile on its say-so would strand a reset the reader could use the moment
+ * the button on its say-so would strand a reset the reader could use the moment
  * the account reaches its limit. A cooldown that has run out since the poll
  * says nothing rather than counting past zero, and a reason this bundle does
  * not know says nothing either: a raw code beside an irreversible action reads
  * as an error.
  */
-function holdText(hold: string, holdUntilEpoch: number | null, now: number, short = false): string | null {
+function holdText(hold: string, holdUntilEpoch: number | null, now: number): string | null {
   switch (hold) {
     case "notLimited":
-      // Short, the account's state rather than the rule: the rule is in the
-      // dialog, and "not at a limit" is what to check against the card.
-      return short ? "not at a limit" : "usable once at a limit"
+      return "usable once at a limit"
     case "cooldown": {
       if (holdUntilEpoch === null) return "cooling down"
       const remaining = holdUntilEpoch - now
       if (remaining <= 0) return null
-      return short ? `cooling ${formatDuration(remaining)}` : `cooling down · ${formatDuration(remaining)}`
+      return `cooling down · ${formatDuration(remaining)}`
     }
     case "paused":
       return "paused"
     case "ineligible":
-      return short ? "not eligible" : "not eligible right now"
+      return "not eligible right now"
     default:
       return null
   }
@@ -127,7 +128,7 @@ function ConfirmDialog({
   onCancel: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  // Whatever had focus when the dialog was asked for — the tile, from a
+  // Whatever had focus when the dialog was asked for — the button, from a
   // keyboard or a click. Read on the first render, before showModal moves
   // focus inside.
   const opener = useRef(document.activeElement)
@@ -139,7 +140,7 @@ function ConfirmDialog({
     // The dialog leaves by unmounting rather than by close(), which skips the
     // platform's own return of focus, so it is handed back here: otherwise a
     // keyboard reader who cancels is dropped at the top of the page. Not when
-    // the tile has gone — a spend that took the account's last reset removes
+    // the button has gone — a spend that took the account's last reset removes
     // it — which leaves focus where the platform puts it.
     const target = opener.current
     return () => {
@@ -194,7 +195,7 @@ function ConfirmDialog({
  *
  * The address is copied in rather than looked up, because the press is often
  * what takes the account out of the list: once quota-cache polls and sees the
- * last reset gone, the tile goes, and the outcome must not go with it.
+ * last reset gone, the row goes, and the outcome must not go with it.
  */
 type Notice = { id: string; who: string; tone: Tone; text: string }
 
@@ -207,7 +208,7 @@ type Notice = { id: string; who: string; tone: Tone; text: string }
  */
 type Tone = "ok" | "bad" | "unknown" | "partial"
 
-/** One provider's tiles, the press in progress, and what earlier presses came to. */
+/** One provider's rows, the press in progress, and what earlier presses came to. */
 export interface BankedResets {
   holding: Credential[]
   asking: Credential | null
@@ -220,16 +221,16 @@ export interface BankedResets {
 }
 
 /**
- * The state behind a provider's tiles, shared by the three places it shows:
- * the tiles in the band, the outcome lines under it, and the dialog.
+ * The state behind a provider's banked resets, shared by the three places it
+ * shows: the rows, the outcome lines under them, and the dialog.
  *
  * One dialog per provider is enough. It is modal and stays open until its
- * press has an answer, so a second tile cannot be pressed while one is in
+ * press has an answer, so a second button cannot be pressed while one is in
  * flight.
  */
 export function useBankedResets(credentials: Credential[], onRedeemed: () => void): BankedResets {
   // Every account with any, in the catalog's order — no other filter. See the
-  // note on the tile in ResetTile.
+  // note on ResetRow.
   const holding = credentials.filter((credential) => credential.resetCredits !== null)
   const [asking, setAsking] = useState<Credential | null>(null)
   const [busy, setBusy] = useState(false)
@@ -305,7 +306,7 @@ function HoldIcon() {
 
 /**
  * One account's banked resets: who, how many, the provider's hold and the
- * deadline — and, when this page can spend one, the tile is the button.
+ * deadline — and, when this page can spend one, the "Use one" button.
  *
  * A button, not a link or a clickable div, and only when both judgements say
  * yes. The server decides whether the credential can be spent at all; the
@@ -313,15 +314,15 @@ function HoldIcon() {
  * console session neither of which has been refused — because a press with
  * none could only be refused, and one with a console key CPA has already
  * refused would cost another failed management sign-in. When either says no
- * the tile still shows the count and the deadline, and is plainly not a
- * control: a greyed button invites a press that explains nothing.
+ * the row still shows the count and the deadline, and has no button: a greyed
+ * button invites a press that explains nothing.
  *
- * Nothing else is consulted. Every account holding a reset gets its own tile
+ * Nothing else is consulted. Every account holding a reset gets its own row
  * and, when both say yes, its own button — whatever its routing status or the
  * provider's hold — because which account to spend on is the reader's choice,
  * and a cooling-down account is the one most worth spending on.
  */
-function ResetTile({
+function ResetRow({
   credential,
   name,
   busy,
@@ -338,117 +339,100 @@ function ResetTile({
   // `?? ""` and `?? null` for a document from a plugin older than the hold.
   const hold = holdText(credits.hold ?? "", credits.holdUntilEpoch ?? null, now)
   const cooling = (credits.hold ?? "") === "cooldown" && hold !== null
+  // Short beside a hold, which already fills most of the line.
   const expiry = expiryOf(credits.expiresAtEpoch, now, hold !== null)
   const offered = credits.redeemable && canRedeemHere()
   const address = credential.email || credential.id
   const long = expiryOf(credits.expiresAtEpoch, now, false).text
-  // Everything the tile says, whole, for the hover and for assistive
-  // technology — the compact tile below prints only part of it.
+  // Everything the row says, whole, for the hover and for assistive
+  // technology.
   const detail = `${plural(credits.availableCount, "reset")} banked, ${long}${hold ? `, ${hold}` : ""}`
 
-  // The compact tile's one status line, two to a row in the menu bar's
-  // popover: a deadline inside a week first, since lapsing is the one thing
-  // here that asks to be acted on; else the provider's hold, which says why a
-  // press would be refused; else the deadline.
-  const shortHold = holdText(credits.hold ?? "", credits.holdUntilEpoch ?? null, now, true)
-  const shortExpiry = expiryOf(credits.expiresAtEpoch, now, true)
-  const brief = shortExpiry.tone ? shortExpiry : shortHold ? { text: shortHold, tone: "qg-hold" } : shortExpiry
-
-  const body = (
-    <>
-      <span className="qg-pico">{cooling ? <HoldIcon /> : <ResetIcon />}</span>
-      <span className="qg-ptxt">
-        <span className="qg-pt">
-          {/* The qualifier never gives way: when two accounts share a local
-            * part it is the half that tells their tiles apart. */}
-          <span className="qg-pwho">
-            <span className="qg-plocal">{name.local}</span>
-            {name.qualifier && <span className="qg-pqual">{name.qualifier}</span>}
-          </span>
-          <span className="qg-pn">· {plural(credits.availableCount, "reset")}</span>
-        </span>
-        <span className="qg-ps qg-ps-full">
-          {hold && (
-            <>
-              <span className="qg-hold">{hold}</span>
-              {" · "}
-            </>
-          )}
-          <span className={expiry.tone}>{expiry.text}</span>
-        </span>
-        <span className="qg-ps qg-ps-short">
-          <span className={brief.tone}>{brief.text}</span>
-        </span>
-      </span>
-    </>
-  )
-
-  if (!offered) {
-    return (
-      <span className="qg-pill is-static" title={`${address}: ${detail}`}>
-        {body}
-      </span>
-    )
-  }
   return (
-    <button
-      type="button"
-      className={`qg-pill ${hold ? "is-held" : ""}`}
-      title={`${address}: ${detail}`}
-      aria-haspopup="dialog"
-      aria-label={`Use one of ${address}'s banked resets: ${detail}`}
-      disabled={busy}
-      onClick={onAsk}
-    >
-      {body}
-      {/* The verb, said on the tile itself: this is the control that spends,
-        * and "Use one" is what the page's own messages tell the reader to
-        * press — after an unknown outcome, to retry the same claim. */}
-      <span className="qg-puse" aria-hidden="true">
-        Use one
+    <div className={`qg-brow ${hold || !offered ? "is-held" : ""}`} title={`${address}: ${detail}`}>
+      <span className="qg-pico">{cooling ? <HoldIcon /> : <ResetIcon />}</span>
+      {/* The qualifier never gives way: when two accounts share a local part
+        * it is the half that tells their rows apart. */}
+      <span className="qg-bwho">
+        <span className="qg-plocal">{name.local}</span>
+        {name.qualifier && <span className="qg-pqual">{name.qualifier}</span>}
+        <span className="qg-pn">· {plural(credits.availableCount, "reset")}</span>
       </span>
-      <svg className="qg-pgo" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-        <path d="M3.5 1.5 7 5 3.5 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
+      <span className="qg-bst">
+        {hold && (
+          <>
+            <span className="qg-hold">{hold}</span>
+            {" · "}
+          </>
+        )}
+        <span className={expiry.tone}>{expiry.text}</span>
+      </span>
+      {offered && (
+        <button
+          type="button"
+          className="qg-use"
+          aria-haspopup="dialog"
+          aria-label={`Use one of ${address}'s banked resets: ${detail}`}
+          disabled={busy}
+          onClick={onAsk}
+        >
+          {/* The verb, said on the button itself: "Use one" is what the
+            * page's own messages tell the reader to press — after an unknown
+            * outcome, to retry the same claim. */}
+          Use one
+          <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path
+              d="M3.5 1.5 7 5 3.5 8.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+    </div>
   )
 }
 
 /**
- * The tiles, with the band's label for them. Nothing when none is held.
- *
- * One tile sits beside the provider's name when there is room. Two or more
- * take a row of their own as an even grid: three tiles do not fit beside the
- * name even at 820px, and letting them wrap where they stood left the last
- * one alone at the right end of a second line with the band empty beside it.
+ * The card: what spending one does on this provider, a row per account
+ * holding any, and what each press came to. Present while any account holds
+ * one or a press still has something to report — the last reset spent takes
+ * its row away, and the outcome must not go with it.
  */
-export function ResetTiles({ state, names }: { state: BankedResets; names: Map<string, AccountName> }) {
-  if (state.holding.length === 0) return null
-  // One provider per band: ProviderSection hands over only its own.
-  const effect = effectOf(state.holding[0]?.provider ?? "")
-  // Said once for the band rather than on every tile: it is a fact about this
+export function BankedResetsCard({ state, names }: { state: BankedResets; names: Map<string, AccountName> }) {
+  if (state.holding.length === 0 && state.notices.length === 0 && !state.asking) return null
+  // One provider per card: ProviderSection hands over only its own. The
+  // dialog's credential stands in once the last row has gone.
+  const effect = effectOf(state.holding[0]?.provider ?? state.asking?.provider ?? "")
+  // Said once for the card rather than on every row: it is a fact about this
   // browser's session, and it is the same for every account in it. With
   // figures on screen it means every way in was refused since they arrived.
   const signedOut = !canRedeemHere() && state.holding.some((credential) => credential.resetCredits?.redeemable)
   return (
-    <div className="qg-resets">
-      <span className="qg-blabel" title={effect.subtitle}>
-        Banked resets
-        <span className="qg-blabel-sub">{effect.subtitle}</span>
-      </span>
-      <div className={`qg-pills ${state.holding.length > 1 ? "is-grid" : ""}`}>
-        {state.holding.map((credential) => (
-          <ResetTile
-            key={credential.id}
-            credential={credential}
-            name={names.get(credential.id) ?? { local: shortName(credential, credential.id), qualifier: "" }}
-            busy={state.busy}
-            onAsk={() => state.ask(credential)}
-          />
-        ))}
+    <article className="qg-win qg-bank" aria-label="Banked resets">
+      <div className="qg-whead">
+        <h3 className="qg-wtitle">Banked resets</h3>
       </div>
+      <p className="qg-bsubt">{effect.subtitle}</p>
+      {state.holding.length > 0 && (
+        <div className="qg-brows">
+          {state.holding.map((credential) => (
+            <ResetRow
+              key={credential.id}
+              credential={credential}
+              name={names.get(credential.id) ?? { local: shortName(credential, credential.id), qualifier: "" }}
+              busy={state.busy}
+              onAsk={() => state.ask(credential)}
+            />
+          ))}
+        </div>
+      )}
       {signedOut && <p className="qg-pnote">To spend a reset from here, sign in again.</p>}
-    </div>
+      <ResetNotices state={state} />
+      <ResetConfirm state={state} />
+    </article>
   )
 }
 
@@ -468,7 +452,7 @@ const TONE_CLASS: Record<Tone, string> = { ok: "is-ok", bad: "is-bad", unknown: 
 /**
  * Where focus goes when a notice's own dismiss button is pressed, since that
  * button is about to go: the next notice's, else the one before, else the
- * band's first tile, else the provider's heading. Without this a keyboard
+ * card's first "Use one", else the provider's heading. Without this a keyboard
  * reader who dismisses a notice is dropped back at the top of the page.
  */
 function focusAfterDismiss(button: HTMLElement) {
@@ -481,9 +465,9 @@ function focusAfterDismiss(button: HTMLElement) {
     return
   }
   const section = button.closest("section")
-  const tile = section?.querySelector<HTMLElement>("button.qg-pill:not(:disabled)")
-  if (tile) {
-    tile.focus()
+  const use = section?.querySelector<HTMLElement>("button.qg-use:not(:disabled)")
+  if (use) {
+    use.focus()
     return
   }
   const heading = section?.querySelector<HTMLElement>("h2")
@@ -494,15 +478,15 @@ function focusAfterDismiss(button: HTMLElement) {
 }
 
 /**
- * What each press came to, right under the tiles that made them.
+ * What each press came to, right under the rows that made them.
  *
- * One live region, present whenever the provider has tiles or anything to
+ * One live region, present whenever the provider has rows or anything to
  * report, so an outcome is announced when it arrives rather than when a region
  * is created around it — which some readers miss. Each line stays until it is
  * dismissed or its account is pressed again: an outcome that may say a reset
  * is spent is not something to time out.
  */
-export function ResetNotices({ state }: { state: BankedResets }) {
+function ResetNotices({ state }: { state: BankedResets }) {
   if (state.holding.length === 0 && state.notices.length === 0) return null
   return (
     <div role="status" className="qg-notices">
@@ -531,8 +515,8 @@ export function ResetNotices({ state }: { state: BankedResets }) {
   )
 }
 
-/** The dialog for the tile being pressed, while one is. */
-export function ResetConfirm({ state }: { state: BankedResets }) {
+/** The dialog for the row being pressed, while one is. */
+function ResetConfirm({ state }: { state: BankedResets }) {
   const credential = state.asking
   if (!credential?.resetCredits) return null
   return (

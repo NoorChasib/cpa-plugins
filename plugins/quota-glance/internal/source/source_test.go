@@ -207,3 +207,66 @@ func TestAnAbsentRingStaysAbsent(t *testing.T) {
 		t.Fatalf("a host that reported no ring produced %d buckets", len(ring))
 	}
 }
+
+// The meter is read from beside the snapshot on every read. A missing or
+// unreadable one is named, and never makes the snapshot a source failure:
+// only the API credit card depends on it.
+func TestTheMeterIsReadBesideTheSnapshot(t *testing.T) {
+	const snapshot = `{"schema":1,"entries":{},"provider_cooldown":{}}`
+	path := write(t, snapshot)
+	meterPath := filepath.Join(filepath.Dir(path), "snapshot.meter.json")
+
+	got := Read(context.Background(), fakeHost{}, path)
+	if got.Reason != "" || got.Meter != nil || got.MeterError != MeterMissing {
+		t.Fatalf("no meter: reason %q meter %v error %q", got.Reason, got.Meter, got.MeterError)
+	}
+
+	for name, body := range map[string]string{"corrupt": `{"schema":1,`, "schema 2": `{"schema":2}`} {
+		if err := os.WriteFile(meterPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got = Read(context.Background(), fakeHost{}, path)
+		if got.Reason != "" || got.Meter != nil || got.MeterError != MeterUnreadable {
+			t.Fatalf("%s meter: reason %q meter %v error %q", name, got.Reason, got.Meter, got.MeterError)
+		}
+	}
+
+	body := `{"schema":1,"since":"2026-10-01T00:00:00Z","started_at":"2026-10-01T00:00:00Z","flushed_at":"2026-10-09T11:59:00Z",` +
+		`"received":3,"counted":2,"organizations":{"00000000-0000-4000-8000-00000000000a":{"since":"2026-10-01T00:00:00Z"}}}`
+	if err := os.WriteFile(meterPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = Read(context.Background(), fakeHost{}, path)
+	if got.MeterError != "" || got.Meter == nil || got.Meter.Counted != 2 || got.Meter.Gaps == nil ||
+		got.Meter.Organizations["00000000-0000-4000-8000-00000000000a"].Days == nil {
+		t.Fatalf("meter = %+v, error %q", got.Meter, got.MeterError)
+	}
+
+	// A meter beside a snapshot that cannot be read is still read: the
+	// snapshot's failure is reported on its own.
+	if err := os.WriteFile(path, []byte(`{"schema":1,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got = Read(context.Background(), fakeHost{}, path); got.Reason != aggregate.ReasonCacheMissing || got.Meter == nil {
+		t.Fatalf("broken snapshot: reason %q meter %v", got.Reason, got.Meter)
+	}
+}
+
+// A FIFO where the meter belongs must not block the read either.
+func TestAnUnopenableMeterDoesNotBlock(t *testing.T) {
+	path := write(t, `{"schema":1,"entries":{},"provider_cooldown":{}}`)
+	fifo := filepath.Join(filepath.Dir(path), "snapshot.meter.json")
+	if out, err := exec.Command("mkfifo", fifo).CombinedOutput(); err != nil {
+		t.Skipf("mkfifo unavailable: %v %s", err, out)
+	}
+	done := make(chan Result, 1)
+	go func() { done <- Read(context.Background(), fakeHost{}, path) }()
+	select {
+	case got := <-done:
+		if got.Reason != "" || got.MeterError != MeterUnreadable {
+			t.Fatalf("reason %q meter error %q", got.Reason, got.MeterError)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Read blocked on a FIFO in the meter's place")
+	}
+}

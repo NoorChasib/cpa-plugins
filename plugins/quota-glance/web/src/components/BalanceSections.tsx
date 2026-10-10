@@ -1,6 +1,6 @@
 import { useId } from "react"
 
-import { ProviderBand } from "./ProviderSection"
+import { SectionHead } from "./ProviderSection"
 import { useNowSeconds } from "../lib/now"
 import { formatDuration } from "../lib/time"
 import type { Balance } from "../lib/types"
@@ -42,7 +42,7 @@ function BalanceCard({ balance }: { balance: Balance }) {
   return (
     <article className="qg-win qg-balance" aria-label={`${balance.title} balance`}>
       <div className="qg-whead">
-        <h3 className="qg-wtitle">Balance</h3>
+        <h3 className="qg-wtitle">Prepaid balance</h3>
         <span className="qg-chips">
           {levelWord && <span className={`qg-chip qg-chip-${balance.level}`}>{levelWord}</span>}
         </span>
@@ -89,7 +89,7 @@ function BalanceGroup({ members }: { members: Balance[] }) {
   const headingID = useId()
   return (
     <section className="qg-prov" aria-labelledby={headingID}>
-      <ProviderBand id={headingID} title={members[0]!.title} detail="prepaid credit" />
+      <SectionHead id={headingID} title={members[0]!.title} />
       {members.map((balance) => (
         <BalanceCard key={balance.id} balance={balance} />
       ))}

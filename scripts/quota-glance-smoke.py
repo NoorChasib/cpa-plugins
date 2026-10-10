@@ -466,6 +466,39 @@ def checks(container, cache_path, now):
     print('  spend         token door GET /spend dispatched; token, fetch metadata, confirmation '
           'and document checked; a repeated press replayed; POST refused')
 
+    # 6b''. The settings doors, which save what the dashboard's editor changed:
+    #       a POST under the management tree for a console session, and a GET
+    #       on the resource tree with the batch in a header for the dashboard
+    #       password. As with a press, a refusal from the plugin is the proof
+    #       CPA dispatched each one, and nothing is written: the renewal id
+    #       named is not a credential the document offers. allow-edit is on by
+    #       default, so both doors are open.
+    #
+    #       The bare request is the plugin's own token check, not CPA's, so it
+    #       costs the management key nothing.
+    settings_batch = json.dumps({'kind': 'renewals', 'items': [
+        {'id': '0123456789abcdef', 'baseRevision': '', 'date': '2026-10-29'}]}).encode()
+    status, body, headers = request(f'/v0/management/plugins/{PLUGIN}/settings', management=True,
+                                    method='POST', body=settings_batch, headers=json_header)
+    assert status != 404, 'CPA did not dispatch POST to the management settings route; the console cannot save'
+    assert (status, error_of(body, headers)) == (409, 'not_editable'), f'management settings: {status} {body!r}'
+
+    save = f'/v0/resource/plugins/{PLUGIN}/save-settings'
+    settings_header = {'X-Quota-Glance-Settings': base64.urlsafe_b64encode(settings_batch).rstrip(b'=').decode()}
+    status, body, _ = request(save)
+    assert status != 404, 'CPA did not dispatch GET to the save-settings route; the token door cannot save'
+    assert status == 401 and not body, f'bare save-settings: {status} {body[:200]!r} (expected a bare 401)'
+    status, body, headers = request(save, token=WEB_TOKEN)
+    assert (status, error_of(body, headers)) == (400, 'invalid_request'), f'save-settings without the header: {status} {body!r}'
+    status, body, headers = request(save, token=WEB_TOKEN, headers={**settings_header, 'Sec-Fetch-Site': 'cross-site'})
+    assert (status, error_of(body, headers)) == (403, 'cross_site'), f'cross-site save-settings: {status} {body!r}'
+    status, body, headers = request(save, token=WEB_TOKEN, headers=settings_header)
+    assert (status, error_of(body, headers)) == (409, 'not_editable'), f'save-settings: {status} {body!r}'
+    status, _, _ = request(save, token=WEB_TOKEN, method='POST', body=settings_batch, headers={**json_header, **settings_header})
+    assert status == 404, f'POST to the save-settings route: {status} (expected 404)'
+    print('  settings      management POST /settings and token door GET /save-settings dispatched; '
+          'token, fetch metadata and document checked; POST to the token door refused')
+
     # 6c. The OpenRouter balance, and its threshold changed the way CPA's
     #     panel changes it: a JSON number sent to CPA's own plugin-config
     #     route, which CPA writes into its config file and hands back to the

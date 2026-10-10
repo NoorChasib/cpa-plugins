@@ -11,6 +11,7 @@ import (
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/golden/summary.json")
@@ -22,6 +23,28 @@ const fixtureNow = 1789012800 // 2026-09-10T04:00:00Z
 func at(t *testing.T, offset int64) time.Time {
 	t.Helper()
 	return time.Unix(fixtureNow+offset, 0).UTC()
+}
+
+// noorchasibID is the one fixture credential with a CPA auth index as CPA
+// forms one today, 16 hex digits, which is what a dashboard renewal date is
+// keyed by. Its address comes from the roster.
+const noorchasibID = "5f2b8c41d09e7a36"
+
+// fixtureExtras is what sits beside a snapshot fixture: quota-cache's meter,
+// read from the sibling .meter.json, and the dashboard's settings, from
+// testdata/overrides under the same name.
+func fixtureExtras(t *testing.T, name string) (*qc.APIMeter, overrides.Values) {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "snapshots", name+".json")
+	meter, err := qc.LoadMeter(qc.MeterPath(path))
+	if err != nil {
+		t.Fatalf("meter beside %s: %v", name, err)
+	}
+	values := overrides.Load(filepath.Join("..", "..", "testdata", "overrides", name+".json"))
+	if values.Unreadable {
+		t.Fatalf("testdata/overrides/%s.json does not load", name)
+	}
+	return meter, values
 }
 
 func loadSnapshot(t *testing.T, name string) qc.Snapshot {
@@ -70,7 +93,7 @@ func fixtureRoster() []Identity {
 		{AuthIndex: "xai-noor@example.com.json", Provider: "xai"},
 		{AuthIndex: "claude-chasibnoor@example.com.json", Provider: "claude",
 			Recent: tenMinuteRing(map[int]int64{3: 6, 4: 11, 5: 8, 6: 4, 7: 2}, nil)},
-		{AuthIndex: "claude-noorchasib@example.com.json", Provider: "claude",
+		{AuthIndex: noorchasibID, Provider: "claude", Email: "noorchasib@example.com",
 			Recent: tenMinuteRing(nil, nil)},
 		{AuthIndex: "codex-noor@example.com.json", Provider: "codex",
 			Recent: tenMinuteRing(map[int]int64{18: 4, 19: 3}, nil)},
@@ -87,6 +110,7 @@ func fixtureRoster() []Identity {
 
 func buildFixture(t *testing.T) Document {
 	t.Helper()
+	meter, values := fixtureExtras(t, "seven-credentials")
 	return Build(Input{
 		Snapshot:   loadSnapshot(t, "seven-credentials.json"),
 		Identities: fixtureRoster(),
@@ -97,6 +121,8 @@ func buildFixture(t *testing.T) Document {
 		Redeemable: true,
 		// And with the threshold a default install ships with.
 		BalanceWarnBelow: 5,
+		// And with editing on, as allow-edit defaults.
+		Meter: meter, Overrides: values, AllowEdit: true,
 	}, at(t, 0))
 }
 
@@ -179,7 +205,7 @@ func TestSessionRowMatchesTheDesign(t *testing.T) {
 		"claude-agency@example.com.json",
 		"claude-chasibnoor@example.com.json",
 		"claude-noor@example.com.json",
-		"claude-noorchasib@example.com.json",
+		noorchasibID,
 	}
 	for i := range want {
 		if order[i] != want[i] {
@@ -804,6 +830,7 @@ func degradedSamples(t *testing.T) []Sample {
 
 func buildDegraded(t *testing.T) Document {
 	t.Helper()
+	meter, values := fixtureExtras(t, "degraded-states")
 	return Build(Input{
 		Snapshot:         loadSnapshot(t, "degraded-states.json"),
 		Identities:       degradedRoster(),
@@ -811,6 +838,8 @@ func buildDegraded(t *testing.T) Document {
 		StaleAfter:       45 * time.Minute,
 		Redeemable:       true,
 		BalanceWarnBelow: 5,
+		// Editing off: the card says why, and what is stored still applies.
+		Meter: meter, Overrides: values, AllowEdit: false,
 	}, at(t, 0))
 }
 
@@ -934,6 +963,21 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 		t.Errorf("missing: nullReset=%v emptySubtext=%v unmatchedRow=%v sourceModel=%v excluded=%v",
 			sawNullReset, sawEmptySubtext, sawUnmatched, sawModel, sawExcluded)
 	}
+	// And every API credit state but ok, which the stale meter here rules out
+	// and the happy-path contract carries; TestDegradedContractCoversEveryAPICreditState
+	// checks the issues and reasons beside them.
+	if doc.APICredits == nil {
+		t.Fatal("the degraded contract has no API credits")
+	}
+	creditStates := map[string]bool{}
+	for _, account := range doc.APICredits.Accounts {
+		creditStates[account.State] = true
+	}
+	for _, want := range []string{StateStale, StateOut, StatusPending, StateNeedsSettings, StateMisconfigured, StateCacheTooOld} {
+		if !creditStates[want] {
+			t.Errorf("no API credit account with state %q", want)
+		}
+	}
 }
 
 // End to end: the plan badge the design shows beside each credential. Claude
@@ -945,7 +989,7 @@ func TestPlanBadgesAreDisplayReadyInTheDocument(t *testing.T) {
 	want := map[string]string{
 		"claude-siphorchannel@example.com.json": "Max 20x",
 		"claude-chasibnoor@example.com.json":    "Max 5x",
-		"claude-noorchasib@example.com.json":    "Max",
+		noorchasibID:                            "Max",
 		"claude-agency@example.com.json":        "Team",
 		"claude-noor@example.com.json":          "Enterprise",
 		"codex-noor@example.com.json":           "Pro 200",

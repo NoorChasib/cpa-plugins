@@ -17,6 +17,7 @@ import (
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/cache"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/meter"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/quota"
 	"gopkg.in/yaml.v3"
@@ -24,7 +25,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.1.13"
+var Version = "0.1.14"
 
 type Host interface {
 	ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error)
@@ -52,6 +53,11 @@ type Plugin struct {
 	// apiCredits is the parsed claude-api-credits list, read by the fetcher on
 	// every scan like openRouterKey, so editing it needs no restart.
 	apiCredits atomic.Pointer[[]creditItem]
+	// meter counts Claude API-key traffic per organization while the cache
+	// runs and at least one item is configured; nil otherwise. usage.handle
+	// reads it without a lock, since CPA delivers usage records on its own
+	// goroutine and must never wait on a configure.
+	meter atomic.Pointer[meter.Meter]
 }
 
 func New(host Host) *Plugin { return &Plugin{host: host} }
@@ -62,6 +68,15 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		return p.configure(raw)
 	case protocol.MethodPluginQuiesce:
 		p.stop(false)
+		return struct{}{}, nil
+	case protocol.MethodUsageHandle:
+		// CPA calls this once per upstream attempt, synchronously, on the one
+		// goroutine every usage plugin shares; the meter only decodes and
+		// enqueues. A record that arrives while nothing is counting is lost,
+		// which the meter records as a gap at its next start.
+		if m := p.meter.Load(); m != nil {
+			m.Offer(raw, time.Now().UTC())
+		}
 		return struct{}{}, nil
 	case protocol.MethodManagementRegister:
 		return protocol.ManagementRegistration{
@@ -95,17 +110,21 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		p.lastStatusRead, p.statusReads = now, p.statusReads+1
 		reads := p.statusReads
 		p.statusMu.Unlock()
+		// The meter file beside the snapshot, when there is one it can read;
+		// the page shows the count and never computes with it.
+		apiMeter, _ := client.LoadMeter(client.MeterPath(opts.Path))
 		return response(200, struct {
 			client.Snapshot
-			GeneratedAt        time.Time      `json:"generated_at"`
-			Running            bool           `json:"running"`
-			CachePath          string         `json:"cache_path"`
-			PollInterval       string         `json:"poll_interval"`
-			RequestSpacing     string         `json:"request_spacing"`
-			Activity           cache.Activity `json:"activity"`
-			StatusReads        uint64         `json:"status_reads"`
-			PreviousStatusRead time.Time      `json:"previous_status_read"`
-		}{snapshot, now, true, opts.Path, opts.Interval.String(), opts.Spacing.String(), current.Activity(), reads, previous}), nil
+			GeneratedAt        time.Time        `json:"generated_at"`
+			Running            bool             `json:"running"`
+			CachePath          string           `json:"cache_path"`
+			PollInterval       string           `json:"poll_interval"`
+			RequestSpacing     string           `json:"request_spacing"`
+			Activity           cache.Activity   `json:"activity"`
+			StatusReads        uint64           `json:"status_reads"`
+			PreviousStatusRead time.Time        `json:"previous_status_read"`
+			APIMeter           *client.APIMeter `json:"api_meter,omitempty"`
+		}{snapshot, now, true, opts.Path, opts.Interval.String(), opts.Spacing.String(), current.Activity(), reads, previous, apiMeter}), nil
 	default:
 		return nil, errors.New("unknown method")
 	}
@@ -117,9 +136,13 @@ func response(status int, value any) protocol.ManagementResponse {
 }
 
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
+	// Held from the first check: an answer CPA rejects stops the meter, and
+	// stopMeter runs under p.mu.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var req protocol.LifecycleRequest
 	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
-		return protocol.Registration{}, errors.New("schema 4 or newer required")
+		return p.reject(errors.New("schema 4 or newer required"))
 	}
 	cfg := struct {
 		Path          string `yaml:"cache-path"`
@@ -138,28 +161,26 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
 		decoder.KnownFields(true)
 		if decoder.Decode(&cfg) != nil {
-			return protocol.Registration{}, errors.New("invalid quota-cache configuration")
+			return p.reject(errors.New("invalid quota-cache configuration"))
 		}
 	}
 	interval, e1 := time.ParseDuration(cfg.Interval)
 	spacing, e2 := time.ParseDuration(cfg.Spacing)
 	if e1 != nil || e2 != nil || interval < time.Minute || interval > 24*time.Hour || spacing < time.Second || spacing > time.Hour || cfg.Path == "" {
-		return protocol.Registration{}, errors.New("invalid cache schedule or path")
+		return p.reject(errors.New("invalid cache schedule or path"))
 	}
 	opts := cache.Options{Path: cfg.Path, Interval: interval, Spacing: spacing}
 	// Compare locations, not the spelling of the path. CPA can rewrite a
 	// relative default as an absolute path when saving user configuration.
 	opts.Path, e1 = filepath.Abs(opts.Path)
 	if e1 != nil {
-		return protocol.Registration{}, errors.New("cache path cannot be resolved")
+		return p.reject(errors.New("cache path cannot be resolved"))
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.terminal {
-		return protocol.Registration{}, errors.New("cache shut down")
+		return p.reject(errors.New("cache shut down"))
 	}
 	if p.cache != nil && p.opts.Path != opts.Path {
-		return protocol.Registration{}, errors.New("cache path changes require native restart")
+		return p.reject(errors.New("cache path changes require native restart"))
 	}
 	if p.cache != nil && p.opts != opts {
 		p.cache.SetSchedule(interval, spacing)
@@ -177,7 +198,13 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.openRouterKey.Store(&openRouterKey)
 	credits := parseAPICredits(cfg.CreditItems)
 	p.apiCredits.Store(&credits)
+	if n := adminKeysIgnored(credits); n > 0 {
+		p.host.Log(context.Background(), "warn", "quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration", map[string]any{"items": n})
+	}
 	if cfg.Enabled != nil && !*cfg.Enabled && p.cache != nil {
+		// The meter writes only while this plugin holds the cache's writer
+		// lock, so it stops before the cache closes.
+		p.stopMeter(client.MeterStopDisabled)
 		p.cancel()
 		<-p.done
 		p.cache.Close()
@@ -186,19 +213,64 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
 		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits})
 		if err != nil {
-			return protocol.Registration{}, err
+			return p.reject(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		p.opts, p.cache, p.cancel, p.done = opts, current, cancel, make(chan struct{})
 		p.wake = make(chan time.Duration, 1)
 		go p.run(ctx, current, p.done, p.wake, spacing)
 	}
+	// The meter runs while the cache does and at least one item is
+	// configured, and CPA is told so at every register and reconfigure: it
+	// rebuilds the capability from each answer. With no items the file stays
+	// put, and the next configure with items carries on from it with a gap.
+	usage := false
+	switch {
+	case p.cache == nil:
+		p.stopMeter(client.MeterStopDisabled)
+	case len(credits) == 0:
+		p.stopMeter(client.MeterStopNoItems)
+	default:
+		now := time.Now().UTC()
+		linked := linkedOrganizations(credits)
+		if m := p.meter.Load(); m == nil || m.Failed() {
+			// A meter that stopped itself is replaced from its file, which
+			// records the gap.
+			p.stopMeter(client.MeterStopFailed)
+			p.meter.Store(meter.Open(client.MeterPath(opts.Path), linked, now, p.host))
+		} else {
+			m.SetLinked(linked, now)
+		}
+		usage = true
+	}
 	return protocol.Registration{SchemaVersion: 4, Metadata: protocol.Metadata{Name: ID, Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: []protocol.ConfigField{
 		{Name: "cache-path", Type: "string", Description: "Shared private snapshot path; preserve across restarts"},
 		{Name: "poll-interval", Type: "string", Description: "Minimum interval per credential; default 15m"},
 		{Name: "request-spacing", Type: "string", Description: "Minimum spacing between provider requests; default 10s"},
 		{Name: "openrouter-management-key", Type: "string", Description: "OpenRouter management key for reading your account balance; empty disables it. It can also create and delete API keys, so give it an expiry"},
-	}}, Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true}}, nil
+	}}, Capabilities: protocol.RegistrationCapabilities{UsagePlugin: usage, ManagementAPI: true}}, nil
+}
+
+// stopMeter stops the running meter, if any, with reason, and forgets it.
+// It is called under p.mu.
+func (p *Plugin) stopMeter(reason string) {
+	if m := p.meter.Swap(nil); m != nil {
+		m.Stop(reason, time.Now().UTC())
+	}
+}
+
+// reject answers a configure with the error CPA is given. From that answer
+// until a later configure succeeds, CPA keeps the plugin loaded but delivers
+// it no usage records, so a meter left running would heartbeat as if it
+// counted and the traffic of that window would vanish from the estimate.
+// Instead the meter stops here, and the next good configure reopens it from
+// its file, which records the window as a gap. The reason is disabled, the
+// one of the fixed set that fits: to CPA the plugin is as good as switched
+// off. The cache carries on; it needs no usage records. It is called under
+// p.mu.
+func (p *Plugin) reject(err error) (protocol.Registration, error) {
+	p.stopMeter(client.MeterStopDisabled)
+	return protocol.Registration{}, err
 }
 
 func (p *Plugin) run(ctx context.Context, current *cache.Cache, done chan struct{}, wake <-chan time.Duration, spacing time.Duration) {
@@ -268,6 +340,14 @@ func (p *Plugin) stop(final bool) {
 	if final {
 		p.terminal = true
 	}
+	// The stop's reason reaches the meter file: the next start records the
+	// stop as a gap, since CPA keeps serving while a plugin is quiesced or
+	// shut down.
+	reason := client.MeterStopQuiesce
+	if final {
+		reason = client.MeterStopShutdown
+	}
+	p.stopMeter(reason)
 	if p.cache != nil {
 		p.cancel()
 		<-p.done
@@ -281,13 +361,6 @@ type hostFetcher struct {
 	host          Host
 	openRouterKey *atomic.Pointer[string]
 	apiCredits    *atomic.Pointer[[]creditItem]
-}
-
-// creditUserAgent names this plugin to Anthropic's Admin API. It is never
-// claudeUserAgent: these are the operator's own reads with their own key, not
-// Claude Code's, and Anthropic asks integrations to identify themselves.
-func creditUserAgent() string {
-	return "cpa-plugins-quota-cache/" + Version + " (https://github.com/NoorChasib/cpa-plugins)"
 }
 
 func (f hostFetcher) credits() []creditItem {
@@ -356,8 +429,8 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 		accounts = append(accounts, cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)})
 	}
 	// Every configured item is listed, misconfigured or not, so the snapshot
-	// can say what is wrong with one; the cache never polls an item with a
-	// problem.
+	// can say what is wrong with one. None is ever polled: what an
+	// organization spent comes from the meter, not from Anthropic.
 	for _, item := range f.credits() {
 		credit := item.credit
 		accounts = append(accounts, cache.Account{Provider: client.ProviderAnthropicAPI, AuthIndex: item.id, Credit: &credit})
@@ -378,16 +451,9 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 		return observed(doer, observation, err)
 	}
 	if account.Provider == client.ProviderAnthropicAPI {
-		// The same guard as OpenRouter's: an item removed, broken or given
-		// another key since the scan that listed it is not read with whatever
-		// key it holds now.
-		item, ok := f.credit(account.AuthIndex)
-		if !ok || account.Credit == nil || item.credit.Problem != "" || item.credit.KeyFingerprint != account.Credit.KeyFingerprint {
-			return cache.Observation{}, errors.New("credential read failed")
-		}
-		doer := &captureDoer{host: f.host, everyRequest: true}
-		observation, err := quota.FetchAPICredit(ctx, doer, item.key, item.credit.Renews, item.credit.KeyFingerprint, creditUserAgent(), time.Now().UTC())
-		return observed(doer, observation, creditFailure(err))
+		// Never reached: the cache skips every account that carries a credit.
+		// Should it ever ask, the answer is a refusal, not a request.
+		return cache.Observation{}, errors.New("not polled")
 	}
 	raw, err := f.host.GetAuth(ctx, account.AuthIndex)
 	if err != nil {
@@ -408,22 +474,12 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 	return observed(doer, observation, err)
 }
 
-func (f hostFetcher) credit(id string) (creditItem, bool) {
-	for _, item := range f.credits() {
-		if item.id == id {
-			return item, true
-		}
-	}
-	return creditItem{}, false
-}
-
 // ReportFailure puts one line in CPA's log for each failed poll. The snapshot
 // keeps only the last hundred polls and host HTTP traffic never reaches CPA's
 // own log, so without this a rate limit older than the history cannot be
 // dated. A 429 is a warning because it pauses every credential of its
-// provider, or, for a Claude API credit organization, stops that organization
-// being read until its own retry; any other failure backs off one credential,
-// which the status page already shows, and is logged as info. The poll schedule bounds the volume.
+// provider; any other failure backs off one credential, which the status page
+// already shows, and is logged as info. The poll schedule bounds the volume.
 // A line names only the provider, the opaque auth index already in the
 // snapshot, the status and the schedule: never an email, token, file name,
 // URL or response body.
@@ -480,19 +536,11 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 // inventory, is an optional read on top of a reading already in hand, so its
 // status is never the poll's: like a profile 429, an inventory 429 must not
 // discard a good usage reading, count as a rate limit, or pause the provider.
-//
-// A Claude API credit poll is the exception, set by everyRequest. Every
-// request it makes, each cost-report page and the /v1/organizations/me
-// fallback, is part of the one reading, and the reading fails with any of
-// them. So each request counts until one is refused: the poll's status is the
-// first that is not 2xx, a 429 on any of them makes the poll rate-limited, and
-// Retry-After is read from that response.
 type captureDoer struct {
-	host         Host
-	everyRequest bool
-	status       int
-	retryAfter   time.Time
-	sent         bool
+	host       Host
+	status     int
+	retryAfter time.Time
+	sent       bool
 }
 
 // limited reports whether the poll's own request was refused with 429, which
@@ -500,7 +548,7 @@ type captureDoer struct {
 func (d *captureDoer) limited() bool { return d.status == 429 }
 
 func (d *captureDoer) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
-	counts := !d.sent || (d.everyRequest && d.status >= 200 && d.status < 300)
+	counts := !d.sent
 	d.sent = true
 	response, err := d.host.HTTPDo(ctx, req)
 	if !counts {

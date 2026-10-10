@@ -204,163 +204,77 @@
     color: var(--color-ink-2);
   }
 
-  /* ---------- a provider's band ---------- */
+  /* ---------- a provider's section ---------- */
 
   .qg-prov {
     margin-bottom: 30px;
   }
 
-  /* A rounded band holding the provider's name and its banked-reset tiles, so
-   * a reset reads as belonging to the provider's accounts and not to any one
-   * window. It wraps rather than truncates: three accounts holding resets do
-   * not fit beside the name at 820px, and a tile cut off is a button hidden. */
-  .qg-pbar {
+  /* The provider's name and a hairline to the card edge, nothing else: what
+   * the provider counts and holds is said by its cards. */
+  .qg-phead {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 8px 14px;
-    min-height: 46px;
-    padding: 6px 6px 6px 18px;
-    margin-bottom: 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 24px;
-    background: var(--color-band);
+    gap: 12px;
+    margin: 0 2px 12px;
   }
 
-  .qg-pbar.is-bare {
-    padding: 10px 18px;
-    min-height: 0;
-  }
-
-  /* The name soaks up the line's slack, so a tile beside it keeps its own
-   * width and the label stays against the tiles. */
-  .qg-pname {
-    display: flex;
-    flex: 1 0 auto;
-    align-items: baseline;
-    gap: 9px;
-    min-width: 0;
-  }
-
-  .qg-pname h2 {
+  .qg-phead h2 {
     font-size: 15px;
     font-weight: 650;
     letter-spacing: -0.01em;
-  }
-
-  .qg-pcount {
-    font-size: 11.5px;
-    color: var(--color-ink-3);
     white-space: nowrap;
   }
 
-  /* The label and the tiles are items of the band itself, so when the tiles
-   * do not fit beside the name they drop to a line of their own and the label
-   * stays up beside the name, rather than the pair wrapping as one block and
-   * leaving the label stranded on a line of its own. */
-  .qg-resets {
-    display: contents;
+  .qg-phead::after {
+    flex: 1;
+    height: 1px;
+    background: var(--color-line);
+    content: "";
   }
 
-  /* "Banked resets", and under it what spending one does on this provider —
-   * which differs between Codex and Claude, and is the line that makes a
-   * refusal afterwards unsurprising. */
-  .qg-blabel {
-    display: flex;
-    flex: none;
-    flex-direction: column;
-    gap: 1px;
-    max-width: 270px;
-    padding-right: 4px;
-    text-wrap: balance;
+  .qg-empty-card {
+    margin-bottom: 10px;
+  }
+
+  /* ---------- banked resets: the last card in a section ---------- */
+
+  .qg-win.qg-bank {
+    padding-bottom: 6px;
+  }
+
+  /* What spending one does on this provider, which differs between Codex and
+   * Claude and is the line that makes a refusal afterwards unsurprising. */
+  .qg-bsubt {
+    margin-top: 3px;
     font-size: 11px;
-    font-weight: 550;
-    line-height: 1.3;
-    color: var(--color-ink-2);
-    text-align: right;
-  }
-
-  .qg-blabel-sub {
-    font-size: 10px;
-    font-weight: 400;
     color: var(--color-ink-3);
   }
 
-  /* One tile: beside the name when it fits, under the label when not. */
-  .qg-pills {
-    display: flex;
-    flex: 0 1 auto;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px;
-    min-width: 0;
-    margin-left: auto;
+  .qg-brows {
+    margin-top: 11px;
+    border-top: 1px solid var(--color-line);
   }
 
-  /* Two or more: a row of the band's own, as an even grid from the left. The
-   * column floor is the widest tile's natural width — a held Claude reset
-   * with its deadline beside the hold — so a column never clips one.
-   *
-   * The row sits as far from the band's left edge as from its right: the
-   * name's deeper inset is a heading's, and tiles held to it read as shifted
-   * right inside the band. */
-  .qg-pills.is-grid {
+  /* One account's resets: the mark, who and how many, the provider's hold and
+   * the deadline, and the button at the end of the line. */
+  .qg-brow {
     display: grid;
-    flex: 1 1 100%;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
-    margin-left: -12px;
-  }
-
-  /* Why the tiles above are not buttons in this browser, once for the band. */
-  .qg-pnote {
-    flex: 1 1 100%;
-    margin: -2px 0 2px 2px;
-    font-size: 11px;
-    color: var(--color-ink-3);
-  }
-
-  /* One account's banked resets, as a tile. A button when this page can spend
-   * one, and a plain tile — dashed, no arrow, no hover — when it cannot. */
-  .qg-pill {
-    display: flex;
+    grid-template-columns: 28px 200px minmax(0, 1fr) auto;
+    grid-template-areas: "ico who st use";
     align-items: center;
-    gap: 9px;
-    min-width: 0;
-    min-height: 42px;
-    padding: 5px 12px 5px 7px;
-    border: 1px solid var(--color-line);
-    border-radius: 21px;
-    background: var(--color-card-2);
-    text-align: left;
-    transition: background 120ms ease, border-color 120ms ease;
+    column-gap: 12px;
+    min-height: 46px;
+    padding: 8px 0;
   }
 
-  button.qg-pill {
-    cursor: pointer;
-  }
-
-  button.qg-pill:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-    background: color-mix(in srgb, var(--color-accent) 22%, var(--color-card-2));
-  }
-
-  button.qg-pill:active:not(:disabled) {
-    transform: translateY(0.5px);
-  }
-
-  button.qg-pill:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-
-  button.qg-pill:disabled {
-    opacity: 0.55;
-    cursor: default;
+  .qg-brow + .qg-brow {
+    border-top: 1px solid var(--color-rule);
   }
 
   .qg-pico {
     display: grid;
-    flex: none;
+    grid-area: ico;
     place-items: center;
     width: 28px;
     height: 28px;
@@ -374,47 +288,24 @@
     height: 14px;
   }
 
-  button.qg-pill:hover:not(:disabled) .qg-pico {
-    background: color-mix(in srgb, var(--color-accent) 38%, transparent);
-    color: #e1ecfc;
-  }
-
-  /* Held back by the provider: still a button, quieter until hovered. */
-  .qg-pill.is-held .qg-pico,
-  .qg-pill.is-static .qg-pico {
+  /* Held back by the provider, or not spendable from here: the mark goes
+   * quiet, so a column of rows shows at a glance which would be refused. */
+  .qg-brow.is-held > .qg-pico {
     background: #262a31;
     color: #8b929c;
   }
 
-  .qg-pill.is-static {
-    border-style: dashed;
-    background: transparent;
-  }
-
-  .qg-ptxt {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
   /* Who and how many. The count never gives way; a long address does, with
-   * the whole of it in the tile's hover and its accessible name. */
-  .qg-pt {
+   * the whole of it in the row's hover and the button's accessible name. */
+  .qg-bwho {
     display: flex;
+    grid-area: who;
     gap: 0.3em;
     min-width: 0;
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 600;
-    line-height: 1.2;
     color: var(--color-ink);
     white-space: nowrap;
-  }
-
-  .qg-pwho {
-    display: flex;
-    min-width: 0;
   }
 
   .qg-plocal {
@@ -429,81 +320,98 @@
 
   .qg-pn {
     flex: none;
-    font-weight: 500;
+    font-weight: 400;
     color: var(--color-ink-2);
   }
 
-  /* Each line of a tile stays whole: the grid's column floor is set so it
-   * fits. The ellipsis is a backstop for an address or a phrase longer than
-   * any this was measured against, not a layout. */
-  .qg-ps {
+  .qg-bst {
+    grid-area: st;
+    min-width: 0;
     overflow: hidden;
-    font-family: var(--font-sans);
-    font-size: 10.5px;
-    line-height: 1.25;
+    font-size: 11.5px;
     color: var(--color-ink-3);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* The compact tile's single status line, shown only in the popover. */
-  .qg-ps-short {
-    display: none;
-  }
-
-  button.qg-pill:hover:not(:disabled) .qg-ps {
-    color: #aebfd6;
-  }
-
   /* The provider's hold is a hint, so it is brighter than the line it sits
-   * on but not amber: amber on this tile already means the reset lapses
-   * within a week, which is the one thing here asking to be acted on. */
+   * on but not amber: amber here already means the reset lapses within a
+   * week, which is the one thing on the line asking to be acted on. */
   .qg-hold {
     color: var(--color-ink-2);
   }
 
-  .qg-puse {
-    flex: none;
-    margin-left: 4px;
-    font-size: 11px;
+  /* The control that spends. Accent ink and outline rather than a fill: it is
+   * irreversible, and a solid button is the shape people click unread. */
+  .qg-use {
+    display: inline-flex;
+    grid-area: use;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px 0 12px;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-accent) 9%, var(--color-card));
+    font-size: 11.5px;
     font-weight: 550;
     color: var(--color-accent);
     white-space: nowrap;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
   }
 
-  /* Held: the verb waits in quieter ink until the tile is pointed at, so a
-   * row of tiles shows at a glance which the provider would refuse today. */
-  .qg-pill.is-held .qg-puse {
-    color: var(--color-ink-3);
+  .qg-use svg {
+    width: 9px;
+    height: 9px;
   }
 
-  button.qg-pill:hover:not(:disabled) .qg-puse {
+  .qg-use:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 20%, var(--color-card));
     color: #cfe1fa;
   }
 
-  .qg-pgo {
-    flex: none;
-    width: 10px;
-    height: 10px;
-    margin-left: -3px;
-    color: var(--color-accent);
+  .qg-use:active:not(:disabled) {
+    transform: translateY(0.5px);
   }
 
-  .qg-pill.is-held .qg-pgo {
-    color: var(--color-ink-4);
+  .qg-use:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 
-  button.qg-pill:hover:not(:disabled) .qg-pgo {
-    color: #a9cbf6;
+  .qg-use:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
-  /* What a press came to, under the band. Kept until dismissed, so the outcome
+  /* Held: the verb waits in quieter ink until it is pointed at. */
+  .qg-brow.is-held .qg-use {
+    border-color: var(--color-line);
+    background: transparent;
+    color: var(--color-ink-3);
+  }
+
+  .qg-brow.is-held .qg-use:hover:not(:disabled) {
+    border-color: var(--color-ink-4);
+    color: var(--color-ink);
+  }
+
+  /* Why the rows above have no button in this browser, once for the card. */
+  .qg-pnote {
+    margin: 2px 0 8px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  /* What a press came to, under the rows. Kept until dismissed, so the outcome
    * of an irreversible action cannot scroll past unread or time out. */
   .qg-notices {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin: -2px 0 10px;
+    margin: 4px 0 10px;
   }
 
   /* Present and empty is the region waiting for its first announcement. It
@@ -608,10 +516,15 @@
     background: var(--color-card);
   }
 
-  /* Folded, the card ends at its fold row, which needs a little room under
-   * it rather than the rows' padding. */
+  /* Folded, the card ends at its fold row, whose own padding is the room
+   * under it. */
   .qg-win:has(> .qg-fold[aria-expanded="false"]) {
-    padding-bottom: 9px;
+    padding-bottom: 2px;
+  }
+
+  /* A window with one account has no fold, and ends at its figures. */
+  .qg-win.is-plain {
+    padding-bottom: 16px;
   }
 
   .qg-whead {
@@ -862,16 +775,17 @@
     color: var(--color-ink-2);
   }
 
-  /* The fold: the label between the pool and its accounts, and the control
-   * that hides them. A full-width button, because at 390px a chevron alone is
-   * not a target. */
+  /* The fold: the line between the pool and its accounts, and the control
+   * that shows them. A full-width button, because at 390px a chevron alone
+   * is not a target. Shut, it names the accounts worth opening it for. */
   .qg-fold {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 7px;
     width: 100%;
+    min-height: 38px;
     margin-top: 14px;
-    padding: 10px 0 5px;
+    padding: 8px 0;
     border-top: 1px solid var(--color-line);
     font-size: 11.5px;
     font-weight: 500;
@@ -890,10 +804,13 @@
     outline-offset: 2px;
   }
 
+  /* Level with the fold's first line when its flags wrap under it: that
+   * line is a chip tall. */
   .qg-chev {
     flex: none;
     width: 9px;
     height: 9px;
+    margin-top: 5.5px;
     transition: transform 150ms;
   }
 
@@ -901,66 +818,118 @@
     transform: rotate(-90deg);
   }
 
+  /* The count, its notes, then the flags pushed to the right end — under
+   * the count when they do not fit beside it. */
+  .qg-fold-line {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 7px;
+    min-width: 0;
+    min-height: 20px;
+  }
+
+  .qg-fold-count {
+    flex: none;
+    white-space: nowrap;
+  }
+
   .qg-fold-note {
+    flex: none;
     font-weight: 400;
+    white-space: nowrap;
+  }
+
+  .qg-flags {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 5px;
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  .qg-flags .qg-chip b {
+    font-family: var(--font-num);
+    font-weight: 650;
+  }
+
+  .qg-rows {
+    padding-bottom: 8px;
   }
 
   /* ---------- one account inside a card ---------- */
 
-  .qg-acct {
-    padding: 11px 0 12px;
+  /* One account, one line: who, its own bar, what is left, when it resets.
+   * A grid, so the bars and figures line up down the card. */
+  .qg-arow {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr) 46px 112px;
+    grid-template-areas: "who bar pct rst";
+    align-items: center;
+    column-gap: 16px;
+    min-height: 38px;
+    padding: 8px 0;
   }
 
-  .qg-acct + .qg-acct {
+  .qg-arow + .qg-arow {
     border-top: 1px solid var(--color-rule);
   }
 
-  /* A reading the server will not vouch for steps back by ink, not opacity.
-   * Fading the whole row took the word that explains it down with the rest,
-   * to below 3.5:1; here that word keeps its ink and the dashed rule, and only
-   * the figures that would otherwise read as firmly as a healthy row's give
-   * way — bright ink becomes the line's secondary ink. A level colour stays,
-   * because a stale 30% is still low. */
-  .qg-acct.is-degraded .qg-email {
-    color: var(--color-ink-2);
-  }
-
-  .qg-acct.is-degraded .qg-afig b:not(.text-warn, .text-crit) {
-    color: var(--color-ink-2);
-  }
-
-  /* A countdown on a failed reading is the last one the server saw, not a
-   * live one: regular weight, so it does not read as the row's headline. */
-  .qg-acct.is-degraded .qg-ar b {
-    font-weight: 500;
-  }
-
-  .qg-aline {
+  .qg-awho {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .qg-addr {
-    display: flex;
+    grid-area: who;
     align-items: center;
     gap: 8px;
     min-width: 0;
     font-size: 13px;
+    color: var(--color-ink);
   }
 
-  .qg-email {
+  .qg-aname {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .qg-achips {
-    display: flex;
-    flex: none;
-    gap: 5px;
+  .qg-apct {
+    grid-area: pct;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--color-ink);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .qg-arst {
+    grid-area: rst;
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .qg-arst b {
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--color-ink);
+  }
+
+  /* A reading the server will not vouch for steps back by ink, not opacity:
+   * the word that explains it keeps its ink and the dashed rule, and only the
+   * figures that would otherwise read as firmly as a healthy row's give way.
+   * A level colour stays, because a stale 30% is still low. */
+  .qg-arow.is-degraded .qg-aname,
+  .qg-arow.is-degraded .qg-apct:not(.text-warn, .text-crit) {
+    color: var(--color-ink-2);
+  }
+
+  /* A countdown on a failed reading is the last one the server saw, not a
+   * live one: regular weight, so it does not read as the row's headline. */
+  .qg-arow.is-degraded .qg-arst b {
+    font-weight: 500;
   }
 
   /* A real bar, not a hairline: an account is read on its own as often as in
@@ -968,8 +937,8 @@
   .qg-abar {
     position: relative;
     display: block;
+    grid-area: bar;
     height: 6px;
-    margin-top: 9px;
     overflow: hidden;
     border-radius: 3px;
     background: var(--color-track);
@@ -985,48 +954,131 @@
   /* An account whose weekly is spent keeps its bar at its real width, in the
    * dimmest ink rather than its level's colour: the reading it shows is real,
    * but nothing can use it, and an idle 100% in the accent reads as room. */
-  .qg-abar.is-spent i {
+  .qg-abar.is-spent i,
+  .qg-abar i.is-capped {
     background: var(--color-ink-4);
   }
 
-  /* In the bar's place on a reading the server will not vouch for: the word
-   * for why, then a dashed rule holding the bar's line. */
-  .qg-astate {
+  /* Past its monthly credit: the track itself turns, striped, so an overage
+   * is not drawn as merely empty. */
+  .qg-abar.is-over {
+    background:
+      repeating-linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--color-crit) 70%, transparent) 0 1.5px,
+        transparent 1.5px 4px
+      ),
+      color-mix(in srgb, var(--color-crit) 22%, var(--color-track));
+  }
+
+  /* In the bar's place on a reading the server will not vouch for, or on one
+   * that is not there: the word for why, then a dashed rule holding the bar's
+   * line. */
+  .qg-astate,
+  .qg-nobar {
     display: flex;
+    grid-area: bar;
     align-items: center;
     gap: 8px;
-    height: 6px;
-    margin-top: 9px;
+    min-width: 0;
     font-size: 10.5px;
     line-height: 1;
     color: var(--color-ink-2);
+    white-space: nowrap;
   }
 
-  .qg-astate::after {
+  .qg-nobar {
+    color: var(--color-ink-3);
+  }
+
+  .qg-astate::after,
+  .qg-nobar::after {
     flex: 1;
     border-top: 1px dashed #343941;
     content: "";
   }
 
-  .qg-afig {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-height: 17px;
-    margin-top: 8px;
+  /* ---------- a provider's accounts ---------- */
+
+  /* The whole card is its fold line until it is opened. */
+  .qg-win.qg-roster {
+    padding: 0 18px;
   }
 
-  .qg-ap {
-    font-size: 11.5px;
-    color: var(--color-ink-3);
+  /* The heading the fold sits in: a heading to assistive technology, the
+   * fold's own type to the eye. */
+  .qg-fold-h {
+    margin: 0;
+    font: inherit;
+  }
+
+  .qg-fold.qg-fold-head {
+    align-items: flex-start;
+    min-height: 50px;
+    margin-top: 0;
+    padding: 12px 0;
+    border-top: 0;
+  }
+
+  .qg-rtitle {
+    flex: none;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--color-ink);
+  }
+
+  .qg-rnote {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 400;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .qg-ap b {
-    font-size: 14px;
-    font-weight: 650;
-    letter-spacing: -0.01em;
-    color: var(--color-ink);
+  .qg-roster > .qg-rows {
+    border-top: 1px solid var(--color-line);
+  }
+
+  /* Who and its plan, the renewal and credit, the strip, its words.
+   *
+   * The strip's track is as wide as the card's longest ring (--qg-act-n
+   * blocks of 5px and 1.5px gaps), not `auto`: each row is its own grid, and
+   * a row with no counter would otherwise close the track and shift its
+   * renewal out of line with the rows above. */
+  .qg-arow.qg-arow-acct {
+    grid-template-columns: minmax(0, 1fr) 146px max(0px, calc(var(--qg-act-n, 0) * 6.5px - 1.5px)) 158px;
+    grid-template-areas: "who sub act txt";
+    column-gap: 14px;
+  }
+
+  .qg-arow-acct > .act {
+    grid-area: act;
+  }
+
+  .qg-asub {
+    grid-area: sub;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 11px;
+    color: var(--color-ink-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .qg-asub b,
+  .qg-ameta b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-atxt {
+    grid-area: txt;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .qg-traffic {
@@ -1036,32 +1088,770 @@
     min-width: 0;
   }
 
-  .qg-ar {
-    margin-left: auto;
-    font-size: 11.5px;
-    color: var(--color-ink-3);
-    white-space: nowrap;
-  }
-
-  .qg-ar b {
-    font-size: 13px;
-    font-weight: 650;
-    color: var(--color-ink);
-  }
-
-  .qg-amuted {
+  /* A provider's only account: one line, no fold, no title. */
+  .qg-win.qg-solo {
     display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 5px;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+  }
+
+  .qg-solo .qg-awho {
+    flex: 1 1 auto;
+  }
+
+  .qg-solo .qg-traffic {
+    flex: none;
+  }
+
+  .qg-ameta {
+    flex: none;
     font-size: 11px;
     color: var(--color-ink-3);
     white-space: nowrap;
   }
 
-  .qg-amuted b {
+  /* The foot of an opened list: where its figures come from. */
+  .qg-cfoot {
+    padding: 10px 0 6px;
+    border-top: 1px solid var(--color-rule);
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  .qg-cfoot b {
     font-weight: 500;
     color: var(--color-ink-2);
+  }
+
+  /* ---------- the monthly API credit ---------- */
+
+  /* Where the figures come from, where a window card keeps its level chip. */
+  .qg-src {
+    flex: none;
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-hsub b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  /* One organization: the same line as an account's, in money. */
+  .qg-chead,
+  .qg-arow.qg-crow {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr) 132px 92px 112px;
+    grid-template-areas: "who bar left spent rnw";
+    column-gap: 14px;
+  }
+
+  /* A level chip and a condition chip together ("$32.00 low", "incomplete")
+   * fill most of the column. The chips wrap under the name rather than leave
+   * it one letter and an ellipsis; a name and a chip that fit stay on one
+   * line. */
+  .qg-crow > .qg-awho {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .qg-chead {
+    align-items: end;
+    padding: 8px 0 7px;
+    border-bottom: 1px solid var(--color-rule);
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-chead > span:nth-child(2) {
+    grid-column: 2 / 4;
+    text-align: right;
+  }
+
+  .qg-chead > span:nth-child(3),
+  .qg-chead > span:nth-child(4) {
+    text-align: right;
+  }
+
+  .qg-cleft,
+  .qg-cspent,
+  .qg-crnw {
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .qg-cleft {
+    grid-area: left;
+  }
+
+  .qg-cleft b {
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--color-ink);
+  }
+
+  .qg-cspent {
+    grid-area: spent;
+  }
+
+  .qg-cspent b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-crnw {
+    grid-area: rnw;
+  }
+
+  .qg-crnw b {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  /* A reading that has aged: the row in quieter ink, its age on a chip. */
+  .qg-crow.is-aged .qg-abar {
+    opacity: 0.45;
+  }
+
+  .qg-crow.is-aged .qg-cleft b:not(.text-warn, .text-crit) {
+    color: var(--color-ink-2);
+  }
+
+  /* A line a row or the pool earns when something about it needs saying, a
+   * dot ahead of it in the tone of what it says. */
+  .qg-cnote {
+    grid-column: 1 / -1;
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+    text-wrap: pretty;
+  }
+
+  .qg-api > .qg-cnote {
+    margin-top: 6px;
+  }
+
+  .qg-cnote.is-bad::before,
+  .qg-cnote.is-warn::before {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 50%;
+    vertical-align: 1px;
+    background: var(--color-warn);
+    content: "";
+  }
+
+  .qg-cnote.is-bad::before {
+    background: var(--color-crit);
+  }
+
+  /* Words a wide line has room for and the popover does not, and the other
+   * way round. */
+  .qg-short {
+    display: none;
+  }
+
+  /* A figure that is only a bound, and how far spend passed the credit,
+   * beside the row's figures. */
+  .qg-cmark {
+    color: var(--color-ink-3);
+  }
+
+  .qg-cpast {
+    display: block;
+    font-size: 10.5px;
+    color: var(--color-crit);
+    white-space: normal;
+  }
+
+  /* Out: Anthropic refused it for low credit. An empty bar on a red track,
+   * plain where an overage's is striped. */
+  .qg-abar.is-out {
+    background: color-mix(in srgb, var(--color-crit) 22%, var(--color-track));
+  }
+
+  /* The pool's ≈ (an estimate) or ≤ (at most): smaller than the figure, in
+   * the figure's own line. */
+  .qg-approx {
+    margin-right: 2px;
+    font-family: var(--font-num);
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--color-ink-3);
+  }
+
+  .qg-cnote .qg-elink {
+    margin-left: 2px;
+  }
+
+  /* ---------- editing: the open list as a form (option A) ---------- */
+
+  /* "Set here": a value typed on the dashboard, not read from config. */
+  .qg-mk {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    vertical-align: 2px;
+  }
+
+  .qg-mk.is-lead {
+    margin: 0 6px 0 0;
+    vertical-align: 1px;
+  }
+
+  /* A card's foot at rest: who sets what, then the Edit button. */
+  .qg-afoot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 0 6px;
+    border-top: 1px solid var(--color-rule);
+    font-size: 11px;
+    color: var(--color-ink-3);
+  }
+
+  .qg-afoot > span {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  .qg-afoot b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-btn.qg-fbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .qg-btn.qg-fbtn svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  /* Saved: what changed, with a tick, where the foot's words were. */
+  .qg-eok {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    color: var(--color-ink-2);
+  }
+
+  .qg-eok svg {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    margin-top: 2px;
+    color: var(--color-good);
+  }
+
+  .qg-estate {
+    color: #80b1ef;
+  }
+
+  .qg-estate.is-bad {
+    color: #f29393;
+  }
+
+  .qg-ehead,
+  .qg-arow.qg-erow {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "who credit date";
+    column-gap: 14px;
+  }
+
+  .qg-ehead {
+    align-items: end;
+    padding: 8px 0 7px;
+    border-bottom: 1px solid var(--color-rule);
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ehead > span:nth-child(1) {
+    grid-area: who;
+  }
+
+  .qg-ehead > span:nth-child(2) {
+    grid-area: credit;
+  }
+
+  .qg-ehead > span:nth-child(3) {
+    grid-area: date;
+  }
+
+  .qg-arow.qg-erow {
+    grid-template-areas:
+      "who credit date"
+      ". read read";
+    align-items: start;
+    row-gap: 8px;
+    padding: 10px 0 9px;
+  }
+
+  .qg-erow > .qg-awho {
+    grid-area: who;
+    min-height: 30px;
+  }
+
+  /* A row that cannot be edited says why where its fields would be. */
+  .qg-arow.qg-erow.is-locked {
+    grid-template-areas: "who lock lock";
+    align-items: center;
+  }
+
+  .qg-erow.is-locked > .qg-awho {
+    min-height: 0;
+  }
+
+  .qg-elock {
+    grid-area: lock;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  .qg-efield {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .qg-efield.is-credit {
+    grid-area: credit;
+  }
+
+  .qg-efield.is-date {
+    grid-area: date;
+  }
+
+  /* A field: the sign-in input's look — mono, 8px corners, the line, the
+   * accent on focus. */
+  .qg-ebox {
+    display: flex;
+    align-items: center;
+    width: 136px;
+    max-width: 100%;
+    height: 30px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-band);
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+
+  .qg-efield.is-date .qg-ebox {
+    width: 156px;
+  }
+
+  .qg-ebox input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 10px;
+    background: transparent;
+    font-family: var(--font-num);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-ink);
+    outline: none;
+  }
+
+  .qg-ebox input::placeholder {
+    color: var(--color-ink-4);
+  }
+
+  .qg-ebox input::-webkit-calendar-picker-indicator {
+    filter: invert(0.6);
+    cursor: pointer;
+  }
+
+  .qg-epre {
+    flex: none;
+    margin-right: -6px;
+    padding-left: 10px;
+    font-family: var(--font-num);
+    font-size: 12.5px;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ebox:hover {
+    border-color: var(--color-ink-4);
+  }
+
+  .qg-ebox.is-dirty {
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-line));
+    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-band));
+  }
+
+  .qg-ebox.is-back {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-line));
+  }
+
+  .qg-ebox.is-back input {
+    color: var(--color-ink-2);
+  }
+
+  .qg-ebox:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  }
+
+  .qg-ebox.is-bad {
+    border-color: color-mix(in srgb, var(--color-crit) 75%, transparent);
+    background: color-mix(in srgb, var(--color-crit) 8%, var(--color-band));
+  }
+
+  .qg-ebox.is-bad:focus-within {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-crit) 20%, transparent);
+  }
+
+  .qg-ebox.is-busy {
+    opacity: 0.5;
+  }
+
+  /* Under a field: where its value comes from, or what is about to happen
+   * to it. */
+  .qg-ecap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 1px 5px;
+    min-height: 15px;
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ecap .num {
+    font-size: 10.5px;
+    color: var(--color-ink-2);
+  }
+
+  .qg-ecap b {
+    font-weight: 500;
+    color: var(--color-ink-2);
+  }
+
+  .qg-esrc {
+    display: inline;
+    white-space: nowrap;
+  }
+
+  .qg-esrc.is-dirty {
+    color: #80b1ef;
+  }
+
+  .qg-edot {
+    color: var(--color-ink-4);
+  }
+
+  .qg-ecap.is-bad,
+  .qg-ecap.is-warn {
+    display: block;
+    color: #f29393;
+  }
+
+  .qg-ecap.is-warn {
+    color: #f5c862;
+  }
+
+  .qg-ecap.is-bad::before,
+  .qg-ecap.is-warn::before {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--color-crit);
+    content: "";
+    vertical-align: 1px;
+  }
+
+  .qg-ecap.is-warn::before {
+    background: var(--color-warn);
+  }
+
+  .qg-elink {
+    color: #80b1ef;
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, #80b1ef 35%, transparent);
+    text-underline-offset: 3px;
+  }
+
+  .qg-elink:hover:not(:disabled) {
+    color: #cfe1fa;
+    text-decoration-color: currentColor;
+  }
+
+  .qg-elink:disabled {
+    color: var(--color-ink-3);
+    cursor: default;
+  }
+
+  .qg-elink:focus-visible {
+    border-radius: 3px;
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .qg-ecap.is-bad .qg-elink {
+    font-family: var(--font-num);
+  }
+
+  .qg-ehint {
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--color-ink-2);
+  }
+
+  .qg-elabel {
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  /* A row's Console reading, under its two fields. */
+  .qg-eread {
+    display: flex;
+    flex-direction: column;
+    grid-area: read;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .qg-eread-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 6px 12px;
+  }
+
+  .qg-eread-fields .qg-efield {
+    gap: 3px;
+  }
+
+  .qg-eread-fields input[type="datetime-local"] {
+    padding-right: 6px;
+  }
+
+  .qg-eread-fields label:nth-child(2) .qg-ebox {
+    width: 240px;
+  }
+
+  .qg-eread-utc {
+    min-height: 30px;
+    align-items: center;
+  }
+
+  /* The editor's last lines: values kept for something no longer listed. */
+  .qg-eorphan {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 5px;
+    padding: 9px 0;
+    border-top: 1px solid var(--color-rule);
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-ink-3);
+  }
+
+  /* The foot while a list is a form: what a date means, then the change
+   * count, Cancel and Save. Pinned to the bottom of the viewport so Save
+   * stays in reach in the 400×620 popover (must-fix 1). */
+  .qg-efoot {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin: 0 -18px;
+    padding: 0 18px;
+    border-top: 1px solid var(--color-rule);
+    border-radius: 0 0 14px 14px;
+    background: var(--color-card);
+  }
+
+  .qg-efoot-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 14px;
+    padding: 11px 0 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--color-ink-3);
+  }
+
+  .qg-ehelp {
+    flex: 1 1 280px;
+    min-width: 0;
+  }
+
+  .qg-eacts {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .qg-eacts .qg-btn {
+    padding: 6px 13px;
+  }
+
+  .qg-esave {
+    min-width: 64px;
+    font-weight: 550;
+  }
+
+  /* Off, Save takes the muted look of an unavailable Use one rather than a
+   * fade, which on the dark card reads almost as on (must-fix 7). */
+  .qg-btn.qg-esave:disabled {
+    border-color: var(--color-line);
+    background: transparent;
+    color: var(--color-ink-3);
+    opacity: 1;
+  }
+
+  .qg-ecount {
+    margin-right: 4px;
+    font-size: 11px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-ecount.is-bad {
+    color: #f29393;
+  }
+
+  .qg-espin {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin: 0 7px -1px 0;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: qg-espin 0.8s linear infinite;
+  }
+
+  @keyframes qg-espin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Save failed: said above the buttons, nothing taken away. */
+  .qg-notice.qg-efail {
+    margin: 10px 0 0;
+  }
+
+  /* Accounts: one date per subscription. */
+  .qg-eahead,
+  .qg-arow.qg-earow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-areas: "who date";
+    column-gap: 14px;
+  }
+
+  .qg-eahead {
+    padding: 8px 0 7px;
+    border-bottom: 1px solid var(--color-rule);
+    font-size: 10.5px;
+    color: var(--color-ink-3);
+    white-space: nowrap;
+  }
+
+  .qg-arow.qg-earow {
+    align-items: start;
+    padding: 9px 0;
+  }
+
+  .qg-earow > .qg-awho {
+    min-height: 30px;
+  }
+
+  .qg-earow.is-locked {
+    align-items: center;
+  }
+
+  .qg-earow.is-locked > .qg-awho {
+    min-height: 0;
+  }
+
+  .qg-earow .qg-efield {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  .qg-earow .qg-ecap {
+    flex: 1 1 160px;
+    min-height: 0;
+  }
+
+  .qg-earow.is-locked > .qg-asub {
+    grid-area: date;
+    text-align: left;
+  }
+
+  /* ---------- the page foot ---------- */
+
+  .qg-foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 16px;
+    margin-top: 18px;
+    padding-left: 2px;
+    font-size: 11.5px;
+    color: var(--color-ink-3);
+  }
+
+  /* What the hatched stretch on every bar means, said once. */
+  .qg-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+  }
+
+  .qg-swatch {
+    --lvl: var(--color-accent);
+    display: inline-block;
+    width: 18px;
+    height: 8px;
+    border-radius: 3px;
+    background: repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--lvl) 62%, transparent) 0 1.5px,
+      transparent 1.5px 5px
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lvl) 45%, transparent);
   }
 
   /* ---------- a prepaid balance ---------- */
@@ -1215,50 +2005,6 @@
       margin-bottom: 22px;
     }
 
-    /* The tiles take a line of their own under the name, two to a line, and
-     * the label above them reads across rather than stacking. */
-    .qg-pbar {
-      gap: 8px;
-      padding: 9px 7px 7px 14px;
-      border-radius: 18px;
-    }
-
-    .qg-pbar.is-bare {
-      padding: 10px 14px;
-    }
-
-    .qg-blabel {
-      max-width: 170px;
-      padding-right: 7px;
-    }
-
-    .qg-pills,
-    .qg-pills.is-grid {
-      flex: 1 1 100%;
-      justify-content: flex-start;
-      gap: 5px;
-      margin-left: -7px;
-    }
-
-    .qg-pill {
-      flex: 1 1 160px;
-      gap: 7px;
-      padding: 5px 8px 5px 6px;
-    }
-
-    .qg-pnote {
-      margin-top: -1px;
-    }
-
-    .qg-pico {
-      width: 26px;
-      height: 26px;
-    }
-
-    .qg-puse {
-      margin-left: auto;
-    }
-
     .qg-win {
       padding: 14px 14px 4px;
       border-radius: 13px;
@@ -1284,8 +2030,18 @@
       font-size: 10.5px;
     }
 
-    .qg-afig {
-      gap: 11px;
+    .qg-win.qg-roster {
+      padding: 0 14px;
+    }
+
+    .qg-win.qg-solo {
+      padding: 12px 14px;
+    }
+
+    .qg-efoot {
+      margin: 0 -14px;
+      padding: 0 14px;
+      border-radius: 0 0 13px 13px;
     }
 
     /* Under 640px the figure line is about 340px and the ring would leave the
@@ -1303,64 +2059,222 @@
 
   /* ---------- 480px and under: the menu bar's popover, and a phone ---------- */
 
-  /* The banked-reset band is the first thing in the popover, and at full size
-   * three accounts holding resets took a third of its 620px before any quota
-   * showed. Here a tile is two lines, two to a row, as the D mockup draws it:
-   * who and how many, then one status and the verb. The icon goes — the verb's
-   * ink already says held or ready — and the band's explanation goes too,
-   * because the dialog that asks before anything is spent says it in full.
-   * "Use one" stays: it is the word the page tells the reader to press. */
+  /* Every one-line row becomes two: who and the figures it is read for, then
+   * the bar or the strip under them. Words that only the wide line has room
+   * for go (qg-long), and words that replace a column head arrive (qg-short). */
   @media (max-width: 480px) {
-    .qg-blabel-sub {
+    .qg-long {
       display: none;
     }
 
-    .qg-pills,
-    .qg-pills.is-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    .qg-short {
+      display: inline;
     }
 
-    .qg-pill {
-      display: grid;
+    .qg-win.is-plain {
+      padding-bottom: 14px;
+    }
+
+    /* The reset track fits "resets 23h 59m", the widest countdown. */
+    .qg-arow {
+      grid-template-columns: minmax(0, 1fr) 38px 92px;
+      grid-template-areas:
+        "who pct rst"
+        "bar bar bar";
+      column-gap: 9px;
+      row-gap: 7px;
+      padding: 9px 0 10px;
+    }
+
+    .qg-arow .qg-awho {
+      gap: 6px;
+    }
+
+    /* A chip beside a name gives up its padding before the name gives up a
+     * letter: "chasibnoor" whole beside "weekly caps at 24%". */
+    .qg-arow .qg-awho .qg-chip {
+      padding: 0 6px;
+    }
+
+    /* An organization: who and what is left; then the bar, the spend and
+     * the refill, each saying what it is now that the heads are gone. */
+    .qg-chead {
+      display: none;
+    }
+
+    .qg-arow.qg-crow {
       grid-template-columns: minmax(0, 1fr) auto auto;
       grid-template-areas:
-        "who who who"
-        "status verb go";
-      align-items: center;
-      gap: 3px 4px;
-      min-height: 0;
-      padding: 7px 10px 7px 11px;
-      border-radius: 13px;
+        "who left left"
+        "bar spent rnw";
+      column-gap: 10px;
     }
 
-    .qg-pico,
-    .qg-ps-full {
+    /* State chips must not reduce a short label to two letters. They wrap
+     * under the name before the amount or refill column gives up space. */
+    .qg-crow > .qg-awho {
+      flex-wrap: wrap;
+    }
+
+    .qg-crow .qg-aname {
+      flex: 1 0 60px;
+    }
+
+    .qg-cspent,
+    .qg-crnw {
+      font-size: 11px;
+    }
+
+    /* The API pool's gain gets a line of its own under the figure rather than
+     * wrapping ragged beside it, and its source drops under the title. */
+    .qg-api .qg-hfig {
+      flex-wrap: wrap;
+    }
+
+    .qg-api .qg-rec {
+      flex: 1 1 100%;
+      margin-left: 0;
+      text-align: left;
+    }
+
+    .qg-api .qg-whead {
+      flex-wrap: wrap;
+      row-gap: 3px;
+    }
+
+    .qg-api .qg-wtitle {
+      flex: none;
+    }
+
+    .qg-fold.qg-fold-head {
+      min-height: 46px;
+      padding: 11px 0;
+    }
+
+    /* An account: who, its plan and renewal; then its requests. */
+    .qg-arow.qg-arow-acct {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        "who who sub"
+        "act txt txt";
+      column-gap: 9px;
+      row-gap: 7px;
+    }
+
+    .qg-asub {
+      text-align: right;
+    }
+
+    .qg-win.qg-solo {
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      padding: 11px 14px;
+    }
+
+    .qg-solo .qg-awho {
+      flex: 1 1 100%;
+    }
+
+    .qg-solo .qg-ameta {
+      margin-left: auto;
+    }
+
+    /* A banked reset: who and how many over the hold and deadline, with the
+     * button beside both. */
+    .qg-brow {
+      grid-template-columns: 26px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "ico who use"
+        "ico st use";
+      column-gap: 10px;
+      row-gap: 2px;
+    }
+
+    .qg-brow > .qg-pico {
+      width: 26px;
+      height: 26px;
+    }
+
+    .qg-bst {
+      font-size: 11px;
+    }
+
+    /* The editor: who on its own line, then the two fields side by side
+     * under the column heads, which stay as the fields' labels; then the
+     * reading. */
+    .qg-ehead,
+    .qg-arow.qg-erow {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "credit date";
+      column-gap: 10px;
+    }
+
+    .qg-ehead > span:nth-child(1) {
       display: none;
     }
 
-    .qg-ptxt {
-      display: contents;
+    .qg-arow.qg-erow {
+      grid-template-areas:
+        "who who"
+        "credit date"
+        "read read";
+      row-gap: 7px;
     }
 
-    .qg-pt {
-      grid-area: who;
+    .qg-arow.qg-erow.is-locked {
+      grid-template-areas:
+        "who who"
+        "lock lock";
     }
 
-    .qg-ps-short {
-      display: block;
-      grid-area: status;
+    .qg-erow > .qg-awho {
+      min-height: 0;
     }
 
-    .qg-puse {
-      grid-area: verb;
-      margin-left: 0;
-      font-size: 10.5px;
+    .qg-ebox,
+    .qg-efield.is-date .qg-ebox,
+    .qg-eread-fields label:nth-child(2) .qg-ebox {
+      width: 100%;
     }
 
-    .qg-pgo {
-      grid-area: go;
-      margin-left: 0;
+    .qg-eread-fields label {
+      flex: 1 1 140px;
+    }
+
+    /* A localized date and time, including AM/PM, does not fit half of a
+     * popover. Give the picker its own line instead of hiding its minutes. */
+    .qg-eread-fields label:nth-child(2) {
+      flex: 1 1 100%;
+    }
+
+    .qg-efoot {
+      margin: 0 -14px;
+      padding: 0 14px;
+      border-radius: 0 0 13px 13px;
+    }
+
+    .qg-ehelp {
+      flex-basis: 100%;
+    }
+
+    .qg-eahead {
+      display: none;
+    }
+
+    .qg-arow.qg-earow {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "who"
+        "date";
+      row-gap: 7px;
+    }
+
+    .qg-earow > .qg-awho {
+      min-height: 0;
+    }
+
+    .qg-earow.is-locked > .qg-asub {
+      text-align: left;
     }
   }
 }

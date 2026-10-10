@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { fileURLToPath } from "node:url"
 import type { Plugin } from "vite"
 
+import { cycleOn, dateEpoch, readDate, READING_MAX_AGE, READING_MAX_AHEAD } from "../src/lib/settings.ts"
+
 // A stand-in for the plugin's routes, backed by the committed golden fixtures.
 // It exists so the app can be developed and reviewed without a running CPA,
 // and it lives in the dev server rather than in the bundle: the shell is served
@@ -12,8 +14,9 @@ import type { Plugin } from "vite"
 // What it copies from the real routes, because the page depends on it: the
 // paths, ETag revalidation with 304, no-store caching, and the exact answers a
 // refusal comes back with. What it adds, because a fixture cannot: scenarios
-// for the states the design has to survive, and endings for every way a press
-// can turn out.
+// for the states the design has to survive, endings for every way a press
+// can turn out, and a settings store held in memory so the editor saves end
+// to end.
 //
 // Two doors, as in production. The resource tree is the plugin's own: CPA
 // authenticates nothing there and dispatches only GET, and the plugin checks
@@ -43,13 +46,26 @@ const RESOURCE_REDEEM_PATH = "/v0/resource/plugins/quota-glance/redeem"
  * ever reaches a real CPA.
  */
 export const PRESS_PATHS: ReadonlySet<string> = new Set([SPEND_PATH, MANAGEMENT_REDEEM_PATH, RESOURCE_REDEEM_PATH])
+/** The token door's save: GET only, the batch in a header. */
+const SAVE_SETTINGS_PATH = "/v0/resource/plugins/quota-glance/save-settings"
+/** The console door's save: POST, behind CPA's management sign-in. */
+const MANAGEMENT_SETTINGS_PATH = "/v0/management/plugins/quota-glance/settings"
+/**
+ * Both paths that write settings. Each is answered here whatever the method and
+ * whatever QUOTA_GLANCE_PROXY says, into the store this fixture keeps in
+ * memory, so no save made against the dev server ever reaches a real CPA.
+ */
+export const SETTINGS_PATHS: ReadonlySet<string> = new Set([SAVE_SETTINGS_PATH, MANAGEMENT_SETTINGS_PATH])
 export const DEV_TOKEN = "dev-token"
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`../../testdata/golden/${name}.json`, import.meta.url))
 
-/** Every epoch field in the document, so rebasing touches those and nothing else. */
-const EPOCH_FIELDS = new Set([
+/**
+ * Every epoch field in the document, so rebasing touches those and nothing else.
+ * A test walks both golden documents and fails on any `*Epoch` key missing here.
+ */
+export const EPOCH_FIELDS: ReadonlySet<string> = new Set([
   "generatedAtEpoch",
   "observedAtEpoch",
   "nextAttemptEpoch",
@@ -69,9 +85,42 @@ const EPOCH_FIELDS = new Set([
   // clock, so moving it with the rest keeps it ahead here too.
   "holdUntilEpoch",
   "renewalAtEpoch",
+  // The estimate a Claude credential carries beside a date set here.
+  "renewalEstimateAtEpoch",
   // When a card's pool is full again, which the card counts down to beside
   // its legend.
   "fullAtEpoch",
+  // Claude API credits: each organization's cycle, its next refill and the
+  // pool's. These are 00:00 UTC in the document, and the rebase offset is an
+  // arbitrary number of seconds, so here they are not: a date printed from
+  // one can read a day off, and the YYYY-MM-DD strings beside them in each
+  // account's settings are not moved at all. Use ?rebase=0 to review dates
+  // exactly. Rounding the offset to whole days instead would move every
+  // countdown on the page by up to 23 hours.
+  "cycleStartEpoch",
+  "renewsAtEpoch",
+  "refillAtEpoch",
+  // The usage meter: when it began, last saved and stopped, when it last
+  // dropped, could not match or could not read a record, and each gap.
+  "sinceEpoch",
+  "updatedAtEpoch",
+  "stoppedAtEpoch",
+  "lastDroppedEpoch",
+  "lastUnattributedEpoch",
+  "lastRejectedEpoch",
+  "fromEpoch",
+  "toEpoch",
+  // Each organization: what its spend counts from, its Console reading, when
+  // it was entered, when counting began and traffic was last seen, and its
+  // refusals; and each unlinked organization's first and last traffic.
+  "spentSinceEpoch",
+  "atEpoch",
+  "enteredAtEpoch",
+  "meterSinceEpoch",
+  "lastSeenEpoch",
+  "lastAtEpoch",
+  "claudeCodeLastAtEpoch",
+  "firstSeenEpoch",
 ])
 
 type Doc = Record<string, unknown>
@@ -308,6 +357,437 @@ function withEveryWeeklySpent(doc: Doc): Doc {
   return { ...doc, providers }
 }
 
+// ---------------------------------------------------------------------------
+// Monthly API Credit states the golden documents do not reach
+
+/** Money as the server prints it: "$1,250.00". */
+const usd = (amount: number) =>
+  `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+const levelOf = (fraction: number) => (fraction <= 0.1 ? "critical" : fraction <= 0.4 ? "low" : "ok")
+
+/**
+ * The pool, summed again from its accounts as the server sums it (D.3 rule
+ * 11), for a scenario or a save that changed an account's figures. Floats
+ * are fine here: this is a stand-in for review, never a contract.
+ */
+function recountPool(credits: Doc, now: number): Doc {
+  const accounts = credits.accounts as Doc[]
+  const counted = accounts.filter((account) => account.counted === true)
+  const sum = (key: string) => counted.reduce((total, account) => total + ((account[key] as number) ?? 0), 0)
+  const credit = sum("monthlyCredit")
+  const left = sum("left")
+  const used = sum("used")
+  const overage = sum("overage")
+  const hasEstimate = counted.some((account) => account.hasEstimate === true)
+  const fraction = credit > 0 ? Math.max(0, Math.min(1, left / credit)) : 0
+  const refilling = counted.filter((account) => typeof account.renewsAtEpoch === "number" && (account.used as number) > 0)
+  const soonest = refilling.length > 0 ? Math.min(...refilling.map((account) => account.renewsAtEpoch as number)) : null
+  const latest = refilling.length > 0 ? Math.max(...refilling.map((account) => account.renewsAtEpoch as number)) : null
+  const gainers = refilling.filter((account) => account.renewsAtEpoch === soonest)
+  const gain = gainers.reduce((total, account) => total + (account.used as number), 0)
+  const text = (amount: number) => (hasEstimate ? usd(amount) : "")
+  return {
+    ...credits,
+    pool: {
+      hasEstimate,
+      lowerBound: counted.some((account) => account.lowerBound === true),
+      monthlyCredit: hasEstimate ? credit : 0,
+      monthlyCreditText: text(credit),
+      used: hasEstimate ? used : 0,
+      usedText: text(used),
+      left: hasEstimate ? left : 0,
+      leftText: text(left),
+      overage: hasEstimate ? overage : 0,
+      overageText: text(overage),
+      remainingFraction: hasEstimate ? fraction : 0,
+      remainingPercent: hasEstimate ? Math.round(fraction * 100) : 0,
+      level: hasEstimate && credit > 0 ? levelOf(fraction) : "",
+      nextRefill:
+        soonest === null || credit <= 0
+          ? null
+          : {
+              accountIds: gainers.map((account) => account.id),
+              refillAtEpoch: soonest,
+              refillInSeconds: soonest - now,
+              gain,
+              gainText: usd(gain),
+              gainFraction: gain / credit,
+              gainPercent: Math.round((gain / credit) * 100),
+            },
+      fullAtEpoch: latest,
+      fullInSeconds: latest === null ? null : latest - now,
+      accountCount: accounts.length,
+      countedCount: counted.length,
+      missingCount: accounts.length - counted.length,
+    },
+  }
+}
+
+/** Replaces one account of a document's API credits, by label. */
+function patchAccounts(doc: Doc, patches: Record<string, (account: Doc) => Doc>): Doc {
+  const credits = doc.apiCredits as Doc
+  const accounts = (credits.accounts as Doc[]).map((account) => {
+    const patch = patches[account.label as string]
+    return patch ? patch(account) : account
+  })
+  return { ...doc, apiCredits: { ...credits, accounts } }
+}
+
+/** A fake Console organization's id, as the D.7 fixtures write them. */
+const fakeOrg = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`
+
+/**
+ * Every row state of F.2 the golden document does not hold, side by side:
+ * spend past the credit, a reading above the credit, a Claude Code-based
+ * refusal that is not out, a credit of $0.00, counting that began mid-cycle
+ * on an organization with no traffic, a reading taken on the refill day, a
+ * reading from before the last refill, and more unlinked organizations than
+ * the pool names. The sentences are the server's (D.4).
+ */
+function withAPIStates(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  let next = patchAccounts(doc, {
+    alpha: (account) => ({
+      ...account,
+      spent: 240.1,
+      spentText: "$240.10",
+      used: 200,
+      usedText: "$200.00",
+      left: 0,
+      leftText: "$0.00",
+      overage: 40.1,
+      overageText: "$40.10",
+      remainingFraction: 0,
+      remainingPercent: 0,
+      level: "critical",
+      dataIssues: ["overCredit"],
+      issue:
+        "Spend is $40.10 past the monthly credit. Anthropic bills purchased credit after the monthly credit; if there is none, enter a Console reading.",
+    }),
+    bravo: (account) => ({
+      ...account,
+      left: 252,
+      leftText: "$252.00",
+      used: 0,
+      usedText: "$0.00",
+      remainingFraction: 1,
+      remainingPercent: 100,
+      level: "ok",
+      reading: { ...(account.reading as Doc), remaining: 260, remainingText: "$260.00" },
+      settings: { ...(account.settings as Doc), reading: { ...((account.settings as Doc).reading as Doc), remainingUsd: "260.00" } },
+      dataIssues: ["readingAboveCredit"],
+      issue: "Your Console reading is more than the monthly credit; check the monthly credit.",
+    }),
+    charlie: (account) => ({
+      ...account,
+      refusals: { total: 0, lastAtEpoch: null, claudeCodeTotal: 4, claudeCodeLastAtEpoch: built - 40 * 60 },
+      dataIssues: ["claudeCodeRefused"],
+      issue:
+        "Anthropic refused requests from a Claude Code-based client (Claude Code or the Agent SDK) for low credit. If they were Agent SDK requests, this credit may be spent; enter a Console reading.",
+    }),
+    delta: (account) => ({
+      ...account,
+      monthlyCredit: 0,
+      monthlyCreditText: "$0.00",
+      monthlyCreditSource: "dashboard",
+      used: 0,
+      usedText: "$0.00",
+      left: 0,
+      leftText: "$0.00",
+      overage: 30,
+      overageText: "$30.00",
+      remainingFraction: 0,
+      remainingPercent: 0,
+      level: "",
+      cacheWriteExtra: 0,
+      cacheWriteExtraText: "",
+      settings: { ...(account.settings as Doc), monthlyUsd: "0", revision: "4", updatedAtEpoch: built - 3 * HOUR },
+      dataIssues: ["zeroCredit", "overCredit"],
+      issue: "This organization's monthly credit is set to $0.00.",
+    }),
+    echo: (account) => ({
+      ...account,
+      lowerBound: true,
+      spent: 0,
+      spentText: "$0.00",
+      used: 0,
+      usedText: "$0.00",
+      left: 500,
+      leftText: "$500.00",
+      remainingFraction: 1,
+      remainingPercent: 100,
+      meterSinceEpoch: built - 2 * HOUR,
+      lastSeenEpoch: null,
+      dataIssues: ["meterStartedLate", "noTraffic"],
+      issue: "Counting began after this cycle started, so earlier spend is missing. Enter a Console reading to correct it.",
+    }),
+  })
+  const credits = next.apiCredits as Doc
+  const echo = (credits.accounts as Doc[]).find((account) => account.label === "echo")!
+  const extra = (n: number, label: string, patch: Doc): Doc => ({
+    ...echo,
+    id: `org-${String(n).repeat(12).slice(0, 12)}`,
+    label,
+    order: 4 + n,
+    organizationId: fakeOrg(10 + n),
+    lowerBound: false,
+    meterSinceEpoch: echo.meterSinceEpoch,
+    lastSeenEpoch: built - 20 * 60,
+    settings: { ...(echo.settings as Doc), configMonthlyUsd: "100", configRenews: "2026-09-10" },
+    ...patch,
+  })
+  const cycleStart = echo.cycleStartEpoch as number
+  const accounts = [
+    ...(credits.accounts as Doc[]),
+    extra(1, "foxtrot", {
+      basis: "reading",
+      monthlyCredit: 100,
+      monthlyCreditText: "$100.00",
+      spent: 0.5,
+      spentText: "$0.50",
+      used: 0.5,
+      usedText: "$0.50",
+      left: 99.5,
+      leftText: "$99.50",
+      remainingFraction: 0.995,
+      remainingPercent: 100,
+      level: "ok",
+      reading: {
+        remaining: 100,
+        remainingText: "$100.00",
+        atEpoch: cycleStart + HOUR,
+        enteredAtEpoch: cycleStart + HOUR + 300,
+        spentSince: 0.5,
+        spentSinceText: "$0.50",
+      },
+      settings: {
+        ...(echo.settings as Doc),
+        configMonthlyUsd: "100",
+        configRenews: "2026-09-10",
+        revision: "3",
+        reading: { remainingUsd: "100.00", atEpoch: cycleStart + HOUR, enteredAtEpoch: cycleStart + HOUR + 300 },
+        updatedAtEpoch: cycleStart + HOUR + 300,
+      },
+      dataIssues: ["readingOnRefillDay"],
+      issue:
+        "This Console reading was taken on the refill day. If Console did not show the new credit yet, enter a new reading once it does.",
+    }),
+    extra(2, "golf", {
+      monthlyCredit: 200,
+      monthlyCreditText: "$200.00",
+      spent: 12,
+      spentText: "$12.00",
+      used: 12,
+      usedText: "$12.00",
+      left: 188,
+      leftText: "$188.00",
+      remainingFraction: 0.94,
+      remainingPercent: 94,
+      level: "ok",
+      settings: {
+        ...(echo.settings as Doc),
+        configMonthlyUsd: "200",
+        configRenews: "2026-09-10",
+        revision: "2",
+        reading: { remainingUsd: "143.20", atEpoch: cycleStart - 10 * DAY, enteredAtEpoch: cycleStart - 10 * DAY + 600 },
+        readingUnusedReason: "beforeRefill",
+        updatedAtEpoch: cycleStart - 10 * DAY + 600,
+      },
+      dataIssues: ["readingUnused"],
+      issue: `Your Console reading of $143.20 on ${new Date((cycleStart - 10 * DAY) * 1000).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      })} was before the last refill, so it is not used.`,
+    }),
+    extra(3, "hotel", {
+      monthlyCredit: 100, monthlyCreditText: "$100.00", spent: 93, spentText: "$93.00",
+      used: 93, usedText: "$93.00", left: 7, leftText: "$7.00", overage: 0, overageText: "$0.00",
+      remainingFraction: 0.07, remainingPercent: 7, level: "critical", dataIssues: [], issue: "",
+    }),
+    extra(4, "india", {
+      monthlyCredit: 100, monthlyCreditText: "$100.00", spent: 0, spentText: "$0.00",
+      used: 0, usedText: "$0.00", left: 100, leftText: "$100.00", overage: 0, overageText: "$0.00",
+      remainingFraction: 1, remainingPercent: 100, level: "ok", lastSeenEpoch: null,
+      dataIssues: ["noTraffic"], issue: "No API traffic for this organization has reached CPA since counting began.",
+    }),
+  ]
+  const unlinked = [
+    ...(credits.unlinked as Doc[]),
+    { organizationId: fakeOrg(0x20), firstSeenEpoch: built - 3 * DAY, lastSeenEpoch: built - 50 * 60, requests: 1, reason: "notConfigured" },
+    { organizationId: fakeOrg(0x21), firstSeenEpoch: built - 6 * DAY, lastSeenEpoch: built - 5 * HOUR, requests: 12, reason: "overLimit" },
+    { organizationId: fakeOrg(0x22), firstSeenEpoch: built - 9 * DAY, lastSeenEpoch: built - 2 * DAY, requests: 4, reason: "notConfigured" },
+  ]
+  next = { ...next, apiCredits: recountPool({ ...credits, accounts, unlinked }, built) }
+  return next
+}
+
+/**
+ * Quota Cache switched off two hours ago: the meter's open gap makes every
+ * counted organization a lower bound, and the card says counting stopped.
+ */
+function withMeterStopped(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  const credits = doc.apiCredits as Doc
+  const gap =
+    "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter a Console reading to correct it."
+  const accounts = (credits.accounts as Doc[]).map((account) =>
+    account.counted
+      ? {
+          ...account,
+          lowerBound: true,
+          dataIssues: ["meterGap", ...(account.dataIssues as string[])],
+          issue: (account.dataIssues as string[]).length === 0 ? gap : account.issue,
+        }
+      : account,
+  )
+  const meter = { ...(credits.meter as Doc), stoppedAtEpoch: built - 2 * HOUR, stopReason: "disabled", updatedAtEpoch: built - 2 * HOUR }
+  return { ...doc, apiCredits: recountPool({ ...credits, meter, accounts }, built) }
+}
+
+/**
+ * The owner's first day: Quota Cache began counting three hours ago, after
+ * every organization's cycle had started, and no Console reading has been
+ * entered. Each organization counts only what it spent since then, so each
+ * is a lower bound for the same reason, in the server's one sentence for it
+ * (D.4 `meterStartedLate`, basis credit).
+ */
+function withFirstDay(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  const credits = doc.apiCredits as Doc
+  const since = built - 3 * HOUR
+  const spentSince: Record<string, number> = { alpha: 3.1, bravo: 1.25, charlie: 0.4, delta: 5.8, echo: 2.15 }
+  const accounts = (credits.accounts as Doc[]).map((account) => {
+    const credit = account.monthlyCredit as number
+    const spent = spentSince[account.label as string] ?? 0
+    const left = Math.max(0, credit - spent)
+    const fraction = credit > 0 ? left / credit : 0
+    return {
+      ...account,
+      basis: "credit",
+      lowerBound: true,
+      spent,
+      spentText: usd(spent),
+      spentSinceEpoch: account.cycleStartEpoch,
+      used: spent,
+      usedText: usd(spent),
+      left,
+      leftText: usd(left),
+      overage: 0,
+      overageText: "$0.00",
+      remainingFraction: fraction,
+      remainingPercent: Math.round(fraction * 100),
+      level: levelOf(fraction),
+      reading: null,
+      cacheWriteExtra: 0,
+      cacheWriteExtraText: "",
+      meterSinceEpoch: since,
+      lastSeenEpoch: Math.max(account.lastSeenEpoch as number, since + 20 * 60),
+      dataIssues: ["meterStartedLate"],
+      issue: "Counting began after this cycle started, so earlier spend is missing. Enter a Console reading to correct it.",
+      settings: { ...(account.settings as Doc), reading: null, readingUnusedReason: "" },
+    }
+  })
+  const meter = { ...(credits.meter as Doc), sinceEpoch: since, foreign: 0, gaps: [] }
+  const unlinked = (credits.unlinked as Doc[]).map((org) => ({ ...org, firstSeenEpoch: since + 40 * 60, requests: 6 }))
+  return { ...doc, apiCredits: recountPool({ ...credits, meter, accounts, unlinked }, built) }
+}
+
+/**
+ * No meter file at all: Quota Cache older than 0.1.14, or not loaded since.
+ * Every organization waits for one, and nothing is counted.
+ */
+function withoutMeter(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  const credits = doc.apiCredits as Doc
+  const blank = {
+    state: "pending",
+    counted: false,
+    hasEstimate: false,
+    basis: "",
+    lowerBound: false,
+    spent: 0,
+    spentText: "",
+    spentSinceEpoch: null,
+    used: 0,
+    usedText: "",
+    left: 0,
+    leftText: "",
+    overage: 0,
+    overageText: "",
+    remainingFraction: 0,
+    remainingPercent: 0,
+    level: "",
+    reading: null,
+    cacheWriteExtra: 0,
+    cacheWriteExtraText: "",
+    meterSinceEpoch: null,
+    lastSeenEpoch: null,
+    dataIssues: ["meterMissing"],
+    issue: "Quota Cache has not saved an API meter yet. Update it to 0.1.14 or newer; counting starts when it next loads.",
+  }
+  const accounts = (credits.accounts as Doc[]).map((account) => ({ ...account, ...blank }))
+  return { ...doc, apiCredits: recountPool({ ...credits, meter: null, accounts, unlinked: [] }, built) }
+}
+
+/** settings.json could not be read: nothing set here applies, and nothing can be edited. */
+function withSettingsUnreadable(doc: Doc): Doc {
+  // None of a corrupt settings file applies. Drop the seeded overrides and
+  // let the config's values stand before closing the editor.
+  const store = seedStore(doc)
+  for (const id of [...store.credits.keys(), ...store.renewals.keys()]) store.touched.add(id)
+  store.credits.clear()
+  store.renewals.clear()
+  doc = applyStore(doc, store, doc.generatedAtEpoch as number)
+  const credits = doc.apiCredits as Doc
+  const accounts = (credits.accounts as Doc[]).map((account) => {
+    const settings = account.settings as Doc
+    const own = ["noOrganization", "duplicateOrganization", "overLimit", "cacheTooOld"].includes(settings.notEditableReason as string)
+    return { ...account, settings: { ...settings, editable: false, notEditableReason: own ? settings.notEditableReason : "settingsUnreadable" } }
+  })
+  const credentials = (doc.credentials as Doc[]).map((credential) => ({ ...credential, renewalEditable: false }))
+  return {
+    ...doc,
+    credentials,
+    apiCredits: { ...credits, accounts, editing: { available: false, reason: "settingsUnreadable" } },
+  }
+}
+
+/**
+ * The degraded document with allow-edit on, so the editor can be reviewed on
+ * the rows that cannot take it: an item with no organization-id, a duplicate,
+ * one past the sixteenth, one Quota Cache 0.1.13 still reads, and an orphan.
+ */
+function withEditing(doc: Doc): Doc {
+  const credits = doc.apiCredits as Doc
+  const accounts = (credits.accounts as Doc[]).map((account) => {
+    const settings = account.settings as Doc
+    return settings.notEditableReason === "disabled"
+      ? { ...account, settings: { ...settings, editable: true, notEditableReason: "" } }
+      : account
+  })
+  return { ...doc, apiCredits: { ...credits, accounts, editing: { available: true, reason: "" } } }
+}
+
+/** The goldens retain historical filename ids, which cannot key saved dates.
+ * Give Claude fake auth indexes to review every renewal field's source note. */
+function withEditableRenewals(doc: Doc): Doc {
+  const ids = new Map<string, string>()
+  const claude = (doc.credentials as Doc[]).filter((one) => one.provider === "claude")
+  claude.forEach((one, i) => {
+    ids.set(one.id as string, (i + 1).toString(16).padStart(16, "0"))
+  })
+  const rename = (value: unknown): unknown => {
+    if (typeof value === "string") return ids.get(value) ?? value
+    if (Array.isArray(value)) return value.map(rename)
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rename(item)]))
+    return value
+  }
+  const next = rename(doc) as Doc
+  return { ...next, credentials: (next.credentials as Doc[]).map((one) => ({ ...one, renewalEditable: one.provider === "claude" })) }
+}
+
 type Outcome = Doc | "unauthorized" | "down"
 
 /** The states §5 of the handoff requires the app to render legibly. */
@@ -378,6 +858,27 @@ function scenarios(): Record<string, () => Outcome> {
         dataIssues: ["refreshPending"],
         subtext: "Waiting for Quota Cache to read the balance.",
       }),
+
+    // Small installs still need the renewal editor, including an install
+    // whose last Claude account disappeared but left a saved renewal date.
+    "single-claude": () => {
+      const doc = golden()
+      const credential = (doc.credentials as Doc[]).find((one) => one.provider === "claude" && one.renewalEditable)!
+      return { ...doc, credentials: [credential], providers: [], apiCredits: null }
+    },
+    "renewal-orphans": () => ({
+      ...golden(), credentials: [], providers: [], apiCredits: null,
+      renewalOrphans: [{ id: "0123456789abcdef", date: "2026-10-29", revision: "1", updatedAtEpoch: 1791547200 }],
+    }),
+
+    // The Monthly API Credit card's states the golden documents do not hold.
+    "api-states": () => withAPIStates(golden()),
+    "meter-stopped": () => withMeterStopped(golden()),
+    "first-day": () => withFirstDay(golden()),
+    "no-meter": () => withoutMeter(golden()),
+    "settings-unreadable": () => withSettingsUnreadable(golden()),
+    "degraded-editable": () => withEditing(degraded()),
+    "renewals-editable": () => withEditableRenewals(golden()),
 
     // The plugin has been updated past what this bundle knows how to read.
     "future-schema": () => ({ ...golden(), schemaVersion: 2 }),
@@ -550,20 +1051,29 @@ function parsePress(raw: string, pressRequired: boolean): Press | string {
   return { credentialId: credentialId ?? "", pressId }
 }
 
-/** The spend header, decoded as the plugin decodes it, or the error code to answer with. */
-function pressFromHeader(value: string | string[] | undefined): Press | string {
-  if (typeof value !== "string" || value.length > MAX_PRESS_BYTES) return "invalid_request"
-  // Unpadded base64url and nothing else. Node's decoder skips what it does not
-  // understand, and the plugin's refuses it.
-  if (!/^[A-Za-z0-9_-]*$/.test(value) || value.length % 4 === 1) return "invalid_request"
+/**
+ * A header carrying JSON as unpadded base64url, decoded as the plugin decodes
+ * it, or null when it is not one: absent, repeated, too long, or anything but
+ * base64url. Node's decoder skips what it does not understand, and the
+ * plugin's refuses it.
+ */
+function headerJSON(value: string | string[] | undefined, maxBytes: number): string | null {
+  if (typeof value !== "string" || value.length > Math.ceil((maxBytes * 4) / 3)) return null
+  if (!/^[A-Za-z0-9_-]*$/.test(value) || value.length % 4 === 1) return null
   let raw: string
   try {
     raw = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(value, "base64url"))
   } catch {
-    return "invalid_request"
+    return null
   }
-  if (!raw.trimStart().startsWith("{")) return "invalid_request"
-  return parsePress(raw, true)
+  return raw.trimStart().startsWith("{") ? raw : null
+}
+
+/** The spend header, decoded as the plugin decodes it, or the error code to answer with. */
+function pressFromHeader(value: string | string[] | undefined): Press | string {
+  if (typeof value === "string" && value.length > MAX_PRESS_BYTES) return "invalid_request"
+  const raw = headerJSON(value, MAX_PRESS_BYTES)
+  return raw === null ? "invalid_request" : parsePress(raw, true)
 }
 
 /**
@@ -667,6 +1177,405 @@ const ENDINGS = [
 /** How long the press ledger remembers a finished press, as the plugin's does. */
 const LEDGER_TTL_MS = 10 * 60 * 1000
 
+// ---------------------------------------------------------------------------
+// Settings: what the editor saves, kept in memory
+
+type StoredReading = { remainingUsd: string; at: number; enteredAt: number; spentSince?: number }
+type StoredCredit = { monthlyUsd: string | null; renews: string | null; reading: StoredReading | null; rev: number; updatedAt: number }
+type StoredRenewal = { date: string; rev: number; updatedAt: number }
+
+/**
+ * One scenario's settings.json, as internal/overrides holds it: the file's
+ * revision, and each entry with the revision that last wrote it. Seeded from
+ * the document's own settings blocks, so a first save meets the revisions
+ * the page was shown. `touched` is every id a save here has written: only
+ * those are laid over the document served, so an untouched row keeps the
+ * fixture's own figures, rebased.
+ */
+interface SettingsStore {
+  revision: number
+  credits: Map<string, StoredCredit>
+  renewals: Map<string, StoredRenewal>
+  touched: Set<string>
+}
+
+function seedStore(doc: Doc): SettingsStore {
+  const store: SettingsStore = { revision: 0, credits: new Map(), renewals: new Map(), touched: new Set() }
+  const credits = doc.apiCredits as Doc | null | undefined
+  for (const account of (credits?.accounts as Doc[] | undefined) ?? []) {
+    const settings = account.settings as Doc
+    if (!settings.revision) continue
+    const reading = settings.reading as Doc | null
+    store.credits.set(account.id as string, {
+      monthlyUsd: (settings.monthlyUsd as string) || null,
+      renews: (settings.renews as string) || null,
+      reading: reading
+        ? { remainingUsd: reading.remainingUsd as string, at: reading.atEpoch as number, enteredAt: reading.enteredAtEpoch as number,
+            spentSince: ((account.reading as Doc | null)?.spentSince as number | undefined) ?? 0 }
+        : null,
+      rev: Number(settings.revision),
+      updatedAt: (settings.updatedAtEpoch as number | null) ?? 0,
+    })
+  }
+  for (const orphan of (credits?.orphans as Doc[] | undefined) ?? []) {
+    store.credits.set(orphan.id as string, {
+      monthlyUsd: (orphan.monthlyUsd as string) || null,
+      renews: (orphan.renews as string) || null,
+      reading: null,
+      rev: Number(orphan.revision),
+      updatedAt: orphan.updatedAtEpoch as number,
+    })
+  }
+  const renewals: Doc[] = [
+    ...((doc.credentials as Doc[] | undefined) ?? []).flatMap((credential): Doc[] =>
+      credential.renewalSetting ? [{ id: credential.id, ...(credential.renewalSetting as Doc) }] : [],
+    ),
+    ...((doc.renewalOrphans as Doc[] | undefined) ?? []),
+  ]
+  for (const renewal of renewals) {
+    store.renewals.set(renewal.id as string, {
+      date: renewal.date as string,
+      rev: Number(renewal.revision),
+      updatedAt: renewal.updatedAtEpoch as number,
+    })
+  }
+  const revs = [...store.credits.values(), ...store.renewals.values()].map((entry) => entry.rev)
+  store.revision = Math.max(0, ...revs)
+  return store
+}
+
+/** When a renewal date set here next comes round: the date while it is ahead, else the next monthly one. */
+function nextRenewal(date: string, now: number): number {
+  const day = dateEpoch(date)
+  if (day > now) return day
+  return cycleOn(date, now)?.end ?? day
+}
+
+/**
+ * The served document with every row a save here wrote laid over it: each
+ * account's settings block and the sources it gives, and — for a counted
+ * account — its credit, cycle and estimate figured again the simple way,
+ * then the pool. A stand-in so a save can be seen to land; it does not price
+ * the meter, and an account's state is the fixture's.
+ */
+function applyStore(doc: Doc, store: SettingsStore, now: number): Doc {
+  if (store.touched.size === 0) return doc
+  const credits = doc.apiCredits as Doc | null | undefined
+  let next = doc
+  if (credits) {
+    const accounts = (credits.accounts as Doc[]).map((account) => {
+      const id = account.id as string
+      if (!store.touched.has(id)) return account
+      const entry = store.credits.get(id)
+      const settings = account.settings as Doc
+      const monthlyUsd = entry?.monthlyUsd ?? ""
+      const renews = entry?.renews ?? ""
+      const configCredit = settings.configMonthlyUsdInvalid ? "" : (settings.configMonthlyUsd as string)
+      const configRenews = settings.configRenewsInvalid ? "" : (settings.configRenews as string)
+      const reading = entry?.reading ?? null
+      const patched: Doc = {
+        ...account,
+        monthlyCreditSource: monthlyUsd ? "dashboard" : configCredit ? "config" : "none",
+        renewsSource: renews ? "dashboard" : configRenews ? "config" : "none",
+        settings: {
+          ...settings,
+          revision: entry ? String(entry.rev) : "",
+          monthlyUsd,
+          renews,
+          reading: reading ? { remainingUsd: reading.remainingUsd, atEpoch: reading.at, enteredAtEpoch: reading.enteredAt } : null,
+          readingUnusedReason: "",
+          updatedAtEpoch: entry?.updatedAt ?? null,
+        },
+      }
+      if (!account.counted || account.state === "out") return patched
+      const grantText = monthlyUsd || configCredit
+      const refill = renews || configRenews
+      const cycle = refill ? cycleOn(refill, now) : null
+      if (!grantText || !cycle) return patched
+      const grant = Number(grantText)
+      const spent = account.spent as number
+      const sinceReading = reading?.spentSince ?? 0
+      const left = reading ? Math.max(0, Number(reading.remainingUsd) - sinceReading) : Math.max(0, grant - spent)
+      const used = Math.max(0, Math.min(grant, grant - left))
+      const overage = reading ? 0 : Math.max(0, spent - grant)
+      const fraction = grant > 0 ? Math.max(0, Math.min(1, left / grant)) : 0
+      return {
+        ...patched,
+        basis: reading ? "reading" : "credit",
+        monthlyCredit: grant,
+        monthlyCreditText: usd(grant),
+        cycleStartEpoch: cycle.start,
+        renewsAtEpoch: cycle.end,
+        renewsInSeconds: cycle.end - now,
+        left,
+        leftText: usd(left),
+        used,
+        usedText: usd(used),
+        overage,
+        overageText: usd(overage),
+        remainingFraction: fraction,
+        remainingPercent: Math.round(fraction * 100),
+        level: grant > 0 ? levelOf(fraction) : "",
+        reading: reading
+          ? {
+              remaining: Number(reading.remainingUsd),
+              remainingText: usd(Number(reading.remainingUsd)),
+              atEpoch: reading.at,
+              enteredAtEpoch: reading.enteredAt,
+              spentSince: sinceReading,
+              spentSinceText: usd(sinceReading),
+            }
+          : null,
+      }
+    })
+    const orphans = (credits.orphans as Doc[]).filter((orphan) => store.credits.has(orphan.id as string))
+    next = { ...next, apiCredits: recountPool({ ...credits, accounts, orphans }, now) }
+  }
+  const credentials = ((next.credentials as Doc[] | undefined) ?? []).map((credential) => {
+    const id = credential.id as string
+    if (!store.touched.has(id)) return credential
+    const entry = store.renewals.get(id)
+    const setting = entry ? { date: entry.date, revision: String(entry.rev), updatedAtEpoch: entry.updatedAt } : null
+    if (credential.renewalSource === "reported") return { ...credential, renewalSetting: setting }
+    // Without a date set here, the estimate the credential carries applies,
+    // as the plugin's precedence has it: dashboard over estimated.
+    const estimate = typeof credential.renewalEstimateAtEpoch === "number" ? credential.renewalEstimateAtEpoch : null
+    return entry
+      ? { ...credential, renewalSetting: setting, renewalSource: "dashboard", renewalEstimated: false, renewalAtEpoch: nextRenewal(entry.date, now) }
+      : { ...credential, renewalSetting: null, renewalSource: estimate === null ? null : "estimated", renewalEstimated: estimate !== null, renewalAtEpoch: estimate }
+  })
+  const renewalOrphans = ((next.renewalOrphans as Doc[] | undefined) ?? []).filter((orphan) =>
+    store.renewals.has(orphan.id as string),
+  )
+  return { ...next, credentials, renewalOrphans }
+}
+
+const MONTHLY_USD = /^[0-9]{1,7}(\.[0-9]{1,2})?$/
+const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+const MAX_SETTINGS_BYTES = 4096
+
+type CreditItem = {
+  id: string
+  baseRevision: string
+  monthlyUsd: string | null
+  renews: string | null
+  reading: { remainingUsd: string; at: string } | null
+}
+type RenewalItem = { id: string; baseRevision: string; date: string | null }
+type Batch = { kind: "apiCredits"; items: CreditItem[] } | { kind: "renewals"; items: RenewalItem[] }
+
+const exactKeys = (value: unknown, keys: string[]): value is Record<string, unknown> =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => key in value)
+const nullableString = (value: unknown) => value === null || typeof value === "string"
+
+/** A batch's shape, as ParseBatch in internal/overrides judges it; null for invalid_request. */
+function parseBatch(raw: string): Batch | null {
+  let body: unknown
+  try {
+    body = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!exactKeys(body, ["kind", "items"]) || !Array.isArray(body.items)) return null
+  const seen = new Set<string>()
+  const fresh = (item: Record<string, unknown>) => {
+    if (typeof item.id !== "string" || item.id === "" || seen.has(item.id)) return false
+    if (typeof item.baseRevision !== "string" || !/^(|0|[1-9][0-9]{0,19})$/.test(item.baseRevision)) return false
+    seen.add(item.id)
+    return true
+  }
+  if (body.kind === "apiCredits") {
+    if (body.items.length === 0 || body.items.length > 16) return null
+    for (const item of body.items) {
+      if (!exactKeys(item, ["id", "baseRevision", "monthlyUsd", "renews", "reading"]) || !fresh(item)) return null
+      if (!nullableString(item.monthlyUsd) || !nullableString(item.renews)) return null
+      const reading = item.reading
+      if (reading !== null && (!exactKeys(reading, ["remainingUsd", "at"]) || typeof reading.remainingUsd !== "string" || typeof reading.at !== "string")) {
+        return null
+      }
+    }
+    return body as Batch
+  }
+  if (body.kind === "renewals") {
+    if (body.items.length === 0 || body.items.length > 32) return null
+    for (const item of body.items) {
+      if (!exactKeys(item, ["id", "baseRevision", "date"]) || !fresh(item) || !nullableString(item.date)) return null
+    }
+    return body as Batch
+  }
+  return null
+}
+
+/** The first value the save-time rules refuse, as {error, id, field}; null when every one passes. */
+function checkBatch(batch: Batch, store: SettingsStore, doc: Doc, now: number): Doc | null {
+  if (batch.kind === "renewals") {
+    for (const item of batch.items) {
+      if (item.date !== null && readDate(item.date).kind !== "ok") return { error: "invalid_date", id: item.id, field: "date" }
+    }
+    return null
+  }
+  const accounts = (((doc.apiCredits as Doc | null)?.accounts as Doc[] | undefined) ?? [])
+  for (const item of batch.items) {
+    const fail = (error: string, field: string) => ({ error, id: item.id, field })
+    if (item.monthlyUsd !== null && !MONTHLY_USD.test(item.monthlyUsd)) return fail("invalid_monthly_usd", "monthlyUsd")
+    if (item.renews !== null && readDate(item.renews).kind !== "ok") return fail("invalid_renews", "renews")
+    const reading = item.reading
+    if (reading === null) continue
+    if (!MONTHLY_USD.test(reading.remainingUsd)) return fail("invalid_reading_amount", "reading.remainingUsd")
+    const stored = store.credits.get(item.id)?.reading
+    const at = STAMP.test(reading.at) ? Date.parse(reading.at) / 1000 : Number.NaN
+    // A reading resent as stored is not judged against the clock again.
+    if (stored && stored.remainingUsd === reading.remainingUsd && stored.at === at) continue
+    if (!Number.isFinite(at) || at < now - READING_MAX_AGE || at > now + READING_MAX_AHEAD) return fail("invalid_reading_time", "reading.at")
+    const account = accounts.find((one) => one.id === item.id)
+    const renews = item.renews ?? ((account?.settings as Doc | undefined)?.configRenews as string | undefined) ?? ""
+    const cycle = renews ? cycleOn(renews, now) : null
+    if (cycle && at < cycle.start) return fail("reading_before_refill", "reading.at")
+  }
+  return null
+}
+
+/** Ids the served document does not offer for editing; an orphan may only be cleared. */
+function notEditable(batch: Batch, doc: Doc): string[] {
+  const credits = doc.apiCredits as Doc | null | undefined
+  if (batch.kind === "apiCredits") {
+    const editable = new Set(
+      ((credits?.accounts as Doc[] | undefined) ?? []).filter((account) => (account.settings as Doc).editable).map((account) => account.id),
+    )
+    const orphans = new Set(((credits?.orphans as Doc[] | undefined) ?? []).map((orphan) => orphan.id))
+    return batch.items
+      .filter((item) => !editable.has(item.id) && !(orphans.has(item.id) && item.monthlyUsd === null && item.renews === null && item.reading === null))
+      .map((item) => item.id)
+  }
+  const editable = new Set(((doc.credentials as Doc[] | undefined) ?? []).filter((credential) => credential.renewalEditable).map((credential) => credential.id))
+  const orphans = new Set(((doc.renewalOrphans as Doc[] | undefined) ?? []).map((orphan) => orphan.id))
+  return batch.items.filter((item) => !editable.has(item.id) && !(orphans.has(item.id) && item.date === null)).map((item) => item.id)
+}
+
+/** Whether an item asks for exactly what is stored now. */
+function holds(store: SettingsStore, batch: Batch, item: CreditItem | RenewalItem): boolean {
+  if (batch.kind === "renewals") {
+    const entry = store.renewals.get(item.id)
+    return (entry?.date ?? null) === (item as RenewalItem).date
+  }
+  const want = item as CreditItem
+  const entry = store.credits.get(item.id)
+  const reading = entry?.reading ?? null
+  const sameReading =
+    reading === null || want.reading === null
+      ? reading === want.reading
+      : reading.remainingUsd === want.reading.remainingUsd && reading.at === Date.parse(want.reading.at) / 1000
+  return (entry?.monthlyUsd ?? null) === want.monthlyUsd && (entry?.renews ?? null) === want.renews && sameReading
+}
+
+/** Every answer a save can be given, for the warning that names them when ?save= is misspelled. */
+const SAVE_ENDINGS = [
+  "saved",
+  "conflict",
+  "unwritable",
+  "full",
+  "throttled",
+  "not-editable",
+  "unavailable",
+  "switched-off",
+  "invalid-monthly-usd",
+  "invalid-reading-time",
+  "dropped",
+  "gateway",
+]
+
+/**
+ * One save, after the door's own checks, in the plugin's order from step 6
+ * (E.4): shape, values, editable, conflict, rate, commit. ?save= forces an
+ * ending; "conflict" first writes another device's value to every row, and
+ * "dropped" and "gateway" commit before losing the answer, which is why the
+ * page must treat them as unknown.
+ */
+function saveSettings(raw: string, ending: string, store: SettingsStore, doc: Doc, now: number): Reply | "dropped" | "gateway" {
+  if (raw.length > MAX_SETTINGS_BYTES) return pluginJSON(400, { error: "invalid_request" })
+  const batch = parseBatch(raw)
+  if (batch === null) return pluginJSON(400, { error: "invalid_request" })
+  if (ending === "unavailable") return pluginJSON(503, { error: "settings_unavailable" })
+  const first = batch.items[0]!
+  if (ending === "invalid-monthly-usd") return pluginJSON(400, { error: "invalid_monthly_usd", id: first.id, field: batch.kind === "renewals" ? "date" : "monthlyUsd" })
+  if (ending === "invalid-reading-time") return pluginJSON(400, { error: "invalid_reading_time", id: first.id, field: "reading.at" })
+  const refused = checkBatch(batch, store, doc, now)
+  if (refused) return pluginJSON(400, refused)
+  const locked = ending === "not-editable" ? batch.items.map((item) => item.id) : notEditable(batch, doc)
+  if (locked.length > 0) return pluginJSON(409, { error: "not_editable", ids: locked })
+
+  if (ending === "conflict") {
+    // Another device saves first.
+    store.revision++
+    for (const item of batch.items) {
+      store.touched.add(item.id)
+      if (batch.kind === "renewals") store.renewals.set(item.id, { date: "2026-12-01", rev: store.revision, updatedAt: now })
+      else store.credits.set(item.id, { ...(store.credits.get(item.id) ?? { renews: null, reading: null }), monthlyUsd: "275", rev: store.revision, updatedAt: now })
+    }
+  }
+  const revOf = (id: string) => {
+    const entry = batch.kind === "renewals" ? store.renewals.get(id) : store.credits.get(id)
+    return entry ? String(entry.rev) : ""
+  }
+  const conflicts = batch.items.filter((item) => item.baseRevision !== revOf(item.id) && !holds(store, batch, item)).map((item) => item.id)
+  if (conflicts.length > 0) {
+    const served = applyStore(doc, store, now)
+    const current: Doc = {}
+    for (const id of conflicts) {
+      if (batch.kind === "renewals") {
+        current[id] = ((served.credentials as Doc[]).find((credential) => credential.id === id)?.renewalSetting as Doc | undefined) ?? null
+      } else {
+        current[id] = (((served.apiCredits as Doc).accounts as Doc[]).find((account) => account.id === id)?.settings as Doc | undefined) ?? null
+      }
+    }
+    return pluginJSON(409, { error: "conflict", revision: String(store.revision), conflicts, current })
+  }
+  if (batch.items.every((item) => holds(store, batch, item))) {
+    return pluginJSON(200, { ok: true, unchanged: true, revision: String(store.revision) })
+  }
+  if (ending === "throttled") return { ...pluginJSON(429, { error: "too_many_writes" }), headers: { ...pluginJSON(429, {}).headers, "Retry-After": "60" } }
+  if (ending === "full") return pluginJSON(409, { error: "settings_full" })
+  if (ending === "unwritable") return pluginJSON(503, { error: "settings_unwritable" })
+
+  store.revision++
+  for (const item of batch.items) {
+    store.touched.add(item.id)
+    if (batch.kind === "renewals") {
+      const date = (item as RenewalItem).date
+      if (date === null) store.renewals.delete(item.id)
+      else store.renewals.set(item.id, { date, rev: store.revision, updatedAt: now })
+      continue
+    }
+    const want = item as CreditItem
+    if (want.monthlyUsd === null && want.renews === null && want.reading === null) {
+      store.credits.delete(item.id)
+      continue
+    }
+    const kept = store.credits.get(item.id)?.reading ?? null
+    const at = want.reading ? Date.parse(want.reading.at) / 1000 : 0
+    const reading = want.reading
+      ? kept && kept.remainingUsd === want.reading.remainingUsd && kept.at === at
+        ? kept
+        : { remainingUsd: want.reading.remainingUsd, at, enteredAt: now }
+      : null
+    store.credits.set(item.id, { monthlyUsd: want.monthlyUsd, renews: want.renews, reading, rev: store.revision, updatedAt: now })
+  }
+  if (ending === "dropped" || ending === "gateway") return ending
+  const served = applyStore(doc, store, now)
+  const settings: Doc = {}
+  for (const item of batch.items) {
+    settings[item.id] =
+      batch.kind === "renewals"
+        ? (((served.credentials as Doc[]).find((credential) => credential.id === item.id)?.renewalSetting as Doc | undefined) ?? null)
+        : ((((served.apiCredits as Doc).accounts as Doc[]).find((account) => account.id === item.id)?.settings as Doc | undefined) ?? null)
+  }
+  return pluginJSON(200, { ok: true, unchanged: false, revision: String(store.revision), settings })
+}
+
 export interface FixtureOptions {
   /**
    * How long a press takes to answer. Slow enough by default to see the button
@@ -680,6 +1589,24 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
   const pressDelayMs = options.pressDelayMs ?? 700
   // Fixed for the life of the dev server. See rebase().
   let offset: number | null = null
+  // Each scenario's settings, for the life of the dev server, as the plugin
+  // keeps settings.json across reloads. Restarting the dev server forgets them.
+  const stores = new Map<string, SettingsStore>()
+
+  /**
+   * A scenario's document as the summary route serves it: rebased unless
+   * ?rebase=0, with what saves here have written laid over it.
+   */
+  const serve = (name: string, result: Doc, rebased: boolean): Doc => {
+    offset ??= nowSeconds() - (result.generatedAtEpoch as number)
+    const doc = rebased ? (rebase(result, offset) as Doc) : result
+    let store = stores.get(name)
+    if (!store) {
+      store = seedStore(doc)
+      stores.set(name, store)
+    }
+    return applyStore(doc, store, nowSeconds())
+  }
 
   return {
     name: "quota-glance:golden-fixture-route",
@@ -842,6 +1769,75 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
         })
       })
 
+      // Both settings paths, every method. Registered before Vite's own
+      // middleware, the proxy among them, so no save is ever forwarded.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost")
+        if (!SETTINGS_PATHS.has(url.pathname)) return next()
+        const method = (req.method ?? "GET").toUpperCase()
+        const ending = url.searchParams.get("save") ?? "saved"
+        if (!SAVE_ENDINGS.includes(ending)) warn(`unknown save ending ${ending}; try one of: ${SAVE_ENDINGS.join(", ")}`)
+        const name = url.searchParams.get("scenario") ?? "golden"
+        const pick = scenarios()[name]
+        const result = pick ? pick() : null
+        const doc = result && typeof result === "object" ? serve(name, result, url.searchParams.get("rebase") !== "0") : null
+
+        // The plugin's step 4: editing switched off is a 404 that says
+        // nothing more, and settings.json unreadable a 503.
+        const gate = (): boolean => {
+          const editing = (doc?.apiCredits as Doc | null | undefined)?.editing as Doc | undefined
+          if (doc === null || ending === "switched-off" || editing?.reason === "disabled") {
+            json(res, 404, { error: "not_found" })
+            return false
+          }
+          if (editing?.reason === "settingsUnreadable") {
+            json(res, 503, { error: "settings_unavailable" })
+            return false
+          }
+          return true
+        }
+        const answer = (raw: string) => {
+          const reply = saveSettings(raw, ending, stores.get(name)!, doc!, nowSeconds())
+          setTimeout(() => {
+            if (reply === "dropped") {
+              // The save landed and its answer was lost: the page must say
+              // it may or may not have saved.
+              res.destroy()
+            } else if (reply === "gateway") {
+              res.statusCode = 504
+              res.setHeader("Content-Type", "text/html")
+              res.end("<html><body>504 Gateway Time-out</body></html>")
+            } else {
+              send(res, reply)
+            }
+          }, pressDelayMs)
+        }
+
+        if (url.pathname === SAVE_SETTINGS_PATH) {
+          if (method !== "GET") return bare(res, 404, false)
+          // In the plugin's order: the fetch-metadata gate, early data, the
+          // password, the switch, the header.
+          if (crossSite(req.headers)) return json(res, 403, { error: "cross_site" })
+          if (req.headers["early-data"] !== undefined) return json(res, 425, { error: "too_early" })
+          if (presentedToken(req) !== DEV_TOKEN) return bare(res, 401, true)
+          if (!gate()) return
+          const raw = headerJSON(req.headers["x-quota-glance-settings"], MAX_SETTINGS_BYTES)
+          if (raw === null) return json(res, 400, { error: "invalid_request" })
+          return answer(raw)
+        }
+
+        // The console door: CPA's sign-in first, then the plugin.
+        if (!admit(req, res, null)) return
+        if (method !== "POST") return bare(res, 404, false)
+        if (!gate()) return
+        const media = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase() ?? ""
+        if (media !== "" && media !== "application/json") return json(res, 415, { error: "unsupported_media_type" })
+        let raw = ""
+        req.setEncoding("utf8")
+        req.on("data", (chunk: string) => (raw += chunk))
+        req.on("end", () => answer(raw))
+      })
+
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost")
         const viaCPA = url.pathname === MANAGEMENT_PATH
@@ -870,8 +1866,7 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
         if (result === "unauthorized") return bare(res, 401, true)
         if (result === "down") return bare(res, 503, true)
 
-        offset ??= nowSeconds() - (result.generatedAtEpoch as number)
-        let doc = url.searchParams.get("rebase") === "0" ? result : (rebase(result, offset) as Doc)
+        let doc = serve(name, result, url.searchParams.get("rebase") !== "0")
         const runsOutIn = Number(url.searchParams.get("expiring"))
         if (Number.isFinite(runsOutIn) && runsOutIn > 0) doc = expiring(doc, runsOutIn)
 

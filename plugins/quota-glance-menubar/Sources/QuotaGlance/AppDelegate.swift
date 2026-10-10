@@ -10,12 +10,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let popover = NSPopover()
     private var statusItem: NSStatusItem!
     private var keyMonitor: Any?
-    private lazy var settingsWindow = SettingsWindowController(settings: settings, updater: updaterController.updater) { [weak self] location in
-        self?.dashboard.configure(location)
-        self?.dashboard.readout.setEnabled(self?.settings.quotaSelection != nil)
-        self?.updateReadout()
-        self?.installApplicationMenu()
-        self?.showPopover()
+    private var appearanceObservation: NSKeyValueObservation?
+    private var contrastObserver: NSObjectProtocol?
+    private let logos = ProviderLogos.bundled
+    private lazy var settingsWindow = SettingsWindowController(settings: settings, updater: updaterController.updater, logos: logos) { [weak self] location in
+        guard let self else { return }
+        self.dashboard.configure(location)
+        self.dashboard.readout.setEnabled(self.settings.readout.style != .iconOnly)
+        self.updateReadout()
+        self.installApplicationMenu()
+        self.showPopover()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,10 +39,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             button.target = self
             button.action = #selector(statusItemClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // Template alphas are baked into the drawn readout: redraw when the
+            // bar turns light or dark (on Tahoe, also when the wallpaper does).
+            appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+                Task { @MainActor [weak self] in self?.updateReadout() }
+            }
         }
-        dashboard.readout.onChange = { [weak self] in self?.updateReadout() }
+        contrastObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateReadout() }
+        }
+        dashboard.readout.onChange = { [weak self] in
+            guard let self else { return }
+            if self.settings.adoptFirstSummary(self.dashboard.readout.state.windows) {
+                // An open Settings window must not save the old default pair back.
+                self.settingsWindow.savedWindowsAdopted(self.settings.readout.windows)
+            }
+            self.updateReadout()
+        }
+        settingsWindow.onNeedsWindows = { [weak self] in self?.dashboard.readout.requestWindows() }
         if let location = settings.location { dashboard.configure(location) }
-        dashboard.readout.setEnabled(settings.quotaSelection != nil)
+        dashboard.readout.setEnabled(settings.readout.style != .iconOnly)
         updateReadout()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, self?.popover.isShown == true {
@@ -53,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationWillTerminate(_ notification: Notification) {
         dashboard.readout.stop()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        appearanceObservation?.invalidate()
+        if let contrastObserver { NSWorkspace.shared.notificationCenter.removeObserver(contrastObserver) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -61,17 +85,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func updateReadout() {
-        let selection = settings.quotaSelection
-        let value = dashboard.readout.state.presentation(for: selection)
-        statusItem.length = selection == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        let readout = settings.readout
+        let state = dashboard.readout.state
         if let button = statusItem.button {
-            button.title = value.text.isEmpty ? "" : " " + value.text
-            button.imagePosition = selection == nil ? .imageOnly : .imageLeading
-            button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            button.toolTip = value.detail
-            button.setAccessibilityLabel("Quota Glance. " + value.detail)
+            switch readout.style {
+            case .iconOnly, .percent:
+                // Icon only and Percent keep 0.3's drawing: the symbol, plus " 59%" as the title.
+                let selection = readout.style == .percent ? readout.windows.first : nil
+                let value = state.presentation(for: selection)
+                statusItem.length = selection == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
+                button.image = ReadoutRenderer.appIcon()
+                button.title = value.text.isEmpty ? "" : " " + value.text
+                button.imagePosition = selection == nil ? .imageOnly : .imageLeading
+                button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+                button.toolTip = value.detail
+                button.setAccessibilityLabel("Quota Glance. " + value.detail)
+            case .letteredPair, .splitPill:
+                let cells = state.cells(for: readout.windows)
+                let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                let options = ReadoutRenderer.Options(
+                    style: readout.style, badges: readout.badgeVisible, appIcon: readout.showsAppIcon, dark: dark,
+                    increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
+                statusItem.length = NSStatusItem.variableLength
+                button.title = ""
+                button.image = ReadoutRenderer.image(cells: cells, options: options, marks: marks(for: cells))
+                button.imagePosition = .imageOnly
+                button.toolTip = ReadoutText.tooltip(cells)
+                button.setAccessibilityLabel(ReadoutText.accessibilityLabel(cells))
+            }
         }
-        settingsWindow.updateQuotas(dashboard.readout.state.windows)
+        settingsWindow.updateQuotas(state)
+    }
+
+    private func marks(for cells: [ReadoutCell]) -> [String: LogoMark] {
+        var marks: [String: LogoMark] = [:]
+        for provider in Set(cells.map(\.selection.providerID)) {
+            marks[provider] = logos.mark(for: provider)
+        }
+        return marks
     }
 
     @objc private func statusItemClicked() {

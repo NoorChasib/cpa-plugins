@@ -58,6 +58,21 @@ with tempfile.TemporaryDirectory(prefix='cpa-suite-smoke-') as tmp:
     snapshot.write_text(json.dumps({'schema': 1, 'written_at': stamp, 'next_request': stamp,
                                     'provider_cooldown': {}, 'entries': {}}))
 
+    # One Claude API credit item with a fake organization, so quota-cache
+    # registers as a CPA usage plugin and opens its API meter beside the
+    # snapshot. Nothing is ever sent to Anthropic: an item is listed, never
+    # polled, and the meter only counts records CPA delivers, of which this
+    # empty roster produces none. The published quota-cache (0.1.12) rejects
+    # claude-api-credits outright, so the item is configured only when the
+    # local build is the one loaded.
+    ORG = '00000000-0000-4000-8000-00000000000a'
+    METERED = not args.candidate or args.candidate == 'quota-cache'
+    credits = '''      claude-api-credits:
+        - label: smoke
+          organization-id: ''' + ORG + '''
+          monthly-usd: "200"
+          renews: "2026-10-29"
+''' if METERED else ''
     config = work/'config.yaml'
     config.write_text('''host: 0.0.0.0
 port: 8317
@@ -73,7 +88,7 @@ plugins:
     quota-cache:
       enabled: true
       request-spacing: 1s
-    account-health-pushover:
+''' + credits + '''    account-health-pushover:
       enabled: true
       quota-alerts: true
       use-quota-cache: true
@@ -118,9 +133,25 @@ plugins:
                     if data['schema']==1: return data
                 except Exception: time.sleep(.1)
             raise AssertionError('quota-cache did not become available')
+        def wait_until(check, seconds, what):
+            # check answers a value once the condition holds, else None or raises.
+            deadline=time.monotonic()+seconds
+            while True:
+                try:
+                    value=check()
+                    if value is not None: return value
+                except Exception: pass
+                if time.monotonic()>deadline: raise AssertionError(what)
+                time.sleep(.5)
         ready()
         registered = get('plugins')
         records = {entry['id']:entry for entry in registered['plugins']}
+        # CPA lists no per-plugin capabilities. Its acceptance of the
+        # registration (registered, effective_enabled), together with the
+        # meter running below, which quota-cache starts only on the path that
+        # answers usage_plugin: true, is the evidence that CPA holds
+        # quota-cache as a usage plugin.
+        metered = METERED and tuple(map(int, records['quota-cache']['metadata']['version'].split('.'))) >= (0, 1, 14)
         for plugin in LOADED:
             assert records[plugin]['registered'] and records[plugin]['effective_enabled'], 'plugin inactive: '+plugin
             assert records[plugin]['metadata']['github_repository'] == 'https://github.com/NoorChasib/cpa-plugins', 'legacy repository metadata: '+plugin
@@ -172,9 +203,33 @@ plugins:
             raise AssertionError('private cache route accepted unauthenticated request')
         except urllib.error.HTTPError as err:
             assert err.code in (401,403)
-        for _ in range(25): assert get('plugins/quota-cache/status')['entries']=={}
+        if metered:
+            # The item is listed as an anthropic-api entry keyed by its
+            # organization, and never polled.
+            credit_key = 'anthropic-api:org-' + hashlib.sha256(ORG.encode()).hexdigest()[:12]
+            wait_until(lambda: get('plugins/quota-cache/status')['entries'].get(credit_key), 15, 'credit item was not listed')
+            for _ in range(25):
+                entries = get('plugins/quota-cache/status')['entries']
+                assert set(entries) == {credit_key}, entries
+                assert entries[credit_key]['api_credit']['organization_id'] == ORG, entries
+                assert entries[credit_key]['last_attempt'].startswith('0001-'), 'credit item was polled'
+        else:
+            for _ in range(25): assert get('plugins/quota-cache/status')['entries']=={}
         assert (plugins/'data/quota-cache/snapshot.json').is_file()
         assert (plugins/'data/token-usage/usage.sqlite').is_file()
+        meter_file = plugins/'data/quota-cache/snapshot.meter.json'
+        if metered:
+            # The meter writes its own file beside the snapshot at its first
+            # flush, a minute after it opened, and the status route carries
+            # it from then on. It is counting: the organization is linked,
+            # and there is no stop, gap or restart yet.
+            meter = wait_until(lambda: get('plugins/quota-cache/status').get('api_meter'), 90, 'meter file was not written')
+            assert meter_file.is_file()
+            assert 'stopped_at' not in meter and meter['gaps'] == [] and meter.get('restarts', 0) == 0, meter
+            assert set(meter['organizations']) == {ORG}, meter
+            assert 'quota-cache API meter counting Claude API-key traffic' in run('docker','logs',container)
+        else:
+            assert not meter_file.exists()
         run('docker','restart',container)
         origin = 'http://'+run('docker','port',container,'8317/tcp').splitlines()[0]
         ready()
@@ -182,10 +237,26 @@ plugins:
             get('plugins/'+plugin+'/status')
         logs=run('docker','logs',container)
         assert '8.0.4' in logs, 'unexpected CPA runtime version'
+        if metered:
+            # CPA shuts its plugins down on a graceful stop, and the meter's
+            # last save recorded it. The restarted meter reopened from that
+            # file but writes it only at its own first flush, so the route
+            # still shows the stop for the first minute.
+            meter = get('plugins/quota-cache/status')['api_meter']
+            assert meter['stop_reason'] == 'shutdown' and meter['stopped_at'], meter
+            stopped_at = meter['stopped_at']
         evidence = {'image':IMAGE,'code_commit':run('git','-C',str(ROOT),'rev-parse','HEAD'),'libraries':{plugin:{'sha256':hashlib.sha256((plugins/(plugin+'.so')).read_bytes()).hexdigest(),'version':records[plugin]['metadata']['version']} for plugin in LOADED}}
         # Prove the other four register without the cache library or snapshot.
         # Test both opted-in waiting and explicitly standalone configuration.
         run('docker','stop',container)
+        if metered:
+            # The graceful stop made the restarted meter save: the earlier
+            # stop is now a gap, from when it was recorded to the restart,
+            # and this stop is recorded in turn.
+            meter = json.loads(meter_file.read_text())
+            assert meter['restarts'] == 1 and meter['stop_reason'] == 'shutdown' and meter['stopped_at'], meter
+            assert len(meter['gaps']) == 1 and meter['gaps'][0]['reason'] == 'shutdown' and meter['gaps'][0]['from'] == stopped_at, meter
+            assert meter['gaps'][0]['to'] <= meter['stopped_at'], meter
         (plugins/'quota-cache.so').unlink()
         shutil.rmtree(plugins/'data/quota-cache')
         for mode in (True, False):
@@ -210,7 +281,8 @@ plugins:
             evidence['candidate'] = args.candidate
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, and restart verified with an empty synthetic roster')
+        evidence['api_meter'] = 'file, shutdown stop and gap verified' if metered else 'not configured'
+        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, restart' + (', and the API meter file with its shutdown gap' if metered else '') + ' verified with an empty synthetic roster')
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.
         print(run('docker','logs',container)[-6000:])

@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter', 'anthropic-api': 'Claude API credits'};
-  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits', 'anthropic-api': 'api.anthropic.com/v1/organizations/cost_report'};
+  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits', 'anthropic-api': 'CPA usage meter (no requests)'};
   // Providers with no weekly window: their observation is dated by the nested
   // quota.observed_at, and the weekly observed_at stays empty.
   const noWeekly = ['openrouter', 'anthropic-api'];
@@ -233,47 +233,60 @@
     return noWeekly.includes(e.provider) && observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error;
   }
   // The configuration problem of a Claude API credit item, if any. Such an
-  // item is listed but never polled.
+  // item is listed but not counted, and has no next poll: no credit item is
+  // ever polled.
   const notPolled = e => (e.api_credit && e.api_credit.problem) || '';
+  // The meter is alive when it saved within the last 30 minutes; it saves at
+  // least every 10 while it counts.
+  function meterFresh(s, now) {
+    const flushed = date(s.api_meter && s.api_meter.flushed_at);
+    return flushed > 0 && flushed <= now && now - flushed <= 30 * 60000;
+  }
+  const metered = (e, s, now) => e.provider === 'anthropic-api' && !notPolled(e) && meterFresh(s, now);
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
   }
   const utcDay = value => date(value) ? new Date(date(value)).toISOString().slice(0, 10) : '';
-  // A Claude API credit entry prints what was configured and what Anthropic
-  // reported, verbatim. Amounts are cents as Anthropic sent them; nothing is
-  // added up here, which is Quota Glance's job.
-  function creditDetails(entry, now) {
+  // A Claude API credit entry prints what was configured and what the meter
+  // counted for its organization, verbatim. Tokens are printed as counted;
+  // nothing is priced or added up here, which is Quota Glance's job.
+  function creditDetails(entry, now, s) {
     const c = entry.api_credit || {};
     const details = node('details');
     details.className = 'quota-details';
-    details.append(node('summary', 'Configured credit and daily spend'));
+    details.append(node('summary', 'Configured credit and metered usage'));
+    const stamp = (label, value) => { const p = node('p', label); p.append(time(value, now)); return p; };
+    details.append(node('p', 'Label: ' + (c.label || 'not set')));
+    details.append(node('p', 'Organization: ' + (c.organization_id || 'not set')));
     details.append(node('p', 'Monthly credit: ' + (c.monthly_usd ? c.monthly_usd + ' USD' : 'not set') + ' (configured)'));
     details.append(node('p', 'Renews: ' + (c.renews || 'not set') + ' (configured)'));
-    if (c.key_fingerprint) details.append(node('p', 'Key: ' + c.key_fingerprint));
-    if (c.problem) details.append(node('p', 'Configuration problem: ' + c.problem + '. This item is not polled.', 'secondary'));
-    const q = entry.quota;
-    const r = q && q.schema === 1 ? q.cost_report : null;
-    if (!r) { details.append(node('p', c.problem ? 'No reading.' : 'Spend arrives after the next successful poll', 'secondary')); return details; }
-    const observed = date(q.observed_at);
-    details.append(node('p', entry.last_error || !observed || observed > now || now - observed > 30 * 60000 ? 'Last known response — not fresh' : 'Latest successful response', 'secondary'));
-    details.append(time(q.observed_at, now));
-    if (r.organization_id) details.append(node('p', 'Organization: ' + r.organization_id));
-    if (r.key_fingerprint && c.key_fingerprint && r.key_fingerprint !== c.key_fingerprint) details.append(node('p', 'Read with an earlier key (' + r.key_fingerprint + ')', 'secondary'));
-    details.append(node('p', 'Asked: ' + (r.starting_at || '—') + ' to ' + (r.ending_at || '—')));
-    const days = Array.isArray(r.days) ? r.days : [];
-    details.append(node('p', 'Days read: ' + days.length));
-    const last = days.length ? utcDay(days[days.length - 1].starting_at) : '';
-    if (!last || last < utcDay(q.observed_at)) details.append(node('p', 'Today not reported yet', 'secondary'));
+    if (c.monthly_usd_invalid) details.append(node('p', 'monthly-usd in the configuration is not a dollar amount, so it is ignored.', 'secondary'));
+    if (c.renews_invalid) details.append(node('p', 'renews in the configuration is not a date, so it is ignored.', 'secondary'));
+    if (c.admin_key_ignored) details.append(node('p', 'admin-key is no longer used; delete it from the configuration.', 'secondary'));
+    if (c.problem) details.append(node('p', 'Configuration problem: ' + c.problem + '. This item is not counted.', 'secondary'));
+    const m = s.api_meter;
+    const o = m && object(m.organizations) && c.organization_id ? m.organizations[c.organization_id] : null;
+    if (!object(o)) { details.append(node('p', m ? 'Not counted by the meter yet; counting starts at its next save.' : 'No meter file yet; it appears once the meter first saves.', 'secondary')); return details; }
+    details.append(stamp('Counting since: ', o.since));
+    if (o.unlinked_at) details.append(stamp('Dormant since: ', o.unlinked_at));
+    details.append(stamp('Last seen: ', o.last_seen_at));
+    details.append(stamp('Last success: ', o.last_success_at));
+    details.append(stamp('Low-credit refusals: ' + (o.refusals || 0) + ', last ', o.last_refusal_at));
+    details.append(stamp('Low-credit refusals from Claude Code-based clients: ' + (o.claude_code_refusals || 0) + ', last ', o.last_claude_code_refusal_at));
+    if (o.last_overflow_at) details.append(stamp('Meter full, last ', o.last_overflow_at));
+    const days = Array.isArray(o.days) ? o.days : [];
+    const day = days.length ? days[days.length - 1] : null;
+    if (!day) { details.append(node('p', 'No usage counted yet.', 'secondary')); return details; }
+    details.append(node('p', 'Newest day (UTC): ' + utcDay(day.start)));
     const list = node('ul');
-    for (const day of days) {
-      const amounts = Array.isArray(day.amounts) ? day.amounts : [];
-      list.append(node('li', utcDay(day.starting_at) + ': ' + (amounts.length ? amounts.map(a => a.amount + ' ' + a.currency).join(', ') + ' (lowest units)' : 'no cost')));
+    for (const u of Array.isArray(day.usage) ? day.usage : []) {
+      list.append(node('li', u.model + (u.prompt ? ' ' + u.prompt : '') + ': ' + (u.requests || 0) + ' ok, ' + (u.failed || 0) + ' failed, in ' + (u.input || 0) + ', out ' + (u.output || 0) + ', cache read ' + (u.cache_read || 0) + ', cache write ' + (u.cache_write || 0) + ' tokens'));
     }
     details.append(list);
     return details;
   }
-  function extendedQuota(entry, now) {
-    if (entry.provider === 'anthropic-api') return creditDetails(entry, now);
+  function extendedQuota(entry, now, s) {
+    if (entry.provider === 'anthropic-api') return creditDetails(entry, now, s);
     const q = entry.quota;
     if (!q || q.schema !== 1) return node('span', 'Additional fields arrive after the next successful poll', 'secondary');
     const details = node('details');
@@ -316,13 +329,46 @@
     if (q.truncated) details.append(node('p', 'Provider returned more entries than the cache limit; this list is incomplete.', 'secondary'));
     return details;
   }
+  // The meter file, as last saved: counters, gaps and the organizations no
+  // item names. Everything is printed as counted; nothing is added up.
+  function meterPanel(s, now) {
+    const m = s.api_meter;
+    $('meter-section').hidden = !object(m);
+    if (!object(m)) return;
+    const stopped = node('span');
+    if (m.stopped_at) { stopped.append(time(m.stopped_at, now)); stopped.append(node('span', m.stop_reason || 'reason not recorded', 'secondary')); } else stopped.textContent = 'Counting';
+    const rows = [
+      ['Counting since', time(m.since, now)], ['This run started', time(m.started_at, now)], ['Last saved', time(m.flushed_at, now)], ['Stopped', stopped],
+      ['Records received', String(m.received || 0)], ['Counted', String(m.counted || 0)], ['Foreign (not Anthropic)', String(m.foreign || 0)],
+      ['Rejected', String(m.rejected || 0)], ['Dropped', String(m.dropped || 0)], ['Unattributed', String(m.unattributed || 0)], ['Restarts', String(m.restarts || 0)]
+    ];
+    $('meter').replaceChildren();
+    for (const [label, value] of rows) { const item = node('div'); const dd = node('dd'); dd.append(value instanceof Node ? value : document.createTextNode(value)); item.append(node('dt', label), dd); $('meter').append(item); }
+    $('meter-status').textContent = meterFresh(s, now) ? 'Saved within 30 minutes' : 'Not saved within 30 minutes';
+    const gaps = Array.isArray(m.gaps) ? m.gaps : [];
+    $('meter-gaps').replaceChildren();
+    for (const g of gaps) {
+      const item = node('li');
+      item.append(time(g.from, now)); item.append(node('span', ' to ')); item.append(time(g.to, now)); item.append(node('span', ' · ' + (g.reason || 'reason not recorded'), 'secondary'));
+      $('meter-gaps').append(item);
+    }
+    $('meter-gaps-empty').hidden = gaps.length > 0;
+    const unlinked = Array.isArray(m.unlinked) ? m.unlinked : [];
+    $('meter-unlinked').replaceChildren();
+    for (const u of unlinked) {
+      const item = node('li', (u.organization_id || 'unknown') + ' · ' + (u.requests || 0) + ' requests · last seen ');
+      item.append(time(u.last_seen_at, now));
+      $('meter-unlinked').append(item);
+    }
+    $('meter-unlinked-empty').hidden = unlinked.length > 0;
+  }
   function render(s) {
     const now = Date.now();
     const all = Object.values(s.entries || {});
     const selected = $('provider').value;
     const entries = all.filter(e => selected === 'all' || e.provider === selected).sort((a,b) => (a.provider + a.auth_index).localeCompare(b.provider + b.auth_index));
     const cooldowns = Object.entries(s.provider_cooldown || {}).filter(([,until]) => date(until) > now);
-    const usable = all.filter(e => fresh(e, now) || freshBalance(e, now)).length;
+    const usable = all.filter(e => fresh(e, now) || freshBalance(e, now) || metered(e, s, now)).length;
     // Waiting for CPA to load its credentials is an expected startup state,
     // not a failed check.
     const waiting = Boolean(s.activity?.waiting);
@@ -334,9 +380,9 @@
     const last = calls[calls.length - 1];
     $('last-call').replaceChildren(last ? time(last.started_at, now) : node('span', 'Not recorded yet'));
     $('last-call-detail').textContent = last ? (providers[last.provider] || last.provider) + ' · ' + (last.http_status ? 'HTTP ' + last.http_status : 'No HTTP response') : 'History begins with the next completed poll';
-    // A misconfigured credit item is never polled, so it has no next poll and
-    // must not make the header read as due now.
-    const polled = all.filter(e => !notPolled(e));
+    // A credit item is never polled, so it has no next poll and must not
+    // make the header read as due now.
+    const polled = all.filter(e => e.provider !== 'anthropic-api');
     const due = polled.length ? Math.min(...polled.map(e => next(e, s, now))) : 0;
     $('next-call').replaceChildren(due ? time(new Date(due).toISOString(), now) : node('span', all.length ? 'Nothing to poll' : 'Waiting for accounts'));
     $('cooldowns').replaceChildren();
@@ -365,18 +411,23 @@
         quotaCell.append(node('span', fresh(e, now) ? 'Current observation' : 'Last known value', 'secondary'));
         if (date(e.reset_at)) { const reset = node('span', 'Resets ', 'secondary'); reset.append(time(e.reset_at, now)); quotaCell.append(reset); }
       }
-      quotaCell.append(extendedQuota(e, now));
+      quotaCell.append(extendedQuota(e, now, s));
       addCell(row, time(e.observed_at, now));
       addCell(row, time(e.last_attempt, now));
       const problem = notPolled(e);
-      addCell(row, problem ? node('span', 'Not polled', 'secondary') : time(new Date(next(e,s,now)).toISOString(), now));
+      const credit = e.provider === 'anthropic-api';
+      addCell(row, problem ? node('span', 'Not polled', 'secondary') : credit ? '—' : time(new Date(next(e,s,now)).toISOString(), now));
       const cooling = date((s.provider_cooldown || {})[e.provider]) > now;
-      const label = problem ? 'Not polled' : cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (noWeekly.includes(e.provider) && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
-      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' ? 'ok' : label === 'Failed' || label === 'Not polled' ? 'error' : 'warn')));
+      // A credit item is metered, not polled: its freshness is the meter's
+      // last save, and a problem item is listed with its problem.
+      const label = problem ? 'Not polled' : credit ? 'Metered' : cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (noWeekly.includes(e.provider) && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
+      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' || (label === 'Metered' && meterFresh(s, now)) ? 'ok' : label === 'Failed' || label === 'Not polled' ? 'error' : 'warn')));
       if (problem) status.append(node('span', problem, 'secondary'));
+      else if (label === 'Metered' && !meterFresh(s, now)) status.append(node('span', 'meter not saved within 30 minutes', 'secondary'));
       else if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
       $('accounts').append(row);
     }
+    meterPanel(s, now);
     $('accounts-empty').hidden = entries.length > 0;
     $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : EMPTY;
     const history = (s.history || []).filter(p => selected === 'all' || p.provider === selected).slice().reverse();

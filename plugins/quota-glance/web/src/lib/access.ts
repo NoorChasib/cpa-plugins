@@ -1,5 +1,5 @@
-// Which credential this page may present, and the two requests that present
-// one: reading the document, and spending a banked reset.
+// Which credential this page may present, and the three requests that present
+// one: reading the document, spending a banked reset, and saving settings.
 //
 // There are two ways in. The dashboard password (`web-token`, the token door)
 // goes to this plugin's own resource routes, which CPA does not authenticate;
@@ -37,6 +37,8 @@ export const ACCESS_CHANGED = "quota-glance:access"
 export const SPEND_HEADER = "X-Quota-Glance-Spend"
 /** Marks an answer the plugin's press ledger handed back for an earlier copy. */
 export const REPLAYED_HEADER = "X-Quota-Glance-Replayed"
+/** Carries a settings batch on the token door. Mirrors the POST body. */
+export const SETTINGS_HEADER = "X-Quota-Glance-Settings"
 
 /** A read gives up after this, so a hung plugin surfaces as a failed poll. */
 export const READ_TIMEOUT_MS = 20_000
@@ -46,6 +48,11 @@ export const READ_TIMEOUT_MS = 20_000
  * "outcome unknown" included — must not arrive at a closed connection.
  */
 export const SPEND_TIMEOUT_MS = 65_000
+/**
+ * A save gives up after this. The plugin writes one small file and rebuilds
+ * the document before it answers, so anything longer is a hung plugin.
+ */
+export const SAVE_TIMEOUT_MS = 30_000
 /** How long a press id is reused for the same credential after a lost answer. */
 export const PRESS_REUSE_SECONDS = 600
 /** CPA's ban, for a refusal that says it is banned but not for how long. */
@@ -138,13 +145,13 @@ const CODE_OF_REASON: Record<ConsoleReason, RefusalCode> = {
 }
 
 /**
- * Every `error` the plugin answers a press with, on either door: Handle,
- * redeemResponse, spendResponse, spend and redeemError in
- * internal/api/api.go, with parsePress's confirmation_required. A body that
- * carries one of these is the plugin's own answer. A body that carries
- * anything else came from something in front of the plugin — a gateway that
- * writes its errors as JSON among them — and says nothing about whether the
- * plugin acted.
+ * Every `error` the plugin answers a press or a save with, on either door:
+ * Handle, redeemResponse, spendResponse, spend and redeemError in
+ * internal/api/api.go, parsePress's confirmation_required, and the settings
+ * doors in internal/api/settings.go. A body that carries one of these is the
+ * plugin's own answer. A body that carries anything else came from something
+ * in front of the plugin — a gateway that writes its errors as JSON among
+ * them — and says nothing about whether the plugin acted.
  */
 export const PLUGIN_ERRORS: ReadonlySet<string> = new Set([
   "disabled",
@@ -162,6 +169,19 @@ export const PLUGIN_ERRORS: ReadonlySet<string> = new Set([
   "provider_rate_limited",
   "provider_refused",
   "provider_unavailable",
+  // Saving settings.
+  "settings_unavailable",
+  "settings_unwritable",
+  "settings_full",
+  "conflict",
+  "not_editable",
+  "too_many_writes",
+  "invalid_monthly_usd",
+  "invalid_renews",
+  "invalid_date",
+  "invalid_reading_amount",
+  "invalid_reading_time",
+  "reading_before_refill",
 ])
 
 /**
@@ -859,6 +879,9 @@ export async function readThrough(
   })
 }
 
+/** A press or a save that never left the page, and why. */
+type Unsent = { sent: false; code: "no_session" | RefusalCode; status: number }
+
 /**
  * A press with no door to go through, reported by the refusal that shut the
  * door — in the same order NoSessionError names them — so the reader is told
@@ -866,7 +889,7 @@ export async function readThrough(
  * refusal's own, or a 4xx standing in for it: nothing was sent, and every
  * reader of the code treats a 4xx as proof of that.
  */
-function unsent(access: Pick<Access, "env" | "token">): SpendAnswer {
+function unsent(access: Pick<Access, "env" | "token">): Unsent {
   const reason = noSession(access).reason
   if (reason === "token") return { sent: false, code: "token_refused", status: 401 }
   if (reason === null) return { sent: false, code: "no_session", status: 0 }
@@ -1022,4 +1045,134 @@ export async function spendThrough(access: Access, credentialId: string, targets
     const read = await errorOf(response)
     return answer(response, response.ok ? null : classifyRefusal("console", response.status, read.error), read, reused)
   })
+}
+
+/**
+ * One settings batch: every changed row of one card, in the shape both doors
+ * carry (internal/overrides ParseBatch). settings.ts builds it; this only
+ * sends it.
+ */
+export interface SettingsBatch {
+  kind: string
+  items: readonly object[]
+}
+
+/** The token door's settings header: the POST body's JSON, as unpadded base64url. */
+export function encodeSettingsHeader(batch: SettingsBatch): string {
+  return base64url(new TextEncoder().encode(JSON.stringify(batch)))
+}
+
+/** Where a save goes, by door. */
+export interface SaveTargets {
+  /** GET, with the batch in SETTINGS_HEADER. */
+  tokenURL: string
+  /** POST, with the batch as the body. */
+  consoleURL: string
+}
+
+/** What came of one save, before it is put into words. */
+export type SaveAnswer =
+  /** Nothing left this page. */
+  | Unsent
+  /** The request went out and nothing came back: the fetch itself failed. */
+  | { sent: true; door: DoorKind; answered: false }
+  | {
+      sent: true
+      door: DoorKind
+      answered: true
+      status: number
+      ok: boolean
+      /** Whether the body parsed as JSON; `body` is undefined when it did not. */
+      json: boolean
+      body: unknown
+      refusal: Classified | null
+      /**
+       * The plugin's own answer: a JSON outcome, or one of its codes. Anything
+       * else came from something in front of it and says nothing about
+       * whether it saved.
+       */
+      plugin: boolean
+    }
+
+/**
+ * Sends one settings batch, through one door, once: spendThrough's door
+ * logic, without a press id.
+ *
+ * None is needed. The plugin answers a batch it has already applied as
+ * unchanged, and one that another save overtook as a conflict, so a resent
+ * save is never a second change. It is still never retried and never passed
+ * to the other door: the door is fixed before anything is sent, a refusal
+ * latches as a read's or a press's does, and the reader decides whether to
+ * press Save again.
+ */
+export async function saveThrough(access: Access, batch: SettingsBatch, targets: SaveTargets): Promise<SaveAnswer> {
+  const door = openDoors(access)[0]
+  if (door === undefined) return unsent(access)
+
+  if (door.kind === "token") {
+    const headers = {
+      Accept: "application/json",
+      Authorization: bearer(door.token),
+      [SETTINGS_HEADER]: encodeSettingsHeader(batch),
+    }
+    let response: ResponseLike
+    try {
+      response = await access.fetch(targets.tokenURL, request("GET", headers, AbortSignal.timeout(SAVE_TIMEOUT_MS)))
+    } catch {
+      return { sent: true, door: "token", answered: false }
+    }
+    // As for a press: the body is read before the token is latched, because
+    // a 403 refuses the token only when it is not the plugin's own cross_site.
+    const read = await errorOf(response)
+    const refusal = response.ok ? null : classifyRefusal("token", response.status, read.error)
+    if (refusal?.latch === "token") access.token.refuse(door.token)
+    return saved("token", response, read, refusal)
+  }
+
+  return access.serial(async (): Promise<SaveAnswer> => {
+    // The key may have been refused while this save waited its turn.
+    const key = usableConsoleKey(access.env)
+    if (key === null) return unsent(access)
+    const fp = fingerprint(access.env, key)
+    const headers = { "Content-Type": "application/json", Accept: "application/json", Authorization: bearer(key) }
+    let response: ResponseLike
+    try {
+      response = await access.fetch(
+        targets.consoleURL,
+        request("POST", headers, AbortSignal.timeout(SAVE_TIMEOUT_MS), JSON.stringify(batch)),
+      )
+    } catch {
+      // CPA may have counted it, so reads leave the key alone until the
+      // reader asks again, as after a press.
+      access.unanswered.add(fp)
+      return { sent: true, door: "console", answered: false }
+    }
+    if (response.ok) access.unanswered.delete(fp)
+    if (response.status === 401 || response.status === 403) {
+      const refusal = await refuseConsole(access.env, key, response)
+      return saved("console", response, { json: false, body: undefined, error: null }, refusal)
+    }
+    const read = await errorOf(response)
+    return saved("console", response, read, response.ok ? null : classifyRefusal("console", response.status, read.error))
+  })
+}
+
+/** A save's answer, as saveThrough reports it. */
+function saved(
+  door: DoorKind,
+  response: ResponseLike,
+  read: Awaited<ReturnType<typeof errorOf>>,
+  refusal: Classified | null,
+): SaveAnswer {
+  return {
+    sent: true,
+    door,
+    answered: true,
+    status: response.status,
+    ok: response.ok,
+    json: read.json,
+    body: read.body,
+    refusal,
+    plugin: refusal === null && (response.ok ? read.json : PLUGIN_ERRORS.has(read.error ?? "")),
+  }
 }

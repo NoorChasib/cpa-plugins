@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "written_at": "2026-10-09T11:55:00Z",
+  "next_request": "0001-01-01T00:00:00Z",
+  "provider_cooldown": {},
+  "entries": {
+    "anthropic-api:org-1ad35d608dd7": {
+      "provider": "anthropic-api",
+      "auth_index": "org-1ad35d608dd7",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "alpha",
+        "position": 0,
+        "monthly_usd": "200",
+        "renews": "2026-10-29",
+        "organization_id": "00000000-0000-4000-8000-00000000000a"
+      }
+    },
+    "anthropic-api:org-752c8e5b3c4d": {
+      "provider": "anthropic-api",
+      "auth_index": "org-752c8e5b3c4d",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "team",
+        "position": 1,
+        "monthly_usd": "200",
+        "renews": "2026-10-15",
+        "organization_id": "00000000-0000-4000-8000-00000000000b"
+      }
+    },
+    "anthropic-api:org-613513e3d228": {
+      "provider": "anthropic-api",
+      "auth_index": "org-613513e3d228",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "charlie",
+        "position": 2,
+        "monthly_usd": "200",
+        "renews": "2026-10-21",
+        "organization_id": "00000000-0000-4000-8000-00000000000c"
+      }
+    },
+    "anthropic-api:org-8bbdd19ecb78": {
+      "provider": "anthropic-api",
+      "auth_index": "org-8bbdd19ecb78",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "delta",
+        "position": 3,
+        "renews": "2026-11-02",
+        "organization_id": "00000000-0000-4000-8000-00000000000d"
+      }
+    },
+    "anthropic-api:org-d1bb035b1234": {
+      "provider": "anthropic-api",
+      "auth_index": "org-d1bb035b1234",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "0001-01-01T00:00:00Z",
+      "next_attempt": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "api_credit": {
+        "label": "echo",
+        "position": 4,
+        "monthly_usd": "200",
+        "renews": "2026-10-11",
+        "organization_id": "00000000-0000-4000-8000-00000000000e"
+      }
+    }
+  }
+}

@@ -5,12 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,12 +21,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Obviously fake keys. Nothing here talks to Anthropic.
+// The spec's fake organization ids, and an obviously fake admin key that
+// must never be read. Nothing here talks to Anthropic.
 const (
-	fakeAdminKey  = "sk-ant-admin01-FAKEFAKEFAKEFAKE"
-	fakeOtherKey  = "sk-ant-admin01-FAKEOTHERFAKEOTHER"
-	fakeAPIKey    = "sk-ant-api03-FAKEFAKEFAKEFAKE_-"
-	fakeOrgHeader = "5b1e3c9a-0d1f-4c8e-9a51-7d0c2b6e4f10"
+	fakeOrgA     = "00000000-0000-4000-8000-00000000000a"
+	fakeOrgB     = "00000000-0000-4000-8000-00000000000b"
+	fakeOrgC     = "00000000-0000-4000-8000-00000000000c"
+	fakeAdminKey = "sk-ant-admin01-FAKEFAKEFAKEFAKE"
 )
 
 // creditsOf registers a disabled plugin with yaml and returns the items its
@@ -56,9 +54,9 @@ func mustCredits(t *testing.T, config string) []creditItem {
 
 // item renders one list item from the four fields, each a raw YAML value; a
 // field given as "-" is left out.
-func item(label, key, monthly, renews string) string {
+func item(label, org, monthly, renews string) string {
 	lines := []string{}
-	for _, field := range [][2]string{{"label", label}, {"admin-key", key}, {"monthly-usd", monthly}, {"renews", renews}} {
+	for _, field := range [][2]string{{"label", label}, {"organization-id", org}, {"monthly-usd", monthly}, {"renews", renews}} {
 		if field[1] != "-" {
 			lines = append(lines, field[0]+": "+field[1])
 		}
@@ -66,82 +64,83 @@ func item(label, key, monthly, renews string) string {
 	return "  - " + strings.Join(lines, "\n    ") + "\n"
 }
 
-const goodItem = "  - label: healthy\n    admin-key: " + fakeOtherKey + "\n    monthly-usd: \"500\"\n    renews: \"2026-10-03\"\n"
+const goodItem = "  - label: healthy\n    organization-id: " + fakeOrgB + "\n    monthly-usd: \"500\"\n    renews: \"2026-10-03\"\n"
+const goodItem2 = "  - label: after\n    organization-id: " + fakeOrgC + "\n    monthly-usd: \"100\"\n    renews: \"2026-10-31\"\n"
 
 func TestCreditItemsAreReadVerbatim(t *testing.T) {
 	items := mustCredits(t, "claude-api-credits:\n"+
-		item("siphorchannel", fakeAdminKey, `"200"`, `"2026-10-29"`)+
+		item("siphorchannel", fakeOrgA, `"200"`, `"2026-10-29"`)+
 		// Unquoted, YAML would type these; the scalar's text is what counts.
-		item("unquoted", fakeOtherKey, "200", "2026-10-29")+
+		// The organization id is stored lower-cased.
+		item("unquoted", strings.ToUpper(fakeOrgB), "200", "2026-10-29")+
 		// What a save from CPA's plugin panel turns them into.
-		item("panel", fakeAPIKey, "12.5", "2026-10-29T00:00:00Z")+
-		item(`"  padded  "`, "sk-ant-admin01-PADDEDPADDED", `" 0 "`, `" 2026-02-28 "`))
+		item("panel", fakeOrgC, "12.5", "2026-10-29T00:00:00Z")+
+		item(`"  padded  "`, `" 12345678-1234-5678-1234-567812345678 "`, `" 0 "`, `" 2026-02-28 "`))
 	want := []creditItem{
-		{id: client.APICreditAccount("siphorchannel"), key: fakeAdminKey, credit: client.APICredit{Label: "siphorchannel", Position: 0, MonthlyUSD: "200", Renews: "2026-10-29", KeyFingerprint: creditKeyFingerprint(fakeAdminKey)}},
-		{id: client.APICreditAccount("unquoted"), key: fakeOtherKey, credit: client.APICredit{Label: "unquoted", Position: 1, MonthlyUSD: "200", Renews: "2026-10-29", KeyFingerprint: creditKeyFingerprint(fakeOtherKey)}},
-		{id: client.APICreditAccount("panel"), key: fakeAPIKey, credit: client.APICredit{Label: "panel", Position: 2, MonthlyUSD: "12.5", Renews: "2026-10-29T00:00:00Z", KeyFingerprint: creditKeyFingerprint(fakeAPIKey)}},
-		{id: client.APICreditAccount("padded"), key: "sk-ant-admin01-PADDEDPADDED", credit: client.APICredit{Label: "padded", Position: 3, MonthlyUSD: "0", Renews: "2026-02-28", KeyFingerprint: creditKeyFingerprint("sk-ant-admin01-PADDEDPADDED")}},
+		{id: client.APICreditOrgAccount(fakeOrgA), credit: client.APICredit{Label: "siphorchannel", Position: 0, MonthlyUSD: "200", Renews: "2026-10-29", OrganizationID: fakeOrgA}},
+		{id: client.APICreditOrgAccount(fakeOrgB), credit: client.APICredit{Label: "unquoted", Position: 1, MonthlyUSD: "200", Renews: "2026-10-29", OrganizationID: fakeOrgB}},
+		{id: client.APICreditOrgAccount(fakeOrgC), credit: client.APICredit{Label: "panel", Position: 2, MonthlyUSD: "12.5", Renews: "2026-10-29T00:00:00Z", OrganizationID: fakeOrgC}},
+		{id: client.APICreditOrgAccount("12345678-1234-5678-1234-567812345678"), credit: client.APICredit{Label: "padded", Position: 3, MonthlyUSD: "0", Renews: "2026-02-28", OrganizationID: "12345678-1234-5678-1234-567812345678"}},
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Fatalf("items:\n%+v\nwant:\n%+v", items, want)
 	}
-	if id := items[0].id; id != "label-9611d9ba844a" {
-		t.Fatalf("id=%s; the spec's fixture id for siphorchannel is label-9611d9ba844a", id)
+	if id := items[0].id; !strings.HasPrefix(id, "org-") || len(id) != 16 || strings.Contains(id, "000a") {
+		t.Fatalf("id=%s", id)
 	}
-	if fp := items[0].credit.KeyFingerprint; !strings.HasPrefix(fp, "key-") || len(fp) != 16 || fp != openRouterAccount(fakeAdminKey) {
-		t.Fatalf("fingerprint=%q", fp)
+	if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, []string{fakeOrgA, fakeOrgB, fakeOrgC, "12345678-1234-5678-1234-567812345678"}) {
+		t.Fatalf("linked=%v", linked)
 	}
 }
 
 // Each problem is judged on its own item, which is still listed, and the
-// valid item after it is still pollable.
+// valid item after it is still counted. The problems come in the order of
+// the CreditProblem values; an organization id with a valid shape is kept
+// whatever the problem.
 func TestEachCreditProblemStopsOnlyItsOwnItem(t *testing.T) {
 	long := strings.Repeat("x", 65)
 	for _, tc := range []struct {
-		name, item, problem, label string
+		name, item, problem, label, org string
 	}{
-		{"not a mapping", "  - just text\n", client.CreditProblemItemInvalid, ""},
-		{"a list value", "  - label: [a, b]\n    admin-key: " + fakeAdminKey + "\n    monthly-usd: \"1\"\n    renews: \"2026-10-01\"\n", client.CreditProblemItemInvalid, ""},
-		{"a mapping value", "  - label: ok\n    admin-key: {a: b}\n    monthly-usd: \"1\"\n    renews: \"2026-10-01\"\n", client.CreditProblemItemInvalid, "ok"},
-		{"repeated key", "  - label: one\n    label: two\n    admin-key: " + fakeAdminKey + "\n    monthly-usd: \"1\"\n    renews: \"2026-10-01\"\n", client.CreditProblemItemInvalid, "one"},
-		{"unknown field", item("ok", fakeAdminKey, `"1"`, `"2026-10-01"`) + "    monthly: 5\n", client.CreditProblemUnknownField, "ok"},
-		{"unknown field beats a missing label", "  - admin-key: " + fakeAdminKey + "\n    note: x\n", client.CreditProblemUnknownField, ""},
-		{"label missing", item("-", fakeAdminKey, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, ""},
-		{"label blank", item(`"   "`, fakeAdminKey, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, ""},
-		{"label too long", item(long, fakeAdminKey, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, ""},
-		{"label control character", item(`"a\tb"`, fakeAdminKey, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, ""},
-		{"label duplicate ignoring case", item("HEALTHY", fakeAdminKey, `"1"`, `"2026-10-01"`), client.CreditProblemLabelDuplicate, ""},
-		{"key missing", item("ok", "-", `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyMissing, "ok"},
-		{"key not anthropic", item("ok", "sk-proj-FAKEFAKEFAKEFAKE", `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"key bare token", item("ok", "FAKEFAKEFAKEFAKE", `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"key with a space", item("ok", `"sk-ant-admin01-FAKE FAKEFAKE"`, `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"key too short", item("ok", "sk-ant-short", `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"key too long", item("ok", "sk-ant-"+strings.Repeat("A", 251), `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"key repeated", item("ok", fakeOtherKey, `"1"`, `"2026-10-01"`), client.CreditProblemAdminKeyRepeated, "ok"},
-		{"monthly missing", item("ok", fakeAdminKey, "-", `"2026-10-01"`), client.CreditProblemMonthlyMissing, "ok"},
-		{"monthly cents", item("ok", fakeAdminKey, `"12.345"`, `"2026-10-01"`), client.CreditProblemMonthlyInvalid, "ok"},
-		{"monthly negative", item("ok", fakeAdminKey, "-5", `"2026-10-01"`), client.CreditProblemMonthlyInvalid, "ok"},
-		{"monthly dollar sign", item("ok", fakeAdminKey, `"$200"`, `"2026-10-01"`), client.CreditProblemMonthlyInvalid, "ok"},
-		{"renews missing", item("ok", fakeAdminKey, `"1"`, "-"), client.CreditProblemRenewsMissing, "ok"},
-		{"renews not a date", item("ok", fakeAdminKey, `"1"`, `"2026-02-30"`), client.CreditProblemRenewsInvalid, "ok"},
-		{"renews with a time", item("ok", fakeAdminKey, `"1"`, `"2026-10-01T05:00:00Z"`), client.CreditProblemRenewsInvalid, "ok"},
-		{"label first", item(long, "nope", "nope", "nope"), client.CreditProblemLabelInvalid, ""},
-		{"key before amount", item("ok", "nope", "nope", "nope"), client.CreditProblemAdminKeyInvalid, "ok"},
-		{"amount before date", item("ok", fakeAdminKey, "nope", "nope"), client.CreditProblemMonthlyInvalid, "ok"},
+		{"not a mapping", "  - just text\n", client.CreditProblemItemInvalid, "", ""},
+		{"a list value", "  - label: [a, b]\n    organization-id: " + fakeOrgA + "\n", client.CreditProblemItemInvalid, "", fakeOrgA},
+		{"a mapping value", "  - label: ok\n    organization-id: {a: b}\n", client.CreditProblemItemInvalid, "ok", ""},
+		{"repeated key", "  - label: one\n    label: two\n    organization-id: " + fakeOrgA + "\n", client.CreditProblemItemInvalid, "one", fakeOrgA},
+		{"unknown field", item("ok", fakeOrgA, `"1"`, `"2026-10-01"`) + "    monthly: 5\n", client.CreditProblemUnknownField, "ok", fakeOrgA},
+		{"unknown field beats a missing label", "  - organization-id: " + fakeOrgA + "\n    note: x\n", client.CreditProblemUnknownField, "", fakeOrgA},
+		{"label missing", item("-", fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, "", fakeOrgA},
+		{"label blank", item(`"   "`, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, "", fakeOrgA},
+		{"label too long", item(long, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, "", fakeOrgA},
+		{"label control character", item(`"a\tb"`, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, "", fakeOrgA},
+		{"label duplicate ignoring case", item("HEALTHY", fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelDuplicate, "", fakeOrgA},
+		{"organization missing", item("ok", "-", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDMissing, "ok", ""},
+		{"organization empty", item("ok", `""`, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDMissing, "ok", ""},
+		{"organization braced", item("ok", `"{`+fakeOrgA+`}"`, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization urn", item("ok", "urn:uuid:"+fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization undashed", item("ok", strings.ReplaceAll(fakeOrgA, "-", ""), `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization short group", item("ok", "00000000-000-4000-8000-00000000000a", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization not hex", item("ok", "0000000g-0000-4000-8000-00000000000a", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization all zeros", item("ok", "00000000-0000-0000-0000-000000000000", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
+		{"organization duplicate", item("ok", strings.ToUpper(fakeOrgB), `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDDuplicate, "ok", fakeOrgB},
+		{"label before organization", item(long, "nope", "nope", "nope"), client.CreditProblemLabelInvalid, "", ""},
+		{"organization before the optional values", item("ok", "nope", "nope", "nope"), client.CreditProblemOrganizationIDInvalid, "ok", ""},
 	} {
 		items := mustCredits(t, "claude-api-credits:\n"+goodItem+tc.item+goodItem2)
 		if len(items) != 3 {
 			t.Fatalf("%s: %d items", tc.name, len(items))
 		}
 		got := items[1]
-		if got.credit.Problem != tc.problem || got.credit.Label != tc.label || got.credit.Position != 1 {
-			t.Errorf("%s: credit=%+v; want problem %q label %q", tc.name, got.credit, tc.problem, tc.label)
+		if got.credit.Problem != tc.problem || got.credit.Label != tc.label || got.credit.Position != 1 || got.credit.OrganizationID != tc.org {
+			t.Errorf("%s: credit=%+v; want problem %q label %q organization %q", tc.name, got.credit, tc.problem, tc.label, tc.org)
 		}
-		if wantID := "item-2"; tc.label != "" {
-			if got.id != client.APICreditAccount(tc.label) {
-				t.Errorf("%s: id=%s", tc.name, got.id)
-			}
-		} else if got.id != wantID {
+		// Whatever else is wrong, an item whose organization is valid and
+		// first-occurring is keyed by it and linked, so fixing the rest of
+		// the item loses no history; any other item is positional.
+		wantID, wantLinked := "item-2", []string{fakeOrgB, fakeOrgC}
+		if tc.org != "" && tc.problem != client.CreditProblemOrganizationIDDuplicate {
+			wantID, wantLinked = client.APICreditOrgAccount(tc.org), []string{fakeOrgB, tc.org, fakeOrgC}
+		}
+		if got.id != wantID {
 			t.Errorf("%s: id=%s want %s", tc.name, got.id, wantID)
 		}
 		for _, other := range []creditItem{items[0], items[2]} {
@@ -149,36 +148,67 @@ func TestEachCreditProblemStopsOnlyItsOwnItem(t *testing.T) {
 				t.Errorf("%s: a neighbouring item caught %q", tc.name, other.credit.Problem)
 			}
 		}
+		if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, wantLinked) {
+			t.Errorf("%s: linked=%v want %v", tc.name, linked, wantLinked)
+		}
 	}
 }
 
-const goodItem2 = "  - label: after\n    admin-key: sk-ant-admin01-FAKEAFTERFAKEAFTER\n    monthly-usd: \"100\"\n    renews: \"2026-10-31\"\n"
-
-// The valid fields of a broken item are still filled in.
-func TestABrokenCreditItemKeepsItsValidFields(t *testing.T) {
-	items := mustCredits(t, "claude-api-credits:\n"+item("ok", fakeAdminKey, `"260.50"`, `"2026-10-31"`)+"    extra: 1\n")
-	want := client.APICredit{Label: "ok", MonthlyUSD: "260.50", Renews: "2026-10-31", KeyFingerprint: creditKeyFingerprint(fakeAdminKey), Problem: client.CreditProblemUnknownField}
-	if items[0].credit != want {
-		t.Fatalf("credit=%+v want %+v", items[0].credit, want)
+// monthly-usd and renews are optional: an invalid value is ignored and
+// flagged, never a problem, and the item stays counted. admin-key is
+// accepted, flagged, and never read.
+func TestOptionalValuesAreFlaggedNotProblems(t *testing.T) {
+	for _, tc := range []struct {
+		name, item string
+		want       client.APICredit
+	}{
+		{"nothing optional", item("ok", fakeOrgA, "-", "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA}},
+		{"monthly cents", item("ok", fakeOrgA, `"12.345"`, `"2026-10-01"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, Renews: "2026-10-01", MonthlyUSDInvalid: true}},
+		{"monthly negative", item("ok", fakeOrgA, "-5", "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true}},
+		{"monthly dollar sign", item("ok", fakeOrgA, `"$200"`, "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true}},
+		{"monthly zero", item("ok", fakeOrgA, `"0"`, "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "0"}},
+		{"renews not a date", item("ok", fakeOrgA, `"1"`, `"2026-02-30"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1", RenewsInvalid: true}},
+		{"renews with a time", item("ok", fakeOrgA, "-", `"2026-10-01T05:00:00Z"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, RenewsInvalid: true}},
+		{"both invalid", item("ok", fakeOrgA, "nope", "nope"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true, RenewsInvalid: true}},
+		{"admin key", item("ok", fakeOrgA, `"1"`, "-") + "    admin-key: " + fakeAdminKey + "\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1", AdminKeyIgnored: true}},
+		{"admin key of any shape", item("ok", fakeOrgA, "-", "-") + "    admin-key: not-a-key\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}},
+		{"admin key repeated elsewhere", item("ok", fakeOrgA, "-", "-") + "    admin-key: " + fakeAdminKey + "\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}},
+	} {
+		items := mustCredits(t, "claude-api-credits:\n"+goodItem+"    admin-key: "+fakeAdminKey+"\n"+tc.item)
+		got := items[1]
+		tc.want.Position = 1
+		if got.credit != tc.want || got.id != client.APICreditOrgAccount(fakeOrgA) {
+			t.Errorf("%s: credit=%+v id=%s; want %+v", tc.name, got.credit, got.id, tc.want)
+		}
+		if printed := fmt.Sprintf("%v %+v %#v", items, items, items); strings.Contains(printed, "FAKE") || strings.Contains(printed, "sk-ant") {
+			t.Errorf("%s: formatting the items printed the key: %s", tc.name, printed)
+		}
 	}
 }
 
 // Null is absent, in every spelling YAML has for it; a quoted "null" is text.
 func TestNullCreditValuesAreMissing(t *testing.T) {
 	for _, null := range []string{"null", "~", "", "Null", "NULL", "!!null whatever", "!!null"} {
-		for field, problem := range map[string]string{
-			"label": client.CreditProblemLabelMissing, "admin-key": client.CreditProblemAdminKeyMissing,
-			"monthly-usd": client.CreditProblemMonthlyMissing, "renews": client.CreditProblemRenewsMissing,
+		for field, want := range map[string]client.APICredit{
+			"label":           {OrganizationID: fakeOrgA, MonthlyUSD: "1", Renews: "2026-10-01", Problem: client.CreditProblemLabelMissing},
+			"organization-id": {Label: "ok", MonthlyUSD: "1", Renews: "2026-10-01", Problem: client.CreditProblemOrganizationIDMissing},
+			"monthly-usd":     {Label: "ok", OrganizationID: fakeOrgA, Renews: "2026-10-01"},
+			"renews":          {Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1"},
 		} {
-			values := map[string]string{"label": "ok", "admin-key": fakeAdminKey, "monthly-usd": `"1"`, "renews": `"2026-10-01"`}
+			values := map[string]string{"label": "ok", "organization-id": fakeOrgA, "monthly-usd": `"1"`, "renews": `"2026-10-01"`}
 			values[field] = null
-			items := mustCredits(t, "claude-api-credits:\n"+item(values["label"], values["admin-key"], values["monthly-usd"], values["renews"]))
-			if items[0].credit.Problem != problem {
-				t.Errorf("%s: %q gave %q; want %q", field, null, items[0].credit.Problem, problem)
+			items := mustCredits(t, "claude-api-credits:\n"+item(values["label"], values["organization-id"], values["monthly-usd"], values["renews"]))
+			if items[0].credit != want {
+				t.Errorf("%s: %q gave %+v; want %+v", field, null, items[0].credit, want)
 			}
 		}
+		// admin-key is flagged by its presence, null or not.
+		items := mustCredits(t, "claude-api-credits:\n"+item("ok", fakeOrgA, "-", "-")+"    admin-key: "+null+"\n")
+		if want := (client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}); items[0].credit != want {
+			t.Errorf("admin-key %q gave %+v", null, items[0].credit)
+		}
 	}
-	items := mustCredits(t, "claude-api-credits:\n"+item(`"null"`, fakeAdminKey, `"1"`, `"2026-10-01"`))
+	items := mustCredits(t, "claude-api-credits:\n"+item(`"null"`, fakeOrgA, `"1"`, `"2026-10-01"`))
 	if items[0].credit.Problem != "" || items[0].credit.Label != "null" {
 		t.Fatalf("a quoted null label: %+v", items[0].credit)
 	}
@@ -189,33 +219,53 @@ func TestThePanelsNullNodeIsMissing(t *testing.T) {
 	scalar := func(tag, value string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value} }
 	node := yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
 		scalar("!!str", "label"), scalar("!!null", "null"),
-		scalar("!!str", "admin-key"), scalar("!!str", fakeAdminKey),
-		scalar("!!str", "monthly-usd"), scalar("!!str", "1"),
+		scalar("!!str", "organization-id"), scalar("!!str", fakeOrgA),
+		scalar("!!str", "monthly-usd"), scalar("!!null", "null"),
 		scalar("!!str", "renews"), scalar("!!str", "2026-10-01"),
 	}}
 	items := parseAPICredits([]yaml.Node{node})
-	if items[0].credit.Problem != client.CreditProblemLabelMissing || items[0].credit.Label != "" || items[0].id != "item-1" {
+	if want := (client.APICredit{OrganizationID: fakeOrgA, Renews: "2026-10-01", Problem: client.CreditProblemLabelMissing}); items[0].credit != want || items[0].id != client.APICreditOrgAccount(fakeOrgA) {
 		t.Fatalf("item=%+v", items[0].credit)
 	}
 }
 
-func TestCreditItemsPastTheLimitAreListedButNotPolled(t *testing.T) {
+// The 17th item is listed with its organization id, so a consumer can name
+// it, and is not linked to the meter.
+func TestCreditItemsPastTheLimitAreListedButNotLinked(t *testing.T) {
 	config := "claude-api-credits:\n"
 	for i := 0; i <= client.MaxAPICreditItems; i++ {
-		config += item("org"+strconv.Itoa(i), fmt.Sprintf("sk-ant-admin01-FAKEFAKE%04d", i), `"1"`, `"2026-10-01"`)
+		config += item("org"+strconv.Itoa(i), fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1), `"1"`, `"2026-10-01"`)
 	}
 	items := mustCredits(t, config)
 	if len(items) != client.MaxAPICreditItems+1 {
 		t.Fatalf("%d items", len(items))
 	}
 	for i, it := range items {
-		want := ""
+		want, id := "", client.APICreditOrgAccount(fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1))
 		if i == client.MaxAPICreditItems {
-			want = client.CreditProblemTooManyItems
+			want, id = client.CreditProblemTooManyItems, "item-17"
 		}
-		if it.credit.Problem != want || it.credit.Label != "org"+strconv.Itoa(i) {
-			t.Fatalf("item %d: %+v", i, it.credit)
+		if it.credit.Problem != want || it.credit.Label != "org"+strconv.Itoa(i) || it.credit.OrganizationID == "" || it.id != id {
+			t.Fatalf("item %d: %+v id=%s", i, it.credit, it.id)
 		}
+	}
+	if linked := linkedOrganizations(items); len(linked) != client.MaxAPICreditItems || linked[0] != "00000000-0000-4000-8000-000000000001" {
+		t.Fatalf("linked=%v", linked)
+	}
+}
+
+func TestDuplicateOrganizationsKeepTheFirstItem(t *testing.T) {
+	items := mustCredits(t, "claude-api-credits:\n"+item("one", fakeOrgA, `"1"`, "-")+item("two", strings.ToUpper(fakeOrgA), "-", "-")+item("three", fakeOrgA, "-", "-"))
+	if items[0].credit.Problem != "" || items[0].id != client.APICreditOrgAccount(fakeOrgA) {
+		t.Fatalf("first=%+v id=%s", items[0].credit, items[0].id)
+	}
+	for _, later := range items[1:] {
+		if later.credit.Problem != client.CreditProblemOrganizationIDDuplicate || later.credit.OrganizationID != fakeOrgA || !strings.HasPrefix(later.id, "item-") {
+			t.Fatalf("later=%+v id=%s", later.credit, later.id)
+		}
+	}
+	if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, []string{fakeOrgA}) {
+		t.Fatalf("linked=%v", linked)
 	}
 }
 
@@ -231,14 +281,14 @@ func TestCreditListShapeAndOtherSettings(t *testing.T) {
 		}
 	}
 	// Anchors and aliases resolve.
-	items := mustCredits(t, "claude-api-credits:\n  - label: a\n    admin-key: &k "+fakeAdminKey+"\n    monthly-usd: &m \"1\"\n    renews: \"2026-10-01\"\n  - label: b\n    admin-key: "+fakeOtherKey+"\n    monthly-usd: *m\n    renews: \"2026-10-01\"\n")
+	items := mustCredits(t, "claude-api-credits:\n  - label: a\n    organization-id: "+fakeOrgA+"\n    monthly-usd: &m \"1\"\n    renews: \"2026-10-01\"\n  - label: b\n    organization-id: "+fakeOrgB+"\n    monthly-usd: *m\n    renews: \"2026-10-01\"\n")
 	if items[1].credit.Problem != "" || items[1].credit.MonthlyUSD != "1" {
 		t.Fatalf("alias: %+v", items[1].credit)
 	}
 }
 
-// The panel cannot describe a list of objects, mark a value secret, or check
-// one item, so the list is YAML only and the panel's fields are unchanged.
+// The panel cannot describe a list of objects or check one item, so the
+// list is YAML only and the panel's fields are unchanged.
 func TestCreditsAreNotAPanelField(t *testing.T) {
 	p := New(&testHost{})
 	defer p.Shutdown()
@@ -266,7 +316,7 @@ func fetcherWithCredits(host Host, config string, t *testing.T) hostFetcher {
 }
 
 func TestCreditAccountsAreListedAfterTheRosterChecks(t *testing.T) {
-	config := "claude-api-credits:\n" + item("siphorchannel", fakeAdminKey, `"200"`, `"2026-10-29"`) + item("-", fakeOtherKey, `"1"`, `"2026-10-01"`)
+	config := "claude-api-credits:\n" + item("siphorchannel", fakeOrgA, `"200"`, `"2026-10-29"`) + item("-", "nope", `"1"`, `"2026-10-01"`)
 	indexed := diskEntry("claude-one.json", "claude")
 	indexed.AuthIndex = "one"
 	accounts, err := fetcherWithCredits(rosterHost{[]protocol.HostAuthFileEntry{indexed}}, config, t).List(context.Background())
@@ -277,10 +327,10 @@ func TestCreditAccountsAreListedAfterTheRosterChecks(t *testing.T) {
 		t.Fatalf("first=%+v", accounts[0])
 	}
 	first, second := accounts[1], accounts[2]
-	if first.Provider != client.ProviderAnthropicAPI || first.AuthIndex != "label-9611d9ba844a" || first.Credit == nil || first.Credit.Label != "siphorchannel" {
+	if first.Provider != client.ProviderAnthropicAPI || first.AuthIndex != client.APICreditOrgAccount(fakeOrgA) || first.Credit == nil || first.Credit.Label != "siphorchannel" {
 		t.Fatalf("credit account=%+v", first)
 	}
-	if second.AuthIndex != "item-2" || second.Credit.Problem != client.CreditProblemLabelMissing {
+	if second.AuthIndex != "item-2" || second.Credit.Problem != client.CreditProblemLabelMissing || second.Credit.OrganizationID != "" {
 		t.Fatalf("misconfigured account=%+v credit=%+v", second, second.Credit)
 	}
 	// Credit accounts are no reason to stop waiting for CPA's roster.
@@ -297,514 +347,390 @@ func TestCreditAccountsAreListedAfterTheRosterChecks(t *testing.T) {
 	}
 }
 
-// creditHost serves Anthropic's cost report for whatever window is asked, from
-// a scripted status, and records every request and log call.
-type creditHost struct {
-	mu         sync.Mutex
-	status     int
-	retryAfter string
-	body       string
-	requests   []protocol.HostHTTPRequest
-	logs       []string
-	failHTTP   error
+// The cache never asks for a credit account; should it, the fetcher refuses
+// without a request. testHost panics on any credential read or HTTP call.
+func TestCreditFetchNeverCallsTheHost(t *testing.T) {
+	f := fetcherWithCredits(&testHost{}, "claude-api-credits:\n"+item("siphorchannel", fakeOrgA, `"200"`, `"2026-10-29"`), t)
+	accounts, _ := f.List(context.Background())
+	if _, err := f.Fetch(context.Background(), accounts[0], nil); err == nil || err.Error() != "not polled" {
+		t.Fatalf("err=%v", err)
+	}
 }
 
-func (*creditHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) { return nil, nil }
-func (*creditHost) GetAuth(context.Context, string) ([]byte, error) {
+// meterHost holds no credentials, answers no HTTP, and keeps every log line.
+type meterHost struct {
+	mu    sync.Mutex
+	lines []logLine
+}
+
+func (*meterHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) { return nil, nil }
+func (*meterHost) GetAuth(context.Context, string) ([]byte, error) {
 	panic("a credit account must not read a CPA credential")
 }
-func (h *creditHost) Log(_ context.Context, level, message string, fields map[string]any) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.logs = append(h.logs, fmt.Sprint(level, message, fields))
+func (*meterHost) HTTPDo(context.Context, protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
+	panic("the meter must not make a request")
 }
-func (h *creditHost) HTTPDo(_ context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.requests = append(h.requests, req)
-	if h.failHTTP != nil {
-		return protocol.HostHTTPResponse{}, h.failHTTP
-	}
-	headers := map[string][]string{"Anthropic-Organization-Id": {fakeOrgHeader}}
-	if h.retryAfter != "" {
-		headers["Retry-After"] = []string{h.retryAfter}
-	}
-	if h.status != 0 && h.status != 200 {
-		// Error bodies name the key; nothing of them may survive.
-		return protocol.HostHTTPResponse{StatusCode: h.status, Headers: headers, Body: []byte(`{"type":"error","error":{"type":"authentication_error","message":"bad key ` + fakeAdminKey + `"},"request_id":"req_FAKEFAKE"}`)}, nil
-	}
-	if h.body != "" {
-		return protocol.HostHTTPResponse{StatusCode: 200, Headers: headers, Body: []byte(h.body)}, nil
-	}
-	raw, _ := json.Marshal(map[string]any{"data": costReportDays(req.URL), "has_more": false, "next_page": nil})
-	return protocol.HostHTTPResponse{StatusCode: 200, Headers: headers, Body: raw}, nil
-}
-
-// costReportDays is one bucket for every day of the window a cost report
-// request asks for, each charged $12.505.
-func costReportDays(rawURL string) []map[string]any {
-	parsed, _ := url.Parse(rawURL)
-	start, _ := time.Parse(time.RFC3339, parsed.Query().Get("starting_at"))
-	end, _ := time.Parse(time.RFC3339, parsed.Query().Get("ending_at"))
-	data := []map[string]any{}
-	for day := start; day.Before(end); day = day.Add(24 * time.Hour) {
-		data = append(data, map[string]any{"starting_at": day.Format(time.RFC3339), "ending_at": day.Add(24 * time.Hour).Format(time.RFC3339),
-			"results": []map[string]any{{"amount": "1250.5", "currency": "USD"}}})
-	}
-	return data
-}
-
-func (h *creditHost) sent() []protocol.HostHTTPRequest {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]protocol.HostHTTPRequest(nil), h.requests...)
-}
-
-const oneCredit = "claude-api-credits:\n  - label: siphorchannel\n    admin-key: " + fakeAdminKey + "\n    monthly-usd: \"200\"\n    renews: \"2026-10-29\"\n"
-
-func TestCreditFetchReadsTheCostReportHonestly(t *testing.T) {
-	host := &creditHost{}
-	f := fetcherWithCredits(host, oneCredit, t)
-	accounts, _ := f.List(context.Background())
-	observation, err := f.Fetch(context.Background(), accounts[0], nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sent := host.sent()
-	if len(sent) != 1 || !strings.HasPrefix(sent[0].URL, "https://api.anthropic.com/v1/organizations/cost_report?starting_at=") ||
-		sent[0].Headers["X-Api-Key"][0] != fakeAdminKey || sent[0].Headers["User-Agent"][0] != "cpa-plugins-quota-cache/"+Version+" (https://github.com/NoorChasib/cpa-plugins)" {
-		t.Fatalf("sent %s", describeRequests(sent))
-	}
-	r := observation.Quota.CostReport
-	if !observation.RequestSent || observation.HTTPStatus != 200 || r.OrganizationID != fakeOrgHeader || r.KeyFingerprint != accounts[0].Credit.KeyFingerprint || len(r.Days) == 0 {
-		t.Fatalf("observation=%+v report=%+v", observation, r)
-	}
-}
-
-func TestCreditFailuresAreNamedAndNeverEchoAnthropic(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		host    *creditHost
-		message string
-	}{
-		{"401", &creditHost{status: 401}, client.CreditErrorKeyRejected},
-		{"403", &creditHost{status: 403}, client.CreditErrorForbidden},
-		{"404", &creditHost{status: 404}, client.CreditErrorUnavailable},
-		{"400", &creditHost{status: 400}, client.CreditErrorRefused},
-		{"413", &creditHost{status: 413}, client.CreditErrorRefused},
-		{"500", &creditHost{status: 500}, client.CreditErrorUpstream},
-		{"529", &creditHost{status: 529}, client.CreditErrorUpstream},
-		{"bad body", &creditHost{body: `{"data":"` + fakeAdminKey + `"}`}, client.CreditErrorResponse},
-		{"transport", &creditHost{failHTTP: errors.New("dial tcp: " + fakeAdminKey)}, "quota fetch failed"},
-	} {
-		f := fetcherWithCredits(tc.host, oneCredit, t)
-		accounts, _ := f.List(context.Background())
-		observation, err := f.Fetch(context.Background(), accounts[0], nil)
-		if err == nil || err.Error() != tc.message || !observation.RequestSent {
-			t.Fatalf("%s: err=%v observation=%+v", tc.name, err, observation)
-		}
-		var limited cache.RateLimited
-		if errors.As(err, &limited) {
-			t.Fatalf("%s: treated as a rate limit", tc.name)
-		}
-	}
-}
-
-// scriptedCreditHost is creditHost with the poll of the organization whose
-// Admin API key is key scripted request by request. Its cost report comes in
-// two pages; firstPage, secondPage and me refuse the first page, the second
-// or /v1/organizations/me with that status. The report lacks the
-// organization header when askMe or me is set, so the poll falls back to /me.
-// A refusal carries Retry-After when refusalRetryWait is set, and a body that
-// names the key. An unscripted first page, and every request made with any
-// other key, is creditHost's, with its status, body and failHTTP. Log lines
-// are kept whole.
-type scriptedCreditHost struct {
-	creditHost
-	key                       string
-	firstPage, secondPage, me int
-	askMe                     bool
-	refusalRetryWait          string
-	lines                     []logLine
-}
-
-func (h *scriptedCreditHost) Log(_ context.Context, level, message string, fields map[string]any) {
+func (h *meterHost) Log(_ context.Context, level, message string, fields map[string]any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lines = append(h.lines, logLine{level, message, fields})
 }
 
-func (h *scriptedCreditHost) logged() []logLine {
+func (h *meterHost) logged() []logLine {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]logLine(nil), h.lines...)
 }
 
-func (h *scriptedCreditHost) HTTPDo(ctx context.Context, req protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
-	if req.Headers["X-Api-Key"][0] != h.key {
-		return h.creditHost.HTTPDo(ctx, req)
-	}
-	paged, me := strings.Contains(req.URL, "&page="), strings.HasSuffix(req.URL, "/v1/organizations/me")
-	if !paged && !me && h.firstPage == 0 {
-		response, err := h.creditHost.HTTPDo(ctx, req)
-		if err != nil || response.StatusCode != 200 || h.body != "" {
-			return response, err
-		}
-		data := costReportDays(req.URL)
-		response.Body, _ = json.Marshal(map[string]any{"data": data[:len(data)/2], "has_more": true, "next_page": "page_2"})
-		if h.askMe || h.me != 0 {
-			delete(response.Headers, "Anthropic-Organization-Id")
-		}
-		return response, nil
-	}
-	h.mu.Lock()
-	h.requests = append(h.requests, req)
-	h.mu.Unlock()
-	refuse := func(status int) (protocol.HostHTTPResponse, error) {
-		headers := map[string][]string{}
-		if h.refusalRetryWait != "" {
-			headers["Retry-After"] = []string{h.refusalRetryWait}
-		}
-		return protocol.HostHTTPResponse{StatusCode: status, Headers: headers, Body: []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"key ` + h.key + `"},"request_id":"req_FAKEFAKE"}`)}, nil
-	}
-	switch {
-	case me && h.me != 0:
-		return refuse(h.me)
-	case me:
-		return protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"id":"org_scripted","type":"organization","name":"Scripted"}`)}, nil
-	case !paged:
-		return refuse(h.firstPage)
-	case h.secondPage != 0:
-		return refuse(h.secondPage)
-	}
-	data := costReportDays(req.URL)
-	raw, _ := json.Marshal(map[string]any{"data": data[len(data)/2:], "has_more": false, "next_page": nil})
-	return protocol.HostHTTPResponse{StatusCode: 200, Headers: map[string][]string{"Anthropic-Organization-Id": {fakeOrgHeader}}, Body: raw}, nil
+// meterPlugin is a registered plugin writing to its own temporary cache
+// path, with configure and status helpers.
+type meterPlugin struct {
+	*Plugin
+	t    *testing.T
+	host *meterHost
+	path string
 }
 
-// Every request of a credit poll is part of the one reading: a cost-report
-// page or the /me fallback that is refused fails the poll, its status is the
-// poll's, and a 429 on any of them is a rate limit with that response's
-// Retry-After. 0.1.12 judges every other poll by its first request alone.
-func TestEveryCreditRequestCountsForThePoll(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		host           *scriptedCreditHost
-		status, sent   int
-		limited        bool
-		retryAfter     time.Duration
-		message        string
-		organizationID string
-	}{
-		{name: "two pages read", host: &scriptedCreditHost{}, status: 200, sent: 2, organizationID: fakeOrgHeader},
-		{name: "/me read", host: &scriptedCreditHost{askMe: true}, status: 200, sent: 3, organizationID: "org_scripted"},
-		{name: "429 on page 2", host: &scriptedCreditHost{secondPage: 429, refusalRetryWait: "3600"}, status: 429, sent: 2, limited: true, retryAfter: time.Hour},
-		{name: "429 on page 2 without Retry-After", host: &scriptedCreditHost{secondPage: 429}, status: 429, sent: 2, limited: true},
-		{name: "429 on /me", host: &scriptedCreditHost{me: 429, refusalRetryWait: "1800"}, status: 429, sent: 3, limited: true, retryAfter: 30 * time.Minute},
-		{name: "401 on /me", host: &scriptedCreditHost{me: 401}, status: 401, sent: 3, message: client.CreditErrorKeyRejected},
-		{name: "401 on page 2", host: &scriptedCreditHost{secondPage: 401}, status: 401, sent: 2, message: client.CreditErrorKeyRejected},
-		{name: "500 on page 2", host: &scriptedCreditHost{secondPage: 500}, status: 500, sent: 2, message: client.CreditErrorUpstream},
-		{name: "429 on page 1", host: &scriptedCreditHost{firstPage: 429, refusalRetryWait: "60"}, status: 429, sent: 1, limited: true, retryAfter: time.Minute},
-		{name: "401 on page 1", host: &scriptedCreditHost{firstPage: 401}, status: 401, sent: 1, message: client.CreditErrorKeyRejected},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.host.key = fakeAdminKey
-			f := fetcherWithCredits(tc.host, oneCredit, t)
-			checkCreditPoll(t, f, tc.host, tc.status, tc.sent, tc.limited, tc.retryAfter, tc.message, tc.organizationID)
-		})
-	}
-}
-
-func checkCreditPoll(t *testing.T, f hostFetcher, host *scriptedCreditHost, status, sent int, limited bool, retryAfter time.Duration, message, organizationID string) {
+func newMeterPlugin(t *testing.T) *meterPlugin {
 	t.Helper()
-	accounts, _ := f.List(context.Background())
-	before := time.Now()
-	observation, err := f.Fetch(context.Background(), accounts[0], nil)
-	if got := len(host.sent()); got != sent {
-		t.Fatalf("sent %s; want %d", describeRequests(host.sent()), sent)
-	}
-	if observation.HTTPStatus != status || !observation.RequestSent {
-		t.Fatalf("observation status %d sent %v; want %d", observation.HTTPStatus, observation.RequestSent, status)
-	}
-	var rateLimited cache.RateLimited
-	switch {
-	case limited:
-		if !errors.As(err, &rateLimited) {
-			t.Fatalf("err=%v; want a rate limit", err)
-		}
-		if retryAfter == 0 && !rateLimited.RetryAfter.IsZero() {
-			t.Fatalf("Retry-After %v; none was sent", rateLimited.RetryAfter)
-		}
-		if retryAfter != 0 && (rateLimited.RetryAfter.Before(before.Add(retryAfter-time.Second)) || rateLimited.RetryAfter.After(time.Now().Add(retryAfter+time.Second))) {
-			t.Fatalf("Retry-After %v; want %s from now", rateLimited.RetryAfter, retryAfter)
-		}
-	case message != "":
-		if err == nil || err.Error() != message || errors.As(err, &rateLimited) {
-			t.Fatalf("err=%v; want %q", err, message)
-		}
-	default:
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := observation.Quota.CostReport
-		if r.OrganizationID != organizationID || len(r.Days) != len(costReportDays(host.sent()[0].URL)) {
-			t.Fatalf("report organization %q with %d days", r.OrganizationID, len(r.Days))
-		}
-	}
+	host := &meterHost{}
+	p := &meterPlugin{Plugin: New(host), t: t, host: host, path: filepath.Join(t.TempDir(), "cache", "snapshot.json")}
+	t.Cleanup(p.Shutdown)
+	return p
 }
 
-// End to end through the real cache: a 429 on any request of one
-// organization's poll, the first page, a later page or /me, backs off that
-// organization alone and honours Retry-After. The provider is never paused,
-// the other organization is read at the next slot, Claude subscriptions are
-// untouched, and the warning says only this credential waits.
-func TestACreditRateLimitPausesOnlyThatOrganization(t *testing.T) {
-	config := oneCredit + item("healthy", fakeOtherKey, `"500"`, `"2026-10-03"`)
-	limitedKey := client.Key(client.ProviderAnthropicAPI, client.APICreditAccount("siphorchannel"))
-	healthyKey := client.Key(client.ProviderAnthropicAPI, client.APICreditAccount("healthy"))
-	for name, host := range map[string]*scriptedCreditHost{
-		"first page": {firstPage: 429, refusalRetryWait: "3600"},
-		"page 2":     {secondPage: 429, refusalRetryWait: "3600"},
-		"/me":        {me: 429, refusalRetryWait: "3600"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			host.key = fakeAdminKey
-			path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
-			c, err := cache.Open(cache.Options{Path: path, Interval: 15 * time.Minute, Spacing: time.Second}, fetcherWithCredits(host, config, t))
-			if err != nil {
-				t.Fatal(err)
-			}
-			now := time.Now().UTC()
-			for _, at := range []time.Time{now, now.Add(2 * time.Second)} {
-				if err := c.Step(context.Background(), at); err != nil {
-					t.Fatal(err)
-				}
-			}
-			c.Close()
-			snapshot, _ := client.Load(path)
-			limited, healthy := snapshot.Entries[limitedKey], snapshot.Entries[healthyKey]
-			if limited.LastError != "provider rate limited" || limited.NextAttempt.Before(now.Add(59*time.Minute)) {
-				t.Fatalf("limited entry: last_error %q next %v", limited.LastError, limited.NextAttempt)
-			}
-			if healthy.LastError != "" || healthy.Quota == nil || healthy.Quota.CostReport == nil {
-				t.Fatalf("healthy entry: %+v", healthy)
-			}
-			if len(snapshot.ProviderCooldown) != 0 {
-				t.Fatalf("provider cooldown %v", snapshot.ProviderCooldown)
-			}
-			lines := host.logged()
-			if len(lines) != 1 || lines[0].level != "warn" || lines[0].message != "quota-cache poll rate limited; this credential is retried at next_attempt" {
-				t.Fatalf("logged %+v", lines)
-			}
-			fields := lines[0].fields
-			if fields["provider"] != client.ProviderAnthropicAPI || fields["auth_index"] != client.APICreditAccount("siphorchannel") ||
-				fields["http_status"] != 429 || fields["next_attempt"] != logTimeOf(limited.NextAttempt) || fields["retry_after"] == nil {
-				t.Fatalf("fields %v", fields)
-			}
-			if _, ok := fields["provider_paused_until"]; ok {
-				t.Fatalf("fields %v; nothing else was paused", fields)
-			}
-		})
+func (p *meterPlugin) configure(method, extra string) protocol.Registration {
+	p.t.Helper()
+	raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("cache-path: " + p.path + "\nrequest-spacing: 1s\n" + extra)})
+	result, err := p.Handle(method, raw)
+	if err != nil {
+		p.t.Fatal(err)
 	}
+	return result.(protocol.Registration)
 }
 
-// No log line, error or failure message of a credit poll ever names an admin
-// key, however the poll fails and whatever Anthropic or the transport echoes
-// back. A line identifies the organization only by its account id,
-// label-<12 hex> or item-N.
-func TestNoCreditLogLineOrErrorCarriesTheAdminKey(t *testing.T) {
-	accountID := regexp.MustCompile(`^(label-[0-9a-f]{12}|item-[0-9]+)$`)
-	echo := `{"error":{"message":"invalid x-api-key ` + fakeAdminKey + `"}}`
-	for name, host := range map[string]*scriptedCreditHost{
-		"401":                 {firstPage: 401},
-		"403":                 {firstPage: 403},
-		"429":                 {firstPage: 429, refusalRetryWait: "60"},
-		"500":                 {firstPage: 500},
-		"429 on page 2":       {secondPage: 429, refusalRetryWait: "60"},
-		"401 on page 2":       {secondPage: 401},
-		"429 on /me":          {me: 429},
-		"401 on /me":          {me: 401},
-		"a body echoing it":   {creditHost: creditHost{body: echo}},
-		"a transport echoing": {creditHost: creditHost{failHTTP: errors.New("dial tcp: x-api-key " + fakeAdminKey)}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			host.key = fakeAdminKey
-			f := fetcherWithCredits(host, oneCredit, t)
-			accounts, _ := f.List(context.Background())
-			_, fetchErr := f.Fetch(context.Background(), accounts[0], nil)
-			if fetchErr == nil {
-				t.Fatal("the poll did not fail")
-			}
-			path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
-			c, err := cache.Open(cache.Options{Path: path, Interval: 15 * time.Minute, Spacing: time.Second}, f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := c.Step(context.Background(), time.Now().UTC()); err != nil {
-				t.Fatal(err)
-			}
-			c.Close()
-			lines := host.logged()
-			if len(lines) != 1 {
-				t.Fatalf("logged %d lines; want one", len(lines))
-			}
-			if id, _ := lines[0].fields["auth_index"].(string); !accountID.MatchString(id) {
-				t.Fatalf("auth_index %q is not an account id", id)
-			}
-			file, _ := os.ReadFile(path)
-			for what, text := range map[string]string{
-				"log":      fmt.Sprintf("%v %+v %#v", lines, lines, lines),
-				"error":    fmt.Sprintf("%v %+v %#v", fetchErr, fetchErr, fetchErr),
-				"snapshot": string(file),
-			} {
-				for _, secret := range []string{fakeAdminKey, "sk-ant-", "FAKEFAKE", "x-api-key", "req_"} {
-					if strings.Contains(text, secret) {
-						t.Fatalf("the %s carries %q", what, secret)
-					}
-				}
-			}
-		})
-	}
-}
-
-// An item removed, broken or rekeyed after the scan that listed it is never
-// read with what it holds now.
-func TestCreditFetchRefusesAStaleListing(t *testing.T) {
-	host := &creditHost{}
-	f := fetcherWithCredits(host, oneCredit, t)
-	accounts, _ := f.List(context.Background())
-	for _, config := range []string{
-		"",
-		"claude-api-credits:\n" + item("siphorchannel", fakeOtherKey, `"200"`, `"2026-10-29"`),
-		"claude-api-credits:\n" + item("siphorchannel", fakeAdminKey, `"200"`, "-"),
-	} {
-		items := mustCredits(t, config)
-		f.apiCredits.Store(&items)
-		if _, err := f.Fetch(context.Background(), accounts[0], nil); err == nil || err.Error() != "credential read failed" {
-			t.Fatalf("%q: err=%v", config, err)
-		}
-	}
-	if len(host.sent()) != 0 {
-		t.Fatal("a request was sent for a stale listing")
-	}
-}
-
-// End to end through configure and the real writer: adding the list starts
-// polling with no restart, a misconfigured item is visible and never polled,
-// removing the list retires the entries, and the key appears in neither the
-// snapshot, nor the status route, nor any log.
-func TestCreditsAreLiveAndTheKeyIsNeverExposed(t *testing.T) {
-	host := &creditHost{}
-	p := New(host)
-	defer p.Shutdown()
-	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
-	configure := func(method, extra string) {
-		t.Helper()
-		raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("cache-path: " + path + "\nrequest-spacing: 1s\n" + extra)})
-		if _, err := p.Handle(method, raw); err != nil {
-			t.Fatal(err)
-		}
-	}
-	configure(protocol.MethodPluginRegister, "")
-	writer := p.cache
-	configure(protocol.MethodPluginReconfigure, oneCredit+item("-", fakeOtherKey, `"5"`, `"2026-10-01"`))
-	if p.cache != writer {
-		t.Fatal("adding credits restarted the writer")
-	}
-	good := client.Key(client.ProviderAnthropicAPI, client.APICreditAccount("siphorchannel"))
-	broken := client.Key(client.ProviderAnthropicAPI, "item-2")
-	snapshot := waitFor(t, path, func(s client.Snapshot) bool {
-		entry, ok := s.Entries[good]
-		_, seen := s.Entries[broken]
-		return ok && seen && entry.Quota != nil && entry.LastError == ""
-	})
-	if entry := snapshot.Entries[broken]; entry.APICredit == nil || entry.APICredit.Problem != client.CreditProblemLabelMissing || !entry.LastAttempt.IsZero() {
-		t.Fatalf("misconfigured entry=%+v", entry)
-	}
-	if entry := snapshot.Entries[good]; entry.Quota.CostReport.OrganizationID != fakeOrgHeader || entry.APICredit.MonthlyUSD != "200" {
-		t.Fatalf("entry=%+v", entry)
-	}
-	for _, req := range host.sent() {
-		if req.Headers["X-Api-Key"][0] != fakeAdminKey {
-			t.Fatalf("the misconfigured item was polled: %s", describeRequests([]protocol.HostHTTPRequest{req}))
-		}
-	}
-	// Now a rejected key, so the error path is in the snapshot too.
-	host.mu.Lock()
-	host.status = 401
-	host.mu.Unlock()
-	configure(protocol.MethodPluginReconfigure, "claude-api-credits:\n"+item("siphorchannel", fakeOtherKey, `"200"`, `"2026-10-29"`))
-	waitFor(t, path, func(s client.Snapshot) bool {
-		return s.Entries[good].LastError == client.CreditErrorKeyRejected
-	})
+func (p *meterPlugin) status() (int, string) {
+	p.t.Helper()
 	raw, _ := json.Marshal(protocol.ManagementRequest{Method: "GET", Path: "/v0/management/plugins/quota-cache/status"})
 	result, err := p.Handle(protocol.MethodManagementHandle, raw)
-	if err != nil || result.(protocol.ManagementResponse).StatusCode != 200 {
-		t.Fatalf("status err=%v", err)
+	if err != nil {
+		p.t.Fatal(err)
 	}
-	status := string(result.(protocol.ManagementResponse).Body)
-	file, _ := os.ReadFile(path)
-	host.mu.Lock()
-	logs := strings.Join(host.logs, "\n")
-	host.mu.Unlock()
-	for name, text := range map[string]string{"snapshot": string(file), "status": status, "logs": logs} {
-		for _, secret := range []string{fakeAdminKey, fakeOtherKey, "FAKEFAKE", "FAKEOTHER", "req_"} {
-			if strings.Contains(text, secret) {
-				t.Fatalf("%s contains %q", name, secret)
-			}
-		}
+	response := result.(protocol.ManagementResponse)
+	return response.StatusCode, string(response.Body)
+}
+
+func (p *meterPlugin) meterFile() *client.APIMeter {
+	p.t.Helper()
+	meter, err := client.LoadMeter(client.MeterPath(p.path))
+	if err != nil {
+		p.t.Fatalf("meter file: %v", err)
 	}
-	if !strings.Contains(status, `"api_credit"`) || !strings.Contains(status, `"cost_report"`) {
-		t.Fatal("the status route does not carry the credit")
+	return meter
+}
+
+func (p *meterPlugin) usage(raw []byte) {
+	p.t.Helper()
+	result, err := p.Handle(protocol.MethodUsageHandle, raw)
+	if err != nil || result != struct{}{} {
+		p.t.Fatalf("usage.handle answered %#v, %v", result, err)
 	}
-	configure(protocol.MethodPluginReconfigure, "")
-	waitFor(t, path, func(s client.Snapshot) bool {
-		_, a := s.Entries[good]
-		_, b := s.Entries[broken]
-		return !a && !b
+}
+
+func goldenRecord(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "meter", "testdata", "usage-record-v8.0.22.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+const oneCredit = "claude-api-credits:\n  - label: siphorchannel\n    organization-id: " + fakeOrgA + "\n    monthly-usd: \"200\"\n    renews: \"2026-10-29\"\n"
+
+// The capability follows the items: usage records are declared wanted only
+// while the cache runs and at least one item is configured, on register
+// and on every reconfigure. With no items the meter stops with no_items and
+// its file stays; disabled stops it with disabled. Routes are unchanged.
+func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
+	p := newMeterPlugin(t)
+	if reg := p.configure(protocol.MethodPluginRegister, ""); reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	}
+	if _, err := os.Lstat(client.MeterPath(p.path)); !os.IsNotExist(err) {
+		t.Fatal("a meter file exists with no items")
+	}
+	reg := p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	m := p.meter.Load()
+	if !reg.Capabilities.UsagePlugin || m == nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, m)
+	}
+	p.usage(goldenRecord(t))
+	// The same items again keep the meter; so does a schedule change.
+	p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	p.configure(protocol.MethodPluginReconfigure, "poll-interval: 30m\n"+oneCredit)
+	if p.meter.Load() != m {
+		t.Fatal("a reconfigure replaced the meter")
+	}
+	if reg := p.configure(protocol.MethodPluginReconfigure, ""); reg.Capabilities.UsagePlugin || p.meter.Load() != nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	}
+	file := p.meterFile()
+	if file.StopReason != client.MeterStopNoItems || file.StoppedAt == nil || file.Counted != 1 || file.Received != 1 {
+		t.Fatalf("file after no_items: %+v", file)
+	}
+	// Items again: the meter carries on from the file, with a gap.
+	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.meter.Load() == nil {
+		t.Fatalf("registration=%+v", reg.Capabilities)
+	}
+	if reg := p.configure(protocol.MethodPluginReconfigure, "enabled: false\n"+oneCredit); reg.Capabilities.UsagePlugin || p.meter.Load() != nil || p.cache != nil {
+		t.Fatalf("registration=%+v meter=%v cache=%v", reg.Capabilities, p.meter.Load(), p.cache)
+	}
+	file = p.meterFile()
+	if file.StopReason != client.MeterStopDisabled || len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopNoItems || file.Restarts != 1 || file.Counted != 1 {
+		t.Fatalf("file after disabled: %+v", file)
+	}
+	raw, _ := json.Marshal(protocol.ManagementRequest{})
+	result, err := p.Handle(protocol.MethodManagementRegister, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := result.(protocol.ManagementRegistration)
+	if len(registration.Routes) != 1 || registration.Routes[0].Path != "/plugins/quota-cache/status" || len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
+		t.Fatalf("routes=%+v", registration)
+	}
+}
+
+// End to end through configure, the real writer and the meter: a record CPA
+// sends is counted for its organization, an OAuth record never is, and
+// nothing the record carries beyond what the meter keeps reaches the meter
+// file, the snapshot, the status route or the log. admin-key is flagged,
+// warned about once per configure, and never read.
+func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, oneCredit+"    admin-key: "+fakeAdminKey+"\n"+item("-", "nope", `"5"`, `"2026-10-01"`)+"    admin-key: "+fakeAdminKey+"\n")
+	good := client.Key(client.ProviderAnthropicAPI, client.APICreditOrgAccount(fakeOrgA))
+	broken := client.Key(client.ProviderAnthropicAPI, "item-2")
+	snapshot := waitFor(t, p.path, func(s client.Snapshot) bool {
+		_, ok := s.Entries[good]
+		_, seen := s.Entries[broken]
+		return ok && seen
 	})
-}
+	if entry := snapshot.Entries[good]; entry.APICredit == nil || !entry.APICredit.AdminKeyIgnored || entry.APICredit.KeyFingerprint != "" || entry.APICredit.OrganizationID != fakeOrgA || !entry.LastAttempt.IsZero() {
+		t.Fatalf("entry=%+v", entry.APICredit)
+	}
+	if entry := snapshot.Entries[broken]; entry.APICredit == nil || entry.APICredit.Problem != client.CreditProblemLabelMissing || !entry.APICredit.AdminKeyIgnored {
+		t.Fatalf("misconfigured entry=%+v", entry.APICredit)
+	}
+	before, _ := os.ReadFile(p.path)
 
-// describeRequests prints requests for a failure message with each key
-// replaced by its fingerprint, so a failing test never prints a key, fake or
-// not.
-func describeRequests(requests []protocol.HostHTTPRequest) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d request(s)", len(requests))
-	for _, r := range requests {
-		fmt.Fprintf(&b, "\n%s %s", r.Method, r.URL)
-		names := make([]string, 0, len(r.Headers))
-		for name := range r.Headers {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			values := r.Headers[name]
-			if strings.EqualFold(name, "X-Api-Key") {
-				printed := make([]string, len(values))
-				for i, v := range values {
-					printed[i] = creditKeyFingerprint(v)
-				}
-				values = printed
+	golden := goldenRecord(t)
+	p.usage(golden)
+	oauth := strings.Replace(string(golden), `"AuthType":"apikey"`, `"AuthType":"oauth"`, 1)
+	oauth = strings.Replace(oauth, fakeOrgA, fakeOrgC, 1)
+	p.usage([]byte(oauth))
+	p.usage([]byte(`not a record`))
+	p.usage(nil)
+	// Stopping the meter writes it; the snapshot is not touched by that.
+	// The configuration is unchanged, so no scan rewrites it either.
+	p.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
+	file := p.meterFile()
+	if file.Received != 4 || file.Counted != 1 || file.Rejected != 2 || len(file.Unlinked) != 0 || file.Organizations[fakeOrgA].ClaudeCodeRefusals != 1 {
+		t.Fatalf("meter file: %+v", file)
+	}
+	if _, listed := file.Organizations[fakeOrgC]; listed {
+		t.Fatal("an OAuth record's organization reached the meter")
+	}
+	if after, _ := os.ReadFile(p.path); string(after) != string(before) {
+		t.Fatal("writing the meter rewrote the snapshot")
+	}
+	p.configure(protocol.MethodPluginReconfigure, "")
+	code, status := p.status()
+	if code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || !strings.Contains(status, `"admin_key_ignored":true`) {
+		t.Fatalf("status %d: %s", code, status)
+	}
+	rawMeter, _ := os.ReadFile(client.MeterPath(p.path))
+	lines := p.host.logged()
+	items := *p.apiCredits.Load()
+	for name, text := range map[string]string{
+		"snapshot": string(before), "meter": string(rawMeter), "status": status,
+		"logs": fmt.Sprintf("%v %+v %#v", lines, lines, lines), "items": fmt.Sprintf("%v %+v %#v", items, items, items),
+	} {
+		for _, secret := range []string{fakeAdminKey, "FAKEFAKE", "sk-ant", "key_fingerprint", "SOURCE-CANARY", "APIKEY-CANARY", "AUTHID-CANARY", "BASEURL-CANARY",
+			"SESSION-CANARY", "PARENT-CANARY", "BODY-CANARY", "HEADER-VALUE-CANARY", "ALIAS-CANARY", "req_"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("the %s carries %q", name, secret)
 			}
-			fmt.Fprintf(&b, "\n  %s: %q", name, values)
 		}
 	}
-	return b.String()
-}
-
-// Formatting an item, in any way, prints its key's fingerprint, never the key.
-func TestCreditItemFormattingNeverPrintsTheKey(t *testing.T) {
-	item := creditItem{id: "label-x", key: fakeAdminKey, credit: client.APICredit{Label: "x", KeyFingerprint: creditKeyFingerprint(fakeAdminKey)}}
-	items := []creditItem{item}
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x"} {
-		for _, value := range []any{item, &item, items, &items} {
-			if out := fmt.Sprintf(verb, value); strings.Contains(out, fakeAdminKey) || strings.Contains(out, "FAKE") || !strings.Contains(out, creditKeyFingerprint(fakeAdminKey)) {
-				t.Errorf("%s of %T printed %q", verb, value, out)
-			}
+	// The meter file keeps model names and organization ids; the log never
+	// names either.
+	for _, named := range []string{"claude-sonnet", fakeOrgA, fakeOrgC, "0123456789abcdef"} {
+		if strings.Contains(fmt.Sprintf("%+v", lines), named) {
+			t.Fatalf("the log names %q", named)
 		}
 	}
-	if out := describeRequests([]protocol.HostHTTPRequest{{Headers: map[string][]string{"X-Api-Key": {fakeAdminKey}}}}); strings.Contains(out, fakeAdminKey) {
-		t.Errorf("describeRequests printed %q", out)
+	warnings := []logLine{}
+	for _, line := range lines {
+		if strings.Contains(line.message, "admin-key") {
+			warnings = append(warnings, line)
+		}
+	}
+	// Once for the register that had two such items, none for the
+	// reconfigure that had none.
+	if len(warnings) != 1 || warnings[0].level != "warn" || warnings[0].message != "quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration" || warnings[0].fields["items"] != 2 {
+		t.Fatalf("warnings=%+v", warnings)
+	}
+	for _, line := range lines {
+		if line.level == "error" {
+			t.Fatalf("logged an error: %+v", line)
+		}
+	}
+}
+
+// The status route carries the meter file when there is one it can read,
+// and omits it otherwise; a poll's save never touches the meter file.
+func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, "")
+	waitFor(t, p.path, func(s client.Snapshot) bool { return !s.WrittenAt.IsZero() })
+	if code, status := p.status(); code != 200 || strings.Contains(status, "api_meter") {
+		t.Fatalf("status %d carries a meter with no file: %s", code, status)
+	}
+	p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	p.configure(protocol.MethodPluginReconfigure, "")
+	rawMeter, err := os.ReadFile(client.MeterPath(p.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, status := p.status(); code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || !strings.Contains(status, `"stop_reason":"no_items"`) {
+		t.Fatalf("status %d: %s", code, status)
+	}
+	// A configuration change makes the writer save the snapshot, while the
+	// meter it restarts has not saved yet; the meter file is as it was.
+	p.configure(protocol.MethodPluginReconfigure, oneCredit+item("-", "nope", `"5"`, `"2026-10-01"`))
+	waitFor(t, p.path, func(s client.Snapshot) bool {
+		_, ok := s.Entries[client.Key(client.ProviderAnthropicAPI, "item-2")]
+		return ok
+	})
+	if again, _ := os.ReadFile(client.MeterPath(p.path)); string(again) != string(rawMeter) {
+		t.Fatal("a snapshot save rewrote the meter file")
+	}
+	if err := os.WriteFile(client.MeterPath(p.path), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code, status := p.status(); code != 200 || strings.Contains(status, "api_meter") {
+		t.Fatalf("status %d carries an unreadable meter: %s", code, status)
+	}
+}
+
+// Quiesce stops the meter with its reason and the register that follows, as
+// CPA's rollback of a failed replacement does, carries on from the file
+// with a quiesce gap; shutdown leaves a shutdown stop in the file.
+func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.usage(goldenRecord(t))
+	if _, err := p.Handle(protocol.MethodPluginQuiesce, nil); err != nil {
+		t.Fatal(err)
+	}
+	if file := p.meterFile(); file.StopReason != client.MeterStopQuiesce || file.Counted != 1 || p.meter.Load() != nil {
+		t.Fatalf("after quiesce: %+v meter=%v", file, p.meter.Load())
+	}
+	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.usage(goldenRecord(t))
+	p.Shutdown()
+	file := p.meterFile()
+	if file.StopReason != client.MeterStopShutdown || len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopQuiesce || !file.Gaps[0].Brief() || file.Restarts != 1 || file.Counted != 2 {
+		t.Fatalf("after shutdown: %+v", file)
+	}
+	if p.meter.Load() != nil {
+		t.Fatal("the meter outlived shutdown")
+	}
+}
+
+// A meter that stopped itself is replaced at the next configure by one
+// opened from its file, which records a failed gap.
+func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, oneCredit)
+	failed := p.meter.Load()
+	failed.Stop(client.MeterStopFailed, time.Now().UTC())
+	if !failed.Failed() {
+		t.Fatal("not failed")
+	}
+	p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	replaced := p.meter.Load()
+	if replaced == nil || replaced == failed || replaced.Failed() {
+		t.Fatalf("meter=%v", replaced)
+	}
+	p.usage(goldenRecord(t))
+	p.configure(protocol.MethodPluginReconfigure, "")
+	if file := p.meterFile(); len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopFailed || file.Counted != 1 || file.StopReason != client.MeterStopNoItems {
+		t.Fatalf("file: %+v", file)
+	}
+}
+
+// A configure quota-cache rejects leaves CPA delivering it no usage records
+// until one succeeds, so the meter stops with the rejection instead of
+// heartbeating through a window it cannot see, and the good configure that
+// follows carries on from the file with that window as a gap. Every
+// rejection does it: a schedule without a unit, a mistyped key, a moved
+// cache path and an old schema. The cache itself carries on.
+func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, oneCredit)
+	attempt := func(schema uint32, yaml string) error {
+		raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: schema, ConfigYAML: []byte(yaml)})
+		_, err := p.Handle(protocol.MethodPluginReconfigure, raw)
+		return err
+	}
+	good := "cache-path: " + p.path + "\nrequest-spacing: 1s\n" + oneCredit
+	rejections := []struct {
+		name   string
+		schema uint32
+		yaml   string
+	}{
+		{"a poll interval without a unit", 6, "cache-path: " + p.path + "\npoll-interval: \"15\"\n" + oneCredit},
+		{"a request spacing without a unit", 6, "cache-path: " + p.path + "\nrequest-spacing: 15\n" + oneCredit},
+		{"a mistyped key", 6, "cache-path: " + p.path + "\npol-interval: 15m\n" + oneCredit},
+		{"a moved cache path", 6, "cache-path: " + filepath.Join(t.TempDir(), "elsewhere", "snapshot.json") + "\n" + oneCredit},
+		{"an old schema", 3, good},
+	}
+	for i, bad := range rejections {
+		running := p.meter.Load()
+		if running == nil {
+			t.Fatalf("%s: no meter was running", bad.name)
+		}
+		p.usage(goldenRecord(t))
+		if err := attempt(bad.schema, bad.yaml); err == nil {
+			t.Fatalf("%s was accepted", bad.name)
+		}
+		if p.meter.Load() != nil || p.cache == nil {
+			t.Fatalf("%s: meter running=%t cache running=%t", bad.name, p.meter.Load() != nil, p.cache != nil)
+		}
+		file := p.meterFile()
+		if file.StopReason != client.MeterStopDisabled || file.StoppedAt == nil || file.Counted != uint64(i+1) || len(file.Gaps) != i {
+			t.Fatalf("%s: file after the rejection: %+v", bad.name, file)
+		}
+		// CPA delivers nothing now; a record that arrived anyway is not
+		// counted as if the meter had been running.
+		p.usage(goldenRecord(t))
+		if err := attempt(6, good); err != nil {
+			t.Fatalf("%s: the fix was rejected: %v", bad.name, err)
+		}
+		if m := p.meter.Load(); m == nil || m == running {
+			t.Fatalf("%s: meter after the fix: %v", bad.name, m)
+		}
+	}
+	p.configure(protocol.MethodPluginReconfigure, "")
+	file := p.meterFile()
+	if n := uint64(len(rejections)); len(file.Gaps) != len(rejections) || file.Restarts != n || file.Counted != n || file.Received != n || file.StopReason != client.MeterStopNoItems {
+		t.Fatalf("file after the fixes: %+v", file)
+	}
+	for _, gap := range file.Gaps {
+		if gap.Reason != client.MeterStopDisabled || !gap.Brief() {
+			t.Fatalf("gaps=%+v", file.Gaps)
+		}
 	}
 }
