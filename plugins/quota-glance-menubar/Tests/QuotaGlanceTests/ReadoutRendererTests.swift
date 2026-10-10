@@ -152,6 +152,14 @@ final class ReadoutRendererTests: XCTestCase {
         XCTAssertEqual(highPixels[fill], lowPixels[fill])
     }
 
+    func testAppIconIsOneSharedTemplateImage() throws {
+        // Created once, not on every status item update.
+        let icon = try XCTUnwrap(ReadoutRenderer.appIcon)
+        XCTAssertTrue(icon === ReadoutRenderer.appIcon)
+        XCTAssertTrue(icon.isTemplate)
+        XCTAssertTrue(ReadoutRenderer.percentImage(text: "59%").isTemplate)
+    }
+
     @MainActor
     func testBundledLogosLoadFromADirectoryAndRejectPaths() {
         let provider = ProviderLogos(directory: logos)

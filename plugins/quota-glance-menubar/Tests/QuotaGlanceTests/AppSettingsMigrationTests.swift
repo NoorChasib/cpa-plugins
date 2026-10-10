@@ -49,6 +49,27 @@ final class AppSettingsMigrationTests: XCTestCase {
         XCTAssertEqual(relaunched.readout, .newInstall)
     }
 
+    // Earlier versions accepted a Management API address. It is never loaded,
+    // but Settings shows it with the reason instead of an empty field.
+    func testRefusedStoredURLStaysReadableAndSaved() throws {
+        let store = defaults()
+        XCTAssertNil(AppSettings(defaults: store).storedURLText, "A new install has nothing saved")
+        let refused = "https://quota.example.com/v0/management/plugins/quota-glance/app"
+        store.set(refused, forKey: "dashboardURL")
+        let settings = AppSettings(defaults: store)
+        XCTAssertNil(settings.location)
+        XCTAssertEqual(settings.storedURLText, refused)
+        XCTAssertThrowsError(try DashboardLocation(settings.storedURLText ?? "")) { error in
+            XCTAssertEqual(error as? DashboardLocation.ValidationError, .managementRoute)
+        }
+        XCTAssertEqual(store.string(forKey: "dashboardURL"), refused, "Reading it neither deletes nor rewrites it")
+
+        let location = try DashboardLocation("https://quota.example.com/v0/resource/plugins/quota-glance/app")
+        settings.save(location)
+        XCTAssertEqual(settings.storedURLText, location.url.absoluteString)
+        XCTAssertEqual(settings.location, location)
+    }
+
     func testStoredReadoutIsNotMigratedAgain() throws {
         let store = defaults()
         let chosen = MenuBarReadout(style: .splitPill, windows: [fable], badge: .whenProvidersDiffer, showsAppIcon: false)

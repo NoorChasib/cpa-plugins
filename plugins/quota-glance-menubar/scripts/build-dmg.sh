@@ -46,7 +46,7 @@ Your dashboard URL and saved web session are retained between launches.
 If macOS asks for login-item approval, allow Quota Glance in System Settings
 under General > Login Items.
 
-Requires macOS 13 or newer.
+Requires a Mac with Apple silicon and macOS 13 or newer.
 EOF
 if [[ "${NOTARIZED_RELEASE:-0}" == 1 ]]; then
     xcrun stapler validate "$app"

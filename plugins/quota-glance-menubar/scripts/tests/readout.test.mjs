@@ -12,8 +12,8 @@ const config = {
 };
 const route = config.summaryPaths[1];
 const authorization = 'Bearer test-only-credential';
-function harness() {
-  const messages = [], requests = [];
+function harness(settings = config) {
+  const messages = [], requests = [], keyListeners = [], dialogs = [];
   let responder = () => new Response(JSON.stringify(fixture), { headers: { ETag: 'v1' } });
   class BrowserRequest extends Request {
     constructor(input, init) { super(typeof input === 'string' ? new URL(input, origin) : input, init); }
@@ -25,16 +25,30 @@ function harness() {
       requests.push(request);
       return responder(request);
     },
+    addEventListener: (type, listener) => { if (type === 'keydown') keyListeners.push(listener); },
   };
-  const context = vm.createContext({ window, location: { origin, pathname: config.path },
-    Request: BrowserRequest, Headers, URL, AbortController, setTimeout, clearTimeout });
-  vm.runInContext(source.replace('__QUOTA_GLANCE_CONFIG__', JSON.stringify(config)), context);
+  const document = { querySelectorAll: selector => selector === 'dialog:modal' ? dialogs.filter(d => d.open) : [] };
+  const context = vm.createContext({ window, document, location: { origin, pathname: settings.path },
+    Request: BrowserRequest, Headers, URL, AbortController, Event, setTimeout, clearTimeout });
+  vm.runInContext(source.replace('__QUOTA_GLANCE_CONFIG__', JSON.stringify(settings)), context);
   const fetchPage = (path = route, init = {}) => window.fetch(path, { headers: { Authorization: authorization }, ...init });
   // Drain the response-clone stream and the observation queue deterministically.
   const settle = async () => {
     for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
   };
-  return { messages, requests, window, fetchPage, settle, respond: fn => { responder = fn; } };
+  // A key as WebKit delivers it to window, once the page's own handlers have run.
+  const press = (fields = {}) => {
+    const event = { isTrusted: true, key: 'Escape', isComposing: false, defaultPrevented: false, target: null,
+      preventDefault() { this.defaultPrevented = true; }, ...fields };
+    for (const listener of keyListeners) listener(event);
+    return event;
+  };
+  const showModal = () => {
+    const dialog = Object.assign(new EventTarget(), { open: true, close() { this.open = false; } });
+    dialogs.push(dialog);
+    return dialog;
+  };
+  return { messages, requests, window, fetchPage, settle, press, showModal, respond: fn => { responder = fn; } };
 }
 
 test('projects the real summary without consuming the page response or exposing credentials', async () => {
@@ -107,6 +121,281 @@ test('network failure and unknown schema report unavailable and recover on the n
   h.respond(() => new Response(JSON.stringify(fixture)));
   await h.window.__quotaGlanceReadout.refresh();
   assert.equal(h.messages.at(-1).kind, 'snapshot');
+});
+
+test('a resource refresh with no answer asks the host to poll again soon and keeps its request', async () => {
+  const h = harness();
+  await h.fetchPage();
+  await h.settle();
+  h.respond(() => { throw new TypeError('Load failed'); });
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'network']);
+  h.respond(() => new Response(JSON.stringify(fixture)));
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.equal(h.requests.at(-1).headers.get('Authorization'), authorization);
+  assert.equal(h.messages.at(-1).kind, 'snapshot');
+});
+
+// CPA counts a refused management key toward its ban, and a console request
+// that got no answer may have been counted: the dashboard never repeats one
+// on its own (access.ts readThrough), so neither does the native clock.
+const consoleRoute = config.summaryPaths[0];
+const pageURL = `${origin}${config.path}`;
+// CPA dispatches only GET to a resource route, so it answers a HEAD for the
+// dashboard page with a 404 (pluginhost ServeResourceHTTP declines it).
+const serverUp = request => request.method === 'HEAD'
+  ? new Response(null, { status: 404 })
+  : new Response(JSON.stringify(fixture));
+const noAnswer = {
+  'a network error': () => { throw new TypeError('Load failed'); },
+  'a redirect': request => {
+    assert.equal(request.redirect, 'error');
+    throw new TypeError('Load failed');
+  },
+  'a deadline': () => { throw new DOMException('The operation was aborted.', 'AbortError'); },
+};
+for (const [name, failure] of Object.entries(noAnswer)) {
+  test(`a console refresh the server was up for that got ${name} is never repeated`, async () => {
+    const h = harness();
+    await h.fetchPage(consoleRoute);
+    await h.settle();
+    assert.equal(h.messages.at(-1).kind, 'snapshot');
+    const before = h.requests.length;
+    h.respond(request => request.method === 'HEAD' ? serverUp(request) : failure(request));
+    await h.window.__quotaGlanceReadout.refresh();
+    assert.deepEqual(h.requests.slice(before).map(r => [r.method, new URL(r.url).pathname]),
+      [['HEAD', config.path], ['GET', consoleRoute]]);
+    assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'unanswered']);
+    const count = h.requests.length;
+    h.respond(() => new Response(JSON.stringify(fixture)));
+    for (let i = 0; i < 3; i++) await h.window.__quotaGlanceReadout.refresh();
+    assert.equal(h.requests.length, count);
+    assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', null]);
+    // The page asking again is the reader's choice, and resumes the readout.
+    await h.fetchPage(consoleRoute);
+    await h.settle();
+    assert.equal(h.messages.at(-1).kind, 'snapshot');
+  });
+}
+
+// The host asks for a reading as soon as the Mac wakes, usually before Wi-Fi
+// or a VPN is back. A console replay sent then got no answer and was dropped,
+// and the readout showed a dash until the popover was opened.
+test('a console refresh while the server cannot be reached sends no key and keeps its request', async () => {
+  const h = harness();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  const before = h.requests.length;
+  h.respond(() => { throw new TypeError('Load failed'); });
+  await h.window.__quotaGlanceReadout.refresh();
+  const asked = h.requests.slice(before);
+  assert.deepEqual(asked.map(r => [r.method, r.url]), [['HEAD', pageURL]], 'Nothing was sent to the console');
+  assert.deepEqual([asked[0].cache, asked[0].credentials, asked[0].redirect], ['no-store', 'omit', 'manual']);
+  assert.equal(asked[0].headers.get('Authorization'), null);
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'network']);
+  // The host's quick retry, once the network is back.
+  h.respond(serverUp);
+  await h.window.__quotaGlanceReadout.refresh();
+  const retried = h.requests.slice(before + 1);
+  assert.deepEqual(retried.map(r => [r.method, new URL(r.url).pathname]), [['HEAD', config.path], ['GET', consoleRoute]]);
+  assert.equal(retried[1].headers.get('Authorization'), authorization);
+  assert.equal(h.messages.at(-1).kind, 'snapshot');
+});
+
+test('any answer to the reachability check, whatever its status, lets the console replay go ahead', async () => {
+  for (const answer of [() => new Response(null, { status: 405 }), () => Response.redirect(`${origin}/sign-in`, 302),
+    () => new Response(null, { status: 502 })]) {
+    const h = harness();
+    await h.fetchPage(consoleRoute);
+    await h.settle();
+    h.respond(request => request.method === 'HEAD' ? answer() : new Response(JSON.stringify(fixture)));
+    await h.window.__quotaGlanceReadout.refresh();
+    assert.deepEqual(h.requests.slice(1).map(r => r.method), ['HEAD', 'GET']);
+    assert.equal(h.messages.at(-1).kind, 'snapshot');
+  }
+});
+
+// The page reads through the console on its own too, for one when the network
+// comes back (TanStack's refetchOnReconnect), often while the bridge's check is
+// out. Its answer stands: after a refusal or no answer, the replay built before
+// it would present the key once more, past the page's own hold.
+function checkHeld(h, read) {
+  let answerCheck;
+  h.respond(request => request.method === 'HEAD'
+    ? new Promise(resolve => { answerCheck = () => resolve(new Response(null, { status: 404 })); })
+    : read(request));
+  return () => answerCheck();
+}
+const pageRead = {
+  'gets no answer': [() => { throw new TypeError('Load failed'); }, 'unanswered'],
+  'is refused': [() => new Response(null, { status: 401 }), null],
+};
+for (const [name, [read, reason]] of Object.entries(pageRead)) {
+  test(`a console replay waiting on the check is not sent once the page's own read ${name}`, async () => {
+    const h = harness();
+    await h.fetchPage(consoleRoute);
+    await h.settle();
+    const answerCheck = checkHeld(h, read);
+    const refreshing = h.window.__quotaGlanceReadout.refresh();
+    await h.settle();
+    assert.equal(h.requests.at(-1).method, 'HEAD');
+    await h.fetchPage(consoleRoute).catch(() => {});
+    await h.settle();
+    assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', reason]);
+    const [count, reported] = [h.requests.length, h.messages.length];
+    answerCheck();
+    await refreshing;
+    assert.equal(h.requests.length, count, 'The key was not presented again');
+    assert.equal(h.messages.length, reported);
+    h.respond(serverUp);
+    await h.window.__quotaGlanceReadout.refresh();
+    assert.equal(h.requests.length, count);
+  });
+}
+
+test("a page read that answers while the check is out stands, and is not replayed", async () => {
+  const h = harness(), changed = structuredClone(fixture);
+  changed.providers[0].rows[0].aggregate.remainingPercent = 17;
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  const answerCheck = checkHeld(h, () => new Response(JSON.stringify(changed), { headers: { ETag: 'v2' } }));
+  const refreshing = h.window.__quotaGlanceReadout.refresh();
+  await h.settle();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  const count = h.requests.length;
+  answerCheck();
+  await refreshing;
+  assert.equal(h.requests.length, count);
+  assert.equal(h.messages.at(-1).kind, 'snapshot', 'The fresh reading is not marked unavailable');
+  assert.equal(h.messages.at(-1).snapshot.windows[0].remainingPercent, 17);
+});
+
+test('a page read still out when the check answers is left to report', async () => {
+  const h = harness();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  let answerPage;
+  const answerCheck = checkHeld(h, () => new Promise(resolve => { answerPage = resolve; }));
+  const refreshing = h.window.__quotaGlanceReadout.refresh();
+  await h.settle();
+  const reading = h.fetchPage(consoleRoute);
+  await h.settle();
+  answerCheck();
+  await h.settle();
+  assert.deepEqual(h.requests.slice(1).map(r => r.method), ['HEAD', 'GET'], 'Only the page read went out');
+  answerPage(new Response(JSON.stringify(fixture)));
+  await Promise.all([reading, refreshing]);
+  await h.settle();
+  assert.equal(h.messages.at(-1).kind, 'snapshot');
+});
+
+test('a page read refused while an earlier one is still being read is observed before the replay', async () => {
+  const h = harness();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  let body;
+  const reads = [() => new Response(new ReadableStream({ start(controller) { body = controller; } })),
+    () => new Response(null, { status: 401 })];
+  const answerCheck = checkHeld(h, () => reads.shift()());
+  const refreshing = h.window.__quotaGlanceReadout.refresh();
+  await h.settle();
+  await h.fetchPage(consoleRoute);
+  answerCheck();
+  await h.settle();
+  await h.fetchPage(consoleRoute);
+  const count = h.requests.length;
+  body.enqueue(new TextEncoder().encode('{"schemaVersion":2}'));
+  body.close();
+  await refreshing;
+  assert.equal(h.requests.length, count, 'The key was not presented again');
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', null]);
+});
+
+test('a resource refresh asks nothing first, so it costs no extra request', async () => {
+  const h = harness();
+  await h.fetchPage();
+  await h.settle();
+  h.respond(serverUp);
+  await h.window.__quotaGlanceReadout.refresh();
+  h.respond(() => { throw new TypeError('Load failed'); });
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.deepEqual(h.requests.map(r => [r.method, new URL(r.url).pathname]), [['GET', route], ['GET', route], ['GET', route]]);
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'network']);
+});
+
+// Settings refuses a Management API address, but should the page ever sit
+// there, a HEAD without the key would itself count toward CPA's ban. CPA's
+// /v8/management tree checks the key the same way.
+for (const path of ['/proxy/v0/management/plugins/quota-glance/app', '/proxy/V0/%4Danagement/plugins/quota-glance/app',
+  '/v8/management/plugins/quota-glance/app']) {
+  test(`a page at ${path} replays the console without asking first, and drops it unanswered`, async () => {
+    const h = harness({ ...config, path });
+    await h.fetchPage(consoleRoute);
+    await h.settle();
+    h.respond(() => { throw new TypeError('Load failed'); });
+    await h.window.__quotaGlanceReadout.refresh();
+    assert.deepEqual(h.requests.map(r => [r.method, new URL(r.url).pathname]), [['GET', consoleRoute], ['GET', consoleRoute]]);
+    assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'unanswered']);
+    await h.window.__quotaGlanceReadout.refresh();
+    assert.equal(h.requests.length, 2);
+  });
+}
+
+test("the page's own console read with no answer stops the native clock repeating it", async () => {
+  const h = harness();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  h.respond(() => { throw new TypeError('Load failed'); });
+  await assert.rejects(h.fetchPage(consoleRoute), TypeError);
+  await h.settle();
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'unanswered']);
+  const count = h.requests.length;
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.equal(h.requests.length, count);
+});
+
+test('a console read with no answer leaves the resource door working', async () => {
+  const h = harness();
+  await h.fetchPage();
+  await h.settle();
+  h.respond(request => {
+    if (request.url.includes('/management/')) throw new TypeError('Load failed');
+    return new Response(JSON.stringify(fixture));
+  });
+  await assert.rejects(h.fetchPage(consoleRoute), TypeError);
+  await h.settle();
+  assert.equal(h.messages.at(-1).reason, 'unanswered');
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.equal(new URL(h.requests.at(-1).url).pathname, route);
+  assert.equal(h.messages.at(-1).kind, 'snapshot');
+});
+
+// The page's own reads follow redirects, so a redirect shows only on the response.
+class FollowedRedirect extends Response {
+  get redirected() { return true; }
+  clone() { return Object.defineProperty(super.clone(), 'redirected', { value: true }); }
+}
+
+test("a redirect the page's console read followed counts as no answer", async () => {
+  const h = harness();
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  h.respond(() => new FollowedRedirect(JSON.stringify(fixture)));
+  await h.fetchPage(consoleRoute);
+  await h.settle();
+  assert.deepEqual([h.messages.at(-1).kind, h.messages.at(-1).reason], ['unavailable', 'unanswered']);
+  const count = h.requests.length;
+  await h.window.__quotaGlanceReadout.refresh();
+  assert.equal(h.requests.length, count);
+});
+
+test('a redirect the page followed on the resource door is not projected', async () => {
+  const h = harness();
+  h.respond(() => new FollowedRedirect(JSON.stringify(fixture)));
+  await h.fetchPage();
+  await h.settle();
+  assert.deepEqual(h.messages.map(m => [m.kind, m.reason]), [['unavailable', null]]);
 });
 
 test('ignores unrelated origins, routes and POSTs and never refreshes without a successful summary', async () => {
@@ -228,4 +517,41 @@ test('leaves non-summary Request bodies usable by dashboard actions', async () =
   await h.window.fetch(new Request(`${origin}/action`, { method: 'POST', body: '{"confirm":true}' }));
   assert.equal(body, '{"confirm":true}');
   assert.equal(h.messages.length, 0);
+});
+
+// WebKit's own Escape close of a modal dialog leaves the key unhandled, and the
+// app then closes the popover as well. The bridge closes the dialog and keeps it.
+test('Escape closes an open page dialog and is kept from the popover', async () => {
+  const h = harness();
+  const dialog = h.showModal();
+  let cancels = 0;
+  dialog.addEventListener('cancel', () => { cancels += 1; });
+  const event = h.press({ target: { closest: selector => selector === 'dialog:modal' ? dialog : null } });
+  assert.deepEqual([event.defaultPrevented, dialog.open, cancels], [true, false, 1]);
+  // Focus on the page body still finds the open dialog.
+  const other = h.showModal();
+  assert.equal(h.press({ target: { closest: () => null } }).defaultPrevented, true);
+  assert.equal(other.open, false);
+  assert.equal(h.messages.length, 0);
+});
+
+test('a page dialog that refuses to cancel stays open, and Escape stays in the page', async () => {
+  const h = harness();
+  const dialog = h.showModal();
+  dialog.addEventListener('cancel', event => event.preventDefault());
+  assert.equal(h.press().defaultPrevented, true);
+  assert.equal(dialog.open, true);
+});
+
+test('Escape with no dialog, one the page handled, a synthetic one, and other keys pass through', async () => {
+  const h = harness();
+  assert.equal(h.press().defaultPrevented, false);
+  const dialog = h.showModal();
+  let cancels = 0;
+  dialog.addEventListener('cancel', () => { cancels += 1; });
+  h.press({ defaultPrevented: true });
+  for (const fields of [{ isTrusted: false }, { key: 'Enter' }, { isComposing: true }]) {
+    assert.equal(h.press(fields).defaultPrevented, false);
+  }
+  assert.deepEqual([dialog.open, cancels], [true, 0]);
 });

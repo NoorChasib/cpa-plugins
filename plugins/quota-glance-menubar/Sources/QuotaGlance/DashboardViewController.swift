@@ -5,6 +5,9 @@ import WebKit
 @MainActor
 final class DashboardViewController: NSViewController, WKNavigationDelegate, WKUIDelegate {
     var onSettings: (() -> Void)?
+    /// Escape that nothing in the popover used: the page left it unhandled,
+    /// or the page is not showing.
+    var onEscape: (() -> Void)?
     private var location: DashboardLocation?
     private var hasDocument = false
     private var failed = false
@@ -30,7 +33,7 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
     required init?(coder: NSCoder) { fatalError("Use init()") }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 620))
+        view = FocusableView(frame: NSRect(x: 0, y: 0, width: 400, height: 620))
         view.wantsLayer = true
         view.layer?.backgroundColor = webView.underPageBackgroundColor.cgColor
         for child in [webView, statusView] {
@@ -70,33 +73,68 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         guard self.location != location else { return }
         self.location = location
         readout.configure(location)
-        readout.onRecover = { [weak self] in
-            guard let self, !self.webView.isLoading else { return }
-            if self.failed || self.webView.url == nil { self.goToDashboard() }
-        }
+        readout.onRecover = { [weak self] in self?.recover() }
         hasDocument = false
         goToDashboard()
     }
 
     func goToDashboard() {
+        readout.restartRecovery()
+        load()
+    }
+
+    /// Show Dashboard returns to the dashboard but leaves it alone while it is
+    /// showing, so the menu item costs no reload. Reload Page reloads.
+    func showDashboard() {
+        readout.restartRecovery()
         guard let location else { return }
-        _ = view
-        if failed || !hasDocument { showLoading() }
-        failed = false
-        webView.load(URLRequest(url: location.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30))
+        if !hasDocument || failed || webView.url.map({ !location.isDashboard($0) }) ?? true {
+            load()
+        }
     }
 
     func prepareToShow() {
         // Opening is presentation only: keep scroll, forms, and the document.
         // Explicit Reload Page still picks up deployments when requested.
+        focusContent()
+        readout.restartRecovery()
         guard !webView.isLoading else { return }
         if failed || webView.url == nil {
-            goToDashboard()
+            load()
         }
     }
 
     func reloadPage() {
-        if failed || webView.url == nil { goToDashboard() } else { webView.reloadFromOrigin() }
+        readout.restartRecovery()
+        if failed || webView.url == nil {
+            load()
+        } else {
+            readout.pageLoadStarted()
+            webView.reloadFromOrigin()
+        }
+    }
+
+    private func load() {
+        guard let location else { return }
+        _ = view
+        if failed || !hasDocument { showLoading() }
+        failed = false
+        readout.pageLoadStarted()
+        // The page is served no-cache with an ETag, so WebKit revalidates it:
+        // a 304 while it is unchanged, the new page after a deployment.
+        webView.load(URLRequest(url: location.url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+    }
+
+    /// Due on the recovery schedule. A page that failed is loaded again; one
+    /// that loaded without a reading only while hidden, since a visible page
+    /// retries its own reads and may be in use.
+    private func recover() {
+        guard let location, !webView.isLoading else { return }
+        if failed || webView.url == nil {
+            load()
+        } else if let url = webView.url, location.isDashboard(url), view.window?.isVisible != true {
+            load()
+        }
     }
 
     @objc private func retry() { goToDashboard() }
@@ -110,9 +148,14 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         statusTitle.stringValue = "Loading your dashboard…"
         statusMessage.stringValue = "Connecting to your Quota Glance page."
         retryButton.isHidden = true
+        focusContent()
     }
 
-    private func showError(_ message: String) {
+    /// Network failures retry within seconds; the rest on the slow steps, as
+    /// an HTTP error page will not change in seconds and each try is a request.
+    private func showError(_ message: String, _ failure: RecoverySchedule.Failure = .server) {
+        // One failure per attempt, so a load reported twice does not skip a step.
+        if !failed { readout.pageDidFail(failure) }
         failed = true
         readout.markUnavailable()
         webView.isHidden = true
@@ -122,6 +165,35 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         statusTitle.stringValue = "Couldn’t open your dashboard"
         statusMessage.stringValue = message
         retryButton.isHidden = false
+        focusContent()
+    }
+
+    /// Keys go to the page while it shows, so its dialogs get Escape first;
+    /// otherwise to the root view, which passes them to this controller.
+    private func focusContent() {
+        guard let window = view.window else { return }
+        window.makeFirstResponder(webView.isHidden ? view : webView)
+    }
+
+    // WebKit gives the page every key first. An Escape the page left unhandled
+    // comes back up the responder chain from the web view as cancelOperation:
+    // (WebPageMac.mm runs that command at the keypress); keyDown gets Escape
+    // while the loading or error view has focus, or if WebKit re-sends the key
+    // (WebViewImpl::doneWithKeyEvent). WebKit's own close of a page dialog
+    // leaves the key unhandled, so the bridge (QuotaReadout.js) closes the
+    // dialog itself and keeps Escape, and the popover stays open.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, let onEscape {
+            onEscape()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    // Escape or Command-period as a command, which is how the page's
+    // unhandled Escape arrives.
+    override func cancelOperation(_ sender: Any?) {
+        onEscape?()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -130,7 +202,8 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         statusView.isHidden = true
         webView.isHidden = false
         spinner.stopAnimation(nil)
-        readout.refreshIfEnabled()
+        focusContent()
+        readout.pageDidLoad()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -143,9 +216,10 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
 
     private func handleFailure(_ error: Error) {
         let error = error as NSError
-        guard !(error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled) else { return }
+        // Nil when this controller ended the load itself, and has shown why.
+        guard let failure = RecoverySchedule.Failure(loadErrorDomain: error.domain, code: error.code) else { return }
         // Avoid displaying URLs or query parameters in WebKit's raw errors.
-        showError("Check your connection and dashboard URL, then try again. If you use a VPN, check that it’s connected.")
+        showError("Check your connection and dashboard URL, then try again. If you use a VPN, check that it’s connected.", failure)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -246,4 +320,9 @@ final class DashboardViewController: NSViewController, WKNavigationDelegate, WKU
         NSApp.activate(ignoringOtherApps: true)
         return alert
     }
+}
+
+/// Takes focus while the status view shows, so Escape still reaches the controller.
+private final class FocusableView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
