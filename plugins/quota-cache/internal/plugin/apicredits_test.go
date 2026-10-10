@@ -670,3 +670,67 @@ func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
 		t.Fatalf("file: %+v", file)
 	}
 }
+
+// A configure quota-cache rejects leaves CPA delivering it no usage records
+// until one succeeds, so the meter stops with the rejection instead of
+// heartbeating through a window it cannot see, and the good configure that
+// follows carries on from the file with that window as a gap. Every
+// rejection does it: a schedule without a unit, a mistyped key, a moved
+// cache path and an old schema. The cache itself carries on.
+func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
+	p := newMeterPlugin(t)
+	p.configure(protocol.MethodPluginRegister, oneCredit)
+	attempt := func(schema uint32, yaml string) error {
+		raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: schema, ConfigYAML: []byte(yaml)})
+		_, err := p.Handle(protocol.MethodPluginReconfigure, raw)
+		return err
+	}
+	good := "cache-path: " + p.path + "\nrequest-spacing: 1s\n" + oneCredit
+	rejections := []struct {
+		name   string
+		schema uint32
+		yaml   string
+	}{
+		{"a poll interval without a unit", 6, "cache-path: " + p.path + "\npoll-interval: \"15\"\n" + oneCredit},
+		{"a request spacing without a unit", 6, "cache-path: " + p.path + "\nrequest-spacing: 15\n" + oneCredit},
+		{"a mistyped key", 6, "cache-path: " + p.path + "\npol-interval: 15m\n" + oneCredit},
+		{"a moved cache path", 6, "cache-path: " + filepath.Join(t.TempDir(), "elsewhere", "snapshot.json") + "\n" + oneCredit},
+		{"an old schema", 3, good},
+	}
+	for i, bad := range rejections {
+		running := p.meter.Load()
+		if running == nil {
+			t.Fatalf("%s: no meter was running", bad.name)
+		}
+		p.usage(goldenRecord(t))
+		if err := attempt(bad.schema, bad.yaml); err == nil {
+			t.Fatalf("%s was accepted", bad.name)
+		}
+		if p.meter.Load() != nil || p.cache == nil {
+			t.Fatalf("%s: meter running=%t cache running=%t", bad.name, p.meter.Load() != nil, p.cache != nil)
+		}
+		file := p.meterFile()
+		if file.StopReason != client.MeterStopDisabled || file.StoppedAt == nil || file.Counted != uint64(i+1) || len(file.Gaps) != i {
+			t.Fatalf("%s: file after the rejection: %+v", bad.name, file)
+		}
+		// CPA delivers nothing now; a record that arrived anyway is not
+		// counted as if the meter had been running.
+		p.usage(goldenRecord(t))
+		if err := attempt(6, good); err != nil {
+			t.Fatalf("%s: the fix was rejected: %v", bad.name, err)
+		}
+		if m := p.meter.Load(); m == nil || m == running {
+			t.Fatalf("%s: meter after the fix: %v", bad.name, m)
+		}
+	}
+	p.configure(protocol.MethodPluginReconfigure, "")
+	file := p.meterFile()
+	if n := uint64(len(rejections)); len(file.Gaps) != len(rejections) || file.Restarts != n || file.Counted != n || file.Received != n || file.StopReason != client.MeterStopNoItems {
+		t.Fatalf("file after the fixes: %+v", file)
+	}
+	for _, gap := range file.Gaps {
+		if gap.Reason != client.MeterStopDisabled || !gap.Brief() {
+			t.Fatalf("gaps=%+v", file.Gaps)
+		}
+	}
+}

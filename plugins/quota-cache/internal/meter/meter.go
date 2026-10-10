@@ -171,6 +171,9 @@ func (m *Meter) restore(linked []string, now time.Time) {
 	m.received.Store(m.data.Received)
 	m.rejected.Store(m.data.Rejected)
 	m.dropped.Store(m.data.Dropped)
+	// The file's drops were warned about in the run that made them; the
+	// warning is for drops since the last one, so this run starts even.
+	m.warnedDropped = m.data.Dropped
 	m.lastRejectedAt.Store(unixOf(m.data.LastRejectedAt))
 	m.lastDroppedAt.Store(unixOf(m.data.LastDroppedAt))
 	m.entries = countEntries(m.data)
