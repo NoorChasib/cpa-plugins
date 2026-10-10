@@ -41,7 +41,7 @@ final class SettingsWindowController: NSWindowController {
         self.logos = logos
         self.onSave = onSave
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 760),
-                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable], backing: .buffered, defer: true)
         window.title = "Quota Glance Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -52,11 +52,14 @@ final class SettingsWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError("Use init(settings:updater:logos:onSave:)") }
 
     func present() {
-        urlField.stringValue = settings.location?.url.absoluteString ?? ""
+        urlField.stringValue = settings.location?.url.absoluteString ?? settings.storedURLText ?? ""
         draft = settings.readout
         refreshMenuBarSection()
         updateLoginCheckbox()
         feedback.stringValue = ""
+        // A URL an earlier version saved but this one refuses, such as a
+        // Management API address, stays in the field with the reason below it.
+        if settings.location == nil, settings.storedURLText != nil { _ = validatedLocation() }
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
@@ -74,16 +77,15 @@ final class SettingsWindowController: NSWindowController {
         refreshMenuBarSection()
     }
 
-    /// Called on every summary. While Settings is closed the draft follows the
-    /// saved choice; while it is open, the user's edits are kept.
+    /// Called on every summary. While Settings is closed it only keeps the
+    /// state: present() reads the saved choice and refreshes. While it is
+    /// open, the user's edits are kept.
     func updateQuotas(_ state: QuotaReadoutState) {
         let rowsChanged = state.windows.map(\.selection) != self.state.windows.map(\.selection)
             || state.windows.map(\.title) != self.state.windows.map(\.title)
         self.state = state
-        if window?.isVisible != true {
-            draft = settings.readout
-            refreshMenuBarSection()
-        } else if rowsChanged {
+        guard window?.isVisible == true else { return }
+        if rowsChanged {
             refreshMenuBarSection()
         } else {
             // Same rows, new readings: leave the table (and any open pop-up) alone.
@@ -291,7 +293,7 @@ final class SettingsWindowController: NSWindowController {
         let images = [true, false].map { dark -> NSImage? in
             switch draft.style {
             case .iconOnly:
-                return ReadoutRenderer.appIcon()
+                return ReadoutRenderer.appIcon
             case .percent:
                 return ReadoutRenderer.percentImage(text: state.presentation(for: draft.windows.first).text)
             case .letteredPair, .splitPill:
@@ -449,15 +451,23 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func saveSettings() {
+        guard let location = validatedLocation() else {
+            window?.makeFirstResponder(urlField)
+            return
+        }
+        // Always persisted; a different dashboard resets the windows and keeps the style.
+        settings.save(location, readout: draft)
+        close()
+        onSave(location)
+    }
+
+    /// The URL field as a dashboard location, or nil with the reason shown below the form.
+    private func validatedLocation() -> DashboardLocation? {
         do {
-            let location = try DashboardLocation(urlField.stringValue)
-            // Always persisted; a different dashboard resets the windows and keeps the style.
-            settings.save(location, readout: draft)
-            close()
-            onSave(location)
+            return try DashboardLocation(urlField.stringValue)
         } catch {
             feedback.stringValue = error.localizedDescription
-            window?.makeFirstResponder(urlField)
+            return nil
         }
     }
 

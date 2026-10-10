@@ -7,6 +7,7 @@ public struct DashboardLocation: Equatable {
     public enum ValidationError: Error, LocalizedError, Equatable {
         case invalidURL
         case embeddedCredential
+        case managementRoute
 
         public var errorDescription: String? {
             switch self {
@@ -14,6 +15,8 @@ public struct DashboardLocation: Equatable {
                 return "Enter a complete http:// or https:// dashboard URL."
             case .embeddedCredential:
                 return "Use a URL without a password or token. Sign in on the dashboard itself."
+            case .managementRoute:
+                return "That is a CPA Management API address, which this app can’t sign in to. Use the dashboard page’s address, ending in /v0/resource/plugins/quota-glance/app."
             }
         }
     }
@@ -35,6 +38,17 @@ public struct DashboardLocation: Equatable {
                   ["token", "password", "access_token", "managementkey"].contains($0.name.lowercased())
               })
         else { throw ValidationError.embeddedCredential }
+
+        // CPA takes the management key only in a header, which a page load
+        // cannot send, and counts every key-less request toward its ban. The
+        // dashboard page is served on the resource tree, never under either
+        // management tree (/v0/management, or /v8/management in CPA v8).
+        let segments = url.standardized.path.lowercased().split(separator: "/")
+        guard !zip(segments, segments.dropFirst()).contains(where: { version, tree in
+            tree == "management" && version.count > 1 && version.first == "v"
+                && version.dropFirst().allSatisfy { ("0"..."9").contains($0) }
+        })
+        else { throw ValidationError.managementRoute }
 
         self.url = url
     }

@@ -62,11 +62,49 @@ appcast.xml --version X.Y.Z --assets /path/to/downloads --publish`. There is no
 need to rebuild or replace published assets. A release already published with
 the wrong content needs a new version, not an overwritten download.
 
+## Apple silicon only updates
+
+v0.3.0, v0.3.1 and v0.4.0 are universal (arm64 and x86_64). Later releases
+contain only arm64 code, including the embedded Sparkle framework and its
+helpers, so they cannot launch on an Intel Mac. The feed must therefore keep
+them from Intel installs of those universal versions.
+
+Sparkle 2.9.0 added `<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>`
+for this. In a native Intel process, Sparkle drops an item with that
+requirement while filtering the feed, so it is never offered or installed.
+A manual check reports "Your Mac is too old" and explains that
+the update requires an Apple silicon Mac. A universal build running under
+Rosetta on Apple silicon still receives it. Every updater-enabled release pins
+Sparkle 2.10.0, so all installed updaters honor the element.
+
+No manual feed editing is needed; editing the signed feed would break the
+signature the app requires. Sparkle 2.10.0's `generate_appcast` adds the
+element itself when the app's main executable has no Intel slice and its
+minimum macOS is below 27. The release job's `publish-appcast.py --validate`
+then refuses a feed whose item lacks `arm64` in `sparkle:hardwareRequirements`,
+so a build with an Intel slice, or a generator that stopped adding the element,
+cannot be published. The check only applies to the new feed; the currently
+published universal feed is still accepted as the version being replaced. After
+that check, the Sparkle probe (`probe-updater.swift`, run by
+`test-update-feed.py`) also fails unless Sparkle itself parsed `arm64` in the
+valid feed's first item (`SUAppcastItem.hardwareRequirements`), so the
+requirement is confirmed as the installed updaters will read it.
+
+Intel installs stay on their current version. The feed carries only the
+latest release, so it cannot also offer a separate Intel item: an Intel Mac
+still on v0.3.x must download the v0.4.0 DMG from GitHub Releases to reach the
+last Intel release.
+
 ## Verification limits
 
-CI exercises compilation on Apple silicon and Intel, nested code signatures,
-notarization, feed/key validation and tamper rejection. It cannot establish a
-user's install permissions, dialogs, relaunch behavior, or login-item behavior.
+CI runs on an Apple silicon runner. It exercises the arm64 build, nested code
+signatures, notarization, feed/key validation, the arm64 hardware requirement,
+and tamper rejection, and checks that every Mach-O file in the bundle is arm64
+only. The bundle scan finds Mach-O files by their magic number and fails if it
+finds fewer than the six known binaries. No Intel Mac runs the updater in CI,
+so skipping the update on Intel is established from Sparkle's source and
+documentation below, not by a test. CI cannot establish a user's install
+permissions, dialogs, relaunch behavior, or login-item behavior.
 For an interactive end-to-end check, install v0.3.0 in Applications, then use
 Check for Updates when the next release is published. Confirm the install and
 relaunch preserve the URL, session, selected quota, and Open at login setting.
@@ -78,3 +116,13 @@ relaunch preserve the URL, session, selected quota, and Open at login setting.
 - [Updater preferences and signed feeds](https://sparkle-project.org/documentation/customization/)
 - [Manual signing of nested helpers](https://sparkle-project.org/documentation/sandboxing/#code-signing)
 - [Exported seed format](https://github.com/sparkle-project/Sparkle/blob/2.10.0/generate_keys/main.swift)
+
+## Apple silicon sources checked on 2026-10-10
+
+- [Publishing: minimum system version and hardware requirements](https://sparkle-project.org/documentation/publishing/#minimum-system-version-requirements)
+- [Sparkle 2.9.0 release notes: `sparkle:hardwareRequirements` (#2797)](https://github.com/sparkle-project/Sparkle/releases/tag/2.9.0)
+- [`generate_appcast` adds the arm64 requirement for an app without an Intel slice](https://github.com/sparkle-project/Sparkle/blob/2.10.0/generate_appcast/ArchiveItem.swift)
+- [Client check, including the Rosetta exception](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUAppcastItemStateResolver.m)
+- [Feed filtering by hardware requirement](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SUAppcastDriver.m)
+- [`ditto --arch` thins universal binaries while copying](https://keith.github.io/xcode-man-pages/ditto.1.html)
+- [Apple: `LSArchitecturePriority` only orders slices in a universal binary](https://developer.apple.com/documentation/bundleresources/information-property-list/lsarchitecturepriority)

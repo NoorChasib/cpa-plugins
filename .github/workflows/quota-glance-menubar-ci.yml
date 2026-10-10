@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   macos:
+    # arm64 (M1) runner: the app and its Sparkle updater probe are Apple silicon only.
     runs-on: macos-14
     timeout-minutes: 90
     defaults:
@@ -62,7 +63,7 @@ jobs:
             version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Test, build universal app, verify bundle, and package ZIP and DMG
+      - name: Test, build Apple silicon app, verify arm64-only bundle, and package ZIP and DMG
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: make ci VERSION="$VERSION"
@@ -121,7 +122,7 @@ jobs:
         run: |
           sha256sum --check SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Quota Glance for macOS 13 or later, supporting Apple silicon and Intel.
+          Quota Glance for Macs with Apple silicon (M1 or later) running macOS 13 or later. Intel Macs are not supported: v0.4.0 was the last release for Intel, and the in-app updater does not offer newer releases to Intel Macs.
 
           Download the DMG, drag Quota Glance to Applications, then eject the disk image and open the installed app. Enter your hosted dashboard URL and sign in on the page.
 

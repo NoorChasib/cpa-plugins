@@ -1,5 +1,6 @@
 import AppKit
 import GlanceCore
+import Network
 import WebKit
 
 /// Owns the bridge and its native clock, independently of popover visibility.
@@ -7,12 +8,21 @@ import WebKit
 @MainActor
 final class QuotaReadoutController: NSObject {
     var onChange: (() -> Void)?
+    /// The recovery schedule wants the dashboard loaded again: its load
+    /// failed, or it loaded and never produced a reading.
     var onRecover: (() -> Void)?
     private(set) var state = QuotaReadoutState()
+    private(set) var recovery = RecoverySchedule()
     private weak var webView: WKWebView?
     private var location: DashboardLocation?
     private var session = UUID().uuidString
     private var timer: Timer?
+    private var deadline: Timer?
+    private var retry: Timer?
+    private let pathMonitor = NWPathMonitor()
+    /// Outlives `recovery`, which a new dashboard replaces: the network's
+    /// state does not change with the address.
+    private var networkPath = RecoverySchedule.NetworkPath()
     private var activity: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var poll = 0
@@ -29,13 +39,30 @@ final class QuotaReadoutController: NSObject {
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.timer != nil else { return }
+                guard let self else { return }
+                self.restartRecovery()
+                guard self.timer != nil else { return }
                 self.poll += 1
                 self.polling = false
                 self.onChange?()
                 self.refresh()
             }
         }
+        // The network coming back is only a reason to retry sooner; a VPN
+        // joining a working connection is not that (networkPathChanged). Polls
+        // never wait for a usable path: a dashboard on this Mac needs none.
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let usable = path.status == .satisfied
+            Task { @MainActor [weak self] in self?.networkPathChanged(usable: usable) }
+        }
+        pathMonitor.start(queue: .main)
+    }
+
+    /// Starts the steps over only when the network comes back, not on every
+    /// report of a usable path (RecoverySchedule.NetworkPath).
+    func networkPathChanged(usable: Bool) {
+        guard networkPath.update(usable: usable) else { return }
+        restartRecovery()
     }
 
     func configure(_ location: DashboardLocation, scriptSource: String? = nil) {
@@ -44,6 +71,8 @@ final class QuotaReadoutController: NSObject {
         poll += 1
         polling = false
         state = QuotaReadoutState()
+        recovery = RecoverySchedule()
+        settleRetry()
         guard let webView,
               let source = scriptSource ?? Self.bundledScript(),
               let script = Self.script(source, for: location, session: session) else {
@@ -98,7 +127,7 @@ final class QuotaReadoutController: NSObject {
         let clock = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refresh() }
         }
-        clock.tolerance = 5
+        clock.tolerance = 6
         RunLoop.main.add(clock, forMode: .common)
         timer = clock
         refresh()
@@ -108,6 +137,11 @@ final class QuotaReadoutController: NSObject {
         setEnabled(false)
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         wakeObserver = nil
+        pathMonitor.cancel()
+        retry?.invalidate()
+        retry = nil
+        deadline?.invalidate()
+        deadline = nil
     }
 
     func refreshIfEnabled() {
@@ -127,15 +161,70 @@ final class QuotaReadoutController: NSObject {
         onChange?()
     }
 
+    // The dashboard reports its page loads here, so page and poll retries
+    // share one schedule (RecoverySchedule).
+
+    func pageLoadStarted() {
+        recovery.pageStarted()
+        settleRetry()
+    }
+
+    func pageDidLoad() {
+        recovery.pageLoaded()
+        settleRetry()
+        refreshIfEnabled()
+    }
+
+    func pageDidFail(_ failure: RecoverySchedule.Failure) {
+        arm(recovery.pageFailed(failure))
+    }
+
+    /// The network came back, the Mac woke, or the user acted.
+    func restartRecovery() {
+        arm(recovery.restart())
+    }
+
+    /// Starts the timer for the schedule's pending retry, replacing any other.
+    private func arm(_ delay: TimeInterval?) {
+        guard let delay else { return }
+        retry?.invalidate()
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.runRetry() }
+        }
+        timer.tolerance = delay / 10
+        RunLoop.main.add(timer, forMode: .common)
+        retry = timer
+    }
+
+    /// Drops the timer once nothing waits for it, so it costs no wake.
+    private func settleRetry() {
+        guard recovery.pending == nil else { return }
+        retry?.invalidate()
+        retry = nil
+    }
+
+    private func runRetry() {
+        retry = nil
+        switch recovery.take() {
+        case .page?: onRecover?()
+        case .poll?: refresh()
+        case nil: break
+        }
+    }
+
     func refresh() {
         // Re-evaluate expiry even if WebKit cannot finish an earlier request.
         onChange?()
-        onRecover?()
         guard !polling, let webView, !webView.isLoading,
               let url = webView.url, location?.isDashboard(url) == true else { return }
         polling = true
         poll += 1
         let currentPoll = poll
+        recovery.pollStarted()
+        settleRetry()
+        // A page whose first read failed while hidden, where its own retries
+        // pause, would otherwise show nothing until opened.
+        arm(recovery.ticked())
         webView.callAsyncJavaScript("""
             if (!window.__quotaGlanceReadout) throw new Error('Readout unavailable');
             await window.__quotaGlanceReadout.refresh();
@@ -143,16 +232,27 @@ final class QuotaReadoutController: NSObject {
             """, arguments: [:], in: nil, in: .page) { [weak self] result in
             guard let self, currentPoll == self.poll else { return }
             self.polling = false
+            self.deadline?.invalidate()
+            self.deadline = nil
             if case .failure = result { self.markUnavailable() }
         }
         // A native deadline remains effective even when WebKit's JS timers or
         // process have stalled. Future native ticks may retry without reloading.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
-            guard let self, self.polling, self.poll == currentPoll else { return }
-            self.poll += 1
-            self.polling = false
-            self.markUnavailable()
+        // A timer, unlike a dispatched block, is gone once cancelled: a poll
+        // that finishes costs no second wake.
+        let limit = Timer(timeInterval: 25, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.polling, self.poll == currentPoll else { return }
+                self.poll += 1
+                self.polling = false
+                self.deadline = nil
+                self.markUnavailable()
+            }
         }
+        limit.tolerance = 2.5
+        RunLoop.main.add(limit, forMode: .common)
+        deadline?.invalidate()
+        deadline = limit
     }
 
     fileprivate func receive(_ message: WKScriptMessage) {
@@ -171,8 +271,19 @@ final class QuotaReadoutController: NSObject {
         if envelope.kind == "snapshot", let snapshot = envelope.snapshot {
             state.receive(snapshot)
             if state.hasSummary { windowsRequested = false }
+            recovery.received()
+            settleRetry()
             onChange?()
         } else if envelope.kind == "unavailable" {
+            switch envelope.reason {
+            // The poll got no answer, or the server did not answer before a
+            // console request was sent: try again in seconds, not at the next tick.
+            case "network": arm(recovery.pollFailed())
+            // A console request got no answer, and CPA may have counted it.
+            // Reloading the page would present that key again.
+            case "unanswered": recovery.consoleUnanswered()
+            default: break
+            }
             markUnavailable()
         }
     }
@@ -181,6 +292,7 @@ final class QuotaReadoutController: NSObject {
         let session: String
         let kind: String
         let snapshot: QuotaReadoutSnapshot?
+        let reason: String?
     }
 }
 

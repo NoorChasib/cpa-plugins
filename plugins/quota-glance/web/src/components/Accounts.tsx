@@ -451,7 +451,7 @@ export function AccountsCard({
   // A refreshed roster: a credential CPA no longer lists takes its edit with
   // it, said so; a conflict's dates give way once the document has them.
   // Keyed on what the roster says rather than on the arrays, which the
-  // section builds afresh on every tick of the clock.
+  // section builds afresh on every render.
   const roster = [
     ...held.map((credential) => `${credential.id}@${credential.renewalSetting?.revision ?? ""}`),
     ...renewalOrphans.map((orphan) => `-${orphan.id}`),
