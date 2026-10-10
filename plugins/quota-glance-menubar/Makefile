@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
-VERSION ?= 0.5.0
+VERSION ?= 0.6.0
 SWIFT ?= swift
 # The app is Apple silicon (arm64) only. Fail instead of ignoring an old
 # ARCHS=x86_64 or universal request, also one exported in the environment.

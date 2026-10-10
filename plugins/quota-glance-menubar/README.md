@@ -9,7 +9,7 @@ supported; v0.4.0 was the last release that runs on them.
 
 ## Install from a DMG
 
-Open `Quota-Glance-0.5.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
+Open `Quota-Glance-0.6.0-macOS.dmg`, drag **Quota Glance** to **Applications**,
 then eject the disk image and open the installed app. Right-click its menu bar
 icon, choose **Settings**, and enable **Open at login** to start it whenever you
 sign in, including after a restart. Your saved URL and session persist.
@@ -53,7 +53,7 @@ To create the drag-to-Applications disk image instead:
 make dmg
 ```
 
-The image is written to `dist/Quota-Glance-0.5.0-macOS.dmg`.
+The image is written to `dist/Quota-Glance-0.6.0-macOS.dmg`.
 Local builds are ad-hoc signed; notarized release builds run through GitHub
 after the Apple signing secrets are configured.
 
@@ -77,7 +77,7 @@ and **Quit**.
 
 ## Choose what the menu bar shows
 
-In **Settings → Menu bar**, **Show** picks one of four styles:
+In **Settings → Menu bar**, **Show** picks one of six styles:
 
 - **Icon only**: the chart icon.
 - **Percent**: the icon and one window's remaining percentage, for example
@@ -85,6 +85,9 @@ In **Settings → Menu bar**, **Show** picks one of four styles:
 - **Lettered pair**: one to three windows as a letter and a number, for
   example `S94 W59`.
 - **Split pill**: the same windows in a rounded box with one half per window.
+- **Stacked pair**: each number first, then its provider logo with the
+  letter underneath, for example `97` with the Claude logo over `S`.
+- **Stacked pill**: the Stacked pair's readings in the Split pill's box.
 
 Under **Windows**, pick one to three windows from any provider and drag them
 into order. The letter beside each is the one the menu bar draws: **S**

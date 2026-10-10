@@ -66,7 +66,9 @@ popover or choose **Try Again**, **Show Dashboard** or **Reload Page**.
 
 **Settings → Menu bar** chooses what the status item shows. The design is the
 signed-off round 2 board,
-`../quota-glance/web/design/menubar-readout/refined.html`.
+`../quota-glance/web/design/menubar-readout/refined.html`; the two stacked
+styles were added in 0.6.0 from a separately approved mockup and are not on
+that board.
 
 | Show | Draws |
 | --- | --- |
@@ -74,6 +76,8 @@ signed-off round 2 board,
 | Percent | the icon and the first window's remaining percentage, `59%` (0.3's form) |
 | Lettered pair | one to three windows as letter + number, `S94 W59`, plain text |
 | Split pill | the same windows in round 1's box, one half per window, `S94 \| W59` |
+| Stacked pair | each window as number, then its logo over its letter, `97` with S under the Claude logo |
+| Stacked pill | the Stacked pair's readings in a taller pill, one half per window |
 
 The percentage is the aggregate **remaining** quota, matching the page.
 Windows are chosen from every row the dashboard summary lists, grouped by
@@ -109,7 +113,8 @@ holds the board's own copy and generates the fixture the Swift tests check.
 ### Badges
 
 **Badge** draws the provider's logo, 9pt square, 1pt after each number with
-its top 3pt above the digits' cap height. **Always** is the default; **When
+its top 3pt above the digits' cap height (in the stacked styles, 8pt square
+over the letter). **Always** is the default; **When
 providers differ** draws badges only when the chosen windows span more than
 one provider; **Off** draws letters only. A provider without a bundled logo
 draws no badge and is spaced as if badges were off (Lettered pair slots 7pt
@@ -118,7 +123,7 @@ apart, not 6pt). Logos are bundled SVG files (Claude, OpenAI for Codex, Grok for
 
 ### Drawing
 
-Lettered pair and Split pill are drawn into one template image per update,
+The four lettered styles are drawn into one template image per update,
 so letters, numbers, badges and the pill's fill share one ink and macOS
 supplies white or black, the highlight and the inactive-display fade. There
 is **one ink at every level**: no colour or dimming for a low reading, and a
@@ -126,7 +131,7 @@ stale or missing reading is **—** in the same ink. Letters are a fixed amount
 lighter than their numbers. The image is redrawn when the menu bar's
 appearance changes (on macOS 26, also when the wallpaper behind it changes
 brightness) and when Increase Contrast changes; with Increase Contrast,
-letters are drawn in full ink (Lettered pair: semibold) and the pill's fill
+letters are drawn in full ink (Lettered pair: semibold) and the pills' fill
 is stronger.
 
 - **Lettered pair**: letter and number in 12pt medium, 1pt apart. Each
@@ -138,8 +143,22 @@ is stronger.
   (letter to badge, or to the number without badges) plus 5.5pt each side,
   rounded to a whole point. A 100 fits in that padding, so the pill keeps
   its width at every reading; other readings are centred by their ink.
-- **Show the Quota Glance icon** adds the chart icon, 7.5pt before either
-  style. It is off for a new install and on for anyone updating from 0.3.
+- **Stacked pair**: the number in 15pt medium, then 2.5pt later a stack: the
+  logo in an 8pt square on top, 1pt of space, and the letter in 7.5pt
+  semibold, each centred in a column as wide as the wider of the two. The
+  stack is centred on the digits' cap height, so the logo rises a little
+  above the digits and the letter sits a little below. Without a logo (badges
+  off, or a provider without one) the letter stands alone, centred the same
+  way. Each number has a two-digit slot with the spare room before it, so
+  94, 6 and — keep the width and the stack never moves; a 100 widens its own
+  slot. Slots are 8pt apart. The letters use the Lettered pair's alphas.
+- **Stacked pill**: the same readings, number in 15pt bold, in the Split
+  pill's box made 20pt tall with 6pt outer corners, and 5pt from each half's
+  widest two-digit ink to its edges. A 100 fits while it leaves a point at
+  each edge; at 15pt it usually doesn't, so every half grows by the same
+  amount while it shows. The letters use the Split pill's alphas.
+- **Show the Quota Glance icon** adds the chart icon, 7.5pt before any
+  lettered style. It is off for a new install and on for anyone updating from 0.3.
 
 The status item is written only when something it shows changes. Before each
 update the app compares what it would show (the length, the drawn image's
@@ -271,7 +290,8 @@ session or password. You may need to sign in separately in that browser.
 The bundle ID is `com.noorchasib.quota-glance-menubar` and the executable is
 `QuotaGlance`. The `dashboardURL` preference is stored in that app's standard
 UserDefaults domain. `menuBarReadout` stores the menu bar choice as one JSON
-value: `style` (`iconOnly`, `percent`, `letteredPair` or `splitPill`), the
+value: `style` (`iconOnly`, `percent`, `letteredPair`, `splitPill`,
+`stackedPair` or `stackedPill`), the
 ordered `windows` (one to three `{providerID, rowID}`), `badge` (`always`,
 `whenProvidersDiffer` or `off`) and `showsAppIcon`. Unknown or malformed
 values fall back to their defaults. Saving Settings always stores it; saving
@@ -332,7 +352,7 @@ make appcast        # after signing: generate, sign, and test the update feed
 make ci             # scripts, tests, arm64 build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.5.0` and must be three numeric components. The app is
+`VERSION` defaults to `0.6.0` and must be three numeric components. The app is
 Apple silicon only: there is no Intel or universal build. Every goal except
 `test` and `check-scripts` stops with an error if `ARCHS` names anything other
 than `arm64`, whether it is set on the command line or in the environment;
@@ -366,7 +386,10 @@ tools are not required.
 The active workflow is
 [quota-glance-menubar-ci.yml](../../.github/workflows/quota-glance-menubar-ci.yml).
 It runs on an Apple silicon macOS runner, builds the arm64 app, and uploads the
-ZIP, DMG, and checksums. It does not modify either CPA registry or run a plugin
+ZIP, DMG, and checksums. It also uploads `readout-renders`: PNGs of the real
+renderer's Lettered pair, Stacked pair, Split pill and Stacked pill on a dark
+and a light bar, with and without badges, written by `ReadoutRendererTests`
+because `READOUT_RENDER_DIR` is set (the test is skipped without it). It does not modify either CPA registry or run a plugin
 release.
 
 ## In-app updates
@@ -420,8 +443,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.5.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.5.0
+git tag quota-glance-menubar/v0.6.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.6.0
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed

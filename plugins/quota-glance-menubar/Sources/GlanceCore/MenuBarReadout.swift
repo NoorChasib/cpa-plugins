@@ -1,9 +1,11 @@
 import Foundation
 
 /// What the status item shows. `iconOnly` and `percent` are the 0.3 forms;
-/// `letteredPair` and `splitPill` draw one to three windows with letters.
+/// `letteredPair` and `splitPill` draw one to three windows with letters;
+/// `stackedPair` and `stackedPill` (0.6.0) draw each number with its logo
+/// stacked over its letter. New cases go last: Settings lists them in order.
 public enum ReadoutStyle: String, Codable, CaseIterable {
-    case iconOnly, percent, letteredPair, splitPill
+    case iconOnly, percent, letteredPair, splitPill, stackedPair, stackedPill
 
     public var title: String {
         switch self {
@@ -11,11 +13,24 @@ public enum ReadoutStyle: String, Codable, CaseIterable {
         case .percent: return "Percent"
         case .letteredPair: return "Lettered pair"
         case .splitPill: return "Split pill"
+        case .stackedPair: return "Stacked pair"
+        case .stackedPill: return "Stacked pill"
         }
     }
 
     /// Styles that draw letters, badges and the optional app icon into one image.
-    public var isLettered: Bool { self == .letteredPair || self == .splitPill }
+    public var isLettered: Bool {
+        switch self {
+        case .letteredPair, .splitPill, .stackedPair, .stackedPill: return true
+        case .iconOnly, .percent: return false
+        }
+    }
+
+    /// The number first, then the logo over the letter.
+    public var isStacked: Bool { self == .stackedPair || self == .stackedPill }
+
+    /// Drawn in a rounded box, one half per window.
+    public var isPill: Bool { self == .splitPill || self == .stackedPill }
 }
 
 /// When the provider logo is drawn at the top-right of each number.

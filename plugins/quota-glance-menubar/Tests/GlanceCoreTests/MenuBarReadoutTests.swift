@@ -120,4 +120,37 @@ final class MenuBarReadoutTests: XCTestCase {
         XCTAssertTrue(mixed.badgeVisible)
         XCTAssertTrue(BadgeMode.always.isVisible(forProviders: ["claude"]))
     }
+
+    func testStylesKeepTheirOrderTitlesAndKinds() {
+        // Settings lists the styles in this order; new ones go last.
+        XCTAssertEqual(ReadoutStyle.allCases, [.iconOnly, .percent, .letteredPair, .splitPill, .stackedPair, .stackedPill])
+        XCTAssertEqual(ReadoutStyle.allCases.map(\.title),
+                       ["Icon only", "Percent", "Lettered pair", "Split pill", "Stacked pair", "Stacked pill"])
+        XCTAssertEqual(ReadoutStyle.allCases.map(\.rawValue),
+                       ["iconOnly", "percent", "letteredPair", "splitPill", "stackedPair", "stackedPill"])
+        XCTAssertEqual(ReadoutStyle.allCases.filter(\.isLettered), [.letteredPair, .splitPill, .stackedPair, .stackedPill])
+        XCTAssertEqual(ReadoutStyle.allCases.filter(\.isStacked), [.stackedPair, .stackedPill])
+        XCTAssertEqual(ReadoutStyle.allCases.filter(\.isPill), [.splitPill, .stackedPill])
+    }
+
+    func testStackedStylesRoundTrip() throws {
+        for style in [ReadoutStyle.stackedPair, .stackedPill] {
+            let value = MenuBarReadout(style: style, windows: [fable, codexWeekly], badge: .whenProvidersDiffer, showsAppIcon: true)
+            let data = try encode(value)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(object["style"] as? String, style.rawValue)
+            XCTAssertEqual(try JSONDecoder().decode(MenuBarReadout.self, from: data), value, "\(style)")
+            let resolved = MenuBarReadout.resolve(stored: data, legacySelection: nil, hasDashboardURL: true)
+            XCTAssertEqual(resolved.readout, value, "\(style)")
+            XCTAssertFalse(resolved.migrated, "\(style)")
+        }
+    }
+
+    func testAStyleFromANewerVersionKeepsTheRestOfTheChoice() throws {
+        // What 0.5.0 does with "stackedPair", and this version with a style it
+        // does not know: the style falls back, the windows and badge stay.
+        let json = #"{"style":"stackedTriple","windows":[{"providerID":"codex","rowID":"weekly"}],"badge":"off","showsAppIcon":true}"#
+        let value = try JSONDecoder().decode(MenuBarReadout.self, from: Data(json.utf8))
+        XCTAssertEqual(value, MenuBarReadout(style: .letteredPair, windows: [codexWeekly], badge: .off, showsAppIcon: true))
+    }
 }
