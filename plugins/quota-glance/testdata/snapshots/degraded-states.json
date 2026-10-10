@@ -35,6 +35,13 @@
           "used_percent": 85,
           "reset_at": "2026-09-11T03:59:00Z",
           "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "raw:claude:seven_day_cowork",
+          "title": "seven_day_cowork",
+          "used_percent": 5,
+          "reset_at": "2026-09-11T04:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
         }
       ],
       "account_details": {
