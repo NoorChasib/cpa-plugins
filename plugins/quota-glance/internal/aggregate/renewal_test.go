@@ -282,6 +282,12 @@ func TestTheGoldenContractsCarryEstimatedRenewals(t *testing.T) {
 	if c := byID["codex-noor@example.com.json"]; c.RenewalAtEpoch == nil || c.RenewalEstimated {
 		t.Errorf("codex: renewal = %v estimated = %v; want its own date, not estimated", c.RenewalAtEpoch, c.RenewalEstimated)
 	}
+	// A date set on the dashboard wins, and its estimate rides beside it for
+	// the editor's "set here · estimate ~Oct 3 · Use estimate".
+	if c := byID["5f2b8c41d09e7a36"]; c.RenewalSource == nil || *c.RenewalSource != renewalDashboard || c.RenewalEstimated ||
+		c.RenewalEstimateAtEpoch == nil || *c.RenewalEstimateAtEpoch != utc(2026, time.October, 3, 11, 20, 0).Unix() {
+		t.Errorf("dashboard: source = %v estimated = %v estimate = %v", c.RenewalSource, c.RenewalEstimated, c.RenewalEstimateAtEpoch)
+	}
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
@@ -337,6 +343,63 @@ func TestRenewalPrecedence(t *testing.T) {
 	raw, _ := json.Marshal(withRenewal(t, claude, qc.Entry{}, ""))
 	if !strings.Contains(string(raw), `"renewalSource":null`) || !strings.Contains(string(raw), `"renewalSetting":null`) {
 		t.Errorf("absent renewal fields must be null: %s", raw)
+	}
+}
+
+// A Claude credential carries its estimate whatever wins, so the page can say
+// what Use estimate returns to beside a date set on the dashboard. Codex has
+// no estimate to return to.
+func TestTheEstimateIsCarriedBesideADashboardDate(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	estimate := utc(2026, time.September, 30, 9, 15, 0).Unix()
+	for name, tc := range map[string]struct {
+		date   string
+		source string
+	}{
+		"set on the dashboard": {"2026-10-01", "dashboard"},
+		"estimated":            {"", "estimated"},
+	} {
+		got := withRenewal(t, claude, started, tc.date)
+		if got.RenewalSource == nil || *got.RenewalSource != tc.source || got.RenewalEstimateAtEpoch == nil || *got.RenewalEstimateAtEpoch != estimate {
+			t.Errorf("%s: source %v estimate %v, want %d", name, got.RenewalSource, got.RenewalEstimateAtEpoch, estimate)
+		}
+	}
+	if got := withRenewal(t, claude, qc.Entry{}, "2026-10-01"); got.RenewalEstimateAtEpoch != nil {
+		t.Errorf("no subscription start: estimate %v", *got.RenewalEstimateAtEpoch)
+	}
+	codex := Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}
+	if got := withRenewal(t, codex, started, ""); got.RenewalEstimateAtEpoch != nil {
+		t.Errorf("codex: estimate %v", *got.RenewalEstimateAtEpoch)
+	}
+	raw, _ := json.Marshal(withRenewal(t, claude, qc.Entry{}, ""))
+	if !strings.Contains(string(raw), `"renewalEstimateAtEpoch":null`) {
+		t.Errorf("an absent estimate must be null: %s", raw)
+	}
+}
+
+// A document served again while its source fails takes every part the
+// settings decide from one built with the settings as they are now, and
+// keeps the rest as it was.
+func TestWithSettingsTakesOnlyWhatTheSettingsDecide(t *testing.T) {
+	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
+	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
+	before := withRenewal(t, claude, started, "")
+	after := withRenewal(t, claude, started, "2026-10-01")
+	old := Document{Credentials: []Credential{before}, RenewalOrphans: []RenewalOrphan{}, Providers: []Provider{{ID: "claude"}}}
+	fresh := Document{Credentials: []Credential{after}, RenewalOrphans: []RenewalOrphan{{ID: "fedcba9876543210"}},
+		APICredits: &APICredits{Title: "Monthly API Credit"}, Providers: []Provider{}}
+	got := WithSettings(old, fresh)
+	c := got.Credentials[0]
+	if c.RenewalSource == nil || *c.RenewalSource != "dashboard" || c.RenewalSetting == nil || c.RenewalSetting.Date != "2026-10-01" ||
+		*c.RenewalAtEpoch != *after.RenewalAtEpoch || c.RenewalEstimated || *c.RenewalEstimateAtEpoch != *after.RenewalEstimateAtEpoch {
+		t.Errorf("credential: %+v", c)
+	}
+	if got.APICredits != fresh.APICredits || len(got.RenewalOrphans) != 1 || len(got.Providers) != 1 {
+		t.Errorf("document: %+v", got)
+	}
+	if old.Credentials[0].RenewalSetting != nil {
+		t.Error("the document served before was modified")
 	}
 }
 

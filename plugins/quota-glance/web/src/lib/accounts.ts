@@ -117,6 +117,20 @@ export function renewalMark(
 }
 
 /**
+ * The estimate the renewal editor names: the one the plugin sends beside
+ * whatever wins, so a date set here shows what Use estimate returns to, else
+ * the renewal itself when it is the estimate. Null when there is none,
+ * including from a plugin too old to send one beside a date set here.
+ */
+export function renewalEstimateAt(
+  credential: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource" | "renewalEstimateAtEpoch">,
+): number | null {
+  if (typeof credential.renewalEstimateAtEpoch === "number") return credential.renewalEstimateAtEpoch
+  const mark = renewalMark(credential)
+  return mark?.estimated ? mark.atEpoch : null
+}
+
+/**
  * Whether an estimated renewal is a yearly plan's. A monthly estimate is the
  * next monthly anniversary, never more than a month off; one further away can
  * only be an annual plan's.

@@ -639,6 +639,26 @@ export interface RenewalDraft {
 
 export const EMPTY_RENEWAL_DRAFT: RenewalDraft = { rows: {}, remove: {} }
 
+/**
+ * A draft after a 409 conflict (must-fix 3): each conflicting row's edit,
+ * and any removal it marked, is dropped, since its fields now show what the
+ * other device saved; every other row's is kept. `retry` says whether
+ * anything is left to send. With nothing, Save must not read "Try again"
+ * beside "no changes".
+ */
+export function dropConflicts<D extends { rows: Record<string, unknown>; remove: Record<string, string> }>(
+  draft: D,
+  ids: readonly string[],
+): { draft: D; retry: boolean } {
+  const rows = { ...draft.rows }
+  const remove = { ...draft.remove }
+  for (const id of ids) {
+    delete rows[id]
+    delete remove[id]
+  }
+  return { draft: { ...draft, rows, remove }, retry: Object.keys(rows).length > 0 || Object.keys(remove).length > 0 }
+}
+
 export function editRenewal(
   draft: RenewalDraft,
   credential: Pick<Credential, "id" | "renewalSetting">,

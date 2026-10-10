@@ -122,8 +122,9 @@ const NOTICE_TONE: Record<FootStatus["tone"], string> = {
  *
  * Save is off with nothing to send, with anything to fix, while a save is
  * under way and while no door is open; off, it takes the muted look of an
- * unavailable Use one, not a fade (must-fix 7). After a failure it reads
- * "Try again", and the reason sits above the buttons.
+ * unavailable Use one, not a fade (must-fix 7). After a failure, while
+ * there is still something to send, it reads "Try again"; the reason sits
+ * above the buttons either way.
  */
 export function EditFoot({
   help,
@@ -176,7 +177,7 @@ export function EditFoot({
                 <span className="qg-espin" aria-hidden="true" />
                 Saving…
               </>
-            ) : failed ? (
+            ) : failed && changes > 0 ? (
               "Try again"
             ) : (
               "Save"

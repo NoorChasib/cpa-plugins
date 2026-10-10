@@ -114,7 +114,7 @@ dates, Console readings and Claude renewal dates. What you set is kept in
 `data-dir/settings.json` and wins over Quota Cache's configuration; the config
 value is always shown beside it, with **Use config** to go back to it. With
 `allow-edit: false` the editor is gone and anything already saved still
-applies. Quota Glance 0.6.0 and older reject the key.
+applies. Quota Glance 0.6.1 and older reject the key.
 
 ## Routes
 
@@ -333,9 +333,10 @@ anything and neither holds an Anthropic key.
 Claude API-key request CPA sends, per organization and model, and saves the
 count beside its snapshot. Quota Glance prices those tokens at Anthropic's list
 prices (the date is on the card) and subtracts them from the monthly credit
-since the cycle began. Every figure is marked as an estimate: traffic that does
-not go through CPA, web search, code execution and a few other charges are not
-in the count.
+since the cycle began. Every figure is marked as an estimate, with `≈` before
+the headline figure and "est." in the column heads: traffic that does not go
+through CPA, web search, code execution and a few other charges are not in the
+count.
 
 **Set it up from the card.** Press **Edit credits & dates** to set each
 organization's monthly credit and the date it refills, if Quota Cache's config
@@ -358,7 +359,9 @@ made then are never counted. Quota Cache cannot tell that from CPA itself being
 down, so any stop that long counts. Brief restarts and plugin updates, under 5
 minutes, do not. Counting that began partway through a cycle does the same
 until there is a reading. **Enter a Console reading** and the row is exact
-again from that moment.
+again from that moment. A reading entered while Quota Cache is still stopped is
+saved, but the row stays incomplete until you enter one taken after it is
+counting again.
 
 The card also says when Anthropic refused a request for low credit (the credit
 is shown as spent until a later request succeeds), names organizations that

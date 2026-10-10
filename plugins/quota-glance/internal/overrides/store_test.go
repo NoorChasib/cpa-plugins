@@ -528,3 +528,121 @@ func TestABaselineIsCapped(t *testing.T) {
 		t.Fatalf("(other) = %+v", other)
 	}
 }
+
+// A meter that has not saved since before the reading's hour, stopped or
+// stale, still gives the reading a baseline: the hours it has. It counted
+// nothing after its last save, so the baseline is complete, or short, which
+// overstates the spend since the reading, the safe direction. That is the
+// state the page asks for a reading in, so it must save, and with it the rest
+// of the batch.
+func TestAStoppedMeterTakesAReading(t *testing.T) {
+	s, _ := newStore(t)
+	now := at(t, "2026-10-09T13:00:00Z")
+	stopped := at(t, "2026-10-09T09:00:00Z")
+	meter := meterFor(t, "2026-10-09T09:00:00Z",
+		qc.MeterBucket{Start: at(t, "2026-10-09T08:00:00Z"), Usage: []qc.MeterUsage{{Model: "claude-sonnet-5-5", Requests: 2, Input: 700}}},
+		qc.MeterBucket{Start: at(t, "2026-10-09T09:00:00Z"), Usage: []qc.MeterUsage{{Model: "claude-sonnet-5-5", Input: 5}}},
+	)
+	meter.StoppedAt, meter.StopReason = &stopped, "disabled"
+	reading := &ReadingInput{RemainingUSD: "143.20", At: "2026-10-09T12:55:00Z"}
+	result, err := s.Apply(Batch{Kind: KindAPICredits, APICredits: []APICreditItem{creditItem(accountA, "", ptr("300"), nil, reading)}}, meter, now)
+	if err != nil || result.Revision != 1 {
+		t.Fatalf("a reading on a stopped meter: %+v, %v", result, err)
+	}
+	credit := s.Current().APICredits[accountA]
+	want := Baseline{DayStart: at(t, "2026-10-09T00:00:00Z"), Until: at(t, "2026-10-09T12:00:00Z"),
+		Usage: []qc.MeterUsage{{Model: "claude-sonnet-5-5", Requests: 2, Input: 705}}}
+	if credit.MonthlyUSD != "300" || credit.Reading == nil || !reflect.DeepEqual(credit.Reading.Baseline, want) {
+		t.Fatalf("saved %+v, reading %+v", credit, credit.Reading)
+	}
+	// A meter that stopped the day before has none of the reading's day.
+	s2, _ := newStore(t)
+	yesterday := meterFor(t, "2026-10-08T20:00:00Z",
+		qc.MeterBucket{Start: at(t, "2026-10-08T19:00:00Z"), Usage: []qc.MeterUsage{{Model: "claude-sonnet-5-5", Input: 9}}})
+	if _, err := s2.Apply(Batch{Kind: KindAPICredits, APICredits: []APICreditItem{creditItem(accountA, "", nil, nil, reading)}}, yesterday, now); err != nil {
+		t.Fatal(err)
+	}
+	if b := s2.Current().APICredits[accountA].Reading.Baseline; len(b.Usage) != 0 {
+		t.Fatalf("a baseline from another day: %+v", b)
+	}
+}
+
+// What a newer quota-cache may write in a bucket, a prompt class or a model
+// name this build does not know, goes into the baseline as (other), which is
+// never priced: the baseline reads low and the spend since high, the safe
+// direction. Stored verbatim it would make settings.json fail its own load
+// rules at the next open, and every value in it would stop applying.
+func TestABaselineIsStoredInAFormThisBuildLoads(t *testing.T) {
+	s, _ := newStore(t)
+	now := at(t, "2026-10-09T14:00:00Z")
+	meter := meterFor(t, "2026-10-09T13:59:00Z",
+		qc.MeterBucket{Start: at(t, "2026-10-09T09:00:00Z"), Usage: []qc.MeterUsage{
+			{Model: "Claude-Sonnet-5-5", Requests: 1, Input: 10},
+			{Model: "claude-haiku-5-5", Prompt: qc.MeterPromptOver100K, Requests: 1, Input: 200000},
+			{Model: "claude-sonnet-5-5", Requests: 3, Input: 1200, Output: 800},
+			{Model: "claude-sonnet-5-5", Prompt: "over_200k", Requests: 2, Input: 300000},
+		}},
+	)
+	reading := &ReadingInput{RemainingUSD: "143.20", At: "2026-10-09T13:20:00Z"}
+	if _, err := s.Apply(Batch{Kind: KindAPICredits, APICredits: []APICreditItem{creditItem(accountA, "", ptr("260.50"), nil, reading)}}, meter, now); err != nil {
+		t.Fatal(err)
+	}
+	want := []qc.MeterUsage{
+		{Model: qc.MeterOtherModel, Requests: 3, Input: 300010},
+		{Model: "claude-haiku-5-5", Prompt: qc.MeterPromptOver100K, Requests: 1, Input: 200000},
+		{Model: "claude-sonnet-5-5", Requests: 3, Input: 1200, Output: 800},
+	}
+	if got := s.Current().APICredits[accountA].Reading.Baseline.Usage; !reflect.DeepEqual(got, want) {
+		t.Fatalf("baseline:\n got %+v\nwant %+v", got, want)
+	}
+	again := Open(s.Dir()).Current()
+	if again.Unreadable || again.APICredits[accountA].MonthlyUSD != "260.50" || !reflect.DeepEqual(again, s.Current()) {
+		t.Fatalf("reopened: %+v", again)
+	}
+}
+
+// A new reading stores the account's organization, so one the document gives
+// in a form the load rules refuse is not taken. Nothing is written.
+func TestAReadingNeedsANormalizedOrganization(t *testing.T) {
+	for _, org := range []string{"", "00000000-0000-4000-8000-00000000000A", "not-an-organization"} {
+		s, _ := newStore(t)
+		item := creditItem(accountA, "", ptr("300"), nil, &ReadingInput{RemainingUSD: "1.00", At: "2026-10-09T13:20:00Z"})
+		item.OrganizationID = org
+		_, err := s.Apply(Batch{Kind: KindAPICredits, APICredits: []APICreditItem{item}}, nil, at(t, "2026-10-09T14:00:00Z"))
+		var refused *NotEditableError
+		if !errors.As(err, &refused) || !reflect.DeepEqual(refused.IDs, []string{accountA}) {
+			t.Fatalf("organization %q: err = %v", org, err)
+		}
+		if s.Current().Revision != 0 {
+			t.Fatalf("organization %q: saved", org)
+		}
+		if _, statErr := os.Stat(s.Path()); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("organization %q: a file was written", org)
+		}
+	}
+}
+
+// A commit never writes a file this build could not load back.
+func TestACommitThisBuildCouldNotLoadIsRefused(t *testing.T) {
+	s, _ := newStore(t)
+	written := false
+	s.write = func(path string, raw []byte) error {
+		written = true
+		return writeFile(path, raw)
+	}
+	for _, raw := range [][]byte{[]byte(`{"schema":2,"revision":0,"apiCredits":{},"renewals":{}}`), []byte(`not json`)} {
+		if err := s.commit(raw); !errors.Is(err, ErrUnwritable) {
+			t.Fatalf("%s: err = %v", raw, err)
+		}
+	}
+	if written {
+		t.Fatal("an unloadable file reached the disk")
+	}
+	good, err := encode(empty())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.commit(good); err != nil || !written {
+		t.Fatalf("a loadable file: %v, written %v", err, written)
+	}
+}

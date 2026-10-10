@@ -54,6 +54,15 @@ type ConflictError struct {
 
 func (e *ConflictError) Error() string { return "conflict" }
 
+// NotEditableError is a batch with a row the store cannot take as sent: a new
+// reading for an account whose organization, as the served document gives it,
+// is not in the form a stored reading must hold. Nothing was written.
+type NotEditableError struct {
+	IDs []string
+}
+
+func (e *NotEditableError) Error() string { return "not_editable" }
+
 // Result is a batch Apply accepted.
 type Result struct {
 	// Revision is the file's revision after the batch.
@@ -148,9 +157,10 @@ func (s *Store) LastError() string {
 }
 
 // Apply saves one batch, all or nothing: a conflict, the write limit, a
-// baseline the meter cannot cover, a bound, or a failed commit leaves the file
-// and the values exactly as they were. meter is the one the last rebuild read,
-// nil when there was none; it gives a new reading its baseline.
+// baseline the meter cannot cover, a reading with no organization to store, a
+// bound, or a failed commit leaves the file and the values exactly as they
+// were. meter is the one the last rebuild read, nil when there was none; it
+// gives a new reading its baseline.
 //
 // The batch must have passed Check against Current; Apply checks again under
 // its lock, against what is stored then, so a save racing another cannot slip
@@ -242,6 +252,9 @@ func (s *Store) Apply(b Batch, meter *qc.APIMeter, now time.Time) (Result, error
 		case sameReading(stored.Reading, r):
 			credit.Reading = stored.Reading
 		default:
+			if org, ok := qc.NormalizeOrganizationID(item.OrganizationID); !ok || org != item.OrganizationID {
+				return Result{}, &NotEditableError{IDs: []string{item.ID}}
+			}
 			reading, ok := newReading(item, meter, now)
 			if !ok {
 				return Result{}, &FieldError{Code: CodeReadingTime, ID: item.ID, Field: "reading.at"}
@@ -289,19 +302,28 @@ func (s *Store) Apply(b Batch, meter *qc.APIMeter, now time.Time) (Result, error
 // newReading is a reading as first saved: the account's organization, and
 // its baseline from the meter. With no meter, or the organization not in it,
 // the baseline is empty, which stays consistent: what was not counted then is
-// not in the daily buckets either. False when the meter no longer keeps, or
-// does not yet have, every hour the baseline needs, which a reading in the
-// 48 hours Check allows only meets on a meter whose clock is ahead.
+// not in the daily buckets either.
+//
+// False only when the meter no longer keeps the first hour the baseline
+// needs, which a reading in the 48 hours Check allows meets only on a meter
+// whose clock is ahead. A meter that has not saved since before the reading's
+// hour, because it is stopped or stale, is not refused, though
+// UsageInHours's covered says it lacks the later hours: the reading is
+// exactly what the page asks for then. A stopped meter counted nothing in
+// those hours, so the baseline from the hours it has is complete; one still
+// counting without saving gives a baseline short of the truth, which
+// overstates the spend since the reading, the safe direction.
 func newReading(item APICreditItem, meter *qc.APIMeter, now time.Time) (*Reading, bool) {
 	at, _ := parseStamp(item.Reading.At)
 	baseline := Baseline{DayStart: qc.MeterDayStart(at), Until: qc.MeterHourStart(at), Usage: []qc.MeterUsage{}}
 	if meter != nil {
 		if org, ok := meter.Organizations[item.OrganizationID]; ok {
-			usage, covered := org.UsageInHours(baseline.DayStart, baseline.Until, meter.FlushedAt)
-			if !covered {
+			kept := qc.MeterHourStart(meter.FlushedAt).Add(-qc.MeterHours * time.Hour)
+			if baseline.DayStart.Before(kept) {
 				return nil, false
 			}
-			baseline.Usage = capBaseline(usage)
+			usage, _ := org.UsageInHours(baseline.DayStart, baseline.Until, meter.FlushedAt)
+			baseline.Usage = capBaseline(loadable(usage))
 		}
 	}
 	return &Reading{
@@ -311,6 +333,26 @@ func newReading(item APICreditItem, meter *qc.APIMeter, now time.Time) (*Reading
 		OrganizationID: item.OrganizationID,
 		Baseline:       baseline,
 	}, true
+}
+
+// loadable puts the meter's usage in the form settings.json's load rules
+// accept. An entry whose model is not a NormalizeMeterModel result, or whose
+// prompt class this build does not know, such as one a newer quota-cache
+// adds, is summed under qc.MeterOtherModel, which is never priced: the
+// baseline then reads low and the spend since the reading high, the safe
+// direction. Stored as it came, it would make the file fail those rules at
+// the next open, and every value in it would stop applying.
+func loadable(usage []qc.MeterUsage) []qc.MeterUsage {
+	out := make([]qc.MeterUsage, 0, len(usage))
+	for _, u := range usage {
+		knownModel := u.Model == qc.MeterOtherModel || qc.NormalizeMeterModel(u.Model, "") == u.Model
+		knownPrompt := u.Prompt == "" || u.Prompt == qc.MeterPromptOver100K
+		if !knownModel || !knownPrompt {
+			u.Model, u.Prompt = qc.MeterOtherModel, ""
+		}
+		out = qc.MergeMeterUsage(out, u)
+	}
+	return out
 }
 
 // capBaseline keeps the MaxBaseline-1 entries with the most tokens and sums
@@ -398,7 +440,15 @@ func (s *Store) fit(next *Values, b Batch) ([]byte, error) {
 // commit writes raw over settings.json: a temporary file in the directory,
 // written, synced, renamed over the old one, and the directory synced. A
 // reader never sees half a file.
+//
+// raw must pass the load rules first. A file this build could not read back
+// would work from memory until the next open and then apply nothing and lock
+// editing until it was moved aside, so a save that would write one is
+// refused instead.
 func (s *Store) commit(raw []byte) error {
+	if _, err := decode(raw); err != nil {
+		return ErrUnwritable
+	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return ErrUnwritable
 	}

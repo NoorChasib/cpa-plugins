@@ -141,11 +141,27 @@ type Plugin struct {
 	// it, without a lock, for a new Console reading's baseline.
 	meter atomic.Pointer[qc.APIMeter]
 
+	// rebuildMu serializes Rebuild end to end, from reading its inputs to
+	// publishing, so documents are published, and history appended, in the
+	// order their inputs were read. Rebuild has two callers, the watcher and a
+	// committed save; without it, a rebuild that read the settings before a
+	// save could publish after the save's own rebuild and undo it until the
+	// next one. Nothing that holds the store's lock, configMu or stateMu ever
+	// takes it, and Rebuild never takes mu, so it cannot deadlock a close.
+	rebuildMu sync.Mutex
+	// afterRead, when set, runs inside Rebuild once its inputs are read and
+	// before it publishes. Tests park a rebuild there; it is never set
+	// otherwise.
+	afterRead atomic.Pointer[func()]
+
 	// lastGood is the most recent document built from a readable snapshot. It
 	// is what gets re-served, marked stale, when the snapshot goes away: an
-	// empty response is indistinguishable from a broken install.
+	// empty response is indistinguishable from a broken install. goodInput is
+	// the snapshot and roster it was built from, so the parts the dashboard's
+	// settings decide can be rebuilt over it while it is re-served.
 	stateMu    sync.Mutex
 	lastGood   *aggregate.Document
+	goodInput  aggregate.Input
 	lastError  string
 	builtAt    time.Time
 	written    time.Time
@@ -413,8 +429,10 @@ func registration() protocol.Registration {
 
 // Rebuild reads the snapshot and republishes. It runs on the watcher's
 // goroutine, on the startup read, and after a committed save, on the request
-// goroutine that made it.
+// goroutine that made it; rebuildMu takes them one at a time.
 func (p *Plugin) Rebuild() {
+	p.rebuildMu.Lock()
+	defer p.rebuildMu.Unlock()
 	p.configMu.RLock()
 	settings, current, kept, watcher, served := p.settings, p.store, p.overrides, p.watcher, p.api
 	p.configMu.RUnlock()
@@ -431,6 +449,23 @@ func (p *Plugin) Rebuild() {
 	// Read before stateMu, never under it: the store's lock is a leaf, and a
 	// save holding it must never wait for this rebuild.
 	values := kept.Current()
+	if hook := p.afterRead.Load(); hook != nil {
+		(*hook)()
+	}
+	in := aggregate.Input{
+		Snapshot:     result.Snapshot,
+		SourceReason: result.Reason,
+		Identities:   result.Identities,
+		StaleAfter:   settings.staleAfter,
+		PlanLabels:   settings.planLabels,
+		Redeemable:   settings.allowRedeem,
+		// Read on every rebuild, so a threshold changed in the panel
+		// applies at the next one rather than at the next snapshot write.
+		BalanceWarnBelow: settings.warnBelow,
+		Meter:            result.Meter,
+		Overrides:        values,
+		AllowEdit:        settings.allowEdit,
+	}
 
 	p.stateMu.Lock()
 	defer p.stateMu.Unlock()
@@ -439,30 +474,24 @@ func (p *Plugin) Rebuild() {
 	switch {
 	case result.Reason != "" && p.lastGood != nil:
 		// Serve stale over empty: the last good document, honestly labelled.
-		doc = *p.lastGood
+		// What the dashboard's settings decide in it is rebuilt from the
+		// snapshot and roster it came from, with the settings and meter as
+		// they are now: a save while the source is failing must show, or the
+		// page would keep the old values and its next save would conflict.
+		settled := in
+		settled.Snapshot, settled.SourceReason, settled.Identities = p.goodInput.Snapshot, "", p.goodInput.Identities
+		doc = aggregate.WithSettings(*p.lastGood, aggregate.Build(settled, now))
 		doc.GeneratedAtEpoch = now.Unix()
 		doc.Stale = true
 		reason := result.Reason
 		doc.StaleReason = &reason
 	default:
-		doc = aggregate.Build(aggregate.Input{
-			Snapshot:     result.Snapshot,
-			SourceReason: result.Reason,
-			Identities:   result.Identities,
-			Samples:      current.Samples(),
-			StaleAfter:   settings.staleAfter,
-			PlanLabels:   settings.planLabels,
-			Redeemable:   settings.allowRedeem,
-			// Read on every rebuild, so a threshold changed in the panel
-			// applies at the next one rather than at the next snapshot write.
-			BalanceWarnBelow: settings.warnBelow,
-			Meter:            result.Meter,
-			Overrides:        values,
-			AllowEdit:        settings.allowEdit,
-		}, now)
+		in.Samples = current.Samples()
+		doc = aggregate.Build(in, now)
 		if result.Reason == "" {
 			good := doc
 			p.lastGood = &good
+			p.goodInput = aggregate.Input{Snapshot: result.Snapshot, Identities: result.Identities}
 			// History records observations, and a rebuild is not one. Rebuilds
 			// now run on a timer as well as on a write — request activity moves
 			// while the snapshot sits still — and sampling each of those would

@@ -60,6 +60,16 @@ func dashboardRenewalOf(r record, setting *overrides.Renewal, now time.Time) *in
 	return &epoch
 }
 
+// renewalEstimateOf is a Claude credential's estimated renewal whatever wins,
+// the date Use estimate returns to; nil for any other provider. Codex reports
+// its own date and has no estimate to return to.
+func renewalEstimateOf(r record, now time.Time) *int64 {
+	if r.identity.Provider != "claude" {
+		return nil
+	}
+	return estimatedRenewalOf(r, now)
+}
+
 // renewalEditable reports whether the page may set this credential's renewal
 // date: a Claude subscription, whose provider reports none, under a CPA auth
 // index settings.json can key it by.
