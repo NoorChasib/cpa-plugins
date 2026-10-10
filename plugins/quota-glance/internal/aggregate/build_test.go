@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -553,6 +555,193 @@ func TestRawWindowIsKeptAndSortsLast(t *testing.T) {
 	}
 	if !rows[0].Matched {
 		t.Fatal("a canonical row must be marked matched")
+	}
+}
+
+// grokProduct is the raw window quota-cache writes for Grok's GrokBuild
+// productUsage item.
+const grokProduct = qc.WindowRawPrefix + "xai:product/GrokBuild"
+
+// grokWindows is a Grok credential as quota-cache writes one: the shared credit
+// pool as credits and, when productUsed is not negative, one product's slice of
+// it carrying the pool's reset.
+func grokWindows(creditsUsed, productUsed float64, reset, observed time.Time) []qc.EntryWindow {
+	windows := []qc.EntryWindow{{Key: qc.WindowCredits, Title: "Credits", UsedPercent: creditsUsed, ResetAt: reset, ObservedAt: observed}}
+	if productUsed >= 0 {
+		windows = append(windows, qc.EntryWindow{Key: grokProduct, Title: "product/GrokBuild", UsedPercent: productUsed, ResetAt: reset, ObservedAt: observed})
+	}
+	return windows
+}
+
+func rowIDsOf(rows []Row) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.RowID)
+	}
+	return ids
+}
+
+// xAI bills one allowance. A product beside it is a slice of the same pool, so
+// the card shows Credits once rather than a second bar reading the same figure
+// — the dashboard printed "50% left, +50% when noorchasib resets in 3d" twice.
+// Nothing downstream of the rows sees the product either: no entry, no trend
+// sample, and history recorded under its old row id moves nothing.
+func TestXAIProductWindowFoldsIntoCredits(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	const grok = "xai-noorchasib@example.com.json"
+	// The product first, so filtering in place would overwrite the snapshot's
+	// own windows rather than only shorten a copy of its slice header.
+	windows := grokWindows(50, 50, now.Add(3*24*time.Hour), observed)
+	windows[0], windows[1] = windows[1], windows[0]
+	before := slices.Clone(windows)
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"xai:" + grok: {Provider: "xai", AuthIndex: grok, ObservedAt: observed, Windows: windows},
+	}}
+	// Written while the product still had a row of its own.
+	samples := []Sample{
+		{AuthIndex: grok, WindowKey: grokProduct, At: now.Add(-90 * time.Minute), Remaining: 0.9},
+		{AuthIndex: grok, WindowKey: grokProduct, At: now.Add(-40 * time.Minute), Remaining: 0.9},
+	}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: grok, Provider: "xai"}},
+		Samples:    samples, StaleAfter: time.Hour}, now)
+
+	if len(doc.Providers) != 1 || doc.Providers[0].ID != "xai" {
+		t.Fatalf("providers = %+v", doc.Providers)
+	}
+	rows := doc.Providers[0].Rows
+	if len(rows) != 1 || rows[0].RowID != qc.WindowCredits || !rows[0].Matched {
+		t.Fatalf("rows = %v; want the Credits row alone", rowIDsOf(rows))
+	}
+	credits := rows[0]
+	if credits.Aggregate.RemainingPercent != 50 || credits.Aggregate.MemberCount != 1 {
+		t.Fatalf("credits = %+v", credits.Aggregate)
+	}
+	if want := "+50% when noorchasib resets in 3d"; credits.Aggregate.Subtext != want {
+		t.Fatalf("subtext = %q; want %q", credits.Aggregate.Subtext, want)
+	}
+	if entry := entryOf(t, credits, grok); entry.SourceWindowKey != qc.WindowCredits {
+		t.Fatalf("entry reads %q; want the pool", entry.SourceWindowKey)
+	}
+	if credits.Aggregate.Trend != TrendUnknown {
+		t.Fatalf("trend = %q; the product's old samples must not feed the pool's", credits.Aggregate.Trend)
+	}
+	for _, sample := range SamplesFrom(doc, now) {
+		if sample.WindowKey != qc.WindowCredits {
+			t.Fatalf("sampled %q; only the Credits row exists", sample.WindowKey)
+		}
+	}
+	if !reflect.DeepEqual(windows, before) {
+		t.Fatalf("the snapshot's windows were modified: %+v", windows)
+	}
+}
+
+// With no pool to fold into, the product is the only reading the credential
+// has, and it keeps its row rather than vanishing from the card.
+func TestXAIProductWindowWithoutCreditsIsKept(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	const grok = "xai-noorchasib@example.com.json"
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"xai:" + grok: {
+			Provider: "xai", AuthIndex: grok, ObservedAt: observed,
+			Windows: []qc.EntryWindow{
+				{Key: grokProduct, Title: "product/GrokBuild", UsedPercent: 30, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot,
+		Identities: []Identity{{AuthIndex: grok, Provider: "xai"}},
+		StaleAfter: time.Hour}, now)
+
+	rows := doc.Providers[0].Rows
+	if len(rows) != 1 || rows[0].RowID != grokProduct {
+		t.Fatalf("rows = %v; want the product row", rowIDsOf(rows))
+	}
+	if rows[0].Matched || rows[0].Title != "product/GrokBuild" {
+		t.Fatalf("product row = %+v; it is still an unmatched raw row", rows[0])
+	}
+	if entry := entryOf(t, rows[0], grok); !entry.HasReading || entry.RemainingPercent != 70 {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if doc.Credentials[0].Status != StatusOK {
+		t.Fatalf("status = %q", doc.Credentials[0].Status)
+	}
+}
+
+// The fold is Grok's alone. A raw window from any other provider, in the same
+// build as a Grok credential being folded, still renders.
+func TestFoldingXAIProductsLeavesOtherRawWindows(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	const cowork = "raw:claude:seven_day_cowork"
+	snapshot := qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+		"xai:xai-a@example.com.json": {
+			Provider: "xai", AuthIndex: "xai-a@example.com.json", ObservedAt: observed,
+			Windows: grokWindows(50, 50, now.Add(time.Hour), observed),
+		},
+		"claude:claude-a@example.com.json": {
+			Provider: "claude", AuthIndex: "claude-a@example.com.json", ObservedAt: observed,
+			Windows: []qc.EntryWindow{
+				{Key: qc.WindowWeekly, UsedPercent: 40, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+				{Key: cowork, Title: "seven_day_cowork", UsedPercent: 10, ResetAt: now.Add(time.Hour), ObservedAt: observed},
+			},
+		},
+	}}
+	doc := Build(Input{Snapshot: snapshot, Identities: []Identity{
+		{AuthIndex: "xai-a@example.com.json", Provider: "xai"},
+		{AuthIndex: "claude-a@example.com.json", Provider: "claude"},
+	}, StaleAfter: time.Hour}, now)
+
+	row := rowOf(t, doc, "claude", cowork)
+	if row.Matched || row.Aggregate.MemberCount != 1 || row.Aggregate.RemainingPercent != 90 {
+		t.Fatalf("cowork row = %+v", row)
+	}
+	for _, provider := range doc.Providers {
+		if provider.ID == "xai" && (len(provider.Rows) != 1 || provider.Rows[0].RowID != qc.WindowCredits) {
+			t.Fatalf("xai rows = %v", rowIDsOf(provider.Rows))
+		}
+	}
+}
+
+// The Credits row never counted products, so folding them changes nothing in
+// it. Two Grok credentials, one naming a product: the row, and every
+// credential, is what it is with no product at all.
+func TestFoldingXAIProductsLeavesTheCreditsRowAsItWas(t *testing.T) {
+	now := at(t, 0)
+	observed := now.Add(-5 * time.Minute)
+	roster := []Identity{
+		{AuthIndex: "xai-a@example.com.json", Provider: "xai"},
+		{AuthIndex: "xai-b@example.com.json", Provider: "xai"},
+	}
+	build := func(productUsed float64) Document {
+		return Build(Input{Snapshot: qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{
+			"xai:xai-a@example.com.json": {
+				Provider: "xai", AuthIndex: "xai-a@example.com.json", ObservedAt: observed,
+				Windows: grokWindows(50, productUsed, now.Add(time.Hour), observed),
+			},
+			"xai:xai-b@example.com.json": {
+				Provider: "xai", AuthIndex: "xai-b@example.com.json", ObservedAt: observed,
+				Windows: grokWindows(20, -1, now.Add(2*time.Hour), observed),
+			},
+		}}, Identities: roster, StaleAfter: time.Hour}, now)
+	}
+	folded, plain := build(50), build(-1)
+
+	if rows := folded.Providers[0].Rows; len(rows) != 1 || rows[0].RowID != qc.WindowCredits {
+		t.Fatalf("rows = %v; want the Credits row alone", rowIDsOf(rows))
+	}
+	credits := rowOf(t, folded, "xai", qc.WindowCredits)
+	// 50% and 80% left.
+	if credits.Aggregate.MemberCount != 2 || credits.Aggregate.ExcludedCount != 0 || credits.Aggregate.RemainingPercent != 65 {
+		t.Fatalf("credits = %+v", credits.Aggregate)
+	}
+	if got, want := jsonOf(t, credits), jsonOf(t, rowOf(t, plain, "xai", qc.WindowCredits)); got != want {
+		t.Fatalf("the Credits row moved:\n got %s\nwant %s", got, want)
+	}
+	if got, want := jsonOf(t, folded.Credentials), jsonOf(t, plain.Credentials); got != want {
+		t.Fatalf("the credentials moved:\n got %s\nwant %s", got, want)
 	}
 }
 

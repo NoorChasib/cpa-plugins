@@ -51,7 +51,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.7.1"
+var Version = "0.7.2"
 
 const (
 	defaultStaleAfter = 45 * time.Minute
