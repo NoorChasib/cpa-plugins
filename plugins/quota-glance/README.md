@@ -279,6 +279,15 @@ A few things the design refuses to guess about:
   credential while the first is in flight is refused outright, and a second
   copy of the same press — a browser or proxy resending it on its own — is
   answered with the first copy's answer rather than spent again.
+- **A reset puts the account straight back into CPA's rotation.** Once the
+  provider confirms the reset, the plugin clears CPA's own cooldown on that one
+  credential, as **Clear cooldown** in the CPA console does; otherwise CPA can
+  keep skipping the account for as long as the cooldown it recorded at the limit
+  still runs. If that clear fails, or CPA is older than v8.0.12, the message says
+  the reset is spent and asks you to use **Clear cooldown** in the console — not
+  to press **Use one** again, which would spend another reset.
+  [CPA's cooldown after a reset](docs/summary-contract.md#cpas-cooldown-after-a-reset)
+  has the details.
 
 The button is absent — not greyed out — whenever it cannot work: with
 `allow-redeem: false`, on a credential you have disabled in CPA, and in a
@@ -490,7 +499,7 @@ look at the console's door.
 
 `?scenario=` then selects a state to look at, such as `degraded`, `holds` or
 `cpa-banned`, and `?redeem=` how a press ends, such as `reset`,
-`outcome-unknown` or `gateway`. An unknown name lists the ones there are: a
+`cooldown-failed`, `outcome-unknown` or `gateway`. An unknown name lists the ones there are: a
 scenario in the response, an ending in the dev server's log. The stand-in
 counts CPA's failed sign-ins as CPA does; restarting the dev server lifts its
 simulated ban.

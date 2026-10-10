@@ -458,6 +458,14 @@
     color: var(--color-ink);
   }
 
+  /* The reset was spent and CPA may still be skipping the account. The same
+   * warning edge, mark and ink: it asks for something before the button is
+   * pressed again, and what it asks is not to press it. */
+  .qg-notice.is-partial {
+    border-left-color: var(--color-warn);
+    color: var(--color-ink);
+  }
+
   .qg-notice-mark {
     flex: none;
     width: 13px;
