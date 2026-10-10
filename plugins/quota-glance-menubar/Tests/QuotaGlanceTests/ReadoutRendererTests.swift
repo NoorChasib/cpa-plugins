@@ -93,7 +93,14 @@ final class ReadoutRendererTests: XCTestCase {
             let off = ReadoutRenderer.image(cells: cells([94, 59]), options: options(style, badges: false), marks: m).size.width
             let icon = ReadoutRenderer.image(cells: cells([94, 59]), options: options(style, icon: true), marks: m).size.width
             let three = ReadoutRenderer.image(cells: cells([94, 59, 36], providers: ["claude", "claude", "codex"]), options: options(style), marks: m).size.width
-            XCTAssertLessThan(off, on, "\(style)")
+            // A Stacked pill's halves are rounded to whole points, and its logo
+            // column is barely wider than W alone, so badges off may round to
+            // the same width. It is never wider.
+            if style == .stackedPill {
+                XCTAssertLessThanOrEqual(off, on, "\(style)")
+            } else {
+                XCTAssertLessThan(off, on, "\(style)")
+            }
             XCTAssertGreaterThan(icon, on, "\(style)")
             XCTAssertGreaterThan(three, on, "\(style)")
         }
@@ -268,7 +275,12 @@ final class ReadoutRendererTests: XCTestCase {
             let on = ReadoutRenderer.layout(cells: designCells(), options: options(style), marks: m, scale: 2)
             let off = ReadoutRenderer.layout(cells: designCells(), options: options(style, badges: false), marks: m, scale: 2)
             XCTAssertTrue(logoRects(off).isEmpty, "\(style)")
-            XCTAssertLessThan(off.width, on.width, "\(style): the letter alone is narrower than the logo")
+            // Never wider; the pill's whole-point halves can round it to the same width.
+            if style == .stackedPill {
+                XCTAssertLessThanOrEqual(off.width, on.width, "\(style)")
+            } else {
+                XCTAssertLessThan(off.width, on.width, "\(style): the letter alone is narrower than the logo")
+            }
             // Under a logo the letter sits below the digits' centre; alone it is centred on it.
             let letterOn = texts(on)[1].origin.y, letterOff = texts(off)[1].origin.y
             XCTAssertGreaterThan(letterOff, letterOn, "\(style)")

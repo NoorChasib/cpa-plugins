@@ -165,6 +165,17 @@ final class ReadoutLayoutTests: XCTestCase {
         XCTAssertEqual((left * 2).rounded(), left * 2)
     }
 
+    /// The stacked styles' type and spacing, as approved in the 0.6.0 mockup.
+    func testStackedMetricsMatchTheApprovedMockup() {
+        XCTAssertEqual(ReadoutMetrics.stackedFontSize, 15)
+        XCTAssertEqual(ReadoutMetrics.stackLetterSize, 7.5)
+        XCTAssertEqual(ReadoutMetrics.stackLogoSize, 8)
+        XCTAssertEqual(ReadoutMetrics.stackGap, 1)
+        XCTAssertEqual(ReadoutMetrics.stackNumberGap, 2.5)
+        XCTAssertEqual(ReadoutMetrics.stackedPairSlotGap, 8)
+        XCTAssertEqual(ReadoutMetrics.stackedPillPadding, 5)
+    }
+
     func testStackedPillBoxHoldsTheStack() {
         XCTAssertEqual(ReadoutMetrics.stackedPillHeight, 20)
         XCTAssertEqual(ReadoutMetrics.stackedPillRadius, 6)
