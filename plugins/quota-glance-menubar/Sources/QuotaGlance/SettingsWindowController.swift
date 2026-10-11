@@ -18,7 +18,8 @@ final class SettingsWindowController: NSWindowController {
     // Menu bar section. `draft` follows the controls; Save writes it.
     private var draft = MenuBarReadout.newInstall
     private var state = QuotaReadoutState()
-    private let styleControl = NSSegmentedControl(labels: ReadoutStyle.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
+    /// A pop-up, not segments: six styles' titles are wider than the form.
+    private let stylePopup = NSPopUpButton()
     private let table = NSTableView()
     private let tableScroll = NSScrollView()
     private var tableHeight: NSLayoutConstraint?
@@ -156,10 +157,14 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func buildMenuBarForm() -> NSView {
-        styleControl.target = self
-        styleControl.action = #selector(styleChanged)
-        styleControl.segmentStyle = .rounded
-        styleControl.setAccessibilityLabel("Show")
+        for style in ReadoutStyle.allCases {
+            stylePopup.addItem(withTitle: style.title)
+            stylePopup.lastItem?.representedObject = style.rawValue
+        }
+        stylePopup.target = self
+        stylePopup.action = #selector(styleChanged)
+        stylePopup.setAccessibilityLabel("Show")
+        stylePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("window"))
         column.resizingMask = .autoresizingMask
@@ -228,7 +233,7 @@ final class SettingsWindowController: NSWindowController {
         let help = small("Updates every minute while your Mac is awake, even with the popover closed. Sign in to the dashboard to load your choices. The menu bar changes when you click Save and Open.")
 
         let grid = NSGridView(views: [
-            [label("Show"), styleControl],
+            [label("Show"), stylePopup],
             [label("Windows"), windows],
             [label("Badge"), badgeRow],
             [NSGridCell.emptyContentView, iconCheckbox],
@@ -265,7 +270,7 @@ final class SettingsWindowController: NSWindowController {
 
     private func refreshMenuBarSection() {
         draft = draft.normalized()
-        styleControl.selectedSegment = ReadoutStyle.allCases.firstIndex(of: draft.style) ?? 0
+        stylePopup.selectItem(at: ReadoutStyle.allCases.firstIndex(of: draft.style) ?? 0)
         badgePopup.selectItem(at: BadgeMode.allCases.firstIndex(of: draft.badge) ?? 0)
         iconCheckbox.state = draft.showsAppIcon ? .on : .off
         let usesWindows = draft.style != .iconOnly
@@ -296,7 +301,7 @@ final class SettingsWindowController: NSWindowController {
                 return ReadoutRenderer.appIcon
             case .percent:
                 return ReadoutRenderer.percentImage(text: state.presentation(for: draft.windows.first).text)
-            case .letteredPair, .splitPill:
+            case .letteredPair, .splitPill, .stackedPair, .stackedPill:
                 let options = ReadoutRenderer.Options(style: draft.style, badges: draft.badgeVisible, appIcon: draft.showsAppIcon,
                                                       dark: dark, increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
                 return ReadoutRenderer.image(cells: cells, options: options, marks: marks(for: cells))
@@ -418,9 +423,8 @@ final class SettingsWindowController: NSWindowController {
     // MARK: - Actions
 
     @objc private func styleChanged() {
-        let index = styleControl.selectedSegment
-        guard ReadoutStyle.allCases.indices.contains(index) else { return }
-        draft.style = ReadoutStyle.allCases[index]
+        guard let raw = stylePopup.selectedItem?.representedObject as? String, let style = ReadoutStyle(rawValue: raw) else { return }
+        draft.style = style
         refreshMenuBarSection()
     }
 

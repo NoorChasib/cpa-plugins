@@ -3,11 +3,13 @@ import CoreText
 import GlanceCore
 
 /// Draws the Lettered pair and Split pill into one template image per update,
-/// following the signed-off board (refined.html, "Building it"). One template
-/// image keeps letters, numbers, badges and the pill's fill in one ink; the
-/// system supplies white or black, the highlight and the inactive fade. The
-/// alphas are baked in, so the image is redrawn when the appearance or
-/// Increase Contrast changes.
+/// following the signed-off board (refined.html, "Building it"), and their
+/// stacked siblings, the Stacked pair and Stacked pill (0.6.0), which put
+/// each number first with its logo over its letter. One template image keeps
+/// letters, numbers, badges and the pill's fill in one ink; the system
+/// supplies white or black, the highlight and the inactive fade. The alphas
+/// are baked in, so the image is redrawn when the appearance or Increase
+/// Contrast changes.
 enum ReadoutRenderer {
     /// In GlanceCore, so the status item's comparable value can hold it.
     typealias Options = ReadoutOptions
@@ -15,8 +17,8 @@ enum ReadoutRenderer {
     /// The image is as tall as the menu bar's content area; the button centres it.
     static let height: CGFloat = 22
 
-    /// Lettered pair or Split pill. `marks` maps provider IDs to their logos;
-    /// a provider without one gets no badge.
+    /// A lettered style. `marks` maps provider IDs to their logos; a provider
+    /// without one gets no badge.
     static func image(cells: [ReadoutCell], options: Options, marks: [String: LogoMark]) -> NSImage {
         let width = layout(cells: cells, options: options, marks: marks, scale: 2).width
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
@@ -67,8 +69,8 @@ enum ReadoutRenderer {
 
     enum Operation {
         case icon(NSImage, CGRect)
-        /// Split pill halves, clipped to the rounded box.
-        case fill([CGRect], box: CGRect, alpha: CGFloat)
+        /// Pill halves, clipped to the rounded box.
+        case fill([CGRect], box: CGRect, radius: CGFloat, alpha: CGFloat)
         /// A line of text with its baseline origin.
         case text(CTLine, CGPoint)
         case logo(LogoMark, CGRect)
@@ -92,6 +94,8 @@ enum ReadoutRenderer {
             rightBearing = ink.isNull || ink.isEmpty ? 0 : advance - ink.maxX
             capHeight = font.capHeight
         }
+
+        var inkWidth: CGFloat { advance - leftBearing - rightBearing }
     }
 
     private struct Fonts {
@@ -110,7 +114,17 @@ enum ReadoutRenderer {
         }
     }
 
+    /// The optional app icon, and where the readout starts after it.
+    private static func appIconPrefix(_ options: Options, scale: Double) -> (operations: [Operation], end: CGFloat) {
+        guard options.appIcon, let icon = appIcon else { return ([], 0) }
+        let size = icon.size
+        let y = CGFloat(ReadoutLayout.snap(Double((height - size.height) / 2), scale: scale))
+        return ([.icon(icon, CGRect(x: 0, y: y, width: size.width, height: size.height))],
+                (size.width + CGFloat(ReadoutMetrics.appIconGap)).rounded(.up))
+    }
+
     static func layout(cells: [ReadoutCell], options: Options, marks: [String: LogoMark], scale: CGFloat) -> Plan {
+        if options.style.isStacked { return stackedLayout(cells: cells, options: options, marks: marks, scale: scale) }
         let pill = options.style == .splitPill
         let fonts = Fonts(style: options.style, increasedContrast: options.increasedContrast)
         let letterAlpha = CGFloat(ReadoutMetrics.letterAlpha(pill: pill, dark: options.dark, increasedContrast: options.increasedContrast))
@@ -120,13 +134,7 @@ enum ReadoutRenderer {
         let letterGap = CGFloat(ReadoutMetrics.letterGap)
         let badgeGap = CGFloat(ReadoutMetrics.badgeGap)
 
-        var operations: [Operation] = []
-        var x: CGFloat = 0
-        if options.appIcon, let icon = appIcon {
-            let size = icon.size
-            operations.append(.icon(icon, CGRect(x: 0, y: snap((height - size.height) / 2), width: size.width, height: size.height)))
-            x = (size.width + CGFloat(ReadoutMetrics.appIconGap)).rounded(.up)
-        }
+        var (operations, x) = appIconPrefix(options, scale: s)
 
         struct Cell {
             let letter: Glyphs
@@ -169,7 +177,8 @@ enum ReadoutRenderer {
             let pillHeight = CGFloat(ReadoutMetrics.pillHeight)
             let box = CGRect(x: x, y: ((height - pillHeight) / 2).rounded(), width: CGFloat(ReadoutLayout.pillWidth(halfWidth: Double(half), halves: measured.count)), height: pillHeight)
             let halves = measured.indices.map { CGRect(x: x + CGFloat($0) * (half + divider), y: box.minY, width: half, height: pillHeight) }
-            operations.append(.fill(halves, box: box, alpha: CGFloat(ReadoutMetrics.pillFillAlpha(dark: options.dark, increasedContrast: options.increasedContrast))))
+            operations.append(.fill(halves, box: box, radius: CGFloat(ReadoutMetrics.pillRadius),
+                                    alpha: CGFloat(ReadoutMetrics.pillFillAlpha(dark: options.dark, increasedContrast: options.increasedContrast))))
             for (cell, rect) in zip(measured, halves) {
                 let origin = CGFloat(ReadoutLayout.pillContentOrigin(halfWidth: Double(half), run: run(cell, cell.placement), scale: s))
                 drawRun(cell, at: rect.minX + origin)
@@ -192,14 +201,102 @@ enum ReadoutRenderer {
         return Plan(width: max(1, x.rounded(.up)), operations: operations)
     }
 
+    /// Stacked pair or Stacked pill: each reading is its number, then one
+    /// column with the logo on top and the letter under it, the column
+    /// centred on the digits' cap height. Without a logo the letter stands
+    /// alone, centred the same way.
+    private static func stackedLayout(cells: [ReadoutCell], options: Options, marks: [String: LogoMark], scale: CGFloat) -> Plan {
+        let pill = options.style == .stackedPill
+        let numberFont = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(ReadoutMetrics.stackedFontSize), weight: pill ? .bold : .medium)
+        let letterFont = NSFont.systemFont(ofSize: CGFloat(ReadoutMetrics.stackLetterSize), weight: .semibold)
+        let letterAlpha = CGFloat(ReadoutMetrics.letterAlpha(pill: pill, dark: options.dark, increasedContrast: options.increasedContrast))
+        let s = Double(scale)
+        func snap(_ value: CGFloat) -> CGFloat { CGFloat(ReadoutLayout.snap(Double(value), scale: s)) }
+        let logo = CGFloat(ReadoutMetrics.stackLogoSize)
+        let numberGap = CGFloat(ReadoutMetrics.stackNumberGap)
+
+        var (operations, x) = appIconPrefix(options, scale: s)
+
+        struct Cell {
+            let letter: Glyphs
+            let number: Glyphs
+            let twoDigits: Glyphs
+            let placement: Glyphs
+            let mark: LogoMark?
+
+            func run(_ number: Glyphs) -> StackedRun {
+                StackedRun(numberAdvance: Double(number.advance), numberLeftBearing: Double(number.leftBearing),
+                           letterInkWidth: Double(letter.inkWidth),
+                           logoRightInset: mark.map { $0.rightInkInset * ReadoutMetrics.stackLogoSize })
+            }
+        }
+        let twoDigits = Glyphs("00", font: numberFont, alpha: 1)
+        let measured: [Cell] = cells.map { cell in
+            let number = Glyphs(cell.text, font: numberFont, alpha: 1)
+            // Any two digits are placed as "00", so the stack never shifts with the reading.
+            let placement = cell.text.count == 2 && cell.percent != nil ? twoDigits : number
+            return Cell(letter: Glyphs(cell.letter, font: letterFont, alpha: letterAlpha), number: number, twoDigits: twoDigits,
+                        placement: placement, mark: options.badges ? marks[cell.selection.providerID] : nil)
+        }
+        let capHeight = numberFont.capHeight
+        let baseline = snap((height - capHeight) / 2)
+        // The digits' cap-height centre: the bar's centre, which the stack shares.
+        let centre = Double(baseline + capHeight / 2)
+
+        // `start` need not be on the pixel grid: the number and each part of
+        // the stack are snapped on their own, so the stack keeps its place.
+        func drawRun(_ cell: Cell, at start: CGFloat) {
+            operations.append(.text(cell.number.line, CGPoint(x: snap(start), y: baseline)))
+            let column = start + cell.placement.advance + numberGap
+            let width = CGFloat(cell.run(cell.placement).stackWidth)
+            let place = ReadoutLayout.stackPlacement(centre: centre, letterCapHeight: Double(cell.letter.capHeight),
+                                                     logo: cell.mark != nil, scale: s)
+            // Letter and logo are each centred in the column, the letter by its ink.
+            let letterX = snap(column + (width - cell.letter.inkWidth) / 2 - cell.letter.leftBearing)
+            operations.append(.text(cell.letter.line, CGPoint(x: letterX, y: CGFloat(place.letterBaseline))))
+            if let mark = cell.mark, let logoY = place.logoOriginY {
+                operations.append(.logo(mark, CGRect(x: snap(column + (width - logo) / 2), y: CGFloat(logoY), width: logo, height: logo)))
+            }
+        }
+
+        if pill {
+            let half = CGFloat(ReadoutLayout.pillHalfWidth(twoDigit: measured.map { $0.run($0.twoDigits) },
+                                                           shown: measured.map { $0.run($0.placement) },
+                                                           padding: ReadoutMetrics.stackedPillPadding))
+            let divider = CGFloat(ReadoutMetrics.pillDivider)
+            let pillHeight = CGFloat(ReadoutMetrics.stackedPillHeight)
+            let box = CGRect(x: x, y: ((height - pillHeight) / 2).rounded(), width: CGFloat(ReadoutLayout.pillWidth(halfWidth: Double(half), halves: measured.count)), height: pillHeight)
+            let halves = measured.indices.map { CGRect(x: x + CGFloat($0) * (half + divider), y: box.minY, width: half, height: pillHeight) }
+            operations.append(.fill(halves, box: box, radius: CGFloat(ReadoutMetrics.stackedPillRadius),
+                                    alpha: CGFloat(ReadoutMetrics.pillFillAlpha(dark: options.dark, increasedContrast: options.increasedContrast))))
+            for (cell, rect) in zip(measured, halves) {
+                let origin = CGFloat(ReadoutLayout.pillContentOrigin(halfWidth: Double(half), run: cell.run(cell.placement), scale: s))
+                drawRun(cell, at: rect.minX + origin)
+            }
+            x = box.maxX
+        } else {
+            let gap = CGFloat(ReadoutMetrics.stackedPairSlotGap)
+            for (index, cell) in measured.enumerated() {
+                if index > 0 { x += gap }
+                let run = cell.run(cell.placement)
+                let slot = CGFloat(ReadoutLayout.stackedSlotWidth(numberAdvance: Double(cell.number.advance), twoDigitAdvance: Double(twoDigits.advance),
+                                                                  stackWidth: run.stackWidth))
+                // Spare room sits before the number, never between number and stack.
+                drawRun(cell, at: CGFloat(ReadoutLayout.stackedContentOrigin(slotStart: Double(x), slotWidth: Double(slot), run: run)))
+                x += slot
+            }
+        }
+        return Plan(width: max(1, x.rounded(.up)), operations: operations)
+    }
+
     static func draw(_ plan: Plan, in context: CGContext) {
         for operation in plan.operations {
             switch operation {
             case let .icon(image, rect):
                 image.draw(in: rect)
-            case let .fill(rects, box, alpha):
+            case let .fill(rects, box, radius, alpha):
                 context.saveGState()
-                context.addPath(CGPath(roundedRect: box, cornerWidth: CGFloat(ReadoutMetrics.pillRadius), cornerHeight: CGFloat(ReadoutMetrics.pillRadius), transform: nil))
+                context.addPath(CGPath(roundedRect: box, cornerWidth: radius, cornerHeight: radius, transform: nil))
                 context.clip()
                 context.setFillColor(CGColor(gray: 0, alpha: alpha))
                 context.fill(rects)

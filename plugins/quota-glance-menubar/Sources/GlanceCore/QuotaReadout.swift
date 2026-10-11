@@ -99,7 +99,7 @@ public struct QuotaReadoutState {
     }
 }
 
-/// One window as the Lettered pair and Split pill draw it.
+/// One window as the lettered styles draw it.
 public struct ReadoutCell: Equatable {
     public let selection: QuotaSelection
     public let letter: String
