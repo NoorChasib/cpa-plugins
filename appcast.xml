@@ -4,16 +4,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Quota Glance</title>
         <item>
-            <title>0.5.0</title>
-            <pubDate>Sat, 10 Oct 2026 15:29:05 +0000</pubDate>
-            <sparkle:version>0.5.0</sparkle:version>
-            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <title>0.6.0</title>
+            <pubDate>Sun, 11 Oct 2026 00:09:24 +0000</pubDate>
+            <sparkle:version>0.6.0</sparkle:version>
+            <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance-menubar/v0.5.0/Quota-Glance-0.5.0-macOS.dmg" length="962325" type="application/octet-stream" sparkle:edSignature="rhM/zBI5rTLSZloaS82iI3LqluSlpTYLE68jfWebQ5kRGb2cfNMmEQZDYQk7dCa+1fj2y8ee1ZnY8KpANzKJCg=="></enclosure>
+            <enclosure url="https://github.com/NoorChasib/cpa-plugins/releases/download/quota-glance-menubar/v0.6.0/Quota-Glance-0.6.0-macOS.dmg" length="975448" type="application/octet-stream" sparkle:edSignature="1xWm1gwT6GaKy97zxIxLbRYD2GCFn3NXRKz1RdjZ/tP6bDURJYFDcfkkM6rNcCJboQO6zQAnNTASxBvF/M7/AQ=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: /CuDW2amYIh8Czn5LC6pj7Lrfn2oU9nCrfp07mFVOF//jfBirI3zNrjTaYrskMO7mAtKuSQIwYLR1ytJOKwFCg==
+edSignature: nH/k15WZwShJ1tAVlJCFpQD8ldzV/epvGONUrKGEXjRFRgxmfaRvAl0sgenI3a2W7bDT0lYdoutYiOOs16mwCw==
 length: 1163
 -->
