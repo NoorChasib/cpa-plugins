@@ -78,6 +78,18 @@ final class AppSettingsMigrationTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: store).readout, chosen)
     }
 
+    func testStackedStylesAreStoredAndReadBack() throws {
+        for style in [ReadoutStyle.stackedPair, .stackedPill] {
+            let store = defaults()
+            let settings = AppSettings(defaults: store)
+            let chosen = MenuBarReadout(style: style, windows: [fable], badge: .off, showsAppIcon: true)
+            settings.readout = chosen
+            XCTAssertEqual(AppSettings(defaults: store).readout, chosen, "\(style) survives a relaunch")
+            XCTAssertEqual(MenuBarReadout.resolve(stored: store.data(forKey: MenuBarReadout.storageKey), legacySelection: nil,
+                                                  hasDashboardURL: false).migrated, false, "\(style) is read as stored")
+        }
+    }
+
     func testSavingFromSettingsOpenDuringAdoptionKeepsTheAdoptedWindows() throws {
         // A new install on a Codex-only dashboard, with Settings open when the
         // first summary arrives. Settings' draft must follow the adoption, or

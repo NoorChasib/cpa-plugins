@@ -1,7 +1,8 @@
 # Provider logos
 
 The Lettered pair and Split pill can draw a small provider logo at the
-top-right of each number (Settings → Menu bar → Badge). The logos are plain
+top-right of each number, and the Stacked pair and Stacked pill one over each
+letter (Settings → Menu bar → Badge). The logos are plain
 SVG files bundled with the app:
 
 | Provider ID in the summary | File |
@@ -70,7 +71,10 @@ into the same template image as the letters and numbers, so it is crisp on
 Retina displays and follows light and dark menu bars, the highlight and
 Increase Contrast like the rest of the readout. The Split pill centres each
 half's ink using the logo's own ink bounds, so a logo with empty space on
-its right is not pushed off-centre.
+its right is not pushed off-centre. The Stacked pair and Stacked pill fit it
+into an 8 × 8pt square instead, centred over the letter, the two centred
+together on the digits; the Stacked pill centres by the logo's ink the same
+way.
 
 The same files supply the 14pt logos in Settings' windows list and the 12pt
 logos in each row's pop-up menu.

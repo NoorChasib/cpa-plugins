@@ -7,9 +7,9 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 
-version="${VERSION:-0.5.0}"
+version="${VERSION:-0.6.0}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo 'VERSION must have three numeric components, such as 0.5.0.' >&2
+    echo 'VERSION must have three numeric components, such as 0.6.0.' >&2
     exit 1
 fi
 

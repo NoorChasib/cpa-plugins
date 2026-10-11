@@ -122,4 +122,29 @@ final class StatusReadoutTests: XCTestCase {
         XCTAssertEqual(icon.changes(from: pair), [.length, .image, .toolTip, .accessibilityLabel],
                        "Both show the image alone with no title")
     }
+
+    func testStackedStylesAreDrawnAndWriteOnlyWhatChanges() throws {
+        let current = try state()
+        let cells = current.cells(for: [session, weekly, codex], at: now)
+        let pair = shown(readout(.letteredPair), current)
+        for style in [ReadoutStyle.stackedPair, .stackedPill] {
+            let stacked = shown(readout(style), current)
+            XCTAssertEqual(stacked.length, .variable)
+            XCTAssertEqual(stacked.image, .drawn(cells: cells, options: ReadoutOptions(style: style, badges: true, appIcon: false,
+                                                                                         dark: true, increasedContrast: false),
+                                                 logos: ["claude"]), "\(style)")
+            // Switching from the Lettered pair redraws the image and nothing else.
+            XCTAssertEqual(stacked.changes(from: pair), .image, "\(style)")
+            XCTAssertEqual(pair.changes(from: stacked), .image, "\(style)")
+            // The same inputs write nothing; appearance and contrast redraw the image.
+            XCTAssertEqual(shown(readout(style), current).changes(from: stacked), [], "\(style)")
+            XCTAssertEqual(shown(readout(style), current, dark: false).changes(from: stacked), .image, "\(style)")
+            XCTAssertEqual(shown(readout(style), current, contrast: true).changes(from: stacked), .image, "\(style)")
+            guard case let .drawn(_, _, logos) = shown(readout(style, badge: .off), current).image else {
+                return XCTFail("\(style) is drawn")
+            }
+            XCTAssertEqual(logos, [], "\(style): badges off draw the letter alone")
+        }
+        XCTAssertEqual(shown(readout(.stackedPill), current).changes(from: shown(readout(.stackedPair), current)), .image)
+    }
 }

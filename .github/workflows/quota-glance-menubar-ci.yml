@@ -66,7 +66,16 @@ jobs:
       - name: Test, build Apple silicon app, verify arm64-only bundle, and package ZIP and DMG
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          # ReadoutRendererTests writes PNGs of the drawn readouts here for review.
+          READOUT_RENDER_DIR: ${{ runner.temp }}/readout-renders
         run: make ci VERSION="$VERSION"
+      - name: Upload the readout renders
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: readout-renders
+          path: ${{ runner.temp }}/readout-renders
+          if-no-files-found: warn
       - name: Developer ID sign, notarize, staple, and assess release downloads
         if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/quota-glance-menubar/v')) || (github.event_name == 'workflow_dispatch' && inputs.notarize && github.ref == 'refs/heads/main')
         env:
@@ -128,7 +137,7 @@ jobs:
 
           To start automatically after restarting your Mac, right-click the menu bar icon, choose Settings, and enable Open at login. Your URL and saved web session persist between launches.
 
-          Opening the popover preserves the page and scroll position. In Settings → Menu bar, Show offers Icon only, Percent, Lettered pair ("S94 W59") and Split pill. Choose one to three windows from any provider, in your order, each with a letter (S session, W weekly, F Fable, C credits), and an optional provider badge on each number (Always, When providers differ, Off). Readings update every minute while your Mac is awake, even with the popover closed. Updating keeps your menu bar as it was: a chosen quota stays Percent and Icon only stays Icon only.
+          Opening the popover preserves the page and scroll position. In Settings → Menu bar, Show offers Icon only, Percent, Lettered pair ("S94 W59"), Split pill, Stacked pair (each number with its provider logo over its letter) and Stacked pill. Choose one to three windows from any provider, in your order, each with a letter (S session, W weekly, F Fable, C credits), and an optional provider badge on each number (Always, When providers differ, Off). Readings update every minute while your Mac is awake, even with the popover closed. Updating keeps your menu bar as it was: a chosen quota stays Percent and Icon only stays Icon only.
 
           Starting with v0.3.0, right-click the menu bar icon and choose Check for Updates… to download and install future releases in the app. Automatic checks are enabled by default; Settings also offers automatic installation. Users on older versions need to install this DMG once to get the updater.
 

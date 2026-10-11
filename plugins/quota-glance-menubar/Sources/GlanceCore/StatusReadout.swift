@@ -1,6 +1,7 @@
 import Foundation
 
-/// How the Lettered pair or Split pill is drawn. The template alphas depend
+/// How a lettered style (Lettered pair, Split pill, Stacked pair, Stacked
+/// pill) is drawn. The template alphas depend
 /// on `dark` and `increasedContrast`, so both are part of the drawing.
 public struct ReadoutOptions: Equatable {
     public var style: ReadoutStyle
@@ -29,7 +30,7 @@ public struct StatusReadout: Equatable {
     public enum Image: Equatable {
         /// The chart symbol: alone in Icon only, before the title in Percent.
         case appIcon
-        /// The Lettered pair or Split pill. `logos` names the providers whose badge is drawn.
+        /// A lettered style. `logos` names the providers whose badge is drawn.
         case drawn(cells: [ReadoutCell], options: ReadoutOptions, logos: Set<String>)
     }
 
@@ -58,7 +59,7 @@ public struct StatusReadout: Equatable {
             imageLeading = selection != nil
             toolTip = value.detail
             accessibilityLabel = "Quota Glance. " + value.detail
-        case .letteredPair, .splitPill:
+        case .letteredPair, .splitPill, .stackedPair, .stackedPill:
             let cells = state.cells(for: readout.windows, at: now)
             let options = ReadoutOptions(style: readout.style, badges: readout.badgeVisible, appIcon: readout.showsAppIcon,
                                          dark: dark, increasedContrast: increasedContrast)
