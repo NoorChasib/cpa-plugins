@@ -39,8 +39,8 @@ const (
 	heartbeat = 10 * time.Minute
 	// warnEvery rate-limits the drop and save warnings.
 	warnEvery = 10 * time.Minute
-	// retention ages dormant organizations, unlinked organizations, auths
-	// and gaps: as long as the day buckets reach back.
+	// retention ages dormant organizations, unlinked organizations, auths,
+	// auth IDs and gaps: as long as the day buckets reach back.
 	retention = client.MeterDays * 24 * time.Hour
 	// oversizeDays is how far back the oversize rule keeps day buckets: a
 	// credit cycle, so the current cycle's sums survive.
@@ -50,13 +50,16 @@ const (
 )
 
 // usageWire is the part of CPA's pluginapi.UsageRecord the meter reads. It
-// has no Source, APIKey, AuthID, BaseURL, Alias, TraceID, RequestID or
-// ParentSessionID field, so the raw upstream key, the client key and the
-// credential's name are never materialized. CPA marshals the record with no
-// JSON tags, so every key is the Go field name; encoding/json matches keys
-// case-insensitively, which also covers the organization header.
+// has no Source, APIKey, BaseURL, Alias, TraceID, RequestID or
+// ParentSessionID field, and reads AuthID only through configAuthID, which
+// keeps nothing but CPA's config API-key shape, so the raw upstream key, the
+// client key and the credential's name are never materialized. CPA marshals
+// the record with no JSON tags, so every key is the Go field name;
+// encoding/json matches keys case-insensitively, which also covers the
+// organization header.
 type usageWire struct {
 	Provider, AuthIndex, AuthType, Model, ResponseModel, SessionID string
+	AuthID                                                         configAuthID
 	// RequestedAt is raw so that a timestamp that is not a string never
 	// rejects the record; the received time stands in for it.
 	RequestedAt json.RawMessage
@@ -72,16 +75,42 @@ type usageWire struct {
 	}
 }
 
+// configAuthIDPrefix is how a JSON string holding a config API-key auth ID
+// begins: the opening quote, then client.ConfigAPIKeyAuthID's prefix.
+const configAuthIDPrefix = `"claude:apikey:`
+
+// configAuthID keeps an AuthID only when it is CPA's config API-key shape.
+// The raw JSON is tested before any string is made, so a file name or an
+// e-mail address an OAuth record carries is never materialized. It never
+// fails, so an odd AuthID never rejects a record.
+type configAuthID string
+
+func (c *configAuthID) UnmarshalJSON(b []byte) error {
+	*c = ""
+	// A plain JSON string with no escape, 26 to 31 bytes between its quotes,
+	// starting with the prefix. Anything else, null, a number, an object or
+	// an escaped string included, is left unread.
+	if n := len(b) - 2; n < 26 || n > 31 || string(b[:len(configAuthIDPrefix)]) != configAuthIDPrefix || b[len(b)-1] != '"' || slices.Contains(b, '\\') {
+		return nil
+	}
+	if id := string(b[1 : len(b)-1]); client.ConfigAPIKeyAuthID(id) {
+		*c = configAuthID(id)
+	}
+	return nil
+}
+
 // event is what the worker counts: one Claude API-key attempt, reduced to
 // the facts the meter keeps. The failure body, the session id and the
 // headers are gone by the time one exists.
 type event struct {
 	at                                   time.Time // completion time, clamped to the received time, truncated to the second
 	authIndex                            string    // CPA's auth index, "" when absent or over maxAuthIndex bytes
+	authID                               string    // CPA's auth ID when it has the config API-key shape, else ""
 	org                                  string    // the organization header, normalized; "" when absent or invalid
 	model                                string    // client.NormalizeMeterModel(Model, ResponseModel)
 	prompt                               string    // client.MeterPromptClass(model, input+cacheRead+cacheWrite)
 	failed, refusal, claudeCode          bool
+	cancelled                            bool // a failure with status 499: the client went away
 	input, output, cacheRead, cacheWrite uint64
 }
 
@@ -124,9 +153,10 @@ type Meter struct {
 }
 
 // Open starts counting into the meter file at path, carrying on from the
-// file when there is one. linked names the organizations the configuration
-// links; now is the start time. It never fails: a file that cannot be read
-// is replaced at the first save, and one warning says so.
+// file when there is one. linked names the organizations listed on
+// quota-cache's page, from its organizations file; now is the start time. It
+// never fails: a file that cannot be read is replaced at the first save, and
+// one warning says so.
 func Open(path string, linked []string, now time.Time, log Logger) *Meter {
 	m := newMeter(path, log)
 	m.restore(linked, now)
@@ -161,6 +191,12 @@ func (m *Meter) restore(linked []string, now time.Time) {
 		m.data.Gaps = append(m.data.Gaps, gap)
 		m.data.StoppedAt, m.data.StopReason = nil, ""
 		m.data.Restarts = addSaturating(m.data.Restarts, 1)
+		// A file an older quota-cache wrote begins recording auth IDs now;
+		// one that already does keeps its first start.
+		if m.data.AuthIDsSince == nil {
+			since := now
+			m.data.AuthIDsSince = &since
+		}
 	case errors.Is(err, client.ErrMeterMissing):
 		m.data = fresh(now)
 	default:
@@ -184,7 +220,8 @@ func (m *Meter) restore(linked []string, now time.Time) {
 
 func fresh(now time.Time) client.APIMeter {
 	return client.APIMeter{Schema: client.MeterSchema, Since: now, StartedAt: now,
-		Gaps: []client.MeterGap{}, Organizations: map[string]client.MeterOrganization{}, Unlinked: []client.MeterUnlinked{}, Auths: map[string]client.MeterAuth{}}
+		Gaps: []client.MeterGap{}, Organizations: map[string]client.MeterOrganization{}, Unlinked: []client.MeterUnlinked{}, Auths: map[string]client.MeterAuth{},
+		AuthIDsSince: &now, AuthIDs: map[string]client.MeterAuthID{}}
 }
 
 // Offer takes one usage record as CPA sent it. It runs on CPA's single usage
@@ -229,7 +266,7 @@ func decode(raw []byte, received time.Time) (e event, keep, rejected bool) {
 	if !strings.EqualFold(w.Provider, "claude") || !strings.EqualFold(w.AuthType, "apikey") {
 		return event{}, false, false
 	}
-	e = event{at: completedAt(w.RequestedAt, w.Latency, received), failed: w.Failed,
+	e = event{at: completedAt(w.RequestedAt, w.Latency, received), failed: w.Failed, authID: string(w.AuthID),
 		input: uint64(d.InputTokens), output: uint64(d.OutputTokens), cacheRead: uint64(d.CacheReadTokens), cacheWrite: uint64(d.CacheCreationTokens)}
 	if index := strings.TrimSpace(w.AuthIndex); len(index) <= maxAuthIndex {
 		e.authIndex = index
@@ -245,6 +282,9 @@ func decode(raw []byte, received time.Time) (e event, keep, rejected bool) {
 		// Claude Code's "Credit balance too low".
 		body := strings.ToLower(w.Failure.Body)
 		e.refusal = strings.Contains(body, "credit balance") && strings.Contains(body, "too low")
+		// CPA's status for a client that went away before the attempt
+		// finished, which says nothing about the credential.
+		e.cancelled = w.Failure.StatusCode == 499
 	}
 	// A Claude Code-based client: Claude Code itself or the Agent SDK.
 	e.claudeCode = strings.HasPrefix(w.SessionID, "claude:")
@@ -353,12 +393,12 @@ func (m *Meter) Failed() bool {
 	return m.data.StopReason == client.MeterStopFailed
 }
 
-// SetLinked tells the meter which organizations the configuration links: the
-// distinct valid organization ids of the first MaxAPICreditItems items. A
-// listed organization not yet known starts counting now; one no longer
-// listed becomes dormant, keeping its buckets and still bucketed, so that
-// fixing a typo or moving an item loses nothing; a dormant one listed again
-// is linked with its history whole.
+// SetLinked tells the meter which organizations are listed on quota-cache's
+// page: the Organization IDs of its organizations file, each distinct and at
+// most MaxAPICreditItems. A listed organization not yet known starts counting
+// now; one no longer listed becomes dormant, keeping its buckets and still
+// bucketed, so that removing an organization and adding it again loses
+// nothing; a dormant one listed again is linked with its history whole.
 func (m *Meter) SetLinked(orgIDs []string, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -421,6 +461,9 @@ func (m *Meter) apply(e event) {
 		m.beforeApply(&e)
 	}
 	m.pruneLocked(e.at)
+	if e.authID != "" && e.authIndex != "" {
+		m.learnAuthIDLocked(e)
+	}
 	org := m.attributeLocked(e)
 	if org == "" {
 		m.dirty = true
@@ -514,6 +557,50 @@ func (m *Meter) capAuthsLocked() {
 			}
 		}
 		delete(m.data.Auths, oldest)
+	}
+}
+
+// learnAuthIDLocked records the auth index CPA reported with a config API
+// key's auth ID, and the attempt's outcome. Both are CPA's facts about its
+// own credential, independent of Anthropic, so it runs for every event that
+// carries both, whatever the event's attribution. A low-credit refusal is
+// the organization's, already counted there, and a cancellation is the
+// client's, so neither is the key's success or failure.
+func (m *Meter) learnAuthIDLocked(e event) {
+	a := m.data.AuthIDs[e.authID]
+	a.AuthIndex = e.authIndex
+	if e.at.After(a.SeenAt) {
+		a.SeenAt = e.at
+	}
+	switch {
+	case !e.failed:
+		a.LastSuccessAt = latest(a.LastSuccessAt, e.at)
+		a.Failures = 0
+	case !e.refusal && !e.cancelled:
+		a.LastFailureAt = latest(a.LastFailureAt, e.at)
+		if a.Failures < math.MaxUint16 {
+			a.Failures++
+		}
+	}
+	m.data.AuthIDs[e.authID] = a
+	m.capAuthIDsLocked()
+}
+
+// capAuthIDsLocked keeps AuthIDs within MaxMeterAuthIDs by forgetting the ID
+// seen longest ago, the smaller ID first when two were seen at once.
+func (m *Meter) capAuthIDsLocked() {
+	for len(m.data.AuthIDs) > client.MaxMeterAuthIDs {
+		oldest := ""
+		for id, a := range m.data.AuthIDs {
+			if oldest == "" {
+				oldest = id
+				continue
+			}
+			if seen := m.data.AuthIDs[oldest].SeenAt; a.SeenAt.Before(seen) || (a.SeenAt.Equal(seen) && id < oldest) {
+				oldest = id
+			}
+		}
+		delete(m.data.AuthIDs, oldest)
 	}
 }
 
@@ -611,8 +698,8 @@ func (m *Meter) hourCutoff() time.Time {
 
 // pruneLocked drops what the meter no longer keeps at t: day buckets past
 // MeterDays, hour buckets past MeterHours, and dormant organizations,
-// unlinked organizations, auths and gaps older than the retention. It also
-// holds Auths and Gaps to their caps.
+// unlinked organizations, auths, auth IDs and gaps older than the retention.
+// It also holds Auths, AuthIDs and Gaps to their caps.
 func (m *Meter) pruneLocked(t time.Time) {
 	if t.Before(m.pruned) {
 		return
@@ -652,6 +739,16 @@ func (m *Meter) pruneLocked(t time.Time) {
 	}
 	if before := len(m.data.Auths); before > client.MaxMeterAuths {
 		m.capAuthsLocked()
+		m.dirty = true
+	}
+	for id, a := range m.data.AuthIDs {
+		if a.SeenAt.Before(ageCut) {
+			delete(m.data.AuthIDs, id)
+			m.dirty = true
+		}
+	}
+	if len(m.data.AuthIDs) > client.MaxMeterAuthIDs {
+		m.capAuthIDsLocked()
 		m.dirty = true
 	}
 	if kept := capGaps(slices.DeleteFunc(m.data.Gaps, func(g client.MeterGap) bool { return g.To.Before(ageCut) })); len(kept) != len(m.data.Gaps) {

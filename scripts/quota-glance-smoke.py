@@ -8,10 +8,12 @@ without hanging. Those are the failures that make a first install look broken,
 and they are the only ones no unit test can reach.
 
 No real accounts and no provider requests: quota-cache is absent and the
-snapshot is written directly, which is the whole point of the split.
+snapshot, and the credit state it would publish beside it, are written
+directly, which is the whole point of the split.
 """
 import base64
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,6 +103,50 @@ def snapshot(now, indices, nudge=0):
             'provider_cooldown': {}, 'entries': entries}
 
 
+# The placeholder Console organization of the credit state below.
+CREDITS_ORG = '00000000-0000-4000-8000-00000000000a'
+
+
+def credit_state(now):
+    """The smallest credit state Quota Cache 0.2.0 publishes beside its
+    snapshot: one Console organization added on its page, with a credit and a
+    refill date entered there and credit left, computed at now and good until
+    its refill. It says the organization is editable, because on Quota Cache's
+    page it is; Quota Glance must show it read-only."""
+    account = 'org-' + hashlib.sha256(CREDITS_ORG.encode()).hexdigest()[:12]
+    day = now - now % 86400
+    renews = day + 10 * 86400
+    settings = {'editable': True, 'notEditableReason': '', 'revision': '1', 'monthlyUsd': '50',
+                'configMonthlyUsd': '', 'configMonthlyUsdInvalid': False,
+                'renews': time.strftime('%Y-%m-%d', time.gmtime(renews)), 'configRenews': '',
+                'configRenewsInvalid': False, 'reading': None, 'readingUnusedReason': '', 'updatedAtEpoch': day}
+    return {
+        'schema': 1, 'quota_cache_version': '0.2.0', 'computed_at': stamp(now), 'valid_until': stamp(renews),
+        'inputs': {'snapshot_written_at': stamp(now), 'meter_flushed_at': stamp(now), 'meter_error': '',
+                   'settings_revision': '1'},
+        'settings': {'state': 'ok', 'editable': True, 'revision': '1'},
+        'api_credits': {
+            'title': 'Monthly API Credit', 'currency': 'USD',
+            'meter': {'sinceEpoch': day, 'updatedAtEpoch': now, 'stale': False, 'gaps': []},
+            'editing': {'available': True, 'reason': ''},
+            'pool': {'hasEstimate': True, 'monthlyCredit': 50, 'monthlyCreditText': '$50.00', 'used': 12.5,
+                     'usedText': '$12.50', 'left': 37.5, 'leftText': '$37.50', 'remainingFraction': 0.75,
+                     'remainingPercent': 75, 'level': 'ok', 'accountCount': 1, 'countedCount': 1},
+            'accounts': [{
+                'id': account, 'label': 'smoke', 'order': 0, 'organizationId': CREDITS_ORG, 'state': 'ok',
+                'counted': True, 'hasEstimate': True, 'basis': 'credit', 'monthlyCredit': 50,
+                'monthlyCreditText': '$50.00', 'monthlyCreditSource': 'dashboard', 'used': 12.5, 'usedText': '$12.50',
+                'left': 37.5, 'leftText': '$37.50', 'remainingFraction': 0.75, 'remainingPercent': 75,
+                'level': 'ok', 'renewsAtEpoch': renews, 'renewsInSeconds': renews - now, 'renewsSource': 'dashboard',
+                'dataIssues': [], 'issue': '', 'settings': settings,
+            }],
+            'unlinked': [], 'orphans': [],
+        },
+        'renewals': {},
+        'organizations': {'state': 'ok', 'revision': '1', 'config_items_ignored': 0},
+    }
+
+
 def header(headers, name):
     """One response header, by name in any case. Go canonicalises what CPA
     sends (X-CPA-VERSION arrives as X-Cpa-Version), and the response headers
@@ -108,13 +154,21 @@ def header(headers, name):
     return next((value for key, value in headers.items() if key.lower() == name.lower()), None)
 
 
-def error_of(body, headers):
-    """The JSON error code of a refusal, or None when the body is not one."""
+def answer_of(body, headers):
+    """A JSON answer, or None when the body is not one."""
     if (header(headers, 'Content-Encoding') or '').lower() == 'gzip':
         body = gzip.decompress(body)
     try:
-        return json.loads(body).get('error')
-    except (ValueError, AttributeError):
+        return json.loads(body)
+    except ValueError:
+        return None
+
+
+def error_of(body, headers):
+    """The JSON error code of a refusal, or None when the body is not one."""
+    try:
+        return answer_of(body, headers).get('error')
+    except AttributeError:
         return None
 
 
@@ -381,11 +435,20 @@ def checks(container, cache_path, now):
     payload = json.dumps({'credentialId': 'does-not-exist.json', 'confirmed': True}).encode()
     json_header = {'Content-Type': 'application/json'}
 
-    status, _, _ = request('/v0/management' + redeem, management=True, method='POST',
-                           body=payload, headers=json_header)
+    status, body, headers = request('/v0/management' + redeem, management=True, method='POST',
+                                    body=payload, headers=json_header)
     assert status != 404, (
         'CPA did not dispatch POST to the management redeem route; the button cannot work')
     assert status == 409, f'management redeem: {status} (expected 409 not_redeemable)'
+    # Every answer the press itself gives says whether Quota Cache was asked
+    # to refresh, and this one spent nothing: it was refused at the document
+    # check, before the redeemer, so no provider was asked and neither was
+    # Quota Cache.
+    # The instant a refresh was asked comes only beside a true.
+    answer = answer_of(body, headers) or {}
+    assert (answer.get('error') == 'not_redeemable' and answer.get('refreshRequested') is False
+            and 'refreshRequestedAtEpoch' not in answer), (
+        f'management redeem answer: {body[:200]!r} (expected not_redeemable with refreshRequested false)')
 
     # An unconfirmed body must be refused even though everything else about it
     # is well formed. Spending a credit cannot be undone, so the confirmation is
@@ -456,6 +519,8 @@ def checks(container, cache_path, now):
     # answered from the ledger, byte for byte, and says so.
     status, first, headers = request(spend, token=WEB_TOKEN, headers=offered)
     assert (status, error_of(first, headers)) == (409, 'not_redeemable'), f'spend: {status} {first!r}'
+    answer = answer_of(first, headers) or {}
+    assert answer.get('refreshRequested') is False and 'refreshRequestedAtEpoch' not in answer, f'spend answer: {first!r}'
     assert header(headers, 'X-Quota-Glance-Replayed') is None, 'the first copy of a press was marked as a replay'
     status, again, headers = request(spend, token=WEB_TOKEN, headers=offered)
     assert status == 409 and again == first, f'repeated press: {status} {again!r}'
@@ -466,38 +531,38 @@ def checks(container, cache_path, now):
     print('  spend         token door GET /spend dispatched; token, fetch metadata, confirmation '
           'and document checked; a repeated press replayed; POST refused')
 
-    # 6b''. The settings doors, which save what the dashboard's editor changed:
-    #       a POST under the management tree for a console session, and a GET
-    #       on the resource tree with the batch in a header for the dashboard
-    #       password. As with a press, a refusal from the plugin is the proof
-    #       CPA dispatched each one, and nothing is written: the renewal id
-    #       named is not a credential the document offers. allow-edit is on by
-    #       default, so both doors are open.
+    # Quota Glance writes one file in Quota Cache's directory, a refresh
+    # request, and only after a press that spent or may have. None of the
+    # presses above did, so there is none.
+    refresh = cache_path.with_name(cache_path.stem + '.refresh.json')
+    assert not refresh.exists(), f'{refresh.name} was written after presses that spent nothing'
+    print(f'  refresh       refreshRequested false on both doors\' refused presses; no {refresh.name}')
+
+    # 6b''. The retired settings doors. API credits and renewal dates are saved
+    #       on Quota Cache's page now, but both routes stay registered and
+    #       answer 410 settings_moved before reading anything. A 410 from the
+    #       plugin is the proof CPA still dispatches each one: CPA's own 404,
+    #       for a route nobody registered, has an empty body.
     #
-    #       The bare request is the plugin's own token check, not CPA's, so it
-    #       costs the management key nothing.
+    #       The management door is asked with the key. The resource door is
+    #       asked bare, which costs the management key nothing: CPA
+    #       authenticates nothing on the resource tree.
     settings_batch = json.dumps({'kind': 'renewals', 'items': [
         {'id': '0123456789abcdef', 'baseRevision': '', 'date': '2026-10-29'}]}).encode()
-    status, body, headers = request(f'/v0/management/plugins/{PLUGIN}/settings', management=True,
-                                    method='POST', body=settings_batch, headers=json_header)
-    assert status != 404, 'CPA did not dispatch POST to the management settings route; the console cannot save'
-    assert (status, error_of(body, headers)) == (409, 'not_editable'), f'management settings: {status} {body!r}'
-
     save = f'/v0/resource/plugins/{PLUGIN}/save-settings'
-    settings_header = {'X-Quota-Glance-Settings': base64.urlsafe_b64encode(settings_batch).rstrip(b'=').decode()}
-    status, body, _ = request(save)
-    assert status != 404, 'CPA did not dispatch GET to the save-settings route; the token door cannot save'
-    assert status == 401 and not body, f'bare save-settings: {status} {body[:200]!r} (expected a bare 401)'
-    status, body, headers = request(save, token=WEB_TOKEN)
-    assert (status, error_of(body, headers)) == (400, 'invalid_request'), f'save-settings without the header: {status} {body!r}'
-    status, body, headers = request(save, token=WEB_TOKEN, headers={**settings_header, 'Sec-Fetch-Site': 'cross-site'})
-    assert (status, error_of(body, headers)) == (403, 'cross_site'), f'cross-site save-settings: {status} {body!r}'
-    status, body, headers = request(save, token=WEB_TOKEN, headers=settings_header)
-    assert (status, error_of(body, headers)) == (409, 'not_editable'), f'save-settings: {status} {body!r}'
-    status, _, _ = request(save, token=WEB_TOKEN, method='POST', body=settings_batch, headers={**json_header, **settings_header})
+    for door, response in (
+            ('management POST /settings', request(f'/v0/management/plugins/{PLUGIN}/settings', management=True,
+                                                   method='POST', body=settings_batch, headers=json_header)),
+            ('resource GET /save-settings', request(save))):
+        status, body, headers = response
+        assert status != 404, f'CPA did not dispatch the retired {door}'
+        assert (status, answer_of(body, headers)) == (410, {'error': 'settings_moved', 'movedTo': 'quota-cache'}), (
+            f'retired {door}: {status} {body[:200]!r}')
+        assert header(headers, 'Cache-Control') == 'no-store', f'retired {door}: {headers}'
+    status, _, _ = request(save, method='POST', body=settings_batch, headers=json_header)
     assert status == 404, f'POST to the save-settings route: {status} (expected 404)'
-    print('  settings      management POST /settings and token door GET /save-settings dispatched; '
-          'token, fetch metadata and document checked; POST to the token door refused')
+    print('  settings      retired: management POST /settings and resource GET /save-settings both '
+          'dispatched and answer 410 settings_moved; POST to the resource door refused by CPA')
 
     # 6c. The OpenRouter balance, and its threshold changed the way CPA's
     #     panel changes it: a JSON number sent to CPA's own plugin-config
@@ -506,6 +571,9 @@ def checks(container, cache_path, now):
     #     only this shows what CPA actually delivers.
     fields = {f['name']: f['type'] for f in registered.get('config_fields') or []}
     assert fields.get('openrouter-warn-below') == 'number', fields
+    # The panel no longer offers the editing switch, which is ignored, or the
+    # router's, which moved to Reset Priority.
+    assert 'allow-edit' not in fields and 'route-api-credits' not in fields, fields
 
     def summary_document():
         status, raw, headers = request(f'/v0/management/plugins/{PLUGIN}/summary', management=True)
@@ -533,6 +601,40 @@ def checks(container, cache_path, now):
     assert (balance['warnBelow'], balance['level']) == (2.5, 'ok'), balance
     print(f'  balance       {balance["remainingText"]} left · low below $80; ok after the panel\'s '
           f'config route set 2.5, applied live')
+
+    # 6e. The API credit card, read-only. Quota Cache publishes each Console
+    #     organization's credit in snapshot.credits.json beside its snapshot,
+    #     and quota-glance shows it as published, marked as edited on Quota
+    #     Cache's page. The watcher has to notice a file it did not see at
+    #     start, and /health has to say what it read.
+    def health_document():
+        status, raw, headers = request(f'/v0/management/plugins/{PLUGIN}/health', management=True)
+        assert status == 200, f'health: {status}'
+        return answer_of(raw, headers)
+
+    credit_health = health_document()['credit_state']
+    assert credit_health['last_error'] == 'missing', credit_health
+    credits_path = cache_path.with_name('snapshot.credits.json')
+    commit(credits_path, credit_state(int(time.time())))
+    deadline = time.monotonic() + 75
+    credits = None
+    while time.monotonic() < deadline:
+        document = summary_document()
+        if document and document.get('apiCredits'):
+            credits = document['apiCredits']
+            break
+        time.sleep(0.25)
+    assert credits, 'the published credit state never reached the served document'
+    account = credits['accounts'][0]
+    assert (account['label'], account['state'], account['leftText']) == ('smoke', 'ok', '$37.50'), account
+    assert credits['editing'] == {'available': False, 'reason': 'quotaCache'}, credits['editing']
+    assert account['settings']['editable'] is False, account['settings']
+    assert account['settings']['notEditableReason'] == 'quotaCache', account['settings']
+    credit_health = health_document()['credit_state']
+    assert (credit_health['last_error'], credit_health['quota_cache_version'],
+            credit_health['settings_state']) == ('', '0.2.0', 'ok'), credit_health
+    print(f'  credits       {account["label"]} {account["leftText"]} left from Quota Cache\'s published state; '
+          f'read-only here (editing {credits["editing"]["reason"]}); /health read it')
 
     # 7. The update path, through whatever filesystem the deployment actually
     #    uses. A bind mount is exactly where inotify delivery gets unreliable,

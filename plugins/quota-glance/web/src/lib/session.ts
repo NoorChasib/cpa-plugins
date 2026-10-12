@@ -23,10 +23,13 @@ import {
   readConsoleKey,
   rereadAfter,
   retryBlocked,
+  rootOf,
   type Serial,
   type StorageLike,
+  usableConsoleKey,
   WATCHED_KEYS,
 } from "./access"
+import { type QuotaCacheSection, quotaCacheEditURL } from "./quotaCacheLink"
 import * as token from "./token"
 
 /**
@@ -126,6 +129,16 @@ export function accessContext(): Access {
 /** The doors open now, best first. */
 export function openDoors(): Door[] {
   return doors(browserEnv(), token.read(), token.refused())
+}
+
+/**
+ * Quota Cache's page at a section, for this browser, or null when no link may
+ * be drawn. See quotaCacheLink.ts. Asked on each render, as the doors are, so
+ * a console key refused a moment ago takes its link with it.
+ */
+export function quotaCacheURL(section: QuotaCacheSection): string | null {
+  const readout = () => Reflect.get(window, "__quotaGlanceReadout") !== undefined
+  return quotaCacheEditURL({ usableConsoleKey, rootOf, readout }, browserEnv(), section)
 }
 
 /** What the Access control shows about this browser's two ways in. */

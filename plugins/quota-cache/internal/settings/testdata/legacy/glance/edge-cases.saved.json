@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "revision": 6,
+  "apiCredits": {
+    "org-2aac79e9b91b": {
+      "monthlyUsd": "123.45",
+      "reading": {
+        "remainingUsd": "100.00",
+        "at": "2026-10-09T13:20:00Z",
+        "enteredAt": "2026-10-09T14:00:01Z",
+        "organizationId": "00000000-0000-4000-8000-0000000000e1",
+        "baseline": {
+          "dayStart": "2026-10-09T00:00:00Z",
+          "until": "2026-10-09T13:00:00Z",
+          "usage": [
+            {
+              "model": "claude-sonnet-5-5",
+              "requests": 3,
+              "input": 1200,
+              "output": 800
+            }
+          ]
+        }
+      },
+      "rev": 6,
+      "updatedAt": "2026-10-09T14:00:01Z"
+    },
+    "org-47efb20b6d10": {
+      "monthlyUsd": "9999999.99",
+      "reading": {
+        "remainingUsd": "0",
+        "at": "2026-10-03T06:59:59Z",
+        "enteredAt": "2026-10-03T07:08:09Z",
+        "organizationId": "00000000-0000-4000-8000-0000000000d1",
+        "baseline": {
+          "dayStart": "2026-10-03T00:00:00Z",
+          "until": "2026-10-03T06:00:00Z",
+          "usage": [
+            {
+              "model": "(other)",
+              "requests": 2,
+              "failed": 1,
+              "input": 5
+            },
+            {
+              "model": "claude-haiku-5-5",
+              "prompt": "over_100k",
+              "requests": 1,
+              "input": 200007
+            }
+          ]
+        }
+      },
+      "rev": 3,
+      "updatedAt": "2026-10-03T07:08:09Z"
+    }
+  },
+  "renewals": {
+    "00000000000000bb": {
+      "date": "2028-02-29",
+      "rev": 4,
+      "updatedAt": "2026-10-04T00:00:00Z"
+    },
+    "ffffffffffffff01": {
+      "date": "2026-11-01",
+      "rev": 5,
+      "updatedAt": "2026-10-09T14:00:00Z"
+    }
+  }
+}

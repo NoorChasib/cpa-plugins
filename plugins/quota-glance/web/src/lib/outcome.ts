@@ -31,6 +31,20 @@ export interface RedeemResult {
   remainingCount: number
   /** The card's count comes from quota-cache and lags until its next poll. */
   snapshotPending: boolean
+  /**
+   * The plugin asked Quota Cache to poll this account now, then every other
+   * one, so the card catches up within a minute rather than at its next poll.
+   * False when it could not ask, when no Quota Cache that acts on the request
+   * is running, when Quota Cache cannot poll the account within about a
+   * minute, after an outcome that spent nothing, and from a plugin too old to
+   * ask.
+   */
+  refreshRequested: boolean
+  /**
+   * When the plugin asked, in Unix seconds by CPA's clock; null whenever
+   * refreshRequested is false. What the page's check waits for (checks.ts).
+   */
+  refreshRequestedAtEpoch: number | null
   /** "codex" or "claude"; empty from a plugin too old to say. */
   provider: string
   /**
@@ -182,10 +196,25 @@ function leftOf(result: RedeemResult): string {
     : `${result.remainingCount} banked reset${result.remainingCount === 1 ? "" : "s"} left.`
 }
 
-/** Why the card's count has not moved yet, when it has not. */
+/**
+ * Why the card's count has not moved yet, when it has not, and how soon it
+ * will.
+ *
+ * A replayed answer is from a press that may be minutes old, whose request
+ * Quota Cache may long since have acted on, so it says the request was made
+ * then rather than that the poll is happening now. The account's rows say
+ * whether it still is.
+ */
 function lagOf(result: RedeemResult): string {
+  if (result.refreshRequested) return ` ${result.replayed ? REFRESH_ASKED : REFRESHING}`
   return result.snapshotPending ? " The card updates at the next quota-cache poll." : ""
 }
+
+/** What the page says while Quota Cache polls the account it was asked to. */
+const REFRESHING = "Quota Cache is checking this account now, then every other one. The card updates within a minute."
+
+/** The same, for an answer to an earlier press. */
+const REFRESH_ASKED = "Quota Cache was asked then to check this account, then every other one."
 
 function providerSentence(result: RedeemResult, provider: string): string {
   const who = opening(nameOf(result.provider || provider))

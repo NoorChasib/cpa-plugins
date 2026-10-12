@@ -5,7 +5,7 @@
 // Imports nothing but types, so node loads it directly in test/.
 
 import type { FoldFlag } from "./pool"
-import type { Activity, Credential, RenewalOrphan } from "./types"
+import type { Activity, APICreditEditing, Credential } from "./types"
 
 /**
  * CPA will not route to this credential right now. Not a reading's state: the
@@ -82,10 +82,11 @@ export function accountFlags(
 
 /**
  * A renewal date as a row prints it: the instant, whether it is an estimate
- * ("~Oct 29") or was set on the dashboard (a dot after it), and which clock
- * it is read on. A date set here is 00:00 UTC on the day the reader picked,
- * so it is printed as UTC sees it; west of Greenwich the reader's own zone
- * would put it on the evening before. Null with no renewal to show.
+ * ("~Oct 29") or was entered on Quota Cache's page (a dot after it), and
+ * which clock it is read on. An entered date is 00:00 UTC on the day the
+ * reader picked, so it is printed as UTC sees it; west of Greenwich the
+ * reader's own zone would put it on the evening before. Null with no renewal
+ * to show.
  */
 export interface RenewalMark {
   atEpoch: number
@@ -116,62 +117,46 @@ export function renewalMark(
   }
 }
 
-/**
- * The estimate the renewal editor names: the one the plugin sends beside
- * whatever wins, so a date set here shows what Use estimate returns to, else
- * the renewal itself when it is the estimate. Null when there is none,
- * including from a plugin too old to send one beside a date set here.
- */
-export function renewalEstimateAt(
-  credential: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource" | "renewalEstimateAtEpoch">,
-): number | null {
-  if (typeof credential.renewalEstimateAtEpoch === "number") return credential.renewalEstimateAtEpoch
-  const mark = renewalMark(credential)
-  return mark?.estimated ? mark.atEpoch : null
-}
+/** The hover on a renewal date entered on Quota Cache's page. */
+export const RENEWAL_ENTERED_TITLE = "Entered in Quota Cache. Replaces the estimate."
 
 /**
- * Whether an estimated renewal is a yearly plan's. A monthly estimate is the
- * next monthly anniversary, never more than a month off; one further away can
- * only be an annual plan's.
+ * Whether a provider's accounts get a card rather than a slim line: always
+ * with two or more, and on Claude with one, for its renewal date's link to
+ * Quota Cache's page.
  */
-export function yearlyEstimate(
-  credential: Pick<Credential, "renewalAtEpoch" | "renewalSource" | "renewalEstimated">,
-  now: number,
-): boolean {
-  const mark = renewalMark(credential)
-  return mark !== null && mark.estimated && mark.atEpoch - now > 31 * 86400
-}
-
-/** Claude keeps the renewal editor even with one account, or only saved orphans. */
-export function accountsCardNeeded(provider: string, count: number, orphanCount: number): boolean {
-  return count > 1 || (provider === "claude" && (count > 0 || orphanCount > 0))
-}
-
-/** A CPA auth index as an orphan line names it: "0123…cdef". */
-export function shortCredentialId(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id
-}
-
-/** The editor's last line for a renewal date kept for a credential CPA no longer lists. */
-export function renewalOrphanText(orphan: Pick<RenewalOrphan, "id">): string {
-  return `Saved renewal date for an account no longer in CPA: ${shortCredentialId(orphan.id)}`
+export function accountsCardNeeded(provider: string, count: number): boolean {
+  return count > 1 || (provider === "claude" && count > 0)
 }
 
 /**
  * Whether the Accounts card has anything to say about renewal dates in its
- * foot: an estimate to explain, a date set here to explain, or one the reader
- * may set.
+ * foot: an estimate to explain, or a date entered on Quota Cache's page.
  */
-export function renewalFoot(held: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource" | "renewalEditable">[]): {
+export function renewalFoot(held: Pick<Credential, "renewalAtEpoch" | "renewalEstimated" | "renewalSource">[]): {
   estimated: boolean
   setHere: boolean
-  editable: boolean
 } {
   const marks = held.map(renewalMark)
   return {
     estimated: marks.some((mark) => mark?.estimated === true),
     setHere: marks.some((mark) => mark?.setHere === true),
-    editable: held.some((credential) => credential.renewalEditable === true),
+  }
+}
+
+/**
+ * Why the renewal dates entered on Quota Cache's page are not the ones shown,
+ * in words, for the Accounts card's foot; null while they are. They live in
+ * the same saved settings as the API credits: while Quota Cache cannot read
+ * its saved settings, each account shows its estimate instead. The API credit
+ * card says the same in its own words (editingTrouble).
+ */
+export function renewalTrouble(editing: Pick<APICreditEditing, "available" | "reason">): string | null {
+  if (editing.available) return null
+  switch (editing.reason) {
+    case "settingsUnreadable":
+      return "Quota Cache cannot read its saved settings, so renewal dates entered there do not apply and estimates are shown. See Quota Cache's page."
+    default:
+      return null
   }
 }

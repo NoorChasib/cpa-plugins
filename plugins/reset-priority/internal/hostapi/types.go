@@ -15,6 +15,26 @@
 //     `Headers`, `Body`, `Query`), while the registration wrapper uses
 //     lowercase `routes` / `resources` and capabilities use snake_case.
 //
+// The scheduler capability was audited against CPA v8.0.23 (d318bcc3):
+//
+//   - The method is `pluginabi.MethodSchedulerPick` ("scheduler.pick") in
+//     sdk/pluginabi/types.go, and the capability is the `scheduler` key of
+//     the registration capabilities in internal/pluginhost/rpc_schema.go.
+//   - The request is `pluginapi.SchedulerPickRequest` in
+//     sdk/pluginapi/types.go, built by `pickViaPluginScheduler` in
+//     sdk/cliproxy/auth/conductor_selection.go and sent by
+//     `rpcPluginAdapter.Pick` in internal/pluginhost/rpc_client.go. It and
+//     its candidates have no JSON tags, so its keys are the capitalized Go
+//     field names.
+//   - The answer is `pluginapi.SchedulerPickResponse` in the same file, whose
+//     UnmarshalJSON takes either the Go field names or snake_case keys.
+//     `normalizeSchedulerResponse` in internal/pluginhost/scheduler.go turns
+//     an answer naming an auth ID that is not a candidate into handled false.
+//     An error answer fails the client's request.
+//
+// Every CPA this plugin supports offers JSON RPC schema 6, whose only effect
+// here is that management JSON responses are no longer HTML-escaped.
+//
 // These types are written independently against that wire contract; no
 // upstream implementation code is copied.
 package hostapi
@@ -27,7 +47,7 @@ import (
 // ABI / RPC schema constants negotiated with the host.
 const (
 	ABIVersion    uint32 = 1
-	SchemaVersion uint32 = 4
+	SchemaVersion uint32 = 6
 )
 
 // Lifecycle and capability RPC method names (host -> plugin).
@@ -39,6 +59,10 @@ const (
 
 	MethodManagementRegister = "management.register"
 	MethodManagementHandle   = "management.handle"
+
+	// MethodSchedulerPick asks the declared scheduler which candidate serves
+	// one request attempt. CPA fails the request on any error answer.
+	MethodSchedulerPick = "scheduler.pick"
 )
 
 // Host callback method names (plugin -> host).
@@ -100,10 +124,21 @@ type Registration struct {
 	Capabilities  Capabilities `json:"capabilities"`
 }
 
-// Capabilities declares only the capability this plugin implements.
-// Capability keys are snake_case on the wire.
+// Capabilities declares only the capabilities this plugin implements.
+// Capability keys are snake_case on the wire. Scheduler is omitted when false,
+// so a registration with routing off carries no scheduler key at all;
+// scheduler_across_priorities is never declared.
 type Capabilities struct {
 	ManagementAPI bool `json:"management_api"`
+	Scheduler     bool `json:"scheduler,omitempty"`
+}
+
+// SchedulerPickResult is the scheduler.pick result. CPA reads auth_id only
+// when handled is true; handled false leaves the attempt to CPA's own
+// selector.
+type SchedulerPickResult struct {
+	Handled bool   `json:"handled"`
+	AuthID  string `json:"auth_id,omitempty"`
 }
 
 // ManagementRegistration is the management.register result. The wrapper keys

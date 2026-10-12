@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "revision": 11,
+  "apiCredits": {
+    "org-2aac79e9b91b": {
+      "monthlyUsd": "123.45",
+      "reading": {
+        "remainingUsd": "100.00",
+        "at": "2026-10-09T13:20:00Z",
+        "enteredAt": "2026-10-09T14:00:01Z",
+        "organizationId": "00000000-0000-4000-8000-0000000000e1",
+        "baseline": {
+          "dayStart": "2026-10-09T00:00:00Z",
+          "until": "2026-10-09T13:00:00Z",
+          "usage": [
+            {
+              "model": "claude-sonnet-5-5",
+              "requests": 3,
+              "input": 1200,
+              "output": 800
+            }
+          ]
+        }
+      },
+      "rev": 11,
+      "updatedAt": "2026-10-09T14:00:01Z"
+    },
+    "org-3f2a9c1d0b7e": {
+      "monthlyUsd": "260.50",
+      "renews": "2026-09-29",
+      "rev": 4,
+      "updatedAt": "2026-08-30T10:00:00Z"
+    }
+  },
+  "renewals": {
+    "0123456789abcdef": {
+      "date": "2026-09-29",
+      "rev": 9,
+      "updatedAt": "2026-09-01T12:00:00Z"
+    },
+    "ffffffffffffff01": {
+      "date": "2026-11-01",
+      "rev": 10,
+      "updatedAt": "2026-10-09T14:00:00Z"
+    }
+  }
+}

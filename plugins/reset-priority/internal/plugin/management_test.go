@@ -9,6 +9,7 @@ import (
 
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/route"
 )
 
 func TestManagementRegistrationRouteCasing(t *testing.T) {
@@ -690,7 +691,7 @@ func TestRenderManagementStatusPageEscapesHTMLAndRedactsIdentifiers(t *testing.T
 		}},
 	}
 
-	raw, err := renderManagementStatusPage(snap)
+	raw, err := renderManagementStatusPage(snap, route.Idle(), snap.GeneratedAt)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -738,7 +739,7 @@ func TestRenderManagementStatusPageUsesDisplayTimezone(t *testing.T) {
 			}},
 		}},
 	}
-	raw, err := renderManagementStatusPage(snap)
+	raw, err := renderManagementStatusPage(snap, route.Idle(), snap.GeneratedAt)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -763,7 +764,7 @@ func TestRenderManagementStatusPageUsesDisplayTimezone(t *testing.T) {
 
 	// Unknown zone names degrade to UTC rather than failing the render.
 	snap.DisplayTimezone = "Mars/Olympus_Mons"
-	raw, err = renderManagementStatusPage(snap)
+	raw, err = renderManagementStatusPage(snap, route.Idle(), snap.GeneratedAt)
 	if err != nil {
 		t.Fatalf("render with unknown zone: %v", err)
 	}

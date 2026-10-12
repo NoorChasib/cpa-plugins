@@ -1,4 +1,5 @@
 import { ConsoleUnansweredError, NoSessionError, readThrough, refetchInterval } from "./access"
+import { anyChecking, type Check, checkedInterval } from "./checks"
 import { managementPath, resourcePath } from "./cpa-auth"
 import { accessContext, openDoors } from "./session"
 import type { Summary } from "./types"
@@ -25,9 +26,14 @@ export { ConsoleUnansweredError }
  * would keep the sign-in screen re-rendering for no reason. A door that opens
  * later, by a sign-in here or a storage change from another tab, comes with a
  * refetch of its own.
+ *
+ * While Quota Cache is polling an account a banked reset was just spent on —
+ * `checks` against the document last read — it is every five seconds instead,
+ * until that account's new figures arrive or three minutes pass (checks.ts).
  */
-export function summaryRefetchInterval(): number | false {
-  return refetchInterval(openDoors())
+export function summaryRefetchInterval(checks: readonly Check[], summary: Summary | undefined): number | false {
+  const now = Math.floor(Date.now() / 1000)
+  return checkedInterval(refetchInterval(openDoors()), anyChecking(checks, summary?.credentials, now))
 }
 
 /**

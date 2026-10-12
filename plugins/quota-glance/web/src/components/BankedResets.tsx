@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react"
 
+import { useChecks } from "../lib/checking"
+import { isChecking, startCheck } from "../lib/checks"
 import { useNowSeconds } from "../lib/now"
 import { type AccountName, shortName } from "../lib/pool"
-import { canRedeemHere, describeError, describeOutcome, fellShort, mayHaveSpent, partlyApplied, redeemReset } from "../lib/redeem"
+import {
+  canRedeemHere,
+  describeError,
+  describeOutcome,
+  fellShort,
+  mayHaveSpent,
+  partlyApplied,
+  RedeemError,
+  redeemReset,
+} from "../lib/redeem"
 import { formatDuration } from "../lib/time"
 import type { Credential } from "../lib/types"
+import { CheckingPill } from "./CheckingPill"
 
 /**
  * Banked rate-limit resets, as one card at the foot of its provider's section
@@ -243,6 +255,17 @@ export function useBankedResets(credentials: Credential[], onRedeemed: () => voi
     setNotices((current) => [...current.filter((item) => item.id !== credential.id), notice])
   }
 
+  /**
+   * Marks the account as being checked once the plugin says Quota Cache was
+   * asked to poll it, at `askedAt` by CPA's clock. The check waits for an
+   * observation from that instant on, not from the press: the instant is
+   * after the spend, it is on the clock Quota Cache's observations are
+   * stamped with, and a replayed answer carries the earlier press's.
+   */
+  function check(credential: Credential, askedAt: number | null) {
+    if (askedAt !== null) startCheck(credential.id, askedAt, Math.floor(Date.now() / 1000))
+  }
+
   async function confirm() {
     const credential = asking
     if (!credential) return
@@ -251,17 +274,22 @@ export function useBankedResets(credentials: Credential[], onRedeemed: () => voi
       const result = await redeemReset(credential.id)
       const tone = fellShort(result) ? "bad" : partlyApplied(result) ? "partial" : "ok"
       report(credential, tone, describeOutcome(result, credential.provider))
+      check(credential, result.refreshRequestedAtEpoch)
       // Ask for a fresh document. It will not show a smaller count until
-      // quota-cache polls again — the message says so — but everything else on
-      // the page stays current.
+      // quota-cache polls again — the message says when — but everything else
+      // on the page stays current.
       onRedeemed()
     } catch (error) {
       report(credential, mayHaveSpent(error) ? "unknown" : "bad", describeError(error, credential.provider))
+      // An unknown outcome may have spent the reset, so the plugin asked
+      // quota-cache to look, and the card waits for what it finds.
+      const asked = error instanceof RedeemError && error.refreshRequested
+      if (asked) check(credential, error.refreshRequestedAtEpoch)
       // A refusal that shut the last way in also stopped the poll, which would
       // leave these figures on screen looking current. Asking once more costs
       // nothing — with no door open the read fails before the network — and
       // that failure is what puts the refused banner over them.
-      if (!canRedeemHere()) onRedeemed()
+      if (asked || !canRedeemHere()) onRedeemed()
     } finally {
       setBusy(false)
       setAsking(null)
@@ -321,6 +349,11 @@ function HoldIcon() {
  * and, when both say yes, its own button — whatever its routing status or the
  * provider's hold — because which account to spend on is the reader's choice,
  * and a cooling-down account is the one most worth spending on.
+ *
+ * Just after a reset spent here, while Quota Cache polls the account, the
+ * hold and the deadline give way to "Checking the new limits…": every figure
+ * on the row is from before the reset, and this is the one row of the
+ * account's that is never folded away.
  */
 function ResetRow({
   credential,
@@ -334,6 +367,9 @@ function ResetRow({
   onAsk: () => void
 }) {
   const now = useNowSeconds()
+  // Quota Cache is polling the account after a reset spent here: the count,
+  // the hold and the deadline on this row are all from before it.
+  const checking = isChecking(useChecks(), credential, now)
   const credits = credential.resetCredits
   if (!credits) return null
   // `?? ""` and `?? null` for a document from a plugin older than the hold.
@@ -346,7 +382,7 @@ function ResetRow({
   const long = expiryOf(credits.expiresAtEpoch, now, false).text
   // Everything the row says, whole, for the hover and for assistive
   // technology.
-  const detail = `${plural(credits.availableCount, "reset")} banked, ${long}${hold ? `, ${hold}` : ""}`
+  const detail = `${plural(credits.availableCount, "reset")} banked, ${long}${hold ? `, ${hold}` : ""}${checking ? ", checking the new limits" : ""}`
 
   return (
     <div className={`qg-brow ${hold || !offered ? "is-held" : ""}`} title={`${address}: ${detail}`}>
@@ -359,13 +395,19 @@ function ResetRow({
         <span className="qg-pn">· {plural(credits.availableCount, "reset")}</span>
       </span>
       <span className="qg-bst">
-        {hold && (
+        {checking ? (
+          <CheckingPill />
+        ) : (
           <>
-            <span className="qg-hold">{hold}</span>
-            {" · "}
+            {hold && (
+              <>
+                <span className="qg-hold">{hold}</span>
+                {" · "}
+              </>
+            )}
+            <span className={expiry.tone}>{expiry.text}</span>
           </>
         )}
-        <span className={expiry.tone}>{expiry.text}</span>
       </span>
       {offered && (
         <button

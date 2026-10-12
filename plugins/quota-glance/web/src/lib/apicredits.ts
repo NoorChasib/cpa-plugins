@@ -1,18 +1,23 @@
 // What the Monthly API Credit card says about each Console organization, in
 // words.
 //
-// Every figure on the card is an estimate: the plugin prices the tokens CPA
+// Every figure on the card is an estimate: Quota Cache prices the tokens CPA
 // metered for each organization at Anthropic's list prices, from a Console
-// reading the reader typed in or from the monthly credit since the last
-// refill. The card says so once ("est." in the column heads, ≈ on the pool's
-// figure) and marks a figure that is only a bound — some spend may be missing
-// — with ≤ on what is left and ≥ on what is used.
+// reading entered on its page or from the monthly credit since the last
+// refill, and publishes the result. The card says so once ("est." in the
+// column heads, ≈ on the pool's figure) and marks a figure that is only a
+// bound — some spend may be missing — with ≤ on what is left and ≥ on what is
+// used.
 //
 // Every amount printed is the server's text. Nothing here adds, subtracts or
-// rounds money: the contract does that on exact rationals and hands over
+// rounds money: Quota Cache does that on exact rationals and hands over
 // `leftText`, `usedText` and the rest, and a figure re-derived in floating
 // point here could read a cent off the one beside it. The only numbers this
 // compares are the server's own, against zero or an instant, to pick a word.
+//
+// Nothing on the card is edited here. Quota Cache's page is where its values
+// are entered, and a line that asks for one ends with a link there when this
+// browser may follow one (quotaCacheLink.ts); the card draws the link.
 //
 // Imports nothing but types, so node loads it directly in test/. Durations
 // are therefore returned as instants (`since`, `at`) and printed by the card.
@@ -41,24 +46,29 @@ export interface CreditMark {
 }
 
 /**
+ * What a line's link to Quota Cache's page asks for: a Console reading, or
+ * the setting the row lacks. "Enter Console reading in Quota Cache" and "Set
+ * in Quota Cache".
+ */
+export type CreditLink = "reading" | "settings"
+
+/**
  * A sentence about an account or the pool. `{age}` stands for how long ago
  * `since` was; `at` is an instant the card prints after the sentence, as a
- * date and time; `reading` asks for an "Enter Console reading" link after it.
+ * date and time; `link` asks for a link to Quota Cache's page after it.
  */
 export interface CreditNote {
   text: string
   tone: "bad" | "warn" | "quiet"
   since?: number
   at?: number
-  reading?: boolean
-  /** A pool line's link: the account whose Console reading it opens the editor on. */
-  readingFor?: string
+  link?: CreditLink
 }
 
 /** A stop shorter than this is a restart or an update, not a gap: client.MeterBriefGap. */
 export const BRIEF_GAP_SECONDS = 5 * 60
 
-/** What a row calls its account: the configured label, else quota-cache's id for the item. */
+/** What a row calls its account: its label, else quota-cache's id for the item. */
 export function creditName(account: Pick<APICreditAccount, "id" | "label">): string {
   return account.label || account.id
 }
@@ -111,7 +121,8 @@ export function creditCondition(
     case "misconfigured":
       return { figure: "", word: "not set up", tone: "warn" }
     case "cacheTooOld":
-      return { figure: "", word: "update Quota Cache", tone: "warn" }
+      // Neutral: the row's own sentence says why, which differs by cause.
+      return { figure: "", word: "no figures", tone: "warn" }
     default:
       // A state this bundle does not know. It is not passed off as fine.
       return account.counted ? null : { figure: "", word: "not counted", tone: "quiet" }
@@ -224,7 +235,7 @@ export function creditBar(
     case "misconfigured":
       return { kind: "none", text: "configuration needs fixing" }
     case "cacheTooOld":
-      return { kind: "none", text: "update Quota Cache" }
+      return { kind: "none", text: "no figures from Quota Cache" }
     case "pending":
       return { kind: "none", text: "waiting for the meter" }
     case "needsSettings": {
@@ -355,6 +366,27 @@ export function wantsReading(account: Pick<APICreditAccount, "state" | "counted"
 }
 
 /**
+ * Whether Quota Cache's page can edit this row: nothing but the card's own
+ * reason keeps it from it. A row no page could edit — no organization, a
+ * duplicate, past the sixteenth, a 0.1.13 entry — keeps its reason, and so
+ * does every row while Quota Cache cannot use its saved settings.
+ */
+export function editsInQuotaCache(account: Pick<APICreditAccount, "settings">): boolean {
+  return account.settings.notEditableReason === "quotaCache"
+}
+
+/**
+ * The link a row's line ends with, or none: what the row lacks, for one that
+ * needs a setting, else a Console reading, for one a reading would settle.
+ * Only for a row Quota Cache's page can edit.
+ */
+function linkOf(account: APICreditAccount): CreditLink | undefined {
+  if (!editsInQuotaCache(account)) return undefined
+  if (account.state === "needsSettings") return "settings"
+  return wantsReading(account) ? "reading" : undefined
+}
+
+/**
  * The server's own sentence about the account, toned by the issue it is
  * about; null when it has none. An account Anthropic refused has the
  * refusal's time after its sentence.
@@ -367,7 +399,8 @@ function issueNote(account: APICreditAccount): CreditNote | null {
     const at = has(account, "refusedNearlySpent") ? account.refusals.claudeCodeLastAtEpoch : account.refusals.lastAtEpoch
     if (at !== null) note.at = at
   }
-  if (wantsReading(account)) note.reading = true
+  const link = linkOf(account)
+  if (link) note.link = link
   return note
 }
 
@@ -376,35 +409,42 @@ function issueNote(account: APICreditAccount): CreditNote | null {
  * pool's lines instead of under each of them.
  */
 export interface SharedIssue {
-  /** The line as each of its rows would have shown it. */
+  /** The line as each of its rows would have shown it, without its link. */
   note: CreditNote
   /** The issue the server wrote it for: the first of its rows' issues. */
   issue: string
   /** The accounts that carry it, in the card's order. */
   ids: string[]
-  /** Whose Console reading its link opens: the first of them a row link would have offered, else null. */
-  readingFor: string | null
+  /** The link its line ends with: the first of them a row's line would have ended with, else null. */
+  link: CreditLink | null
 }
 
 /**
  * The rows' sentences that more than one row carries, grouped by exact
  * string, in the order of the first row to carry each. A refusal's time is
  * part of what its row says, so two refusals group only at the same instant.
- * A sentence one row carries stays on that row.
+ * A sentence one row carries stays on that row, and so does one about an
+ * organization Quota Cache has no figures for: it speaks of that
+ * organization, and the card without Quota Cache's figures lists each one
+ * with its own sentence.
  */
 export function sharedIssues(accounts: APICreditAccount[]): SharedIssue[] {
   const groups = new Map<string, SharedIssue>()
   for (const account of accounts) {
+    if (account.state === "cacheTooOld") continue
     const note = issueNote(account)
     if (note === null) continue
     const key = `${note.at ?? ""}|${note.text}`
     let group = groups.get(key)
     if (!group) {
-      group = { note, issue: account.dataIssues[0] ?? "", ids: [], readingFor: null }
+      // The sentence alone: its link is the group's, from whichever row offers one.
+      const said: CreditNote = { text: note.text, tone: note.tone }
+      if (note.at !== undefined) said.at = note.at
+      group = { note: said, issue: account.dataIssues[0] ?? "", ids: [], link: null }
       groups.set(key, group)
     }
     group.ids.push(account.id)
-    if (note.reading && account.settings.editable && group.readingFor === null) group.readingFor = account.id
+    group.link ??= note.link ?? null
   }
   return [...groups.values()].filter((group) => group.ids.length >= 2)
 }
@@ -496,9 +536,10 @@ export function creditBasis(account: APICreditAccount): CreditBasis | null {
 }
 
 /**
- * Which of a row's values were set on the dashboard rather than read from
- * Quota Cache's config: for each, what the config has instead — "" when it
- * has nothing usable — or null for a value that was not set here.
+ * Which of a row's values were entered on Quota Cache's page: for each, the
+ * configured value the summary carries beside it — "" when there is none
+ * usable, which is always so from Quota Cache 0.2.0 — or null for a value that
+ * was not entered there.
  */
 export function setHere(
   account: Pick<APICreditAccount, "monthlyCreditSource" | "renewsSource" | "settings">,
@@ -509,6 +550,40 @@ export function setHere(
       account.monthlyCreditSource === "dashboard" ? (settings.configMonthlyUsdInvalid ? "" : settings.configMonthlyUsd) : null,
     refill: account.renewsSource === "dashboard" ? (settings.configRenewsInvalid ? "" : settings.configRenews) : null,
   }
+}
+
+/**
+ * The hover on each value entered on Quota Cache's page, naming a configured
+ * value beside it when the summary carries one; null for a value that was not
+ * entered there. `day` prints a UTC calendar day, as the refill dates beside
+ * it are printed.
+ */
+export function setHereTitles(
+  account: Pick<APICreditAccount, "monthlyCreditSource" | "renewsSource" | "settings">,
+  day: (epoch: number) => string,
+): { credit: string | null; refill: string | null } {
+  const config = setHere(account)
+  const title = (value: string | null, shown: (value: string) => string) =>
+    value === null ? null : value ? `Entered in Quota Cache. Its config says ${shown(value)}.` : "Entered in Quota Cache."
+  return {
+    credit: title(config.credit, moneyText),
+    refill: title(config.refill, (value) => day(dateEpoch(value))),
+  }
+}
+
+/** What a mark beside a value entered on Quota Cache's page is called, and what the foot's legend says. */
+export const ENTERED_HERE = "entered in Quota Cache"
+
+/** A valid amount as the page prints money: `1200.5` is `$1,200.50`. String work only; no float touches it. */
+export function moneyText(value: string): string {
+  const [whole = "0", cents = ""] = value.split(".")
+  return `$${whole.replace(/^0+(?=\d)/, "").replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents.padEnd(2, "0")}`
+}
+
+/** 00:00 UTC of a YYYY-MM-DD date, in epoch seconds. */
+export function dateEpoch(value: string): number {
+  const [year, month, day] = value.split("-").map(Number)
+  return Date.UTC(year!, month! - 1, day!) / 1000
 }
 
 /** Why an uncounted account is left out of the pool, as the pool's line says it. */
@@ -526,7 +601,7 @@ function leftOutReason(account: Pick<APICreditAccount, "state" | "dataIssues">):
     case "misconfigured":
       return "its configuration needs fixing"
     case "cacheTooOld":
-      return "Quota Cache needs updating"
+      return "Quota Cache has no figures for it"
     default:
       return "it is not counted"
   }
@@ -612,11 +687,8 @@ export function poolNotes(
   for (const group of shared) {
     const note: CreditNote = { text: `${sharedWho(group.ids, accounts)}: ${group.note.text}`, tone: group.note.tone }
     if (group.note.at !== undefined) note.at = group.note.at
-    // One link for them all, as each row's was: the editor, on the first one's reading.
-    if (group.readingFor !== null) {
-      note.reading = true
-      note.readingFor = group.readingFor
-    }
+    // One link for them all, as each row's was.
+    if (group.link !== null) note.link = group.link
     notes.push(note)
   }
   const sharedSays = (issue: string) => shared.some((group) => group.issue === issue)
@@ -629,7 +701,7 @@ export function poolNotes(
       text:
         org.reason === "overLimit"
           ? `${sent}, which is in an item past the first 16 in claude-api-credits, so it is not counted.`
-          : `${sent}, which no claude-api-credits item names. If it is yours, add its organization-id to Quota Cache's config.`,
+          : `${sent}, which no organization in Quota Cache names. If it is yours, add it on Quota Cache's page.`,
       tone: "warn",
       since: org.lastSeenEpoch,
     })
@@ -662,7 +734,7 @@ export function poolNotes(
   return notes
 }
 
-/** Whether any figure on the card was set here: the foot then explains the dot. */
+/** Whether any figure on the card was entered on Quota Cache's page: the foot then explains the dot. */
 export function anySetHere(accounts: APICreditAccount[]): boolean {
   return accounts.some((account) => account.monthlyCreditSource === "dashboard" || account.renewsSource === "dashboard")
 }
@@ -697,27 +769,45 @@ export function refillWhen(renewsAtEpoch: number | null, cycleStartEpoch: number
   return { kind: "days", days: Math.floor(renewsAtEpoch / DAY) - Math.floor(now / DAY) }
 }
 
-/** Why a row cannot be edited, under it in the editor; null when it can, or the whole card cannot. */
+/**
+ * Why Quota Cache's page cannot edit a row, for a reason no page could lift;
+ * null for any other, which is the card's (editingOffText).
+ */
 export function notEditableText(reason: string): string | null {
   switch (reason) {
     case "noOrganization":
-      return "Add this organization's organization-id in Quota Cache's config to edit it here."
+      return "Add this organization's organization-id in Quota Cache's config to edit it."
     case "duplicateOrganization":
       return "Another item in Quota Cache's config has the same organization-id; edit that one."
     case "overLimit":
-      return "Only the first 16 items in claude-api-credits can be edited here."
+      return "Only the first 16 items in claude-api-credits can be edited."
     case "cacheTooOld":
-      return "Update Quota Cache to 0.1.14 to edit this organization here."
+      return "Update Quota Cache to edit this organization."
     default:
       return null
   }
 }
 
-/** Why the card offers no editor at all, in its foot; null while it does. */
-export function editingOffText(editing: APICredits["editing"]): string | null {
+/**
+ * Why nothing on the card is edited here, in words; null while it is, which
+ * only a plugin older than 0.8.0 says. `quotaCache` is the ordinary case;
+ * `settingsUnreadable` says Quota Cache cannot read its saved settings.
+ */
+export function editingOffText(editing: Pick<APICredits["editing"], "available" | "reason">): string | null {
   if (editing.available) return null
-  if (editing.reason === "settingsUnreadable") {
-    return "Quota Glance could not read settings.json, so values set here are not applied. Move the file aside to edit again."
+  switch (editing.reason) {
+    case "settingsUnreadable":
+      return "Quota Cache cannot read its saved settings, so the values entered there do not apply. See Quota Cache's page."
+    default:
+      return "Change these on Quota Cache's page in CPA's management console."
   }
-  return "Editing is turned off in Quota Glance's settings (allow-edit)."
+}
+
+/**
+ * Whether the card has more to say about editing than where it happens: Quota
+ * Cache cannot read its saved settings, so the values entered there do not
+ * apply. The foot then says why under its own line.
+ */
+export function editingTrouble(editing: Pick<APICredits["editing"], "available" | "reason">): string | null {
+  return editing.available || editing.reason === "quotaCache" ? null : editingOffText(editing)
 }

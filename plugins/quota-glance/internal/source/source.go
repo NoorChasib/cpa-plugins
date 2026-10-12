@@ -1,7 +1,8 @@
-// Package source reads the quota-cache snapshot and the host's credential
-// roster. It makes no network request of any kind: quota-cache is the only
-// component in this system that ever contacts a provider, and a second poller
-// would compete for the exact rate limits quota-cache exists to protect.
+// Package source reads the quota-cache snapshot, the credit state quota-cache
+// publishes beside it, and the host's credential roster. It makes no network
+// request of any kind: quota-cache is the only component in this system that
+// ever contacts a provider, and a second poller would compete for the exact
+// rate limits quota-cache exists to protect.
 package source
 
 import (
@@ -30,19 +31,15 @@ type Result struct {
 	Snapshot   qc.Snapshot
 	Reason     string
 	Identities []aggregate.Identity
-	// Meter is quota-cache's API meter from the file beside the snapshot, and
-	// nil when MeterError says why not: MeterMissing or MeterUnreadable. It
-	// never sets Reason: only the API credit card depends on it, and that card
-	// says so itself.
-	Meter      *qc.APIMeter
-	MeterError string
+	// Credits is quota-cache's published credit state from the file beside
+	// the snapshot. CreditsError is "" when it can be shown, and otherwise
+	// aggregate.CreditsMissing, CreditsUnreadable or CreditsAbandoned. An
+	// abandoned state is kept here so health can say how old it is; nothing
+	// else uses it. Neither ever sets Reason: only the API credit card and the
+	// renewal dates depend on it, and the card says so itself.
+	Credits      *qc.CreditState
+	CreditsError string
 }
-
-// MeterError values, as health reports them.
-const (
-	MeterMissing    = "missing"
-	MeterUnreadable = "unreadable"
-)
 
 var ErrUnreadable = errors.New("quota-cache snapshot cannot be read at the configured cache-path")
 
@@ -91,7 +88,7 @@ func snapshotSchema(path string) (int, bool) {
 	return envelope.Schema, true
 }
 
-// Read loads the snapshot, the API meter beside it, and the roster.
+// Read loads the snapshot, the credit state beside it, and the roster.
 //
 // qc.Load is used deliberately in place of qc.ReadFresh. ReadFresh reports
 // unavailable when an entry is stale, carries an error, or has a reset in the
@@ -100,6 +97,7 @@ func snapshotSchema(path string) (int, bool) {
 // never a blank. The staleness judgement is made in aggregate instead.
 func Read(ctx context.Context, host Host, path string) Result {
 	result := Result{}
+	result.Credits, result.CreditsError = creditsAt(path)
 	snapshot, err := qc.Load(path)
 	if err != nil {
 		// Only a positive, different version is a version bump. A file with no
@@ -113,8 +111,10 @@ func Read(ctx context.Context, host Host, path string) Result {
 		}
 	} else {
 		result.Snapshot = snapshot
+		if result.CreditsError == "" && Abandoned(snapshot, result.Credits) {
+			result.CreditsError = aggregate.CreditsAbandoned
+		}
 	}
-	result.Meter, result.MeterError = meterAt(path)
 	identities, rosterErr := identities(ctx, host)
 	result.Identities = identities
 	// A roster the host could not supply is a source failure, not an empty
@@ -127,18 +127,31 @@ func Read(ctx context.Context, host Host, path string) Result {
 	return result
 }
 
-// meterAt reads the meter quota-cache saves beside the snapshot at path.
-// qc.LoadMeter refuses anything that is not a regular file before opening it,
-// so a FIFO there cannot wedge the watcher goroutine this runs on.
-func meterAt(path string) (*qc.APIMeter, string) {
-	meter, err := qc.LoadMeter(qc.MeterPath(path))
+// creditsAt reads the credit state quota-cache publishes beside the snapshot
+// at path. qc.LoadCredits refuses anything that is not a regular file before
+// opening it, so a FIFO there cannot wedge the watcher goroutine this runs on.
+func creditsAt(path string) (*qc.CreditState, string) {
+	state, err := qc.LoadCredits(qc.CreditsPath(path))
 	switch {
-	case errors.Is(err, qc.ErrMeterMissing):
-		return nil, MeterMissing
+	case errors.Is(err, qc.ErrCreditsMissing):
+		return nil, aggregate.CreditsMissing
 	case err != nil:
-		return nil, MeterUnreadable
+		return nil, aggregate.CreditsUnreadable
 	}
-	return meter, ""
+	return state, ""
+}
+
+// Abandoned reports whether state is one no publisher keeps up any more: the
+// snapshot beside it was written more than qc.CreditPublishLagLimit after the
+// state was computed. While quota-cache 0.2.0 or newer runs, its publisher
+// recomputes within 10 seconds of every snapshot write and writes at least
+// every 60 seconds, so only a snapshot writer with no publisher leaves the
+// state that far behind: a quota-cache rolled back below 0.2.0 over a file
+// 0.2.0 wrote, or a publisher that can no longer write. A quota-cache that has
+// stopped altogether writes neither file, and its last state ages into stale
+// instead. A snapshot with no written_at says nothing either way.
+func Abandoned(snapshot qc.Snapshot, state *qc.CreditState) bool {
+	return state != nil && !snapshot.WrittenAt.IsZero() && snapshot.WrittenAt.Sub(state.ComputedAt) > qc.CreditPublishLagLimit
 }
 
 // identities converts the host roster. A credential whose provider quota-cache

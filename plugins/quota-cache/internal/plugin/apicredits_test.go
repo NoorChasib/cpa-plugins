@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +17,7 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/cache"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
-	"gopkg.in/yaml.v3"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/settings"
 )
 
 // The spec's fake organization ids, and an obviously fake admin key that
@@ -30,30 +29,22 @@ const (
 	fakeAdminKey = "sk-ant-admin01-FAKEFAKEFAKEFAKE"
 )
 
-// creditsOf registers a disabled plugin with yaml and returns the items its
-// configuration produced, through the real strict decoder.
-func creditsOf(t *testing.T, config string) ([]creditItem, error) {
+// configuredItems registers a disabled plugin with yaml, through the real
+// strict decoder, and returns how many claude-api-credits items it counted and
+// the item list it put in force.
+func configuredItems(t *testing.T, config string) (int64, []creditItem, error) {
 	t.Helper()
 	p := New(&testHost{})
 	defer p.Shutdown()
 	raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("enabled: false\n" + config)})
 	if _, err := p.Handle(protocol.MethodPluginRegister, raw); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
-	return *p.apiCredits.Load(), nil
+	return p.configItems.Load(), *p.apiCredits.Load(), nil
 }
 
-func mustCredits(t *testing.T, config string) []creditItem {
-	t.Helper()
-	items, err := creditsOf(t, config)
-	if err != nil {
-		t.Fatalf("configuration rejected: %v\n%s", err, config)
-	}
-	return items
-}
-
-// item renders one list item from the four fields, each a raw YAML value; a
-// field given as "-" is left out.
+// item renders one claude-api-credits item from the four fields, each a raw
+// YAML value; a field given as "-" is left out.
 func item(label, org, monthly, renews string) string {
 	lines := []string{}
 	for _, field := range [][2]string{{"label", label}, {"organization-id", org}, {"monthly-usd", monthly}, {"renews", renews}} {
@@ -64,231 +55,32 @@ func item(label, org, monthly, renews string) string {
 	return "  - " + strings.Join(lines, "\n    ") + "\n"
 }
 
-const goodItem = "  - label: healthy\n    organization-id: " + fakeOrgB + "\n    monthly-usd: \"500\"\n    renews: \"2026-10-03\"\n"
-const goodItem2 = "  - label: after\n    organization-id: " + fakeOrgC + "\n    monthly-usd: \"100\"\n    renews: \"2026-10-31\"\n"
-
-func TestCreditItemsAreReadVerbatim(t *testing.T) {
-	items := mustCredits(t, "claude-api-credits:\n"+
-		item("sierra", fakeOrgA, `"200"`, `"2026-10-29"`)+
-		// Unquoted, YAML would type these; the scalar's text is what counts.
-		// The organization id is stored lower-cased.
-		item("unquoted", strings.ToUpper(fakeOrgB), "200", "2026-10-29")+
-		// What a save from CPA's plugin panel turns them into.
-		item("panel", fakeOrgC, "12.5", "2026-10-29T00:00:00Z")+
-		item(`"  padded  "`, `" 12345678-1234-5678-1234-567812345678 "`, `" 0 "`, `" 2026-02-28 "`))
-	want := []creditItem{
-		{id: client.APICreditOrgAccount(fakeOrgA), credit: client.APICredit{Label: "sierra", Position: 0, MonthlyUSD: "200", Renews: "2026-10-29", OrganizationID: fakeOrgA}},
-		{id: client.APICreditOrgAccount(fakeOrgB), credit: client.APICredit{Label: "unquoted", Position: 1, MonthlyUSD: "200", Renews: "2026-10-29", OrganizationID: fakeOrgB}},
-		{id: client.APICreditOrgAccount(fakeOrgC), credit: client.APICredit{Label: "panel", Position: 2, MonthlyUSD: "12.5", Renews: "2026-10-29T00:00:00Z", OrganizationID: fakeOrgC}},
-		{id: client.APICreditOrgAccount("12345678-1234-5678-1234-567812345678"), credit: client.APICredit{Label: "padded", Position: 3, MonthlyUSD: "0", Renews: "2026-02-28", OrganizationID: "12345678-1234-5678-1234-567812345678"}},
-	}
-	if !reflect.DeepEqual(items, want) {
-		t.Fatalf("items:\n%+v\nwant:\n%+v", items, want)
-	}
-	if id := items[0].id; !strings.HasPrefix(id, "org-") || len(id) != 16 || strings.Contains(id, "000a") {
-		t.Fatalf("id=%s", id)
-	}
-	if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, []string{fakeOrgA, fakeOrgB, fakeOrgC, "12345678-1234-5678-1234-567812345678"}) {
-		t.Fatalf("linked=%v", linked)
-	}
-}
-
-// Each problem is judged on its own item, which is still listed, and the
-// valid item after it is still counted. The problems come in the order of
-// the CreditProblem values; an organization id with a valid shape is kept
-// whatever the problem.
-func TestEachCreditProblemStopsOnlyItsOwnItem(t *testing.T) {
-	long := strings.Repeat("x", 65)
-	for _, tc := range []struct {
-		name, item, problem, label, org string
-	}{
-		{"not a mapping", "  - just text\n", client.CreditProblemItemInvalid, "", ""},
-		{"a list value", "  - label: [a, b]\n    organization-id: " + fakeOrgA + "\n", client.CreditProblemItemInvalid, "", fakeOrgA},
-		{"a mapping value", "  - label: ok\n    organization-id: {a: b}\n", client.CreditProblemItemInvalid, "ok", ""},
-		{"repeated key", "  - label: one\n    label: two\n    organization-id: " + fakeOrgA + "\n", client.CreditProblemItemInvalid, "one", fakeOrgA},
-		{"unknown field", item("ok", fakeOrgA, `"1"`, `"2026-10-01"`) + "    monthly: 5\n", client.CreditProblemUnknownField, "ok", fakeOrgA},
-		{"unknown field beats a missing label", "  - organization-id: " + fakeOrgA + "\n    note: x\n", client.CreditProblemUnknownField, "", fakeOrgA},
-		{"label missing", item("-", fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, "", fakeOrgA},
-		{"label blank", item(`"   "`, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelMissing, "", fakeOrgA},
-		{"label too long", item(long, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, "", fakeOrgA},
-		{"label control character", item(`"a\tb"`, fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelInvalid, "", fakeOrgA},
-		{"label duplicate ignoring case", item("HEALTHY", fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemLabelDuplicate, "", fakeOrgA},
-		{"organization missing", item("ok", "-", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDMissing, "ok", ""},
-		{"organization empty", item("ok", `""`, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDMissing, "ok", ""},
-		{"organization braced", item("ok", `"{`+fakeOrgA+`}"`, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization urn", item("ok", "urn:uuid:"+fakeOrgA, `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization undashed", item("ok", strings.ReplaceAll(fakeOrgA, "-", ""), `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization short group", item("ok", "00000000-000-4000-8000-00000000000a", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization not hex", item("ok", "0000000g-0000-4000-8000-00000000000a", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization all zeros", item("ok", "00000000-0000-0000-0000-000000000000", `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-		{"organization duplicate", item("ok", strings.ToUpper(fakeOrgB), `"1"`, `"2026-10-01"`), client.CreditProblemOrganizationIDDuplicate, "ok", fakeOrgB},
-		{"label before organization", item(long, "nope", "nope", "nope"), client.CreditProblemLabelInvalid, "", ""},
-		{"organization before the optional values", item("ok", "nope", "nope", "nope"), client.CreditProblemOrganizationIDInvalid, "ok", ""},
-	} {
-		items := mustCredits(t, "claude-api-credits:\n"+goodItem+tc.item+goodItem2)
-		if len(items) != 3 {
-			t.Fatalf("%s: %d items", tc.name, len(items))
-		}
-		got := items[1]
-		if got.credit.Problem != tc.problem || got.credit.Label != tc.label || got.credit.Position != 1 || got.credit.OrganizationID != tc.org {
-			t.Errorf("%s: credit=%+v; want problem %q label %q organization %q", tc.name, got.credit, tc.problem, tc.label, tc.org)
-		}
-		// Whatever else is wrong, an item whose organization is valid and
-		// first-occurring is keyed by it and linked, so fixing the rest of
-		// the item loses no history; any other item is positional.
-		wantID, wantLinked := "item-2", []string{fakeOrgB, fakeOrgC}
-		if tc.org != "" && tc.problem != client.CreditProblemOrganizationIDDuplicate {
-			wantID, wantLinked = client.APICreditOrgAccount(tc.org), []string{fakeOrgB, tc.org, fakeOrgC}
-		}
-		if got.id != wantID {
-			t.Errorf("%s: id=%s want %s", tc.name, got.id, wantID)
-		}
-		for _, other := range []creditItem{items[0], items[2]} {
-			if other.credit.Problem != "" {
-				t.Errorf("%s: a neighbouring item caught %q", tc.name, other.credit.Problem)
-			}
-		}
-		if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, wantLinked) {
-			t.Errorf("%s: linked=%v want %v", tc.name, linked, wantLinked)
-		}
-	}
-}
-
-// monthly-usd and renews are optional: an invalid value is ignored and
-// flagged, never a problem, and the item stays counted. admin-key is
-// accepted, flagged, and never read.
-func TestOptionalValuesAreFlaggedNotProblems(t *testing.T) {
-	for _, tc := range []struct {
-		name, item string
-		want       client.APICredit
-	}{
-		{"nothing optional", item("ok", fakeOrgA, "-", "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA}},
-		{"monthly cents", item("ok", fakeOrgA, `"12.345"`, `"2026-10-01"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, Renews: "2026-10-01", MonthlyUSDInvalid: true}},
-		{"monthly negative", item("ok", fakeOrgA, "-5", "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true}},
-		{"monthly dollar sign", item("ok", fakeOrgA, `"$200"`, "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true}},
-		{"monthly zero", item("ok", fakeOrgA, `"0"`, "-"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "0"}},
-		{"renews not a date", item("ok", fakeOrgA, `"1"`, `"2026-02-30"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1", RenewsInvalid: true}},
-		{"renews with a time", item("ok", fakeOrgA, "-", `"2026-10-01T05:00:00Z"`), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, RenewsInvalid: true}},
-		{"both invalid", item("ok", fakeOrgA, "nope", "nope"), client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSDInvalid: true, RenewsInvalid: true}},
-		{"admin key", item("ok", fakeOrgA, `"1"`, "-") + "    admin-key: " + fakeAdminKey + "\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1", AdminKeyIgnored: true}},
-		{"admin key of any shape", item("ok", fakeOrgA, "-", "-") + "    admin-key: not-a-key\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}},
-		{"admin key repeated elsewhere", item("ok", fakeOrgA, "-", "-") + "    admin-key: " + fakeAdminKey + "\n", client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}},
-	} {
-		items := mustCredits(t, "claude-api-credits:\n"+goodItem+"    admin-key: "+fakeAdminKey+"\n"+tc.item)
-		got := items[1]
-		tc.want.Position = 1
-		if got.credit != tc.want || got.id != client.APICreditOrgAccount(fakeOrgA) {
-			t.Errorf("%s: credit=%+v id=%s; want %+v", tc.name, got.credit, got.id, tc.want)
-		}
-		if printed := fmt.Sprintf("%v %+v %#v", items, items, items); strings.Contains(printed, "FAKE") || strings.Contains(printed, "sk-ant") {
-			t.Errorf("%s: formatting the items printed the key: %s", tc.name, printed)
-		}
-	}
-}
-
-// Null is absent, in every spelling YAML has for it; a quoted "null" is text.
-func TestNullCreditValuesAreMissing(t *testing.T) {
-	for _, null := range []string{"null", "~", "", "Null", "NULL", "!!null whatever", "!!null"} {
-		for field, want := range map[string]client.APICredit{
-			"label":           {OrganizationID: fakeOrgA, MonthlyUSD: "1", Renews: "2026-10-01", Problem: client.CreditProblemLabelMissing},
-			"organization-id": {Label: "ok", MonthlyUSD: "1", Renews: "2026-10-01", Problem: client.CreditProblemOrganizationIDMissing},
-			"monthly-usd":     {Label: "ok", OrganizationID: fakeOrgA, Renews: "2026-10-01"},
-			"renews":          {Label: "ok", OrganizationID: fakeOrgA, MonthlyUSD: "1"},
-		} {
-			values := map[string]string{"label": "ok", "organization-id": fakeOrgA, "monthly-usd": `"1"`, "renews": `"2026-10-01"`}
-			values[field] = null
-			items := mustCredits(t, "claude-api-credits:\n"+item(values["label"], values["organization-id"], values["monthly-usd"], values["renews"]))
-			if items[0].credit != want {
-				t.Errorf("%s: %q gave %+v; want %+v", field, null, items[0].credit, want)
-			}
-		}
-		// admin-key is flagged by its presence, null or not.
-		items := mustCredits(t, "claude-api-credits:\n"+item("ok", fakeOrgA, "-", "-")+"    admin-key: "+null+"\n")
-		if want := (client.APICredit{Label: "ok", OrganizationID: fakeOrgA, AdminKeyIgnored: true}); items[0].credit != want {
-			t.Errorf("admin-key %q gave %+v", null, items[0].credit)
-		}
-	}
-	items := mustCredits(t, "claude-api-credits:\n"+item(`"null"`, fakeOrgA, `"1"`, `"2026-10-01"`))
-	if items[0].credit.Problem != "" || items[0].credit.Label != "null" {
-		t.Fatalf("a quoted null label: %+v", items[0].credit)
-	}
-}
-
-// CPA's panel save writes a JSON null as this node, whose text is "null".
-func TestThePanelsNullNodeIsMissing(t *testing.T) {
-	scalar := func(tag, value string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value} }
-	node := yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-		scalar("!!str", "label"), scalar("!!null", "null"),
-		scalar("!!str", "organization-id"), scalar("!!str", fakeOrgA),
-		scalar("!!str", "monthly-usd"), scalar("!!null", "null"),
-		scalar("!!str", "renews"), scalar("!!str", "2026-10-01"),
-	}}
-	items := parseAPICredits([]yaml.Node{node})
-	if want := (client.APICredit{OrganizationID: fakeOrgA, Renews: "2026-10-01", Problem: client.CreditProblemLabelMissing}); items[0].credit != want || items[0].id != client.APICreditOrgAccount(fakeOrgA) {
-		t.Fatalf("item=%+v", items[0].credit)
-	}
-}
-
-// The 17th item is listed with its organization id, so a consumer can name
-// it, and is not linked to the meter.
-func TestCreditItemsPastTheLimitAreListedButNotLinked(t *testing.T) {
-	config := "claude-api-credits:\n"
-	for i := 0; i <= client.MaxAPICreditItems; i++ {
-		config += item("org"+strconv.Itoa(i), fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1), `"1"`, `"2026-10-01"`)
-	}
-	items := mustCredits(t, config)
-	if len(items) != client.MaxAPICreditItems+1 {
-		t.Fatalf("%d items", len(items))
-	}
-	for i, it := range items {
-		want, id := "", client.APICreditOrgAccount(fmt.Sprintf("00000000-0000-4000-8000-%012x", i+1))
-		if i == client.MaxAPICreditItems {
-			want, id = client.CreditProblemTooManyItems, "item-17"
-		}
-		if it.credit.Problem != want || it.credit.Label != "org"+strconv.Itoa(i) || it.credit.OrganizationID == "" || it.id != id {
-			t.Fatalf("item %d: %+v id=%s", i, it.credit, it.id)
-		}
-	}
-	if linked := linkedOrganizations(items); len(linked) != client.MaxAPICreditItems || linked[0] != "00000000-0000-4000-8000-000000000001" {
-		t.Fatalf("linked=%v", linked)
-	}
-}
-
-func TestDuplicateOrganizationsKeepTheFirstItem(t *testing.T) {
-	items := mustCredits(t, "claude-api-credits:\n"+item("one", fakeOrgA, `"1"`, "-")+item("two", strings.ToUpper(fakeOrgA), "-", "-")+item("three", fakeOrgA, "-", "-"))
-	if items[0].credit.Problem != "" || items[0].id != client.APICreditOrgAccount(fakeOrgA) {
-		t.Fatalf("first=%+v id=%s", items[0].credit, items[0].id)
-	}
-	for _, later := range items[1:] {
-		if later.credit.Problem != client.CreditProblemOrganizationIDDuplicate || later.credit.OrganizationID != fakeOrgA || !strings.HasPrefix(later.id, "item-") {
-			t.Fatalf("later=%+v id=%s", later.credit, later.id)
-		}
-	}
-	if linked := linkedOrganizations(items); !reflect.DeepEqual(linked, []string{fakeOrgA}) {
-		t.Fatalf("linked=%v", linked)
-	}
-}
-
+// claude-api-credits is decoded as in 0.1.x, so a configuration written for
+// one still loads: a value that is not a list rejects the configure, as a
+// mistyped key does, and a list of anything is accepted and only counted.
+// Nothing in it is listed.
 func TestCreditListShapeAndOtherSettings(t *testing.T) {
 	for _, bad := range []string{"claude-api-credits: {}\n", "claude-api-credits: text\n", "claude-api-credits:\n  label: x\n", "claude-api-credit:\n  - label: x\n"} {
-		if _, err := creditsOf(t, bad); err == nil || err.Error() != "invalid quota-cache configuration" {
+		if _, _, err := configuredItems(t, bad); err == nil || err.Error() != "invalid quota-cache configuration" {
 			t.Errorf("%q: err=%v; a list is required", bad, err)
 		}
 	}
-	for _, empty := range []string{"", "claude-api-credits:\n", "claude-api-credits: []\n", "claude-api-credits: null\n"} {
-		if items, err := creditsOf(t, empty); err != nil || len(items) != 0 {
-			t.Errorf("%q: items=%+v err=%v", empty, items, err)
+	for config, want := range map[string]int64{
+		"": 0, "claude-api-credits:\n": 0, "claude-api-credits: []\n": 0, "claude-api-credits: null\n": 0,
+		"claude-api-credits:\n" + item("ok", fakeOrgA, `"200"`, `"2026-10-29"`) + "    admin-key: " + fakeAdminKey + "\n" +
+			item("-", "nope", "nope", "nope") + "  - just text\n  - [1, 2]\n": 4,
+		"claude-api-credits:\n  - label: a\n    organization-id: " + fakeOrgA + "\n    monthly-usd: &m \"1\"\n  - label: b\n    organization-id: " + fakeOrgB + "\n    monthly-usd: *m\n": 2,
+	} {
+		count, items, err := configuredItems(t, config)
+		if err != nil || count != want || len(items) != 0 {
+			t.Errorf("%q: counted %d, listed %+v, err=%v; want %d counted and none listed", config, count, items, err, want)
 		}
-	}
-	// Anchors and aliases resolve.
-	items := mustCredits(t, "claude-api-credits:\n  - label: a\n    organization-id: "+fakeOrgA+"\n    monthly-usd: &m \"1\"\n    renews: \"2026-10-01\"\n  - label: b\n    organization-id: "+fakeOrgB+"\n    monthly-usd: *m\n    renews: \"2026-10-01\"\n")
-	if items[1].credit.Problem != "" || items[1].credit.MonthlyUSD != "1" {
-		t.Fatalf("alias: %+v", items[1].credit)
 	}
 }
 
-// The panel cannot describe a list of objects or check one item, so the
-// list is YAML only and the panel's fields are unchanged.
+// Organizations are edited on the page, and the panel could not describe a
+// list of objects or check one item anyway, so the panel's fields are
+// unchanged.
 func TestCreditsAreNotAPanelField(t *testing.T) {
 	p := New(&testHost{})
 	defer p.Shutdown()
@@ -306,9 +98,14 @@ func TestCreditsAreNotAPanelField(t *testing.T) {
 	}
 }
 
-func fetcherWithCredits(host Host, config string, t *testing.T) hostFetcher {
-	t.Helper()
-	items := mustCredits(t, config)
+// fetcherWithOrganizations is a fetcher listing the organizations given, each
+// a label and an Organization ID, as the page lists them.
+func fetcherWithOrganizations(host Host, organizations ...[2]string) hostFetcher {
+	listed := settings.Organizations{State: client.OrganizationsStateOK}
+	for _, o := range organizations {
+		listed.Items = append(listed.Items, settings.Organization{Label: o[0], OrganizationID: o[1]})
+	}
+	items, _ := itemsOf(listed, 0)
 	f := fetcherWith(host, "")
 	f.apiCredits = &atomic.Pointer[[]creditItem]{}
 	f.apiCredits.Store(&items)
@@ -316,41 +113,42 @@ func fetcherWithCredits(host Host, config string, t *testing.T) hostFetcher {
 }
 
 func TestCreditAccountsAreListedAfterTheRosterChecks(t *testing.T) {
-	config := "claude-api-credits:\n" + item("sierra", fakeOrgA, `"200"`, `"2026-10-29"`) + item("-", "nope", `"1"`, `"2026-10-01"`)
+	organizations := [][2]string{{"sierra", fakeOrgA}, {"after", fakeOrgC}}
 	indexed := diskEntry("claude-one.json", "claude")
 	indexed.AuthIndex = "one"
-	accounts, err := fetcherWithCredits(rosterHost{[]protocol.HostAuthFileEntry{indexed}}, config, t).List(context.Background())
+	accounts, err := fetcherWithOrganizations(rosterHost{[]protocol.HostAuthFileEntry{indexed}}, organizations...).List(context.Background())
 	if err != nil || len(accounts) != 3 {
 		t.Fatalf("accounts=%+v err=%v", accounts, err)
 	}
 	if accounts[0].Provider != "claude" || accounts[0].Credit != nil {
 		t.Fatalf("first=%+v", accounts[0])
 	}
-	first, second := accounts[1], accounts[2]
-	if first.Provider != client.ProviderAnthropicAPI || first.AuthIndex != client.APICreditOrgAccount(fakeOrgA) || first.Credit == nil || first.Credit.Label != "sierra" {
-		t.Fatalf("credit account=%+v", first)
-	}
-	if second.AuthIndex != "item-2" || second.Credit.Problem != client.CreditProblemLabelMissing || second.Credit.OrganizationID != "" {
-		t.Fatalf("misconfigured account=%+v credit=%+v", second, second.Credit)
+	// Each carries its organization and nothing else.
+	for i, o := range organizations {
+		account := accounts[i+1]
+		if account.Provider != client.ProviderAnthropicAPI || account.AuthIndex != client.APICreditOrgAccount(o[1]) || account.Credit == nil ||
+			*account.Credit != (client.APICredit{Label: o[0], Position: i, OrganizationID: o[1]}) {
+			t.Fatalf("credit account %d=%+v %+v", i, account, account.Credit)
+		}
 	}
 	// Credit accounts are no reason to stop waiting for CPA's roster.
-	accounts, err = fetcherWithCredits(rosterHost{[]protocol.HostAuthFileEntry{diskEntry("claude-one.json", "claude")}}, config, t).List(context.Background())
+	accounts, err = fetcherWithOrganizations(rosterHost{[]protocol.HostAuthFileEntry{diskEntry("claude-one.json", "claude")}}, organizations...).List(context.Background())
 	if !errors.Is(err, cache.ErrRosterNotReady) || accounts != nil {
 		t.Fatalf("accounts=%+v err=%v", accounts, err)
 	}
-	// Each listing hands out its own copy of the configured facts.
-	f := fetcherWithCredits(rosterHost{}, config, t)
+	// Each listing hands out its own copy of the organization.
+	f := fetcherWithOrganizations(rosterHost{}, organizations...)
 	accounts, _ = f.List(context.Background())
 	accounts[0].Credit.Label = "changed"
 	if again, _ := f.List(context.Background()); again[0].Credit.Label != "sierra" {
-		t.Fatal("a listing shares its credit with the configuration")
+		t.Fatal("a listing shares its credit with the item list")
 	}
 }
 
 // The cache never asks for a credit account; should it, the fetcher refuses
 // without a request. testHost panics on any credential read or HTTP call.
 func TestCreditFetchNeverCallsTheHost(t *testing.T) {
-	f := fetcherWithCredits(&testHost{}, "claude-api-credits:\n"+item("sierra", fakeOrgA, `"200"`, `"2026-10-29"`), t)
+	f := fetcherWithOrganizations(&testHost{}, [2]string{"sierra", fakeOrgA})
 	accounts, _ := f.List(context.Background())
 	if _, err := f.Fetch(context.Background(), accounts[0], nil); err == nil || err.Error() != "not polled" {
 		t.Fatalf("err=%v", err)
@@ -446,42 +244,55 @@ func goldenRecord(t *testing.T) []byte {
 	return raw
 }
 
+// oneCredit is claude-api-credits as quota-cache 0.1.x read it, listing
+// sierra. This quota-cache ignores it.
 const oneCredit = "claude-api-credits:\n  - label: sierra\n    organization-id: " + fakeOrgA + "\n    monthly-usd: \"200\"\n    renews: \"2026-10-29\"\n"
 
-// The capability follows the items: usage records are declared wanted only
-// while the cache runs and at least one item is configured, on register
-// and on every reconfigure. With no items the meter stops with no_items and
+// Usage records are declared wanted whenever the cache runs, on register and
+// on every reconfigure, so an organization added on the page is counted from
+// its first record with no configure; disabled declares none. The meter runs
+// only while an organization is linked: with none it stops with no_items and
 // its file stays; disabled stops it with disabled. Routes are unchanged.
-func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
+func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 	p := newMeterPlugin(t)
-	if reg := p.configure(protocol.MethodPluginRegister, ""); reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
+	if reg := p.configure(protocol.MethodPluginRegister, ""); !reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
 		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
 	}
 	if _, err := os.Lstat(client.MeterPath(p.path)); !os.IsNotExist(err) {
-		t.Fatal("a meter file exists with no items")
+		t.Fatal("a meter file exists with no organization")
 	}
-	reg := p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	// Listed in the configuration, it is not counted: the meter waits for
+	// the page.
+	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.meter.Load() != nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	}
+	// Added on the page, it starts the meter with no configure.
+	p.organizationOps(addOp("sierra", fakeOrgA))
 	m := p.meter.Load()
-	if !reg.Capabilities.UsagePlugin || m == nil {
-		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, m)
+	if m == nil {
+		t.Fatal("adding an organization did not start the meter")
 	}
 	p.usage(goldenRecord(t))
-	// The same items again keep the meter; so does a schedule change.
+	// A reconfigure keeps the meter; so does a schedule change, and so does a
+	// configuration that no longer lists the organization.
 	p.configure(protocol.MethodPluginReconfigure, oneCredit)
 	p.configure(protocol.MethodPluginReconfigure, "poll-interval: 30m\n"+oneCredit)
-	if p.meter.Load() != m {
-		t.Fatal("a reconfigure replaced the meter")
+	if reg := p.configure(protocol.MethodPluginReconfigure, ""); !reg.Capabilities.UsagePlugin || p.meter.Load() != m {
+		t.Fatalf("registration=%+v; a reconfigure replaced the meter", reg.Capabilities)
 	}
-	if reg := p.configure(protocol.MethodPluginReconfigure, ""); reg.Capabilities.UsagePlugin || p.meter.Load() != nil {
-		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	// Removing the last organization on the page stops it, with no configure.
+	p.removeAll()
+	if p.meter.Load() != nil {
+		t.Fatal("the meter outlived the last organization")
 	}
 	file := p.meterFile()
 	if file.StopReason != client.MeterStopNoItems || file.StoppedAt == nil || file.Counted != 1 || file.Received != 1 {
 		t.Fatalf("file after no_items: %+v", file)
 	}
-	// Items again: the meter carries on from the file, with a gap.
-	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.meter.Load() == nil {
-		t.Fatalf("registration=%+v", reg.Capabilities)
+	// An organization again: the meter carries on from the file, with a gap.
+	p.organizationOps(addOp("sierra", fakeOrgA))
+	if p.meter.Load() == nil {
+		t.Fatal("adding an organization did not start the meter")
 	}
 	if reg := p.configure(protocol.MethodPluginReconfigure, "enabled: false\n"+oneCredit); reg.Capabilities.UsagePlugin || p.meter.Load() != nil || p.cache != nil {
 		t.Fatalf("registration=%+v meter=%v cache=%v", reg.Capabilities, p.meter.Load(), p.cache)
@@ -496,7 +307,8 @@ func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	if len(registration.Routes) != 1 || registration.Routes[0].Path != "/plugins/quota-cache/status" || len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
+	if len(registration.Routes) != 2 || registration.Routes[0].Path != "/plugins/quota-cache/status" || registration.Routes[1].Path != "/plugins/quota-cache/settings" ||
+		len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
 		t.Fatalf("routes=%+v", registration)
 	}
 }
@@ -504,23 +316,25 @@ func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
 // End to end through configure, the real writer and the meter: a record CPA
 // sends is counted for its organization, an OAuth record never is, and
 // nothing the record carries beyond what the meter keeps reaches the meter
-// file, the snapshot, the status route or the log. admin-key is flagged,
-// warned about once per configure, and never read.
+// file, the snapshot, the status route or the log. claude-api-credits, with
+// the admin-key quota-cache 0.1.13 used and an item with a problem, is
+// ignored: nothing in it is read, flagged or warned about.
 func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 	p := newMeterPlugin(t)
+	p.writeOrganizations([2]string{"sierra", fakeOrgA})
 	p.configure(protocol.MethodPluginRegister, oneCredit+"    admin-key: "+fakeAdminKey+"\n"+item("-", "nope", `"5"`, `"2026-10-01"`)+"    admin-key: "+fakeAdminKey+"\n")
 	good := client.Key(client.ProviderAnthropicAPI, client.APICreditOrgAccount(fakeOrgA))
-	broken := client.Key(client.ProviderAnthropicAPI, "item-2")
 	snapshot := waitFor(t, p.path, func(s client.Snapshot) bool {
 		_, ok := s.Entries[good]
-		_, seen := s.Entries[broken]
-		return ok && seen
+		return ok
 	})
-	if entry := snapshot.Entries[good]; entry.APICredit == nil || !entry.APICredit.AdminKeyIgnored || entry.APICredit.KeyFingerprint != "" || entry.APICredit.OrganizationID != fakeOrgA || !entry.LastAttempt.IsZero() {
+	if entry := snapshot.Entries[good]; entry.APICredit == nil || *entry.APICredit != (client.APICredit{Label: "sierra", OrganizationID: fakeOrgA}) || !entry.LastAttempt.IsZero() {
 		t.Fatalf("entry=%+v", entry.APICredit)
 	}
-	if entry := snapshot.Entries[broken]; entry.APICredit == nil || entry.APICredit.Problem != client.CreditProblemLabelMissing || !entry.APICredit.AdminKeyIgnored {
-		t.Fatalf("misconfigured entry=%+v", entry.APICredit)
+	for key, entry := range snapshot.Entries {
+		if entry.Provider == client.ProviderAnthropicAPI && key != good {
+			t.Fatalf("the configuration listed %s", key)
+		}
 	}
 	before, _ := os.ReadFile(p.path)
 
@@ -532,7 +346,7 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 	p.usage([]byte(`not a record`))
 	p.usage(nil)
 	// Stopping the meter writes it; the snapshot is not touched by that.
-	// The configuration is unchanged, so no scan rewrites it either.
+	// The organizations are unchanged, so no scan rewrites it either.
 	p.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
 	file := p.meterFile()
 	if file.Received != 4 || file.Counted != 1 || file.Rejected != 2 || len(file.Unlinked) != 0 || file.Organizations[fakeOrgA].ClaudeCodeRefusals != 1 {
@@ -546,14 +360,19 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 	}
 	p.configure(protocol.MethodPluginReconfigure, "")
 	code, status := p.status()
-	if code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || !strings.Contains(status, `"admin_key_ignored":true`) {
+	if code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || strings.Contains(status, "admin_key") {
 		t.Fatalf("status %d: %s", code, status)
 	}
 	rawMeter, _ := os.ReadFile(client.MeterPath(p.path))
+	p.publisher.PublishNow()
+	rawCredits, err := os.ReadFile(client.CreditsPath(p.path))
+	if err != nil {
+		t.Fatal(err)
+	}
 	lines := p.host.logged()
 	items := *p.apiCredits.Load()
 	for name, text := range map[string]string{
-		"snapshot": string(before), "meter": string(rawMeter), "status": status,
+		"snapshot": string(before), "meter": string(rawMeter), "credits": string(rawCredits), "status": status,
 		"logs": fmt.Sprintf("%v %+v %#v", lines, lines, lines), "items": fmt.Sprintf("%v %+v %#v", items, items, items),
 	} {
 		for _, secret := range []string{fakeAdminKey, "FAKEFAKE", "sk-ant", "key_fingerprint", "SOURCE-CANARY", "APIKEY-CANARY", "AUTHID-CANARY", "BASEURL-CANARY",
@@ -570,20 +389,9 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 			t.Fatalf("the log names %q", named)
 		}
 	}
-	warnings := []logLine{}
 	for _, line := range lines {
-		if strings.Contains(line.message, "admin-key") {
-			warnings = append(warnings, line)
-		}
-	}
-	// Once for the register that had two such items, none for the
-	// reconfigure that had none.
-	if len(warnings) != 1 || warnings[0].level != "warn" || warnings[0].message != "quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration" || warnings[0].fields["items"] != 2 {
-		t.Fatalf("warnings=%+v", warnings)
-	}
-	for _, line := range lines {
-		if line.level == "error" {
-			t.Fatalf("logged an error: %+v", line)
+		if line.level == "error" || strings.Contains(line.message, "admin-key") {
+			t.Fatalf("logged %+v", line)
 		}
 	}
 }
@@ -597,8 +405,8 @@ func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
 	if code, status := p.status(); code != 200 || strings.Contains(status, "api_meter") {
 		t.Fatalf("status %d carries a meter with no file: %s", code, status)
 	}
-	p.configure(protocol.MethodPluginReconfigure, oneCredit)
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.organizationOps(addOp("sierra", fakeOrgA))
+	p.removeAll()
 	rawMeter, err := os.ReadFile(client.MeterPath(p.path))
 	if err != nil {
 		t.Fatal(err)
@@ -606,11 +414,12 @@ func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
 	if code, status := p.status(); code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || !strings.Contains(status, `"stop_reason":"no_items"`) {
 		t.Fatalf("status %d: %s", code, status)
 	}
-	// A configuration change makes the writer save the snapshot, while the
-	// meter it restarts has not saved yet; the meter file is as it was.
-	p.configure(protocol.MethodPluginReconfigure, oneCredit+item("-", "nope", `"5"`, `"2026-10-01"`))
+	// An organization added on the page makes the writer save the snapshot,
+	// while the meter it restarts has not saved yet; the meter file is as it
+	// was.
+	p.organizationOps(addOp("after", fakeOrgC))
 	waitFor(t, p.path, func(s client.Snapshot) bool {
-		_, ok := s.Entries[client.Key(client.ProviderAnthropicAPI, "item-2")]
+		_, ok := s.Entries[client.Key(client.ProviderAnthropicAPI, client.APICreditOrgAccount(fakeOrgC))]
 		return ok
 	})
 	if again, _ := os.ReadFile(client.MeterPath(p.path)); string(again) != string(rawMeter) {
@@ -629,7 +438,8 @@ func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
 // with a quiesce gap; shutdown leaves a shutdown stop in the file.
 func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
 	p := newMeterPlugin(t)
-	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.writeOrganizations([2]string{"sierra", fakeOrgA})
+	p.configure(protocol.MethodPluginRegister, "")
 	p.usage(goldenRecord(t))
 	if _, err := p.Handle(protocol.MethodPluginQuiesce, nil); err != nil {
 		t.Fatal(err)
@@ -637,7 +447,7 @@ func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
 	if file := p.meterFile(); file.StopReason != client.MeterStopQuiesce || file.Counted != 1 || p.meter.Load() != nil {
 		t.Fatalf("after quiesce: %+v meter=%v", file, p.meter.Load())
 	}
-	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.configure(protocol.MethodPluginRegister, "")
 	p.usage(goldenRecord(t))
 	p.Shutdown()
 	file := p.meterFile()
@@ -649,23 +459,72 @@ func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
 	}
 }
 
+// A Quota Cache that starts with no organization opens no meter, so the file
+// keeps the stop the last run wrote, as an update from 0.1.14 leaves it:
+// quiesce, through a CPA restart too. The first organization added carries on
+// from the file with a gap of that reason.
+func TestAStartWithNoOrganizationKeepsTheStopItFinds(t *testing.T) {
+	updated := newMeterPlugin(t)
+	updated.writeOrganizations([2]string{"alpha", fakeOrgA})
+	updated.configure(protocol.MethodPluginRegister, "")
+	updated.usage(goldenRecord(t))
+	if _, err := updated.Handle(protocol.MethodPluginQuiesce, nil); err != nil {
+		t.Fatal(err)
+	}
+	stopped := updated.meterFile()
+	if stopped.StopReason != client.MeterStopQuiesce || stopped.StoppedAt == nil {
+		t.Fatalf("after quiesce: %+v", stopped)
+	}
+	if err := os.Remove(client.OrganizationsPath(updated.path)); err != nil {
+		t.Fatal(err)
+	}
+	host := &meterHost{}
+	p := &meterPlugin{Plugin: New(host), t: t, host: host, path: updated.path}
+	t.Cleanup(p.Shutdown)
+	p.configure(protocol.MethodPluginRegister, alphaCredit)
+	p.configure(protocol.MethodPluginReconfigure, alphaCredit)
+	p.Shutdown()
+	p = &meterPlugin{Plugin: New(host), t: t, host: host, path: updated.path}
+	t.Cleanup(p.Shutdown)
+	p.configure(protocol.MethodPluginRegister, alphaCredit)
+	if file := p.meterFile(); p.meter.Load() != nil || file.StopReason != client.MeterStopQuiesce || !file.StoppedAt.Equal(*stopped.StoppedAt) || file.Restarts != stopped.Restarts {
+		t.Fatalf("with no organization: %+v, meter %v", file, p.meter.Load())
+	}
+	p.organizationOps(addOp("alpha", fakeOrgA))
+	if p.meter.Load() == nil {
+		t.Fatal("adding alpha did not start the meter")
+	}
+	p.Shutdown()
+	file := p.meterFile()
+	if n := len(file.Gaps); n == 0 || file.Gaps[n-1].Reason != client.MeterStopQuiesce || !file.Gaps[n-1].From.Equal(*stopped.StoppedAt) || file.Counted != 1 {
+		t.Fatalf("after the add: %+v", file)
+	}
+}
+
 // A meter that stopped itself is replaced at the next configure by one
 // opened from its file, which records a failed gap.
 func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
 	p := newMeterPlugin(t)
-	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.writeOrganizations([2]string{"sierra", fakeOrgA})
+	p.configure(protocol.MethodPluginRegister, "")
 	failed := p.meter.Load()
 	failed.Stop(client.MeterStopFailed, time.Now().UTC())
 	if !failed.Failed() {
 		t.Fatal("not failed")
 	}
-	p.configure(protocol.MethodPluginReconfigure, oneCredit)
+	// A change on the page leaves it stopped: only a configure replaces it.
+	p.organizationOps(addOp("after", fakeOrgC))
+	if p.meter.Load() != failed {
+		t.Fatal("a change on the page replaced a failed meter")
+	}
+	p.organizationOps(removeOp(fakeOrgC))
+	p.configure(protocol.MethodPluginReconfigure, "")
 	replaced := p.meter.Load()
 	if replaced == nil || replaced == failed || replaced.Failed() {
 		t.Fatalf("meter=%v", replaced)
 	}
 	p.usage(goldenRecord(t))
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.removeAll()
 	if file := p.meterFile(); len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopFailed || file.Counted != 1 || file.StopReason != client.MeterStopNoItems {
 		t.Fatalf("file: %+v", file)
 	}
@@ -676,25 +535,28 @@ func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
 // heartbeating through a window it cannot see, and the good configure that
 // follows carries on from the file with that window as a gap. Every
 // rejection does it: a schedule without a unit, a mistyped key, a moved
-// cache path and an old schema. The cache itself carries on.
+// cache path, claude-api-credits that is not a list, and an old schema. The
+// cache itself carries on.
 func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 	p := newMeterPlugin(t)
-	p.configure(protocol.MethodPluginRegister, oneCredit)
+	p.writeOrganizations([2]string{"sierra", fakeOrgA})
+	p.configure(protocol.MethodPluginRegister, "")
 	attempt := func(schema uint32, yaml string) error {
 		raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: schema, ConfigYAML: []byte(yaml)})
 		_, err := p.Handle(protocol.MethodPluginReconfigure, raw)
 		return err
 	}
-	good := "cache-path: " + p.path + "\nrequest-spacing: 1s\n" + oneCredit
+	good := "cache-path: " + p.path + "\nrequest-spacing: 1s\n"
 	rejections := []struct {
 		name   string
 		schema uint32
 		yaml   string
 	}{
-		{"a poll interval without a unit", 6, "cache-path: " + p.path + "\npoll-interval: \"15\"\n" + oneCredit},
-		{"a request spacing without a unit", 6, "cache-path: " + p.path + "\nrequest-spacing: 15\n" + oneCredit},
-		{"a mistyped key", 6, "cache-path: " + p.path + "\npol-interval: 15m\n" + oneCredit},
-		{"a moved cache path", 6, "cache-path: " + filepath.Join(t.TempDir(), "elsewhere", "snapshot.json") + "\n" + oneCredit},
+		{"a poll interval without a unit", 6, "cache-path: " + p.path + "\npoll-interval: \"15\"\n"},
+		{"a request spacing without a unit", 6, "cache-path: " + p.path + "\nrequest-spacing: 15\n"},
+		{"a mistyped key", 6, "cache-path: " + p.path + "\npol-interval: 15m\n"},
+		{"claude-api-credits not a list", 6, "cache-path: " + p.path + "\nclaude-api-credits: text\n"},
+		{"a moved cache path", 6, "cache-path: " + filepath.Join(t.TempDir(), "elsewhere", "snapshot.json") + "\n"},
 		{"an old schema", 3, good},
 	}
 	for i, bad := range rejections {
@@ -714,8 +576,16 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 			t.Fatalf("%s: file after the rejection: %+v", bad.name, file)
 		}
 		// CPA delivers nothing now; a record that arrived anyway is not
-		// counted as if the meter had been running.
+		// counted as if the meter had been running, and a change on the page
+		// does not start it again.
 		p.usage(goldenRecord(t))
+		if i == 0 {
+			p.organizationOps(addOp("after", fakeOrgC))
+			p.organizationOps(removeOp(fakeOrgC))
+			if p.meter.Load() != nil {
+				t.Fatalf("%s: a change on the page restarted the meter", bad.name)
+			}
+		}
 		if err := attempt(6, good); err != nil {
 			t.Fatalf("%s: the fix was rejected: %v", bad.name, err)
 		}
@@ -723,7 +593,7 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 			t.Fatalf("%s: meter after the fix: %v", bad.name, m)
 		}
 	}
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.removeAll()
 	file := p.meterFile()
 	if n := uint64(len(rejections)); len(file.Gaps) != len(rejections) || file.Restarts != n || file.Counted != n || file.Received != n || file.StopReason != client.MeterStopNoItems {
 		t.Fatalf("file after the fixes: %+v", file)

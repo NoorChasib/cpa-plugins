@@ -16,11 +16,18 @@
 // contact as it ever was. Set allow-redeem to false and the capability is never
 // constructed.
 //
-// The dashboard also saves settings — an API credit's amount, refill date and
-// Console reading, and a Claude renewal date — to settings.json in data-dir,
-// through internal/overrides. That writes one local file and contacts nothing.
-// Set allow-edit to false and the saver is never installed; stored values still
-// apply.
+// After a press that spent, or may have spent, a reset, it asks Quota Cache to
+// poll that account now, then every other one, so the card catches up as soon
+// as Quota Cache can poll, usually within a minute. CPA gives plugins no way
+// to call one another, so the request is a small file beside the snapshot,
+// and it is the one file in Quota Cache's directory this plugin writes.
+//
+// API credit amounts, refill dates and Console readings, and Claude renewal
+// dates, are Quota Cache's: it keeps them, edits them on its own page, works
+// out each organization's credit, and publishes the result beside its
+// snapshot. This plugin shows that read-only and writes none of it. The
+// settings.json that quota-glance 0.7 and older saved them to stays in
+// data-dir, unread.
 package plugin
 
 import (
@@ -34,13 +41,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/api"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
@@ -51,7 +56,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.7.2"
+var Version = "0.8.0"
 
 const (
 	defaultStaleAfter = 45 * time.Minute
@@ -84,11 +89,34 @@ type settings struct {
 	// allowRedeem gates the whole redeem path. When false the redeemer is never
 	// built and the route 404s, so the plugin cannot reach a provider at all.
 	allowRedeem bool
-	// allowEdit gates the two settings doors the same way. What is stored
-	// applies either way.
-	allowEdit bool
-	warnBelow float64
+	warnBelow   float64
 }
+
+// config is the plugin's configuration block. It decodes strictly: a key it
+// does not know refuses the whole block, and CPA then drops the plugin.
+type config struct {
+	Enabled     *bool             `yaml:"enabled"`
+	CachePath   string            `yaml:"cache-path"`
+	DataDir     string            `yaml:"data-dir"`
+	WebToken    string            `yaml:"web-token"`
+	StaleAfter  string            `yaml:"stale-after"`
+	PlanLabels  map[string]string `yaml:"plan-labels"`
+	AllowRedeem *bool             `yaml:"allow-redeem"`
+	// AllowEdit is accepted and ignored since 0.8.0, when the editor moved to
+	// Quota Cache's page, so a configuration 0.7 accepted is still accepted.
+	// It is still a boolean: anything else is refused, as before.
+	AllowEdit *bool          `yaml:"allow-edit"`
+	WarnBelow dollars        `yaml:"openrouter-warn-below"`
+	Priority  *int           `yaml:"priority"`
+	Store     map[string]any `yaml:"store"`
+}
+
+// logAllowEditIgnored is said once per configure that sets allow-edit.
+const logAllowEditIgnored = "quota-glance no longer edits API credits or renewal dates; allow-edit is ignored. Edit them on Quota Cache's page"
+
+// logRefreshNotRequested is said once per press whose refresh request could
+// not be written. It names neither the file nor the credential.
+const logRefreshNotRequested = "quota-glance could not ask Quota Cache to refresh after a banked reset"
 
 // dollars is a money amount from configuration. The configuration panel saves
 // a number field as a YAML int or float depending on what was typed, and a
@@ -134,43 +162,26 @@ type Plugin struct {
 	watcher  *watch.Watcher
 	store    *store.Store
 	settings settings
-	// overrides is settings.json. It is kept across reconfigures, so its write
-	// limit and its values outlive a saved panel, and reopened when data-dir
-	// moves or when the file it holds could not be read: moving that file
-	// aside and saving the configuration is how editing comes back.
-	overrides *overrides.Store
-
-	// meter is the API meter the last rebuild read successfully. A save reads
-	// it, without a lock, for a new Console reading's baseline.
-	meter atomic.Pointer[qc.APIMeter]
 
 	// rebuildMu serializes Rebuild end to end, from reading its inputs to
 	// publishing, so documents are published, and history appended, in the
-	// order their inputs were read. Rebuild has two callers, the watcher and a
-	// committed save; without it, a rebuild that read the settings before a
-	// save could publish after the save's own rebuild and undo it until the
-	// next one. Nothing that holds the store's lock, configMu or stateMu ever
-	// takes it, and Rebuild never takes mu, so it cannot deadlock a close.
+	// order their inputs were read, whoever calls it. Nothing that holds
+	// configMu or stateMu ever takes it, and Rebuild never takes mu, so it
+	// cannot deadlock a close.
 	rebuildMu sync.Mutex
-	// afterRead, when set, runs inside Rebuild once its inputs are read and
-	// before it publishes. Tests park a rebuild there; it is never set
-	// otherwise.
-	afterRead atomic.Pointer[func()]
 
 	// lastGood is the most recent document built from a readable snapshot. It
 	// is what gets re-served, marked stale, when the snapshot goes away: an
 	// empty response is indistinguishable from a broken install. goodInput is
-	// the snapshot and roster it was built from, so the parts the dashboard's
-	// settings decide can be rebuilt over it while it is re-served.
-	stateMu    sync.Mutex
-	lastGood   *aggregate.Document
-	goodInput  aggregate.Input
-	lastError  string
-	builtAt    time.Time
-	written    time.Time
-	nextReq    time.Time
-	meterError string
-	flushedAt  time.Time
+	// the snapshot and roster it was built from, so the parts Quota Cache's
+	// credit state decides can be rebuilt over it while it is re-served.
+	stateMu   sync.Mutex
+	lastGood  *aggregate.Document
+	goodInput aggregate.Input
+	lastError string
+	builtAt   time.Time
+	written   time.Time
+	nextReq   time.Time
 
 	// redeemer is built the first time redemption is configured on and kept
 	// for the life of this Plugin, guarded by mu. Its journal holds the claims
@@ -181,9 +192,18 @@ type Plugin struct {
 	// the process: CPA applies an update or a switch off and on by loading a
 	// fresh copy of the plugin, and the new Plugin starts with an empty journal.
 	redeemer *redeem.Redeemer
+
+	// refreshMu serializes refresh requests, so two presses that finish
+	// together each read the file the other wrote rather than one dropping
+	// the other's request.
+	refreshMu sync.Mutex
 }
 
-func New(host Host) *Plugin { return &Plugin{host: host, api: api.New(ID, "")} }
+func New(host Host) *Plugin {
+	p := &Plugin{host: host, api: api.New(ID, "")}
+	p.api.SetRefresher(quotaCacheRefresh{p})
+	return p
+}
 
 func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	switch method {
@@ -205,10 +225,10 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				// rate-limit reset, which is irreversible, and it refuses any
 				// body that does not carry an explicit confirmation.
 				{Method: "POST", Path: "/plugins/" + ID + "/redeem", Description: "Spend one banked Codex or Claude rate-limit reset for a credential"},
-				// Writes settings.json in data-dir and nothing else. Like
-				// /redeem, CPA's middleware has checked the management key,
-				// which it takes only in a header, before it is dispatched.
-				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: "Save API credit amounts, refill dates, Console readings and Claude renewal dates set on the dashboard"},
+				// Retired in 0.8.0, when the editor moved to Quota Cache's
+				// page, and kept registered so CPA keeps dispatching it: it
+				// answers 410 settings_moved and reads nothing.
+				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: retiredSettingsDescription},
 			},
 			// The page, the document down its fallback path, and the press
 			// for readers arriving without a console session. CPA
@@ -230,10 +250,8 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				// the token, the confirmation and a single-use press id all
 				// travel in headers. See api.spendResponse.
 				{Path: "/spend", Description: "Spend one banked Codex or Claude rate-limit reset by GET for a reader signed in with the web token; CPA dispatches only GET to resource routes"},
-				// The same save as POST .../settings, as a GET, for the same
-				// reason as /spend, and fenced the same way: the batch and
-				// the token travel in headers, never in the URL.
-				{Path: "/save-settings", Description: "Save dashboard settings by GET for a reader signed in with the web token; CPA dispatches only GET to resource routes"},
+				// The GET twin of POST .../settings, retired with it.
+				{Path: "/save-settings", Description: retiredSettingsDescription},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -250,24 +268,15 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	}
 }
 
+// retiredSettingsDescription describes quota-glance 0.7's two settings doors.
+const retiredSettingsDescription = "Retired: API credit and renewal settings are saved on Quota Cache's page"
+
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	var req protocol.LifecycleRequest
 	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
-	cfg := struct {
-		Enabled     *bool             `yaml:"enabled"`
-		CachePath   string            `yaml:"cache-path"`
-		DataDir     string            `yaml:"data-dir"`
-		WebToken    string            `yaml:"web-token"`
-		StaleAfter  string            `yaml:"stale-after"`
-		PlanLabels  map[string]string `yaml:"plan-labels"`
-		AllowRedeem *bool             `yaml:"allow-redeem"`
-		AllowEdit   *bool             `yaml:"allow-edit"`
-		WarnBelow   dollars           `yaml:"openrouter-warn-below"`
-		Priority    *int              `yaml:"priority"`
-		Store       map[string]any    `yaml:"store"`
-	}{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
+	cfg := config{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yamlDecoder(req.ConfigYAML)
 		if decoder.Decode(&cfg) != nil {
@@ -315,6 +324,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		served := p.api
 		p.configMu.RUnlock()
 		served.Disable()
+		p.warnIgnored(cfg)
 		return registration(), nil
 	}
 	// Refuse plainly rather than serve an empty document that is
@@ -335,21 +345,13 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if err != nil {
 		return protocol.Registration{}, err
 	}
-	p.configMu.RLock()
-	kept := p.overrides
-	p.configMu.RUnlock()
-	if kept == nil || kept.Dir() != dataDir || kept.Current().Unreadable {
-		kept = overrides.Open(dataDir)
-	}
 	p.configMu.Lock()
 	p.store = current
-	p.overrides = kept
 	allowRedeem := cfg.AllowRedeem == nil || *cfg.AllowRedeem
-	allowEdit := cfg.AllowEdit == nil || *cfg.AllowEdit
 	p.settings = settings{
 		cachePath: cachePath, dataDir: dataDir, staleAfter: staleAfter,
 		planLabels: aggregate.NormalizePlanLabels(cfg.PlanLabels), allowRedeem: allowRedeem,
-		allowEdit: allowEdit, warnBelow: warnBelow,
+		warnBelow: warnBelow,
 	}
 	served := p.api
 	p.configMu.Unlock()
@@ -371,12 +373,6 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	} else {
 		served.SetRedeemer(nil)
 	}
-	// Nil when editing is off, which closes both settings doors the same way.
-	if allowEdit {
-		served.SetSaver(saver{p: p, store: kept})
-	} else {
-		served.SetSaver(nil)
-	}
 	if generated {
 		// Logged once, when it is first minted, because the operator has no
 		// other way to learn it. It is persisted, so a restart reuses it.
@@ -384,10 +380,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 
 	watcher, err := watch.Start(watch.Options{
-		Path:      cachePath,
-		MeterPath: qc.MeterPath(cachePath),
-		OnChange:  p.Rebuild,
-		Logf:      func(message string) { p.log("warn", message, nil) },
+		Path:        cachePath,
+		CreditsPath: qc.CreditsPath(cachePath),
+		OnChange:    p.Rebuild,
+		Logf:        func(message string) { p.log("warn", message, nil) },
 	})
 	if err != nil {
 		return protocol.Registration{}, err
@@ -406,7 +402,16 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.notice.Do(func() {
 		p.log("info", "quota-glance is serving; if the app route returns 404, CPA's home page is enabled and resource routes are disabled", nil)
 	})
+	p.warnIgnored(cfg)
 	return registration(), nil
+}
+
+// warnIgnored says, once per configure that is accepted, that a key the
+// configuration sets no longer does anything.
+func (p *Plugin) warnIgnored(cfg config) {
+	if cfg.AllowEdit != nil {
+		p.log("warn", logAllowEditIgnored, nil)
+	}
 }
 
 func registration() protocol.Registration {
@@ -415,14 +420,18 @@ func registration() protocol.Registration {
 		Metadata: protocol.Metadata{
 			Name: ID, Version: Version, Author: "NoorChasib",
 			GitHubRepository: "https://github.com/NoorChasib/cpa-plugins",
+			// Every key an operator sets, so CPA's Plugins page can edit
+			// them all; configFieldExclusions in the tests names the rest.
 			ConfigFields: []protocol.ConfigField{
-				{Name: "cache-path", Type: "string", Description: "quota-cache snapshot path; must match quota-cache's own"},
-				{Name: "data-dir", Type: "string", Description: "Private directory for trend history"},
+				// No apostrophes or other HTML-special characters anywhere CPA's
+				// plugin list carries: it escapes them, and the console shows
+				// the escape. See TestRegisteredTextSurvivesPluginListEscaping.
+				{Name: "cache-path", Type: "string", Description: "quota-cache snapshot path; must match the cache-path set in quota-cache"},
+				{Name: "data-dir", Type: "string", Description: "Directory where this plugin keeps its history and generated web token"},
 				{Name: "web-token", Type: "string", Description: "Dashboard password for browsers without a CPA console session; also spends banked resets while allow-redeem is on; generated and logged once if empty"},
 				{Name: "stale-after", Type: "string", Description: "Age at which an observation is shown as stale; default 45m"},
 				{Name: "plan-labels", Type: "object", Description: "Overrides for plan display names, keyed by the provider-reported value"},
-				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex or Claude rate-limit reset from the dashboard; default true. Set false to show the count without a button; governs both the console and the dashboard-password doors"},
-				{Name: "allow-edit", Type: "boolean", Description: "Allow setting API credit amounts, refill dates, Console readings and Claude renewal dates from the dashboard; default true. Values are kept in data-dir."},
+				{Name: "allow-redeem", Type: "boolean", Description: "Allow spending a banked Codex or Claude rate-limit reset from the dashboard. Default true; this form shows it off until you save it once. Set false to show the count without a button; governs both the console and the dashboard-password doors"},
 				{Name: "openrouter-warn-below", Type: "number", Description: "OpenRouter balance in dollars below which its card turns amber; default 5. It turns red at $0. Needs an OpenRouter management key in Quota Cache"},
 			},
 		},
@@ -431,30 +440,21 @@ func registration() protocol.Registration {
 }
 
 // Rebuild reads the snapshot and republishes. It runs on the watcher's
-// goroutine, on the startup read, and after a committed save, on the request
-// goroutine that made it; rebuildMu takes them one at a time.
+// goroutine, including its startup read; rebuildMu takes any other caller one
+// at a time with it.
 func (p *Plugin) Rebuild() {
 	p.rebuildMu.Lock()
 	defer p.rebuildMu.Unlock()
 	p.configMu.RLock()
-	settings, current, kept, watcher, served := p.settings, p.store, p.overrides, p.watcher, p.api
+	settings, current, watcher, served := p.settings, p.store, p.watcher, p.api
 	p.configMu.RUnlock()
-	if settings.cachePath == "" || current == nil || kept == nil {
+	if settings.cachePath == "" || current == nil {
 		return
 	}
 	now := time.Now().UTC()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result := source.Read(ctx, hostSource{p.host}, settings.cachePath)
-	if result.Meter != nil {
-		p.meter.Store(result.Meter)
-	}
-	// Read before stateMu, never under it: the store's lock is a leaf, and a
-	// save holding it must never wait for this rebuild.
-	values := kept.Current()
-	if hook := p.afterRead.Load(); hook != nil {
-		(*hook)()
-	}
 	in := aggregate.Input{
 		Snapshot:     result.Snapshot,
 		SourceReason: result.Reason,
@@ -465,9 +465,8 @@ func (p *Plugin) Rebuild() {
 		// Read on every rebuild, so a threshold changed in the panel
 		// applies at the next one rather than at the next snapshot write.
 		BalanceWarnBelow: settings.warnBelow,
-		Meter:            result.Meter,
-		Overrides:        values,
-		AllowEdit:        settings.allowEdit,
+		Credits:          result.Credits,
+		CreditsError:     result.CreditsError,
 	}
 
 	p.stateMu.Lock()
@@ -477,13 +476,13 @@ func (p *Plugin) Rebuild() {
 	switch {
 	case result.Reason != "" && p.lastGood != nil:
 		// Serve stale over empty: the last good document, honestly labelled.
-		// What the dashboard's settings decide in it is rebuilt from the
-		// snapshot and roster it came from, with the settings and meter as
-		// they are now: a save while the source is failing must show, or the
-		// page would keep the old values and its next save would conflict.
+		// What Quota Cache's credit state decides in it is rebuilt from the
+		// snapshot and roster it came from, with the state as it is now: a
+		// value entered on Quota Cache's page while this source is failing
+		// still shows.
 		settled := in
 		settled.Snapshot, settled.SourceReason, settled.Identities = p.goodInput.Snapshot, "", p.goodInput.Identities
-		doc = aggregate.WithSettings(*p.lastGood, aggregate.Build(settled, now))
+		doc = aggregate.WithCredits(*p.lastGood, aggregate.Build(settled, now))
 		doc.GeneratedAtEpoch = now.Unix()
 		doc.Stale = true
 		reason := result.Reason
@@ -508,10 +507,6 @@ func (p *Plugin) Rebuild() {
 		}
 	}
 	p.builtAt = now
-	p.meterError = result.MeterError
-	if result.Meter != nil {
-		p.flushedAt = result.Meter.FlushedAt
-	}
 	switch {
 	case result.Reason != "":
 		p.lastError = result.Reason
@@ -531,12 +526,8 @@ func (p *Plugin) Rebuild() {
 		SnapshotNextRequest: p.nextReq,
 		BuiltAt:             p.builtAt,
 		LastError:           p.lastError,
-		Settings: api.SettingsHealth{
-			Path: kept.Path(), Revision: values.Revision,
-			APICreditEntries: len(values.APICredits), RenewalEntries: len(values.Renewals),
-			LastError: kept.LastError(),
-		},
-		Meter: api.MeterHealth{Path: qc.MeterPath(settings.cachePath), FlushedAt: p.flushedAt, LastError: p.meterError},
+		Meter:               meterHealthOf(settings.cachePath, result),
+		CreditState:         creditStateHealthOf(settings.cachePath, result),
 	}
 	if watcher != nil {
 		state := watcher.State()
@@ -548,6 +539,49 @@ func (p *Plugin) Rebuild() {
 		}
 	}
 	served.Publish(doc, health)
+}
+
+// meterHealthOf is quota-cache's meter as its published state describes it:
+// when the meter last saved, from the card's meter or, with no organization
+// listed, the state's inputs; and why there is none. Without a usable state
+// nothing is known of the meter, which is reported missing unless the state
+// itself could not be read.
+func meterHealthOf(cachePath string, result source.Result) api.MeterHealth {
+	health := api.MeterHealth{Path: qc.MeterPath(cachePath)}
+	state := result.Credits
+	if result.CreditsError != "" || state == nil {
+		health.LastError = qc.CreditMeterErrorMissing
+		if result.CreditsError == aggregate.CreditsUnreadable {
+			health.LastError = qc.CreditMeterErrorUnreadable
+		}
+		return health
+	}
+	health.LastError = state.Inputs.MeterError
+	switch {
+	case state.APICredits != nil && state.APICredits.Meter != nil:
+		health.FlushedAt = time.Unix(state.APICredits.Meter.UpdatedAtEpoch, 0).UTC()
+	case state.Inputs.MeterFlushedAt != nil:
+		health.FlushedAt = state.Inputs.MeterFlushedAt.UTC()
+	}
+	return health
+}
+
+// creditStateHealthOf is quota-cache's published credit state as /health
+// reports it. An abandoned state's fields still show, to say how old it is.
+func creditStateHealthOf(cachePath string, result source.Result) api.CreditStateHealth {
+	health := api.CreditStateHealth{Path: qc.CreditsPath(cachePath), LastError: result.CreditsError}
+	state := result.Credits
+	if state == nil {
+		return health
+	}
+	computed := state.ComputedAt
+	health.ComputedAt = &computed
+	if state.ValidUntil != nil {
+		until := *state.ValidUntil
+		health.ValidUntil = &until
+	}
+	health.SettingsState, health.QuotaCacheVersion = state.Settings.State, state.QuotaCacheVersion
+	return health
 }
 
 func (p *Plugin) stop(final bool) {
@@ -644,28 +678,98 @@ func (h hostRedeem) ResetCooldown(ctx context.Context, authIndex string) (protoc
 	return h.host.ResetCooldown(ctx, authIndex)
 }
 
-// saver is what the settings doors write through: the store, and the rebuild
-// that makes a committed save the document the page reads next. The store
-// releases its lock before Apply returns, so the rebuild below, and any
-// watcher rebuild running beside it, never waits on a save.
-type saver struct {
-	p     *Plugin
-	store *overrides.Store
+// quotaCacheRefresh asks Quota Cache to poll a credential now, then every other
+// one, by adding a request to the refresh request file beside the snapshot at
+// cache-path. Quota Cache creates that directory and owns everything else in
+// it; this writes that one file, atomically, and never creates the directory.
+// A Quota Cache older than 0.2.0 never reads it, and the file stays at a few
+// hundred bytes however many presses add to it.
+type quotaCacheRefresh struct{ p *Plugin }
+
+// refreshReaderMaxAge is how old Quota Cache's credit state may be for the
+// Quota Cache that published it to count as running: three of the 60-second
+// heartbeats it publishes at.
+const refreshReaderMaxAge = 3 * time.Minute
+
+// refreshPollWithin is how soon Quota Cache has to be able to poll the account
+// for the page to say the card updates within a minute.
+const refreshPollWithin = time.Minute
+
+// RequestRefresh writes the request and, when it reports true, returns the
+// instant written in it. One that could not be written — no such directory, a
+// write that failed, an auth index that is not CPA's sixteen hex digits — is
+// logged once, naming neither the file nor the credential.
+//
+// It reports true only when a Quota Cache that acts on the request is running
+// too, which it knows by the credit state Quota Cache 0.2.0 and newer publish
+// beside the snapshot at least every minute, and its snapshot says it can poll
+// the account within about a minute (refreshPollSoon). An older Quota Cache
+// never reads the file, a stopped one is not polling, and one whose next free
+// slot or provider's 429 pause is further off polls the account only then; in
+// each case the card updates at a later poll, and the page must not say within
+// a minute. The request is written all the same, so this changes only what the
+// page is told.
+func (r quotaCacheRefresh) RequestRefresh(provider, authIndex string) (time.Time, bool) {
+	p := r.p
+	p.configMu.RLock()
+	cachePath := p.settings.cachePath
+	p.configMu.RUnlock()
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+	now := time.Now().UTC()
+	// An empty cache-path would name a file in CPA's working directory; it is
+	// never empty once configured, and nothing can be pressed before that.
+	if cachePath == "" || qc.AppendRefreshRequest(qc.RefreshRequestPath(cachePath), qc.RefreshRequest{
+		Provider: provider, AuthIndex: authIndex, Reason: qc.RefreshReasonReset,
+	}, now) != nil {
+		p.log("info", logRefreshNotRequested, nil)
+		return time.Time{}, false
+	}
+	// Read afresh rather than taken from the last rebuild, which can be from
+	// before Quota Cache stopped. A state left by a Quota Cache since stopped,
+	// or rolled back below 0.2.0, is no longer renewed, so within three
+	// minutes it is too old to count.
+	state, err := qc.LoadCredits(qc.CreditsPath(cachePath))
+	if err != nil || now.Sub(state.ComputedAt) > refreshReaderMaxAge {
+		return time.Time{}, false
+	}
+	// The snapshot too, as the last rebuild may predate the poll that just
+	// moved its next free slot.
+	snapshot, err := qc.Load(cachePath)
+	if err != nil || !refreshPollSoon(snapshot, provider, now) {
+		return time.Time{}, false
+	}
+	return now, true
 }
 
-func (s saver) Current() overrides.Values { return s.store.Current() }
-
-func (s saver) Save(batch overrides.Batch, now time.Time) (overrides.Result, error) {
-	result, err := s.store.Apply(batch, s.p.meter.Load(), now)
-	if err != nil || result.Unchanged {
-		return result, err
+// refreshPollSoon reports whether Quota Cache, as its snapshot describes it,
+// can poll a credential of provider within refreshPollWithin of a request made
+// at now. A request moves neither next_request, the next free slot under
+// request-spacing, nor a 429 pause on the provider, so the poll waits for the
+// later of the two. Once both are past, Quota Cache reads the request within
+// seconds and polls at once. Until then the poll comes at the poller's first
+// tick after them, and ticks come once per spacing, so the spacing has to be
+// within the minute as well; at worst the poll is then two minutes off, inside
+// the page's three-minute check. The snapshot does not record the spacing,
+// but it is no more than next_request less the latest poll's start: that poll
+// set next_request to its slot plus the spacing, a longer spacing set since
+// moves it out to match, and nothing brings it forward. Quota Cache accepts a
+// spacing of up to an hour, and a pause lasts up to six.
+func refreshPollSoon(snapshot qc.Snapshot, provider string, now time.Time) bool {
+	slot := snapshot.NextRequest
+	if pause := snapshot.ProviderCooldown[provider]; pause.After(slot) {
+		slot = pause
 	}
-	// Names only: amounts and dates are not secret, but they are not logged.
-	s.p.log("info", "quota-glance settings changed", map[string]any{
-		"kind": batch.Kind, "door": batch.Door, "ids": result.IDs, "fields": result.Fields,
-	})
-	s.p.Rebuild()
-	return result, nil
+	if !slot.After(now) {
+		return true
+	}
+	var polled time.Time
+	for _, entry := range snapshot.Entries {
+		if entry.LastAttempt.After(polled) {
+			polled = entry.LastAttempt
+		}
+	}
+	return !slot.After(now.Add(refreshPollWithin)) && !polled.IsZero() && snapshot.NextRequest.Sub(polled) <= refreshPollWithin
 }
 
 // hostSource adapts the plugin host to the narrower callback the source needs.

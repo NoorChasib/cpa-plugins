@@ -7,132 +7,22 @@ import (
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
+
+// The renewal math itself, qc.SubscriptionRenewal and qc.NextAnniversary, is
+// Quota Cache's client's and tested there. These test the document: that each
+// credential carries what that math says, from the dates Quota Cache
+// publishes.
 
 func utc(year int, month time.Month, day, hour, minute, second int) time.Time {
 	return time.Date(year, month, day, hour, minute, second, 0, time.UTC)
 }
 
-// The anniversary rule card billing uses for a subscription's anchor: the
-// start's day of the month and time of day in UTC, clamped to the last day of
-// a shorter month, every anniversary counted from the start itself so a short
-// month never drags the day down for good, and the first one strictly after
-// now.
-func TestNextAnniversary(t *testing.T) {
-	const monthly, yearly = 1, 12
-	jan31 := utc(2025, time.January, 31, 9, 15, 0)
-	for _, tc := range []struct {
-		name   string
-		start  time.Time
-		months int
-		now    time.Time
-		want   time.Time
-	}{
-		{"mid-month, later this month", utc(2025, time.March, 15, 10, 0, 0), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.September, 15, 10, 0, 0)},
-		{"mid-month, already past this month", utc(2025, time.March, 5, 10, 0, 0), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.October, 5, 10, 0, 0)},
-		{"today, earlier in the day", utc(2025, time.March, 10, 3, 0, 0), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.October, 10, 3, 0, 0)},
-		{"today, later in the day", utc(2025, time.March, 10, 5, 0, 0), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.September, 10, 5, 0, 0)},
-
-		// A start on the 31st, across February and the 30-day months.
-		{"31st into a short February", jan31, monthly, utc(2026, time.February, 10, 0, 0, 0), utc(2026, time.February, 28, 9, 15, 0)},
-		{"31st into a leap February", jan31, monthly, utc(2028, time.February, 10, 0, 0, 0), utc(2028, time.February, 29, 9, 15, 0)},
-		{"31st back to March 31, no drift", jan31, monthly, utc(2026, time.March, 1, 0, 0, 0), utc(2026, time.March, 31, 9, 15, 0)},
-		{"31st after the February one", jan31, monthly, utc(2026, time.February, 28, 10, 0, 0), utc(2026, time.March, 31, 9, 15, 0)},
-		{"31st into April", jan31, monthly, utc(2026, time.April, 2, 0, 0, 0), utc(2026, time.April, 30, 9, 15, 0)},
-		{"31st into September", jan31, monthly, utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.September, 30, 9, 15, 0)},
-		{"31st into December", jan31, monthly, utc(2026, time.December, 1, 0, 0, 0), utc(2026, time.December, 31, 9, 15, 0)},
-
-		// The 30th and the 29th, the days February has only sometimes.
-		{"30th into a short February", utc(2025, time.January, 30, 12, 0, 0), monthly,
-			utc(2026, time.February, 1, 0, 0, 0), utc(2026, time.February, 28, 12, 0, 0)},
-		{"30th into a leap February", utc(2025, time.January, 30, 12, 0, 0), monthly,
-			utc(2028, time.February, 1, 0, 0, 0), utc(2028, time.February, 29, 12, 0, 0)},
-		{"30th back to March 30", utc(2025, time.January, 30, 12, 0, 0), monthly,
-			utc(2026, time.March, 1, 0, 0, 0), utc(2026, time.March, 30, 12, 0, 0)},
-		{"29th into a short February", utc(2025, time.January, 29, 6, 30, 0), monthly,
-			utc(2026, time.February, 1, 0, 0, 0), utc(2026, time.February, 28, 6, 30, 0)},
-		{"29th into a leap February", utc(2025, time.January, 29, 6, 30, 0), monthly,
-			utc(2028, time.February, 1, 0, 0, 0), utc(2028, time.February, 29, 6, 30, 0)},
-		{"29th back to March 29", utc(2025, time.January, 29, 6, 30, 0), monthly,
-			utc(2026, time.March, 1, 0, 0, 0), utc(2026, time.March, 29, 6, 30, 0)},
-
-		// Annual plans.
-		{"annual, later this year", utc(2024, time.March, 12, 17, 40, 0), yearly,
-			utc(2026, time.March, 1, 0, 0, 0), utc(2026, time.March, 12, 17, 40, 0)},
-		{"annual, already past this year", utc(2024, time.March, 12, 17, 40, 0), yearly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2027, time.March, 12, 17, 40, 0)},
-		{"annual Feb 29 into a common year", utc(2024, time.February, 29, 8, 0, 0), yearly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2027, time.February, 28, 8, 0, 0)},
-		{"annual Feb 29 back to a leap year", utc(2024, time.February, 29, 8, 0, 0), yearly,
-			utc(2027, time.March, 1, 0, 0, 0), utc(2028, time.February, 29, 8, 0, 0)},
-		{"annual 31st of a 31-day month", utc(2023, time.October, 31, 0, 0, 0), yearly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.October, 31, 0, 0, 0)},
-
-		// At the anniversary's own second it is happening, not ahead.
-		{"exactly on a monthly anniversary", utc(2025, time.March, 15, 10, 0, 0), monthly,
-			utc(2026, time.September, 15, 10, 0, 0), utc(2026, time.October, 15, 10, 0, 0)},
-		{"a second before it", utc(2025, time.March, 15, 10, 0, 0), monthly,
-			utc(2026, time.September, 15, 9, 59, 59), utc(2026, time.September, 15, 10, 0, 0)},
-		{"exactly on a clamped anniversary", jan31, monthly, utc(2026, time.February, 28, 9, 15, 0), utc(2026, time.March, 31, 9, 15, 0)},
-		{"exactly on an annual anniversary", utc(2024, time.February, 29, 8, 0, 0), yearly,
-			utc(2027, time.February, 28, 8, 0, 0), utc(2028, time.February, 29, 8, 0, 0)},
-		{"exactly at the start", utc(2026, time.August, 31, 9, 0, 0), monthly,
-			utc(2026, time.August, 31, 9, 0, 0), utc(2026, time.September, 30, 9, 0, 0)},
-
-		// Years back, and across the turn of a year.
-		{"started years ago, monthly", utc(2006, time.December, 31, 23, 59, 59), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.September, 30, 23, 59, 59)},
-		{"started years ago, annual", utc(2006, time.December, 31, 23, 59, 59), yearly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.December, 31, 23, 59, 59)},
-		{"into the next year", utc(2025, time.November, 30, 0, 0, 0), monthly,
-			utc(2025, time.December, 31, 0, 0, 0), utc(2026, time.January, 30, 0, 0, 0)},
-		{"December into January", utc(2025, time.December, 31, 12, 0, 0), monthly,
-			utc(2026, time.January, 5, 0, 0, 0), utc(2026, time.January, 31, 12, 0, 0)},
-
-		// UTC is the calendar, whatever zone the start was written in: 23:30
-		// on the 31st in New York is 04:30 on the 1st.
-		{"a start written in another zone", time.Date(2025, time.January, 31, 23, 30, 0, 0, time.FixedZone("EST", -5*3600)), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.October, 1, 4, 30, 0)},
-		// Whole seconds: a fraction must not put the anniversary a hair past
-		// a now that is itself whole, to be printed as already passed.
-		{"a fractional start", utc(2026, time.August, 10, 4, 0, 0).Add(500 * time.Millisecond), monthly,
-			utc(2026, time.September, 10, 4, 0, 0), utc(2026, time.October, 10, 4, 0, 0)},
-
-		// And whatever zone now is written in. 22:30 UTC on Sep 30 is already
-		// Oct 1 in Sydney and Berlin; counted from those calendars the months
-		// run one long and skip the anniversary 30 minutes away for the one a
-		// month after it. Behind UTC, New York's Sep 30 is still the UTC one's.
-		{"a now in a zone already in the next month", utc(2026, time.January, 30, 23, 0, 0), monthly,
-			utc(2026, time.September, 30, 22, 30, 0).In(time.FixedZone("AEST", 10*3600)), utc(2026, time.September, 30, 23, 0, 0)},
-		{"a month-end now an hour or two ahead", utc(2026, time.August, 31, 23, 45, 0), monthly,
-			utc(2026, time.September, 30, 23, 30, 0).In(time.FixedZone("CEST", 2*3600)), utc(2026, time.September, 30, 23, 45, 0)},
-		{"a now in a zone still in the last month", utc(2026, time.January, 30, 23, 0, 0), monthly,
-			utc(2026, time.October, 1, 2, 0, 0).In(time.FixedZone("EDT", -4*3600)), utc(2026, time.October, 30, 23, 0, 0)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := nextAnniversary(tc.start, tc.months, tc.now)
-			if !ok || !got.Equal(tc.want) || got.Location() != time.UTC {
-				t.Fatalf("next anniversary of %s after %s = %s (%v), want %s", tc.start, tc.now, got, ok, tc.want)
-			}
-		})
-	}
-
-	// A subscription that has not begun has no renewal to estimate.
-	now := utc(2026, time.September, 10, 4, 0, 0)
-	for name, start := range map[string]time.Time{
-		"a second ahead": now.Add(time.Second),
-		"hours ahead":    now.Add(16 * time.Hour),
-		"years ahead":    utc(2030, time.January, 1, 0, 0, 0),
-	} {
-		if got, ok := nextAnniversary(start, monthly, now); ok {
-			t.Errorf("%s: estimated %s from a start still to come", name, got)
-		}
-	}
+// renewalState is a published credit state holding only renewal dates, as
+// Quota Cache publishes one with no organization listed.
+func renewalState(renewals map[string]RenewalSetting) *qc.CreditState {
+	return &qc.CreditState{Schema: qc.CreditsSchema, Settings: qc.CreditSettingsState{State: qc.CreditSettingsOK, Editable: true},
+		Renewals: renewals}
 }
 
 // claudeStarted is a Claude snapshot entry that has read a subscription start
@@ -282,9 +172,9 @@ func TestTheGoldenContractsCarryEstimatedRenewals(t *testing.T) {
 	if c := byID["codex-noor@example.com.json"]; c.RenewalAtEpoch == nil || c.RenewalEstimated {
 		t.Errorf("codex: renewal = %v estimated = %v; want its own date, not estimated", c.RenewalAtEpoch, c.RenewalEstimated)
 	}
-	// A date set on the dashboard wins, and its estimate rides beside it for
-	// the editor's "set here · estimate ~Oct 3 · Use estimate".
-	if c := byID["5f2b8c41d09e7a36"]; c.RenewalSource == nil || *c.RenewalSource != renewalDashboard || c.RenewalEstimated ||
+	// A date entered on Quota Cache's page wins, and its estimate rides beside
+	// it.
+	if c := byID["5f2b8c41d09e7a36"]; c.RenewalSource == nil || *c.RenewalSource != qc.RenewalDashboard || c.RenewalEstimated ||
 		c.RenewalEstimateAtEpoch == nil || *c.RenewalEstimateAtEpoch != utc(2026, time.October, 3, 11, 20, 0).Unix() {
 		t.Errorf("dashboard: source = %v estimated = %v estimate = %v", c.RenewalSource, c.RenewalEstimated, c.RenewalEstimateAtEpoch)
 	}
@@ -292,28 +182,27 @@ func TestTheGoldenContractsCarryEstimatedRenewals(t *testing.T) {
 
 func ptrTime(t time.Time) *time.Time { return &t }
 
-// withRenewal builds one credential's document with a renewal date stored for
-// it on the dashboard, editing on.
+// withRenewal builds one credential's document with a renewal date Quota
+// Cache publishes for it.
 func withRenewal(t *testing.T, identity Identity, entry qc.Entry, date string) Credential {
 	t.Helper()
 	now := at(t, 0)
 	entry.Provider, entry.AuthIndex = identity.Provider, identity.AuthIndex
 	entry.ObservedAt = now.Add(-2 * time.Minute)
-	values := overrides.Values{Renewals: map[string]overrides.Renewal{}}
+	renewals := map[string]RenewalSetting{}
 	if date != "" {
-		values.Renewals[identity.AuthIndex] = overrides.Renewal{Date: date, Rev: 6, UpdatedAt: now.Add(-time.Hour)}
+		renewals[identity.AuthIndex] = RenewalSetting{Date: date, Revision: "6", UpdatedAtEpoch: now.Add(-time.Hour).Unix()}
 	}
 	doc := Build(Input{
 		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{qc.Key(identity.Provider, identity.AuthIndex): entry}},
 		Identities: []Identity{identity},
-		Overrides:  values,
-		AllowEdit:  true,
+		Credits:    renewalState(renewals),
 	}, now)
 	return doc.Credentials[0]
 }
 
-// A renewal the provider reports wins over the dashboard's, and the
-// dashboard's over the estimate; each says which it is.
+// A renewal the provider reports wins over the one the operator entered, and
+// that over the estimate; each says which it is.
 func TestRenewalPrecedence(t *testing.T) {
 	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
 	now := at(t, 0) // 2026-09-10T04:00:00Z
@@ -346,9 +235,8 @@ func TestRenewalPrecedence(t *testing.T) {
 	}
 }
 
-// A Claude credential carries its estimate whatever wins, so the page can say
-// what Use estimate returns to beside a date set on the dashboard. Codex has
-// no estimate to return to.
+// A Claude credential carries its estimate whatever wins, so the page can show
+// it beside a date the operator entered. Codex has no estimate.
 func TestTheEstimateIsCarriedBesideADashboardDate(t *testing.T) {
 	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
 	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
@@ -378,10 +266,10 @@ func TestTheEstimateIsCarriedBesideADashboardDate(t *testing.T) {
 	}
 }
 
-// A document served again while its source fails takes every part the
-// settings decide from one built with the settings as they are now, and
-// keeps the rest as it was.
-func TestWithSettingsTakesOnlyWhatTheSettingsDecide(t *testing.T) {
+// A document served again while its source fails takes every part Quota
+// Cache's published state decides from one built with the state as it is now,
+// and keeps the rest as it was.
+func TestWithCreditsTakesOnlyWhatTheCreditStateDecides(t *testing.T) {
 	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
 	started := claudeStarted(utc(2025, time.January, 31, 9, 15, 0), qc.BillingMonthly)
 	before := withRenewal(t, claude, started, "")
@@ -389,7 +277,7 @@ func TestWithSettingsTakesOnlyWhatTheSettingsDecide(t *testing.T) {
 	old := Document{Credentials: []Credential{before}, RenewalOrphans: []RenewalOrphan{}, Providers: []Provider{{ID: "claude"}}}
 	fresh := Document{Credentials: []Credential{after}, RenewalOrphans: []RenewalOrphan{{ID: "fedcba9876543210"}},
 		APICredits: &APICredits{Title: "Monthly API Credit"}, Providers: []Provider{}}
-	got := WithSettings(old, fresh)
+	got := WithCredits(old, fresh)
 	c := got.Credentials[0]
 	if c.RenewalSource == nil || *c.RenewalSource != "dashboard" || c.RenewalSetting == nil || c.RenewalSetting.Date != "2026-10-01" ||
 		*c.RenewalAtEpoch != *after.RenewalAtEpoch || c.RenewalEstimated || *c.RenewalEstimateAtEpoch != *after.RenewalEstimateAtEpoch {
@@ -403,8 +291,8 @@ func TestWithSettingsTakesOnlyWhatTheSettingsDecide(t *testing.T) {
 	}
 }
 
-// A dashboard date is 00:00 UTC of that day while it is ahead, and once it
-// has come, the next one on the same day of the month, or of the year on an
+// An entered date is 00:00 UTC of that day while it is ahead, and once it has
+// come, the next one on the same day of the month, or of the year on an
 // annual plan, strictly after now: on the day itself, next month's.
 func TestADashboardRenewalIsNeverInThePast(t *testing.T) {
 	claude := Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}
@@ -431,8 +319,7 @@ func TestADashboardRenewalIsNeverInThePast(t *testing.T) {
 	}
 }
 
-// Codex reports its own renewal and never takes one from the dashboard, nor
-// offers to.
+// Codex reports its own renewal and never takes an entered one.
 func TestCodexIgnoresADashboardRenewal(t *testing.T) {
 	codex := Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}
 	got := withRenewal(t, codex, qc.Entry{}, "2026-09-29")
@@ -441,54 +328,53 @@ func TestCodexIgnoresADashboardRenewal(t *testing.T) {
 	}
 }
 
-// Only a Claude credential under an auth index settings.json can key, while
-// editing is available, is offered for editing.
-func TestRenewalEditable(t *testing.T) {
-	for name, tc := range map[string]struct {
-		identity Identity
-		allow    bool
-		want     bool
-	}{
-		"claude":                   {Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}, true, true},
-		"editing off":              {Identity{AuthIndex: "0123456789abcdef", Provider: "claude"}, false, false},
-		"codex":                    {Identity{AuthIndex: "0123456789abcdef", Provider: "codex"}, true, false},
-		"an index that cannot key": {Identity{AuthIndex: "claude-a@example.com.json", Provider: "claude"}, true, false},
+// Renewal dates are entered on Quota Cache's page, so no credential's is
+// editable here, whatever its provider, its auth index or the state of Quota
+// Cache's settings.
+func TestRenewalsAreNeverEditableHere(t *testing.T) {
+	for name, state := range map[string]*qc.CreditState{
+		"settings ok":         renewalState(map[string]RenewalSetting{}),
+		"settings unreadable": {Schema: qc.CreditsSchema, Settings: qc.CreditSettingsState{State: qc.CreditSettingsUnreadable}},
+		"no state":            nil,
 	} {
-		doc := Build(Input{
-			Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
-			Identities: []Identity{tc.identity},
-			AllowEdit:  tc.allow,
-		}, at(t, 0))
-		if got := doc.Credentials[0].RenewalEditable; got != tc.want {
-			t.Errorf("%s: renewalEditable = %v", name, got)
+		for _, identity := range []Identity{
+			{AuthIndex: "0123456789abcdef", Provider: "claude"},
+			{AuthIndex: "0123456789abcdef", Provider: "codex"},
+			{AuthIndex: "claude-a@example.com.json", Provider: "claude"},
+		} {
+			doc := Build(Input{
+				Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
+				Identities: []Identity{identity},
+				Credits:    state,
+			}, at(t, 0))
+			if doc.Credentials[0].RenewalEditable {
+				t.Errorf("%s: %s %s is editable", name, identity.Provider, identity.AuthIndex)
+			}
 		}
 	}
-	// Unreadable settings apply nothing and edit nothing.
-	doc := Build(Input{
-		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
-		Identities: []Identity{{AuthIndex: "0123456789abcdef", Provider: "claude"}},
-		Overrides:  overrides.Values{Unreadable: true},
-		AllowEdit:  true,
-	}, at(t, 0))
-	if doc.Credentials[0].RenewalEditable {
-		t.Error("an unreadable settings.json left renewals editable")
+	for _, doc := range []Document{buildFixture(t), buildDegraded(t)} {
+		for _, c := range doc.Credentials {
+			if c.RenewalEditable {
+				t.Errorf("golden credential %s is editable", c.ID)
+			}
+		}
 	}
 }
 
-// A stored date for a credential the roster no longer lists is offered for
-// removal, oldest first; without a roster, none is.
+// A stored date for a credential the roster no longer lists is an orphan,
+// oldest first; without a roster, none is, and without a usable state from
+// Quota Cache no date is known at all.
 func TestRenewalOrphans(t *testing.T) {
 	now := at(t, 0)
-	values := overrides.Values{Renewals: map[string]overrides.Renewal{
-		"0123456789abcdef": {Date: "2026-10-29", Rev: 5, UpdatedAt: now.Add(-time.Hour)},
-		"fedcba9876543210": {Date: "2026-09-29", Rev: 2, UpdatedAt: now.Add(-48 * time.Hour)},
-		"1111111111111111": {Date: "2026-09-12", Rev: 3, UpdatedAt: now.Add(-24 * time.Hour)},
-	}}
+	state := renewalState(map[string]RenewalSetting{
+		"0123456789abcdef": {Date: "2026-10-29", Revision: "5", UpdatedAtEpoch: now.Add(-time.Hour).Unix()},
+		"fedcba9876543210": {Date: "2026-09-29", Revision: "2", UpdatedAtEpoch: now.Add(-48 * time.Hour).Unix()},
+		"1111111111111111": {Date: "2026-09-12", Revision: "3", UpdatedAtEpoch: now.Add(-24 * time.Hour).Unix()},
+	})
 	in := Input{
 		Snapshot:   qc.Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]qc.Entry{}},
 		Identities: []Identity{{AuthIndex: "1111111111111111", Provider: "claude"}},
-		Overrides:  values,
-		AllowEdit:  true,
+		Credits:    state,
 	}
 	got := Build(in, now).RenewalOrphans
 	want := []RenewalOrphan{
@@ -501,5 +387,48 @@ func TestRenewalOrphans(t *testing.T) {
 	in.SourceReason = ReasonRosterUnavailable
 	if got := Build(in, now).RenewalOrphans; got == nil || len(got) != 0 {
 		t.Errorf("without a roster: %+v", got)
+	}
+	in.SourceReason = ""
+	for _, cause := range []string{CreditsMissing, CreditsUnreadable, CreditsAbandoned} {
+		in.CreditsError = cause
+		if got := Build(in, now).RenewalOrphans; got == nil || len(got) != 0 {
+			t.Errorf("%s: %+v", cause, got)
+		}
+	}
+}
+
+// The committed contracts carry the dates Quota Cache publishes: the
+// healthy one's dashboard date on its credential, and the degraded one's date
+// for a credential its roster does not list as an orphan. Neither is
+// editable, and a document whose source failed lists no orphan.
+func TestRenewalsFromPublishedDates(t *testing.T) {
+	healthy := buildFixture(t)
+	for _, c := range healthy.Credentials {
+		if c.ID != novemberID {
+			if c.RenewalSetting != nil {
+				t.Errorf("%s carries a setting it has none of: %+v", c.ID, c.RenewalSetting)
+			}
+			continue
+		}
+		if c.RenewalSetting == nil || *c.RenewalSetting != (RenewalSetting{Date: "2026-09-10", Revision: "3", UpdatedAtEpoch: 1788984000}) ||
+			c.RenewalSource == nil || *c.RenewalSource != qc.RenewalDashboard || c.RenewalEditable ||
+			c.RenewalAtEpoch == nil || *c.RenewalAtEpoch != utc(2026, time.October, 10, 0, 0, 0).Unix() {
+			t.Errorf("%s: %+v", c.ID, c)
+		}
+	}
+	if len(healthy.RenewalOrphans) != 0 {
+		t.Errorf("healthy orphans: %+v", healthy.RenewalOrphans)
+	}
+	degraded := buildDegraded(t)
+	if want := (RenewalOrphan{ID: "0123456789abcdef", Date: "2026-09-29", Revision: "9", UpdatedAtEpoch: 1788264000}); len(degraded.RenewalOrphans) != 1 ||
+		degraded.RenewalOrphans[0] != want {
+		t.Errorf("degraded orphans: %+v", degraded.RenewalOrphans)
+	}
+	failed := Build(Input{
+		Snapshot: loadSnapshot(t, "degraded-states.json"), Identities: degradedRoster(), SourceReason: ReasonRosterUnavailable,
+		StaleAfter: 45 * time.Minute, Credits: fixtureCredits(t, "degraded-states"),
+	}, at(t, 0))
+	if failed.RenewalOrphans == nil || len(failed.RenewalOrphans) != 0 {
+		t.Errorf("while the source failed: %+v", failed.RenewalOrphans)
 	}
 }

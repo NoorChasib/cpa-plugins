@@ -13,6 +13,8 @@ import (
 // query values. The public resource must never become an operational snapshot.
 // app.js reads the CPA console's remembered management key itself; its opening
 // comment gives the rules that keep the page from costing CPA sign-in failures.
+// editor.js, the editor's cards, follows the same rules through app.js's one
+// namespace, and saves through the management route with that key.
 //
 //go:embed pageassets/index.html
 var sidebarHTML string
@@ -21,7 +23,15 @@ var sidebarHTML string
 var sidebarStyle string
 
 //go:embed pageassets/app.js
-var sidebarScript string
+var sidebarApp string
+
+//go:embed pageassets/editor.js
+var sidebarEditor string
+
+// sidebarScript is the page's one script element: app.js, then editor.js,
+// which attaches to the namespace app.js defines. One element keeps one CSP
+// hash, worked out below from exactly these bytes.
+var sidebarScript = sidebarApp + "\n" + sidebarEditor
 
 func sidebarHash(value string) string {
 	sum := sha256.Sum256([]byte(value))

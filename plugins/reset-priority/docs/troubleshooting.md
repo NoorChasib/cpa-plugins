@@ -267,6 +267,53 @@ At ABI v1, native host callback entry carries no direct cancellation primitive. 
 
 The admitted set is bounded to 64 callbacks process-wide, and Management Refresh provider calls forward CPA's `host_callback_id` so the host can use the originating request context when the ID is resolved in time. These controls prevent unbounded accumulation and improve cancellation, but ABI v1 has no acknowledgement that CPA acquired the context before management can unwind. A callback crossing that narrow dispatch-to-resolution race can therefore lose request cancellation under the audited host's unknown-ID fallback, and no plugin-side code can force-return a callback already executing inside a misbehaving host. If one never returns (for example an upstream HTTP request with no effective host-side deadline through a broken proxy), plugin shutdown blocks inside CPA's unload path until the CPA process itself exits. If an unload hangs, check outbound connectivity/proxy health and stop the CPA process; this is a current-host/ABI limitation, not plugin state corruption.
 
+## API credit routing
+
+These apply only with `route-api-credits: true`. The router's state is the `router` object of `GET /v0/management/plugins/reset-priority/status`, and the **Claude API credit routing** section of the HTML view. Every field and decline reason is in [REFERENCE.md](../REFERENCE.md#claude-api-credit-routing-optional).
+
+### `router.table_reason` is not empty
+
+The router cannot route, so CPA's own selector chooses for every request. With routing on, CPA still takes its slower selection path for every request meanwhile, so fix the reason or turn routing off. After a fix, the router's next rebuild, within a minute, picks it up.
+
+| `table_reason` | Fix |
+| --- | --- |
+| `build_failed` | The last rebuild failed. The log says `reset-priority API credit router could not be built`. It retries every minute; if it lasts, report it with the log line, never with Quota Cache's files. |
+| `no_table` | Wait a minute after a configuration apply. After a quiesce, the next configuration apply builds a table again. |
+| `credits_missing` | Update Quota Cache to 0.2.0 or newer. If it is, check that `quota-cache-path` names the same `snapshot.json` as Quota Cache's `cache-path`: the router reads `snapshot.credits.json` beside it. |
+| `credits_unreadable` | Check Quota Cache's log. It rewrites the file at least once a minute while it runs. |
+| `credits_stale` | Quota Cache has not published for 3 minutes: enable it, or check its log. Right after a refill boundary this clears by itself at the next rebuild. On a CPA older than v8.0.22, Quota Cache keeps publishing after it is turned off, so this never shows; see [below](#routing-carries-on-after-quota-cache-is-turned-off). |
+| `settings_unavailable` | Quota Cache cannot apply the values entered on its page: it cannot read its settings file, `snapshot.settings.json`. Put back a good copy, or move it aside and enter the values on Quota Cache's page again; see [When a file cannot be read](../../quota-cache/docs/credit-settings.md#when-a-file-cannot-be-read). |
+| `meter_missing` | Add a Console organization on Quota Cache's page, or wait for its meter's first save. |
+| `meter_unreadable` | Check Quota Cache's log. |
+| `meter_stopped` | Enable Quota Cache, fix a rejected Quota Cache configuration, or add an organization on its page. The meter file's `stop_reason`, shown under **Claude API meter** on Quota Cache's page, says which. A `shutdown` or `quiesce` that stays while Quota Cache runs means its meter has not started since CPA loaded it, usually because it lists no organization yet, as right after updating from Quota Cache 0.1.14: add the organizations on its page. Quota Cache records a stop only when it stops a running meter, so until then the file keeps the stop its last run recorded, not `no_items`. If Quota Cache's page says it cannot read its organizations file, see [When a file cannot be read](../../quota-cache/docs/credit-settings.md#when-a-file-cannot-be-read). On a CPA older than v8.0.22, turning Quota Cache off does not stop its meter, so this never shows; see [below](#routing-carries-on-after-quota-cache-is-turned-off). |
+| `meter_too_old` | No Quota Cache 0.2.0 or newer has run its meter on this file yet. It starts while Quota Cache is enabled and lists at least one organization. |
+| `meter_stale` | Quota Cache's meter has not been saved for 15 minutes. Check that Quota Cache is running. |
+| `no_api_credits` | Add an organization on Quota Cache's page. |
+| `no_linked_orgs` | Add the organizations on Quota Cache's page, under **Organizations**, each with its Organization ID. |
+| `table_stale` | The router loop has not rebuilt for 3 minutes. Check Reset Priority's log; a configuration apply restarts the loop. |
+
+After 30 minutes of a reason that needs you, the log warns once per configuration apply: `reset-priority API credit routing is on but cannot route (<reason>); CPA still sends every request through its slower selection path`.
+
+### Routing carries on after Quota Cache is turned off
+
+Before v8.0.22, CPA does not stop a plugin that is turned off on its Plugins page, or with `enabled: false`, until CPA restarts: it only stops sending it usage records. Quota Cache keeps saving its meter and publishing a fresh credit state that no longer counts spend. So `router.table_reason` stays `""`, and the router keeps choosing on spend frozen at that moment. An organization whose credit runs out is never marked `out`, because its refusals are no longer counted, so requests keep reaching it and being refused.
+
+On those versions, turn `route-api-credits` off before turning Quota Cache off. Turning Quota Cache back on records no gap, so its estimate leaves out the spend in between without saying so: enter a Console reading for each organization on Quota Cache's page, then turn routing back on. From v8.0.22, CPA stops a Quota Cache that is turned off, and the router steps aside at its next rebuild.
+
+### `router.counters.picks` stays at 0
+
+With `router.declared` `true` and credits traffic flowing, CPA is not calling Reset Priority. Either another plugin that declares a scheduler sorts ahead of it (CPA uses only the one with the highest `plugins.configs.<id>.priority`, then the smaller ID), or CPA runs in Home mode, started with `-home-jwt` or with the `HOME_JWT` environment variable set. Home mode bypasses plugin schedulers. Neither can be seen from the plugin.
+
+With `router.declared` `false`, routing is off or the last configuration apply failed; see CPA's log. If `counters.picks` keeps rising while `declared` has been `false` for more than a minute, CPA is running a rolled-back old copy whose last good registration declared the scheduler. Those picks still step aside, and the next successful configuration apply ends it.
+
+### Requests failed with a scheduler or plugin error during an update
+
+CPA calls the scheduler on every request, and a request that reaches the plugin while CPA replaces, disables or removes it fails. Before any of those, set `route-api-credits: false` and wait until two consecutive requests leave `router.counters.picks` unchanged; turn it back on afterwards. This applies to every update, including one that is only about OAuth priorities.
+
+### Every credits key cools down at once
+
+One interactive Claude Code turn on a credits key, refused for low credit because the monthly credit does not cover it, walks every credits key under the `credit balance is too low` failover rule and cools each for that model for about a minute. Keep interactive Claude Code off the credits keys' model names, and give those keys no `cloak` block (or one with `mode: never`) and no `fingerprint-profile: claude-code-cli`.
+
 ## Smoke test
 
 Build the native Linux library and run:

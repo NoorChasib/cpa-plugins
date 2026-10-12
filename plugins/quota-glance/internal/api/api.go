@@ -4,7 +4,9 @@
 //
 // That separation is enforced by a test — api must not import the source or
 // watch packages — so a request can never trigger a read, and a slow or broken
-// filesystem can never turn into a slow response.
+// filesystem can never turn into a slow response. The press is the one route
+// that waits on anything: the provider, and after a spend the refresh request
+// to Quota Cache, both through interfaces the plugin installs.
 package api
 
 import (
@@ -53,37 +55,39 @@ type WatcherState struct {
 
 // Health is what the management health route reports.
 type Health struct {
-	Version             string         `json:"version"`
-	CachePath           string         `json:"cache_path"`
-	StaleAfter          string         `json:"stale_after"`
-	SnapshotWrittenAt   time.Time      `json:"snapshot_written_at"`
-	SnapshotNextRequest time.Time      `json:"snapshot_next_request"`
-	BuiltAt             time.Time      `json:"built_at"`
-	Stale               bool           `json:"stale"`
-	StaleReason         string         `json:"stale_reason,omitempty"`
-	LastError           string         `json:"last_error,omitempty"`
-	Watcher             WatcherState   `json:"watcher"`
-	Settings            SettingsHealth `json:"settings"`
-	Meter               MeterHealth    `json:"meter"`
+	Version             string            `json:"version"`
+	CachePath           string            `json:"cache_path"`
+	StaleAfter          string            `json:"stale_after"`
+	SnapshotWrittenAt   time.Time         `json:"snapshot_written_at"`
+	SnapshotNextRequest time.Time         `json:"snapshot_next_request"`
+	BuiltAt             time.Time         `json:"built_at"`
+	Stale               bool              `json:"stale"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
+	LastError           string            `json:"last_error,omitempty"`
+	Watcher             WatcherState      `json:"watcher"`
+	Meter               MeterHealth       `json:"meter"`
+	CreditState         CreditStateHealth `json:"credit_state"`
 }
 
-// SettingsHealth is settings.json as the last rebuild found it. LastError is
-// "" or "unreadable": a file that fails a shape rule, which nothing is applied
-// from and nothing is saved over until it is moved aside.
-type SettingsHealth struct {
-	Path             string `json:"path"`
-	Revision         uint64 `json:"revision"`
-	APICreditEntries int    `json:"api_credit_entries"`
-	RenewalEntries   int    `json:"renewal_entries"`
-	LastError        string `json:"last_error"`
-}
-
-// MeterHealth is quota-cache's API meter as the last rebuild read it.
-// LastError is "", "missing" or "unreadable".
+// MeterHealth is quota-cache's API meter as its published credit state
+// describes it; quota-glance no longer reads the meter itself. LastError is
+// "", "missing" or "unreadable".
 type MeterHealth struct {
 	Path      string    `json:"path"`
 	FlushedAt time.Time `json:"flushed_at"`
 	LastError string    `json:"last_error"`
+}
+
+// CreditStateHealth is quota-cache's published credit state as the last
+// rebuild read it. LastError is "", "missing", "unreadable" or "abandoned";
+// an abandoned state's own fields are still shown, to say how old it is.
+type CreditStateHealth struct {
+	Path              string     `json:"path"`
+	LastError         string     `json:"last_error"`
+	ComputedAt        *time.Time `json:"computed_at"`
+	ValidUntil        *time.Time `json:"valid_until"`
+	SettingsState     string     `json:"settings_state"`
+	QuotaCacheVersion string     `json:"quota_cache_version"`
 }
 
 type API struct {
@@ -104,12 +108,12 @@ type API struct {
 	// rather than a flag means a disabled plugin has no way to make the request
 	// at all, instead of a branch that could be got wrong.
 	redeemer Redeemer
+	// refresher asks Quota Cache to poll an account after a press that spent,
+	// or may have spent, one of its resets. Nil asks nothing.
+	refresher Refresher
 	// ledger remembers how each press was answered, so a second copy of one
 	// press is told the same thing instead of spending again. See ledger.go.
 	ledger *ledger
-	// saver is nil unless allow-edit is on, which closes both settings doors
-	// the way a nil redeemer closes the redeem ones. See settings.go.
-	saver Saver
 }
 
 // Redeemer is the one action this API can take on the world. It is an interface
@@ -125,6 +129,26 @@ func (a *API) SetRedeemer(r Redeemer) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.redeemer = r
+}
+
+// Refresher asks Quota Cache to poll one credential now, then every other one,
+// so the card shows what a spent reset changed within a minute rather than at
+// the next scheduled poll. It reports whether a Quota Cache that acts on the
+// request has it and can poll the account within about a minute, and if so
+// the instant, by CPA's clock, the request was made: Quota Cache polls the
+// account no earlier than that. It is an interface for the same reasons
+// Redeemer is: this package holds no file and no clock, and a test can see
+// what was asked.
+type Refresher interface {
+	RequestRefresh(provider, authIndex string) (time.Time, bool)
+}
+
+// SetRefresher installs, or with nil removes, the refresh request made after
+// a press that spent, or may have spent, a reset.
+func (a *API) SetRefresher(r Refresher) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refresher = r
 }
 
 // Disable and Enable close and reopen every route. A plugin turned off in
@@ -221,19 +245,26 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	if disabled {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "disabled"})
 	}
-	// Four paths write. /redeem accepts only POST, on both trees, and so does
-	// /settings, on the management tree only. /spend and /save-settings accept
-	// only GET, on the resource tree only, because CPA dispatches nothing else
-	// there (pluginhost/management.go:295-297). They act only with the web
-	// token and a body carried in a header. No path both reads and writes.
+	// The two settings doors of quota-glance 0.7 stay registered, so a route
+	// CPA dispatches keeps a plugin to answer it, and answer before anything
+	// in the request is read. API credit amounts, refill dates, Console
+	// readings and renewal dates are saved on Quota Cache's page now. 410, not
+	// 404: CPA answers a path no plugin matched with an empty 404 of its own,
+	// so this body is what shows CPA still dispatches here.
+	if req.Path == a.managementPath("/settings") || req.Path == a.resourcePath("/save-settings") {
+		return jsonResponse(http.StatusGone, map[string]string{"error": "settings_moved", "movedTo": "quota-cache"})
+	}
+	// Two paths write. /redeem accepts only POST, on both trees. /spend
+	// accepts only GET, on the resource tree only, because CPA dispatches
+	// nothing else there (pluginhost/management.go:295-297); it acts only with
+	// the web token and a body carried in a header. No path both reads and
+	// writes.
 	if req.Method == http.MethodPost {
 		switch req.Path {
 		case a.managementPath("/redeem"):
 			return a.redeemResponse(req, now, false)
 		case a.resourcePath("/redeem"):
 			return a.redeemResponse(req, now, true)
-		case a.managementPath("/settings"):
-			return a.settingsResponse(req, now)
 		}
 		return jsonResponse(http.StatusNotFound, map[string]string{"error": "not_found"})
 	}
@@ -261,8 +292,6 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 		return a.tokenSummaryResponse(req, now)
 	case a.resourcePath("/spend"):
 		return a.spendResponse(req, now)
-	case a.resourcePath("/save-settings"):
-		return a.saveSettingsResponse(req, now)
 	case a.managementPath("/health"):
 		return a.healthResponse()
 	case a.managementPath("/windows"):
@@ -498,7 +527,7 @@ func (a *API) spend(redeemer Redeemer, p press) protocol.ManagementResponse {
 		// which may have happened after the claim was sent, so the copies are
 		// told the outcome is unknown rather than given an empty success.
 		if answer.StatusCode == 0 {
-			answer = jsonResponse(http.StatusBadGateway, map[string]any{"error": "outcome_unknown", "retryUntilEpoch": nil})
+			answer = jsonResponse(http.StatusBadGateway, map[string]any{"error": "outcome_unknown", "retryUntilEpoch": nil, "refreshRequested": false})
 		}
 		a.ledger.finish(entry, answer)
 	}()
@@ -506,11 +535,12 @@ func (a *API) spend(redeemer Redeemer, p press) protocol.ManagementResponse {
 	return answer
 }
 
-// redeemOnce checks the document and asks the redeemer, once.
+// redeemOnce checks the document and asks the redeemer, once. Every answer it
+// gives carries refreshRequested.
 func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.ManagementResponse {
 	credential, ok := redeemableCredential(a.Document(), credentialID)
 	if !ok {
-		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
+		return jsonResponse(http.StatusConflict, map[string]any{"error": "not_redeemable", "refreshRequested": false})
 	}
 
 	// The redeemer's own bound, which CPA does not shorten: it imposes no
@@ -520,8 +550,17 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 	ctx, cancel := context.WithTimeout(context.Background(), redeem.Timeout)
 	defer cancel()
 	result, err := redeemer.Redeem(ctx, credential.Provider, credential.ID)
+	// Asked once the provider has answered, and only when this press sent a
+	// spend that may have landed: the account's limits may have changed, and
+	// Quota Cache would otherwise not read them until its next poll, up to a
+	// poll interval away. A request that could not be made, or that no Quota
+	// Cache will act on, says so here and changes nothing else in the answer.
+	var refreshed refresh
+	if result.MayHaveSpent {
+		refreshed = a.requestRefresh(credential.Provider, credential.ID)
+	}
 	if err != nil {
-		return redeemError(err)
+		return redeemError(err, refreshed)
 	}
 	answer := map[string]any{
 		// Which provider answered, so the client can word the outcome in that
@@ -537,6 +576,9 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 		// minutes is worse than one that says why.
 		"snapshotPending": true,
 	}
+	// Whether Quota Cache was asked to poll this account now, so the page can
+	// say the card updates within a minute rather than at that next poll.
+	refreshed.addTo(answer)
 	// Present only on an outcome that touched, or deliberately left, CPA's
 	// routing cooldown on the credential. Anything but "cleared" is a reset
 	// spent with CPA still skipping the account until its cooldown ends: a
@@ -546,6 +588,40 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 		answer["cooldown"] = result.Cooldown
 	}
 	return jsonResponse(http.StatusOK, answer)
+}
+
+// refresh is what a press's answer says of the refresh it asked for. The zero
+// value is none asked for.
+type refresh struct {
+	requested bool
+	at        time.Time
+}
+
+// addTo sets refreshRequested on answer, and beside a true one
+// refreshRequestedAtEpoch: the request's instant by CPA's clock, which is the
+// clock Quota Cache stamps its observations with. The page waits for an
+// observation of the account from that second on. That needs no browser
+// clock, which may be minutes off CPA's, and only a poll begun in the same
+// second can be from before the provider answered. The ledger replays the
+// answer whole, so a copy of the press names the instant of the first one's
+// request, which Quota Cache may long since have acted on.
+func (r refresh) addTo(answer map[string]any) {
+	answer["refreshRequested"] = r.requested
+	if r.requested {
+		answer["refreshRequestedAtEpoch"] = r.at.Unix()
+	}
+}
+
+// requestRefresh asks the installed refresher, if there is one.
+func (a *API) requestRefresh(provider, authIndex string) refresh {
+	a.mu.RLock()
+	refresher := a.refresher
+	a.mu.RUnlock()
+	if refresher == nil {
+		return refresh{}
+	}
+	at, ok := refresher.RequestRefresh(provider, authIndex)
+	return refresh{requested: ok, at: at}
 }
 
 // redeemableCredential finds the credential the document says can be redeemed
@@ -583,19 +659,24 @@ func redeemableCredential(doc aggregate.Document, id string) (aggregate.Credenti
 // instant rather than as "ten minutes" a client would count from the answer.
 // retry_window_closed is the same uncertainty with that window gone: the next
 // press is a new claim.
-func redeemError(err error) protocol.ManagementResponse {
+//
+// refreshed is whether Quota Cache was asked to poll the account, which only a
+// press that may have spent does, and every answer here says.
+func redeemError(err error, refreshed refresh) protocol.ManagementResponse {
+	status, body := http.StatusBadGateway, map[string]any{}
+	refreshed.addTo(body)
 	switch {
 	case errors.Is(err, redeem.ErrInFlight):
-		return jsonResponse(http.StatusConflict, map[string]string{"error": "already_in_flight"})
+		status, body["error"] = http.StatusConflict, "already_in_flight"
 	case errors.Is(err, redeem.ErrUnsupportedProvider):
-		return jsonResponse(http.StatusConflict, map[string]string{"error": "not_redeemable"})
+		status, body["error"] = http.StatusConflict, "not_redeemable"
 	case errors.Is(err, redeem.ErrNoAccessToken), errors.Is(err, redeem.ErrNoAccountID),
 		// The credential can no longer be used for the claim left unresolved
 		// on it: it now signs in as a different account. Nothing was sent.
 		errors.Is(err, redeem.ErrIdentityChanged):
-		return jsonResponse(http.StatusConflict, map[string]string{"error": "credential_unusable"})
+		status, body["error"] = http.StatusConflict, "credential_unusable"
 	case errors.Is(err, redeem.ErrRetryWindowClosed):
-		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "retry_window_closed"})
+		body["error"] = "retry_window_closed"
 	case errors.Is(err, redeem.ErrOutcomeUnknown):
 		// Null when the redeemer did not say, which a client must read as no
 		// promise at all rather than as the usual window.
@@ -604,14 +685,15 @@ func redeemError(err error) protocol.ManagementResponse {
 		if errors.As(err, &unknown) && !unknown.RetryUntil.IsZero() {
 			until = unknown.RetryUntil.Unix()
 		}
-		return jsonResponse(http.StatusBadGateway, map[string]any{"error": "outcome_unknown", "retryUntilEpoch": until})
+		body["error"], body["retryUntilEpoch"] = "outcome_unknown", until
 	case errors.Is(err, redeem.ErrRateLimited):
-		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_rate_limited"})
+		body["error"] = "provider_rate_limited"
 	case errors.Is(err, redeem.ErrRefused):
-		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_refused"})
+		body["error"] = "provider_refused"
 	default:
-		return jsonResponse(http.StatusBadGateway, map[string]string{"error": "provider_unavailable"})
+		body["error"] = "provider_unavailable"
 	}
+	return jsonResponse(status, body)
 }
 
 // tokenSummaryResponse is the public, plugin-authenticated path.

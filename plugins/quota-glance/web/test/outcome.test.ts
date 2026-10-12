@@ -14,6 +14,8 @@ function result(fields: Partial<RedeemResult>): RedeemResult {
     windowsReset: 2,
     remainingCount: 1,
     snapshotPending: true,
+    refreshRequested: false,
+    refreshRequestedAtEpoch: null,
     provider: "claude",
     replayed: false,
     cooldown: "",
@@ -85,5 +87,47 @@ describe("CPA's cooldown after a reset", () => {
       assert.doesNotMatch(describeOutcome(answer, "claude"), /CPA’s cooldown|Clear cooldown/, outcome)
       assert.equal(partlyApplied(answer), false, outcome)
     }
+  })
+})
+
+describe("after Quota Cache was asked to refresh", () => {
+  const REFRESHING = "Quota Cache is checking this account now, then every other one. The card updates within a minute."
+
+  test("a spent reset says the card updates within a minute, in place of the next poll", () => {
+    const text = describeOutcome(result({ refreshRequested: true }), "claude")
+    assert.equal(text, `Reset applied. 1 banked reset left. ${REFRESHING}`)
+    assert.doesNotMatch(text, /next quota-cache poll/)
+  })
+
+  test("every outcome that spent says so, cooldown and all", () => {
+    for (const answer of [
+      result({ outcome: "nothingToReset", remainingCount: 0, refreshRequested: true }),
+      result({ outcome: "alreadyUsed", cooldown: "cleared", refreshRequested: true }),
+      result({ provider: "codex", cooldown: "unconfirmed", refreshRequested: true }),
+      result({ cooldown: "failed", refreshRequested: true }),
+    ]) {
+      const text = describeOutcome(answer, answer.provider)
+      assert.ok(text.includes(REFRESHING), text)
+      assert.doesNotMatch(text, /next quota-cache poll/)
+    }
+  })
+
+  test("without it, the sentence is the one it always was", () => {
+    for (const fields of [{}, { cooldown: "cleared" }, { outcome: "nothingToReset" }] as Partial<RedeemResult>[]) {
+      const text = describeOutcome(result(fields), "claude")
+      assert.match(text, /The card updates at the next quota-cache poll\./)
+      assert.ok(!text.includes(REFRESHING), text)
+    }
+  })
+
+  // The earlier press may be minutes old, and Quota Cache may have polled the
+  // account long since: "now" and "within a minute" would not be true of it.
+  test("a replayed answer says it as what the earlier press came to, when it was asked", () => {
+    const text = describeOutcome(result({ replayed: true, refreshRequested: true }), "claude")
+    assert.equal(
+      text,
+      "From your earlier press: Reset applied. 1 banked reset left. Quota Cache was asked then to check this account, then every other one.",
+    )
+    assert.ok(!text.includes(REFRESHING), text)
   })
 })

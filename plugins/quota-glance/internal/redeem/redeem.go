@@ -244,6 +244,13 @@ type Result struct {
 	// CooldownUnconfirmed on a reset reported without that confirmation. Empty
 	// on every other outcome, which leaves the cooldown untouched.
 	Cooldown string
+	// MayHaveSpent means this press sent a spend request and nothing in its
+	// answer proves that request spent nothing: the provider accepted it, said
+	// the repeated claim was already spent, or gave no answer this code can
+	// trust. Unlike the rest of Result it is also set beside ErrOutcomeUnknown
+	// and ErrRetryWindowClosed. It is false on every press that sent no spend
+	// request, or had it refused, whatever an earlier press did.
+	MayHaveSpent bool
 }
 
 // Redeemer spends banked resets for one CPA instance. One lives for the life of
@@ -340,6 +347,13 @@ type answer struct {
 	confirmed bool
 }
 
+// spent reports whether the answer says this claim used a reset. Every settled
+// answer does but one: Claude's "already used" on a fresh claim, which says
+// another hand spent the grant first.
+func (a answer) spent() bool {
+	return a.kind == answerSettled && (a.confirmed || a.result.Outcome != OutcomeAlreadyUsed)
+}
+
 type answerKind int
 
 const (
@@ -394,7 +408,7 @@ func (r *Redeemer) spend(ctx context.Context, authIndex string, claim pendingCla
 	if err != nil {
 		// A transport failure or a timeout after the request may have left. The
 		// provider may have acted on it; nothing here can tell.
-		return Result{}, r.stillUnknown(authIndex, claim)
+		return Result{MayHaveSpent: true}, r.stillUnknown(authIndex, claim)
 	}
 	got := interpret(response)
 	switch {
@@ -404,12 +418,15 @@ func (r *Redeemer) spend(ctx context.Context, authIndex string, claim pendingCla
 		// may turn the next press into a repeat of it.
 		r.forget(authIndex)
 		result := got.result
+		result.MayHaveSpent = got.spent()
 		if got.err == nil {
 			result.Cooldown = r.afterSpend(ctx, authIndex, got)
 		}
 		return result, got.err
 	default:
-		return Result{}, r.stillUnknown(authIndex, claim)
+		// No answer to trust, or a repeat refused: the refusal proves this
+		// request spent nothing, whatever the claim it repeats did.
+		return Result{MayHaveSpent: got.kind == answerUnknown}, r.stillUnknown(authIndex, claim)
 	}
 }
 

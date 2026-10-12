@@ -1,0 +1,93 @@
+{
+  "Revision": 12,
+  "APICredits": {
+    "org-17629bebcd24": {
+      "MonthlyUSD": "260.50",
+      "Renews": "",
+      "Reading": null,
+      "Rev": 5,
+      "UpdatedAt": "2026-10-02T10:15:00Z"
+    },
+    "org-29b0aa7c969d": {
+      "MonthlyUSD": "",
+      "Renews": "2026-10-15",
+      "Reading": {
+        "RemainingUSD": "143.20",
+        "At": "2026-10-09T13:20:00Z",
+        "EnteredAt": "2026-10-09T13:24:10Z",
+        "OrganizationID": "00000000-0000-4000-8000-0000000000c4",
+        "Baseline": {
+          "DayStart": "2026-10-09T00:00:00Z",
+          "Until": "2026-10-09T13:00:00Z",
+          "Usage": [
+            {
+              "model": "claude-opus-5-5",
+              "requests": 12,
+              "input": 1000000,
+              "output": 100000
+            },
+            {
+              "model": "claude-sonnet-5-5",
+              "requests": 3,
+              "input": 1200,
+              "output": 800,
+              "cache_read": 400,
+              "cache_write": 50
+            }
+          ]
+        }
+      },
+      "Rev": 11,
+      "UpdatedAt": "2026-10-09T13:24:10Z"
+    },
+    "org-62438e0b3ab8": {
+      "MonthlyUSD": "",
+      "Renews": "",
+      "Reading": {
+        "RemainingUSD": "88.05",
+        "At": "2026-10-10T18:05:00Z",
+        "EnteredAt": "2026-10-10T18:20:00Z",
+        "OrganizationID": "00000000-0000-4000-8000-0000000000c5",
+        "Baseline": {
+          "DayStart": "2026-10-10T00:00:00Z",
+          "Until": "2026-10-10T18:00:00Z",
+          "Usage": []
+        }
+      },
+      "Rev": 12,
+      "UpdatedAt": "2026-10-10T18:20:00Z"
+    },
+    "org-7868ae291692": {
+      "MonthlyUSD": "200",
+      "Renews": "",
+      "Reading": null,
+      "Rev": 3,
+      "UpdatedAt": "2026-10-01T09:00:00Z"
+    },
+    "org-9c5ecbf49b93": {
+      "MonthlyUSD": "",
+      "Renews": "2026-10-29",
+      "Reading": null,
+      "Rev": 7,
+      "UpdatedAt": "2026-10-03T11:30:00Z"
+    }
+  },
+  "Renewals": {
+    "0123456789abcdef": {
+      "Date": "2026-10-29",
+      "Rev": 2,
+      "UpdatedAt": "2026-09-20T08:00:00Z"
+    },
+    "5f2b8c41d09e7a36": {
+      "Date": "2026-09-10",
+      "Rev": 4,
+      "UpdatedAt": "2026-09-25T08:00:00Z"
+    },
+    "fedcba9876543210": {
+      "Date": "2027-01-05",
+      "Rev": 9,
+      "UpdatedAt": "2026-10-05T08:00:00Z"
+    }
+  },
+  "Unreadable": false
+}

@@ -55,3 +55,14 @@ jobs:
 
       - name: Check smoke script syntax
         run: bash -n scripts/smoke-test.sh
+
+      # Mirrors the monorepo's .github/workflows/reset-priority-ci.yml, which
+      # is the one GitHub runs: the API credit router inside pinned CPA v8.0.4,
+      # then its per-pick cost, reported and never gated.
+      - name: API credit router inside real CPA (pinned v8.0.4)
+        run: |
+          docker pull eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+          make smoke
+
+      - name: Router Pick benchmark (reported, not gated)
+        run: make bench

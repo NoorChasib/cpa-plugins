@@ -19,8 +19,11 @@ import (
 // snapshot, so the snapshot's readers, its size limit and its write cadence are
 // unaffected by it.
 //
-// quota-cache counts tokens and never prices them; a consumer prices them with
-// its own table. Every time in a meter is UTC, truncated to the second.
+// The meter holds token counts, never prices. quota-cache prices them with its
+// own table and publishes the result in the credit state (CreditsPath,
+// LoadCredits, CreditsAt), so a consumer reads an organization's credit there
+// and never prices the meter itself, and every consumer shows the same
+// figures. Every time in a meter is UTC, truncated to the second.
 
 // Meter file limits. They bound the file to MaxMeterBytes whatever traffic
 // CPA carries; quota-cache enforces them and a reader may rely on them.
@@ -33,6 +36,7 @@ const (
 	MaxMeterUsageEntries   = 6000    // usage entries across every bucket of every organization
 	MaxMeterUnlinked       = 8       // unlinked organizations listed
 	MaxMeterAuths          = 64      // auth indexes remembered
+	MaxMeterAuthIDs        = 64      // config API-key auth IDs remembered; same bound as MaxMeterAuths
 	MaxMeterGaps           = 8       // gaps kept
 	MaxMeterBytes          = 2 << 20 // the largest meter file LoadMeter reads
 )
@@ -42,7 +46,7 @@ const (
 	// MeterOtherModel is the model of an entry that sums requests whose model
 	// name could not be kept: one NormalizeMeterModel refused, or a pair that
 	// arrived when its bucket already held MaxMeterUsagePerBucket entries.
-	// It is not a model, and a consumer cannot price it.
+	// It is not a model, so it has no price.
 	MeterOtherModel = "(other)"
 	// MeterPromptOver100K is the prompt class of a Claude Haiku 5.5 request
 	// whose prompt (input + cache read + cache write) is over 100,000 tokens,
@@ -56,8 +60,13 @@ const (
 	MeterStopShutdown = "shutdown" // CPA shut quota-cache down
 	MeterStopQuiesce  = "quiesce"  // CPA quiesced quota-cache, to replace or unload it
 	MeterStopDisabled = "disabled" // quota-cache was configured with enabled: false
-	MeterStopNoItems  = "no_items" // claude-api-credits was left with no items
-	MeterStopFailed   = "failed"   // the meter stopped itself after an internal error
+	// MeterStopNoItems is the stop of a running meter whose last organization
+	// was removed from quota-cache's page, or whose organizations file became
+	// unreadable. quota-cache 0.1.x wrote it when claude-api-credits was left
+	// with no items. A quota-cache that starts with no organization opens no
+	// meter, so the file keeps the reason its last run wrote.
+	MeterStopNoItems = "no_items"
+	MeterStopFailed  = "failed" // the meter stopped itself after an internal error
 	// MeterGapUncleanStop is the reason of a gap whose meter never said it
 	// stopped: the process ended without a final save. The gap runs from the
 	// last save.
@@ -167,6 +176,18 @@ type APIMeter struct {
 	// Auths maps a CPA auth index to the organization last seen on it, at most
 	// MaxMeterAuths. Never null.
 	Auths map[string]MeterAuth `json:"auths"`
+	// AuthIDsSince is when this file began recording AuthIDs: the first start
+	// of the meter of quota-cache 0.2.0 or newer on it. Nil means its writer
+	// records none. quota-cache starts its meter only while it is enabled and
+	// an organization is linked, so a file an older one left stopped stays
+	// without it until then.
+	AuthIDsSince *time.Time `json:"auth_ids_since,omitempty"`
+	// AuthIDs maps the auth ID of a Claude API key from CPA's configuration
+	// (ConfigAPIKeyAuthID) to the auth index last seen with it, at most
+	// MaxMeterAuthIDs. Two IDs can share one index (same key, different
+	// prefix, proxy or headers), so it is keyed by ID. Never null after
+	// LoadMeter.
+	AuthIDs map[string]MeterAuthID `json:"auth_ids"`
 }
 
 // fill replaces the nil maps and slices a file may hold with empty ones, so a
@@ -179,6 +200,9 @@ func (m *APIMeter) fill() {
 	}
 	if m.Auths == nil {
 		m.Auths = map[string]MeterAuth{}
+	}
+	if m.AuthIDs == nil {
+		m.AuthIDs = map[string]MeterAuthID{}
 	}
 	for id, org := range m.Organizations {
 		org.Days, org.Hours = nonNil(org.Days), nonNil(org.Hours)
@@ -280,6 +304,57 @@ type MeterUnlinked struct {
 type MeterAuth struct {
 	OrganizationID string    `json:"organization_id"` // "" for an auth whose responses never name one: not Anthropic's
 	SeenAt         time.Time `json:"seen_at"`
+}
+
+// MeterAuthID is what the meter learned about one CPA auth ID: the auth index
+// CPA reported with it and the latest outcomes of its attempts. The outcomes
+// are CPA facts; no response body, header or credential is kept.
+type MeterAuthID struct {
+	AuthIndex string    `json:"auth_index"`
+	SeenAt    time.Time `json:"seen_at"`
+	// LastSuccessAt and LastFailureAt are the latest successful and failed
+	// attempts. A failure here excludes a low-credit refusal (the
+	// organization's refusal fields already record it) and a client
+	// cancellation (499).
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+	LastFailureAt *time.Time `json:"last_failure_at,omitempty"`
+	// Failures counts such failures since the latest success, saturating at
+	// 65535.
+	Failures uint16 `json:"failures,omitempty"`
+}
+
+// configAPIKeyPrefix is the kind CPA's stable ID generator gives a Claude API
+// key from its configuration, with the separator before the hash.
+const configAPIKeyPrefix = "claude:apikey:"
+
+// ConfigAPIKeyAuthID reports whether id is the auth ID CPA gives a Claude API
+// key from its own configuration: "claude:apikey:" followed by 12 lower-case
+// hex digits, optionally followed by "-" and a count from 1 to 9999 (CPA's
+// suffix for an exact duplicate). Such an id is a truncated hash, never a
+// file name or an e-mail address.
+func ConfigAPIKeyAuthID(id string) bool {
+	// 14 bytes of prefix and 12 of hash, then "-" and one to four digits.
+	if len(id) < len(configAPIKeyPrefix)+12 || len(id) > len(configAPIKeyPrefix)+12+5 || id[:len(configAPIKeyPrefix)] != configAPIKeyPrefix {
+		return false
+	}
+	hash, suffix := id[len(configAPIKeyPrefix):len(configAPIKeyPrefix)+12], id[len(configAPIKeyPrefix)+12:]
+	for i := range len(hash) {
+		if c := hash[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	if suffix == "" {
+		return true
+	}
+	if len(suffix) < 2 || suffix[0] != '-' || suffix[1] < '1' || suffix[1] > '9' {
+		return false
+	}
+	for i := 2; i < len(suffix); i++ {
+		if suffix[i] < '0' || suffix[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // MeterDayStart is 00:00 UTC of t's UTC day: the Start of the day bucket that

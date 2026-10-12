@@ -16,19 +16,28 @@ the CPA sidebar, a browser tab, a phone or the menu bar app alike. It happens on
 that one request and on no timer — see [Banked resets](#banked-resets), or set
 `allow-redeem: false` to show the count without the button.
 
-The dashboard also saves a few values you type into it — an API credit's
-amount, refill date and Console reading, and a Claude renewal date — to
-`settings.json` in `data-dir`. That writes one local file and contacts nothing;
-set `allow-edit: false` to turn the editor off.
+Claude API credit amounts, refill dates and Console readings, and Claude
+renewal dates, are shown here and **edited on Quota Cache's page** in the CPA
+sidebar. Quota Cache keeps them, works out each organization's credit, and
+publishes the result; Quota Glance shows it read-only and writes none of it.
+Spending the API credit that refills soonest first is Reset Priority's
+`route-api-credits`, not a Quota Glance setting; its setup is in
+[Reset Priority's README](../reset-priority/README.md).
 
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
-- Quota Cache **0.1.14 or newer**, with `claude-api-credits` configured, for
-  the [Monthly API Credit](#claude-api-credits). Without the setting
-  `apiCredits` is `null`, the card is absent and nothing else changes. Against
-  Quota Cache 0.1.13 the card lists each organization as needing an update,
-  because 0.1.13 reads the Admin API cost report this card no longer uses.
+- Quota Cache **0.2.0 or newer**, with Claude Console organizations added on
+  its page as [its README](../quota-cache/README.md#claude-api-credits-optional)
+  says, for the [Monthly API Credit](#claude-api-credits) and for renewal dates
+  entered on its page. Without organizations `apiCredits` is `null`, the card
+  is absent and nothing else changes. Against an older Quota Cache the card
+  lists each organization with no figures and says to update Quota Cache, and
+  renewal dates are reported or estimated only.
+- Quota Cache **0.2.0 or newer**, running, for the poll a spent
+  [banked reset](#banked-resets) asks for, organizations or not. Against an
+  older or stopped Quota Cache the card updates at its next scheduled poll,
+  and the message after the reset says so.
 - Quota Cache **0.1.10 or newer** for banked Claude resets, Claude plan names,
   Claude's estimated renewal date, Grok's subscription display name, and
   Codex's subscription renewal date.
@@ -68,8 +77,11 @@ for a loaded native library. After an update, reload any open dashboard tab and
 use **Reload Page** in the menu bar app: a page already open keeps running the
 version it loaded.
 
-Then merge [`config.example.yaml`](config.example.yaml) into your plugin
-configuration, keeping your existing options:
+Then set its options. On CPA's Plugins page, open quota-glance's
+**Edit config**. The form saves them to CPA's configuration for you. It shows
+`allow-redeem` off until you save it once, though it defaults to on. As
+written in the configuration file, keeping your existing options
+([`config.example.yaml`](config.example.yaml) explains each):
 
 ```yaml
 plugins:
@@ -82,7 +94,6 @@ plugins:
       web-token: ""
       stale-after: 45m
       allow-redeem: true
-      allow-edit: true
       openrouter-warn-below: 5
 ```
 
@@ -102,19 +113,16 @@ empty and one is generated and printed **once** in the CPA log at startup, then
 persisted under `data-dir` so restarts keep it. Either way it is typed in once
 per browser and saved there, and a browser that has both uses the password.
 
-It also spends banked resets (**Use one**) unless `allow-redeem: false`, and
-saves the dashboard's settings unless `allow-edit: false`. Treat it as a
-password: anyone holding it can view the dashboard, use a reset, and change the
-API credit amounts and dates it shows. If it was ever shared with someone who
-should not have it, set `web-token` to a new value, or set `allow-redeem: false`
-and `allow-edit: false`, which remove the buttons everywhere.
+It also spends banked resets (**Use one**) unless `allow-redeem: false`. Treat
+it as a password: anyone holding it can view the dashboard and use a reset. If
+it was ever shared with someone who should not have it, set `web-token` to a
+new value, or set `allow-redeem: false`, which removes the button everywhere.
+It cannot change API credit amounts or dates: those are edited only on Quota
+Cache's page, which needs a console session.
 
-`allow-edit` (default `true`) lets the dashboard set API credit amounts, refill
-dates, Console readings and Claude renewal dates. What you set is kept in
-`data-dir/settings.json` and wins over Quota Cache's configuration; the config
-value is always shown beside it, with **Use config** to go back to it. With
-`allow-edit: false` the editor is gone and anything already saved still
-applies. Quota Glance 0.6.1 and older reject the key.
+`allow-edit` is ignored since 0.8.0. It is still accepted, so a configuration
+from 0.7 loads, and each time the configuration is saved with it set, the CPA
+log says it does nothing; remove it when convenient.
 
 ## Routes
 
@@ -123,15 +131,15 @@ applies. Quota Glance 0.6.1 and older reject the key.
 | `GET /v0/resource/plugins/quota-glance/app` | none | The page. Contains no data. |
 | `GET /v0/management/plugins/quota-glance/summary` | CPA management key | The document the page renders. Supports `If-None-Match`. |
 | `GET /v0/resource/plugins/quota-glance/summary` | `Authorization: Bearer <web-token>` | The same document, for a reader signed in with the dashboard password. |
-| `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error. |
+| `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error, and Quota Cache's credit state. |
 | `GET /v0/management/plugins/quota-glance/windows` | CPA management key | Observed window keys and which credentials report them. |
 | `POST /v0/management/plugins/quota-glance/redeem` | CPA management key | Spend one banked Codex or Claude rate-limit reset. |
 | `GET /v0/resource/plugins/quota-glance/spend` | `Authorization: Bearer <web-token>` + `X-Quota-Glance-Spend` | Spend one banked reset, for a reader signed in with the dashboard password. |
 | `POST /v0/resource/plugins/quota-glance/redeem` | `Authorization: Bearer <web-token>` | Registered; CPA v8.0.15 does not dispatch it. |
-| `POST /v0/management/plugins/quota-glance/settings` | CPA management key | Save values set on the dashboard. |
-| `GET /v0/resource/plugins/quota-glance/save-settings` | `Authorization: Bearer <web-token>` + `X-Quota-Glance-Settings` | The same save, for a reader signed in with the dashboard password. |
+| `POST /v0/management/plugins/quota-glance/settings` | CPA management key | Retired: answers `410 settings_moved`. Values are saved on Quota Cache's page. |
+| `GET /v0/resource/plugins/quota-glance/save-settings` | none | Retired, the same. |
 
-**One document, two doors, and both can spend and save.** The dashboard password goes to
+**One document, two doors, and both can spend.** The dashboard password goes to
 the resource routes. CPA authenticates nothing there, so the plugin checks it
 itself: compared in constant time against a stored SHA-256, with failed attempts
 counted globally rather than per caller — the ABI hands the plugin only headers
@@ -156,7 +164,8 @@ Resource routes return 404 while CPA's built-in home page is enabled. The plugin
 cannot read that setting, so if `/app` 404s, that is the first thing to check.
 
 **There is deliberately no refresh route, and no refresh button.** Nothing here
-can make data fresher; Quota Cache owns the schedule. The document reports
+can make data fresher, apart from the poll a spent banked reset asks for; Quota
+Cache owns the schedule. The document reports
 `observedAtEpoch` and `nextAttemptEpoch`, and the dashboard prints them as
 "observed 4m ago · next attempt in 11m", instead of a control that would lie.
 
@@ -264,7 +273,13 @@ A few things the design refuses to guess about:
 - **The count on the card does not drop straight away.** It comes from Quota
   Cache's snapshot, which owns the schedule, so it corrects at the next poll —
   and the message after a redemption says so rather than letting the page
-  disagree with itself.
+  disagree with itself. After a reset is spent, Quota Glance asks Quota Cache
+  to poll that account at once, then every other one. With Quota Cache 0.2.0
+  or newer running, that poll usually comes within a minute, and the account
+  shows **Checking the new limits…** until it does. When Quota Cache cannot
+  poll that soon, held back by a `request-spacing` over a minute or by a 429
+  pause on the provider, the message says the card updates at the next poll
+  instead.
 - **A request that never completed is not a request that did nothing.** When
   no answer anyone can trust came back — from the provider to the plugin, or
   from the plugin to the page — the reset may already be spent, so the
@@ -316,9 +331,10 @@ its first poll. Without a key there is no card and the page is unchanged.
 
 The card shows the dollar amount left: what you have bought, minus what you
 have spent. It turns **amber below `openrouter-warn-below`** (default `$5`) and
-**red once nothing is left**, whatever the threshold. Change the threshold in
-the plugin's settings in the CPA panel; it applies without a restart. Set it
-to `0` to keep the card green until the balance runs out.
+**red once nothing is left**, whatever the threshold. To change the threshold,
+on CPA's Plugins page, open quota-glance's **Edit config** and set
+`openrouter-warn-below`; it applies without a restart. Set it to `0` to keep
+the card green until the balance runs out.
 
 It is a figure, not a bar. OpenRouter reports only lifetime totals, so a
 percentage would be a share of everything you have ever bought, which says
@@ -332,33 +348,36 @@ for the fields.
 
 The **Monthly API Credit** card estimates how much of each Claude Console
 organization's monthly API credit is left, for the credit a Max or Team plan
-deposits each billing cycle. It needs Quota Cache **0.1.14 or newer** with
-`claude-api-credits` configured, as described in
-[its README](../quota-cache/README.md#claude-api-credits-optional): one item
-per organization, naming its Organization ID. Neither plugin asks Anthropic
+deposits each billing cycle. It needs Quota Cache **0.2.0 or newer** with the
+organizations added on its page, as described in
+[its README](../quota-cache/README.md#claude-api-credits-optional): one per
+organization, with a label and its Organization ID. Neither plugin asks Anthropic
 anything and neither holds an Anthropic key.
 
 **Where the estimate comes from.** Quota Cache counts the tokens of every
-Claude API-key request CPA sends, per organization and model, and saves the
-count beside its snapshot. Quota Glance prices those tokens at Anthropic's list
-prices (the date is on the card) and subtracts them from the monthly credit
-since the cycle began. Every figure is marked as an estimate, with `≈` before
-the headline figure and "est." in the column heads: traffic that does not go
-through CPA, web search, code execution and a few other charges are not in the
-count.
+Claude API-key request CPA sends, per organization and model, prices them at
+Anthropic's list prices (the date is on the card), and subtracts them from the
+monthly credit since the cycle began. It publishes the result beside its
+snapshot, and Quota Glance shows it as published. Every figure is marked as an
+estimate, with `≈` before the headline figure and "est." in the column heads:
+traffic that does not go through CPA, web search, code execution and a few
+other charges are not in the count.
 
-**Set it up from the card.** Press **Edit credits & dates** to set each
-organization's monthly credit and the date it refills, if Quota Cache's config
-does not already say. What you set is saved in `settings.json` in `data-dir`
-and wins over the config; the config value stays visible beside it with **Use
-config**. An organization without a credit and either a refill date or a
-Console reading reads "not set" and is left out of the total.
+**Set it up on Quota Cache's page.** The organizations, and each one's monthly
+credit and the date it refills, are added on **Quota Cache**'s page in the CPA
+sidebar; Quota Cache 0.2.0 ignores `claude-api-credits` in its configuration.
+The card marks each value entered there. Signed in to CPA's console, the
+card's foot has **Edit in Quota Cache**, which opens that page in a new tab.
+From a phone, a bookmark or the menu bar the link is absent: Quota Cache's page
+needs a console session. An organization without a credit and either a refill
+date or a Console reading reads "not set" and is left out of the total.
 
 **Console readings correct it.** From time to time, copy what Console shows
-under Settings, Billing, Promotional credits into the row's **Console reading**,
-with the time you read it. From then on the card shows that amount less what
-was spent since, which corrects everything the count could not see. A reading
-from before the last refill is kept but no longer used.
+under Settings, Billing, Promotional credits into the organization's **Console
+reading** on Quota Cache's page, with the time you read it. From then on the
+card shows that amount less what was spent since, which corrects everything
+the count could not see. A reading from before the last refill is kept but no
+longer used.
 
 **Why a row says "incomplete".** Spend the count may be missing makes a row a
 bound: `≤` before what is left and `≥` before what is used. The usual cause is
@@ -368,22 +387,33 @@ made then are never counted. Quota Cache cannot tell that from CPA itself being
 down, so any stop that long counts. Brief restarts and plugin updates, under 5
 minutes, do not. Counting that began partway through a cycle does the same
 until there is a reading. **Enter a Console reading** and the row is exact
-again from that moment. A reading entered while Quota Cache is still stopped is
-saved, but the row stays incomplete until you enter one taken after it is
-counting again.
+again from that moment. A reading cannot be saved while Quota Cache is
+stopped: its page answers `503 cache_stopped`. Enter one once it is counting
+again.
 
 The card also says when Anthropic refused a request for low credit (the credit
 is shown as spent until a later request succeeds), names organizations that
-sent traffic through CPA without a `claude-api-credits` item, and turns amber
-when Quota Cache has not saved its count for `stale-after`.
+sent traffic through CPA without being set up in Quota Cache, and turns amber
+when Quota Cache's figures are older than `stale-after`.
 
-Claude subscription renewal dates in the **Accounts** card can be set the same
-way, with **Set renewal dates**, and replace the estimate from when the
+Claude subscription renewal dates are set on Quota Cache's page too. The
+**Accounts** card shows them in place of the estimate from when the
 subscription started. See
 [docs/summary-contract.md](docs/summary-contract.md#api-credits--claude-console-organizations)
-for the fields and
-[Saving settings](docs/summary-contract.md#saving-settings--post-settings-and-get-save-settings)
-for the save.
+for the fields and Quota Cache's
+[docs/credit-settings.md](../quota-cache/docs/credit-settings.md) for how they
+are saved.
+
+**Updating from Quota Glance 0.7.** Quota Cache 0.2.0 does not read the
+organizations in its own `claude-api-credits` or the values saved in Quota
+Glance 0.7, so they are entered again on Quota Cache's page before Quota Glance
+is updated. Follow
+[updating from Quota Glance 0.7](../quota-cache/README.md#updating-from-quota-glance-07)
+in Quota Cache's README, including what to write down before you start. Until
+Quota Glance is updated, save nothing in its editor: while only some
+organizations are added, Quota Glance 0.7.2 offers **Remove** for the others'
+saved values. Quota Glance 0.7's `settings.json` stays in `data-dir`, unread;
+rolling back to 0.7.2 shows its values again.
 
 ## The dashboard
 
@@ -520,7 +550,13 @@ against a pinned CPA image with synthetic credentials and no provider requests.
 `summary.json` (healthy) and `summary-degraded.json` (every degraded state).
 Both are byte-identical to what the summary route serves, and CI fails if a
 build stops reproducing them. Regenerating is a deliberate contract change —
-review the diff.
+review the diff. Their API credit cards are built from Quota Cache's committed
+credit states for the same fixtures, read from
+`../quota-cache/internal/credits/testdata/golden/`.
+
+`testdata/characterization/` holds each fixture's API credit card as Quota
+Glance 0.7's own pricing built it, before that pricing moved to Quota Cache. It
+is never regenerated: it is what both plugins' tests hold the moved figures to.
 
 To exercise the routes without a CPA instance:
 
@@ -530,7 +566,9 @@ curl -s -H 'Authorization: Bearer dev-token' \
   http://127.0.0.1:8787/v0/resource/plugins/quota-glance/summary
 ```
 
-Add `-redeem reset` (or any ending its `-help` lists) to offer the button and
-answer every press with a stand-in that contacts no provider, then open
+The API credit card comes from Quota Cache's committed credit state for the
+fixture, or from `-credits <file>`. Add `-redeem reset` (or any ending its
+`-help` lists) to offer the button and answer every press with a stand-in that
+contacts no provider, then open
 `http://127.0.0.1:8787/v0/resource/plugins/quota-glance/app?token=dev-token` to
 press **Use one** through the real handler.

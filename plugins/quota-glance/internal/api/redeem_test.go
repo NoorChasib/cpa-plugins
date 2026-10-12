@@ -259,11 +259,20 @@ func TestRedeemForwardsNoProviderText(t *testing.T) {
 		if code == "" || strings.Contains(string(res.Body), "sk-synthetic") || strings.Contains(string(res.Body), "12345") {
 			t.Fatalf("%v: body = %s", err, res.Body)
 		}
-		// A code, and beside outcome_unknown the deadline the plugin computed
+		// A code, whether Quota Cache was asked to refresh and, if it was,
+		// when, and beside outcome_unknown the deadline the plugin computed
 		// itself. Nothing else.
 		for key, value := range body {
 			switch {
 			case key == "error":
+			case key == "refreshRequested":
+				if _, flag := value.(bool); !flag {
+					t.Fatalf("%v: refreshRequested = %v", err, value)
+				}
+			case key == "refreshRequestedAtEpoch" && body["refreshRequested"] == true:
+				if _, number := value.(float64); !number {
+					t.Fatalf("%v: refreshRequestedAtEpoch = %v", err, value)
+				}
 			case key == "retryUntilEpoch" && code == "outcome_unknown":
 				if _, number := value.(float64); value != nil && !number {
 					t.Fatalf("%v: retryUntilEpoch = %v", err, value)

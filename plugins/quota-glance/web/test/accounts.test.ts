@@ -13,13 +13,12 @@ import {
   accountFlags,
   accountsCardNeeded,
   lastFailure,
-  renewalEstimateAt,
+  RENEWAL_ENTERED_TITLE,
   renewalFoot,
   renewalMark,
-  renewalOrphanText,
-  shortCredentialId,
-  yearlyEstimate,
+  renewalTrouble,
 } from "../src/lib/accounts.ts"
+import { editingTrouble } from "../src/lib/apicredits.ts"
 import type { Activity, ActivityBucket, Credential, Summary } from "../src/lib/types.ts"
 
 const quiet: ActivityBucket = { success: 0, failed: 0, intensity: 0 }
@@ -101,16 +100,17 @@ describe("accountFlags", () => {
   })
 })
 
-describe("renewal marks (F.3)", () => {
+describe("renewal marks", () => {
   const doc = (name: string) =>
     JSON.parse(readFileSync(new URL(`../../testdata/golden/${name}.json`, import.meta.url), "utf8")) as Summary
   const golden = doc("summary")
   const degraded = doc("summary-degraded")
   const credential = (id: string) => golden.credentials.find((one) => one.id === id)!
 
-  test("a date set here carries the dot and is read on the UTC calendar", () => {
+  test("a date entered on Quota Cache's page carries the dot and is read on the UTC calendar", () => {
     const mark = renewalMark(credential("5f2b8c41d09e7a36"))
     assert.deepEqual(mark, { atEpoch: 1791590400, source: "dashboard", estimated: false, setHere: true, utc: true })
+    assert.equal(RENEWAL_ENTERED_TITLE, "Entered in Quota Cache. Replaces the estimate.")
   })
 
   test("an estimate carries ~, in the reader's own zone", () => {
@@ -130,49 +130,47 @@ describe("renewal marks (F.3)", () => {
     assert.equal(renewalMark({ renewalAtEpoch: 1, renewalEstimated: true })?.estimated, true)
   })
 
-  test("a date set here names the estimate Use estimate returns to (F.3)", () => {
-    // set here · estimate ~Oct 3 · Use estimate
-    assert.equal(renewalEstimateAt(credential("5f2b8c41d09e7a36")), Date.UTC(2026, 9, 3, 11, 20) / 1000)
-    // An estimate names itself; a known date with no start names none.
-    const estimated = credential("claude-sierra@example.com.json")
-    assert.equal(renewalEstimateAt(estimated), estimated.renewalAtEpoch)
-    assert.equal(renewalEstimateAt(credential("codex-noor@example.com.json")), null)
-    assert.equal(renewalEstimateAt(credential("claude-noor@example.com.json")), null)
-    // A plugin too old to send one beside a date set here: none to name.
-    assert.equal(renewalEstimateAt({ renewalAtEpoch: 1791590400, renewalSource: "dashboard" }), null)
-  })
-
-  test("an estimate more than a month off is a yearly plan's", () => {
-    const now = golden.generatedAtEpoch
-    assert.equal(yearlyEstimate(credential("claude-agency@example.com.json"), now), true)
-    assert.equal(yearlyEstimate(credential("claude-sierra@example.com.json"), now), false)
-    assert.equal(yearlyEstimate(credential("5f2b8c41d09e7a36"), now), false)
-  })
-
-  test("the foot explains what the rows show, and offers the editor only when it may", () => {
+  test("the foot explains what the rows show", () => {
     const claude = (set: Summary) => set.credentials.filter((one) => one.provider === "claude")
-    assert.deepEqual(renewalFoot(claude(golden)), { estimated: true, setHere: true, editable: true })
-    assert.deepEqual(renewalFoot(claude(degraded)), { estimated: true, setHere: false, editable: false })
+    assert.deepEqual(renewalFoot(claude(golden)), { estimated: true, setHere: true })
+    assert.deepEqual(renewalFoot(claude(degraded)), { estimated: true, setHere: false })
   })
 
-  test("a renewal orphan is named by its id's ends, with Remove beside it (E.8 #4)", () => {
-    const orphan = degraded.renewalOrphans![0]!
-    assert.equal(renewalOrphanText(orphan), "Saved renewal date for an account no longer in CPA: 0123…cdef")
-    assert.equal(shortCredentialId("5f2b8c41d09e7a36"), "5f2b…7a36")
-    assert.deepEqual(golden.renewalOrphans, [])
+  test("nothing is editable here: every credential says so", () => {
+    for (const set of [golden, degraded]) {
+      for (const one of set.credentials) assert.equal(one.renewalEditable, false, one.id)
+    }
   })
 })
 
-
-describe("the renewal editor's card", () => {
-  test("one Claude account still has the editor", () => {
-    assert.equal(accountsCardNeeded("claude", 1, 0), true)
-    assert.equal(accountsCardNeeded("codex", 1, 0), false)
-    assert.equal(accountsCardNeeded("claude", 0, 0), false)
+describe("the Accounts card", () => {
+  test("one Claude account still has a card, for its renewal date's link", () => {
+    assert.equal(accountsCardNeeded("claude", 1), true)
+    assert.equal(accountsCardNeeded("codex", 1), false)
+    assert.equal(accountsCardNeeded("codex", 2), true)
+    assert.equal(accountsCardNeeded("claude", 0), false)
   })
 
-  test("renewal orphans keep the editor when the last Claude account disappears", () => {
-    assert.equal(accountsCardNeeded("claude", 0, 1), true)
-    assert.equal(accountsCardNeeded("codex", 0, 1), false)
+  test("while Quota Cache cannot read its saved settings, the foot says the rows show estimates", () => {
+    const unreadable = { available: false, reason: "settingsUnreadable" }
+    const sentence = renewalTrouble(unreadable)
+    assert.equal(
+      sentence,
+      "Quota Cache cannot read its saved settings, so renewal dates entered there do not apply and estimates are shown. See Quota Cache's page.",
+    )
+    // The API credit card's sentence is about its own values, not this card's.
+    assert.notEqual(sentence, editingTrouble(unreadable))
+    // Neither offers a configured value in their place: Quota Cache keeps none
+    // for a renewal date or an API credit.
+    for (const said of [sentence, editingTrouble(unreadable)]) assert.doesNotMatch(said ?? "", /config/i)
+    // Otherwise the entered dates apply, and the foot has nothing more to say.
+    for (const reason of ["quotaCache", "", "disabled"]) assert.equal(renewalTrouble({ available: false, reason }), null, reason)
+    assert.equal(renewalTrouble({ available: true, reason: "" }), null)
+  })
+
+  test("the foot takes its sentence from renewalTrouble, not the API credit card's", () => {
+    const source = readFileSync(new URL("../src/components/Accounts.tsx", import.meta.url), "utf8")
+    assert.match(source, /renewalTrouble\(editing\)/)
+    assert.doesNotMatch(source, /editingTrouble|editingOffText/)
   })
 })

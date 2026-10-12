@@ -92,6 +92,11 @@ export function formatUTCDate(epoch: number): string {
   return new Date(epoch * 1000).toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" })
 }
 
+/** An instant's time of day as UTC sees it, "13:20 UTC", beside the reader's own. */
+export function formatUTCClock(epoch: number): string {
+  return `${new Date(epoch * 1000).toISOString().slice(11, 16)} UTC`
+}
+
 /**
  * Calendar days from today to an instant's day, both in the reader's own
  * zone: what "in 20d" beside formatDate's "Oct 29" has to count for the two

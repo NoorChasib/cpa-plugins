@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bash plugins/token-usage/scripts/browser/install-node.sh "${RUNNER_TEMP:?}/quota-cache-node"
 export PATH="$RUNNER_TEMP/quota-cache-node/bin:$PATH"
+# The page editor's rules (money, dates, cycles, batches, answers, conflicts,
+# organizations, escaped strings), on the same pinned Node.
+node --test plugins/quota-cache/scripts/tests/
 make -C plugins/token-usage browser-tools
 source plugins/token-usage/scripts/browser/check-tools.sh
 export QUOTA_CACHE_AGENT_BROWSER="$TOKEN_USAGE_AGENT_BROWSER"

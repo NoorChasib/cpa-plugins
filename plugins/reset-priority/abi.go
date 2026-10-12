@@ -8,7 +8,10 @@
 // free_buffer.
 //
 // This file contains only the C boundary; all behavior lives in
-// internal/plugin and is covered by pure-Go tests.
+// internal/plugin and is covered by pure-Go tests. The one exception is the
+// scheduler.pick envelope, which is decided here in pure Go
+// (schedulerPickEnvelope) because CPA fails a client's request on any error a
+// scheduler returns, so no gate on this path may answer with one.
 package main
 
 /*
@@ -130,6 +133,43 @@ const maxCGoBytesLength = 1<<31 - 1
 
 var errNativeBufferTooLarge = errors.New("native buffer length exceeds C.GoBytes limit")
 
+// maxSchedulerPickBytes bounds a scheduler.pick request the plugin will read.
+// A real one is a few kilobytes; a larger one is declined unread.
+const maxSchedulerPickBytes = 4 << 20
+
+// unhandledEnvelope is scheduler.pick's decline: CPA's own selector then
+// chooses over the same candidates. It is shared and must never be modified.
+var unhandledEnvelope = []byte(`{"ok":true,"result":{"handled":false}}`)
+
+// schedulerPickEnvelope answers one scheduler.pick. It never returns an error
+// envelope, because CPA fails the client's request on any scheduler error
+// (CPA internal/pluginhost/scheduler.go:75-77): every doubt, including a
+// panic, is unhandledEnvelope. shuttingDown and invalid are the native gate's
+// verdicts, passed in so tests need not touch the package's shutdown state.
+func schedulerPickEnvelope(rt *plugin.Runtime, shuttingDown, invalid bool, raw []byte) (out []byte) {
+	defer func() {
+		if recover() != nil {
+			out = unhandledEnvelope
+		}
+	}()
+	if shuttingDown || invalid || rt == nil {
+		return unhandledEnvelope
+	}
+	d := rt.SchedulerPick(raw)
+	if d.AuthID == "" {
+		return unhandledEnvelope
+	}
+	result, err := json.Marshal(hostapi.SchedulerPickResult{Handled: true, AuthID: d.AuthID})
+	if err != nil {
+		return unhandledEnvelope
+	}
+	envelope, err := json.Marshal(hostapi.Envelope{OK: true, Result: result})
+	if err != nil {
+		return unhandledEnvelope
+	}
+	return envelope
+}
+
 // cgoHostCaller invokes host callbacks through the stored host API.
 type cgoHostCaller struct{}
 
@@ -217,6 +257,9 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, pluginAPI *C.cliproxy_plugi
 
 //export resetPriorityPluginCall
 func resetPriorityPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+	if method != nil && C.GoString(method) == hostapi.MethodSchedulerPick {
+		return schedulerPickCall(request, requestLen, response)
+	}
 	if !beginNativeCall() {
 		if response != nil {
 			response.ptr = nil
@@ -246,6 +289,32 @@ func resetPriorityPluginCall(method *C.char, request *C.uint8_t, requestLen C.si
 		// as the RPC error envelope, which Dispatch guarantees.
 		return 1
 	}
+	return 0
+}
+
+// schedulerPickCall is the native scheduler.pick path. It is checked before
+// the general gate, which answers rc 1 with no payload during shutdown, and
+// before Dispatch, whose envelopes can be errors: both would fail the client's
+// request. It always writes an envelope and returns 0.
+func schedulerPickCall(request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+	if response != nil {
+		response.ptr = nil
+		response.len = 0
+	}
+	invalid := requestLen > maxSchedulerPickBytes || (request == nil && requestLen != 0)
+	var raw []byte
+	if !invalid {
+		var err error
+		if raw, err = readPluginRequest(unsafe.Pointer(request), requestLen); err != nil {
+			invalid = true
+		}
+	}
+	envelope := unhandledEnvelope
+	if beginNativeCall() {
+		defer nativeCallWG.Done()
+		envelope = schedulerPickEnvelope(pluginRuntime(), false, invalid, raw)
+	}
+	writePluginResponse(response, envelope)
 	return 0
 }
 
