@@ -180,8 +180,9 @@ describe('cycleOn, the port of client.CreditCycleAt', () => {
   })
 })
 
-// A published account's settings block, as credit_state carries it.
-const settings = extra => ({editable: true, notEditableReason: '', revision: '', monthlyUsd: '', configMonthlyUsd: '200', configMonthlyUsdInvalid: false, renews: '', configRenews: '2026-09-29', configRenewsInvalid: false, reading: null, readingUnusedReason: '', updatedAtEpoch: null, ...extra})
+// A published account's settings block, as credit_state carries it. Quota
+// Cache leaves the config fields empty: the values are the ones entered here.
+const settings = extra => ({editable: true, notEditableReason: '', revision: '', monthlyUsd: '', configMonthlyUsd: '', configMonthlyUsdInvalid: false, renews: '', configRenews: '', configRenewsInvalid: false, reading: null, readingUnusedReason: '', updatedAtEpoch: null, ...extra})
 const NOW = utc('2026-10-11T12:00:00Z')
 
 describe('Console readings: the window and the refill', () => {
@@ -214,15 +215,21 @@ describe('Console readings: the window and the refill', () => {
 
 describe('fields and the API credit batch', () => {
   const account = (id, extra) => ({id, label: id, settings: settings(extra)})
-  const accounts = [account('org-aaaaaaaaaaaa'), account('org-bbbbbbbbbbbb', {revision: '4', monthlyUsd: '260.50'}), account('item-3', {editable: false, notEditableReason: 'noOrganization'})]
+  const accounts = [account('org-aaaaaaaaaaaa'), account('org-bbbbbbbbbbbb', {revision: '4', monthlyUsd: '260.50'}), account('org-cccccccccccc', {editable: false, notEditableReason: 'settingsUnreadable'})]
   const of = a => a.settings
 
-  test('untouched follows the config; typing it back is no change; Use config sends null', () => {
-    const untouched = L.creditField(settings(), undefined)
-    assert.deepEqual([untouched.text, untouched.source, untouched.desired, untouched.changed], ['200', 'config', null, false])
-    assert.deepEqual([L.creditField(settings(), {kind: 'set', text: '$200.00'}).changed], [false])
-    const dropped = L.creditField(settings({monthlyUsd: '260.50'}), {kind: 'drop'})
-    assert.deepEqual([dropped.text, dropped.desired, dropped.changed], ['200', null, true])
+  test('untouched keeps the value entered here; typing it back is no change; Clear sends null', () => {
+    const none = L.creditField(settings(), undefined)
+    assert.deepEqual([none.text, none.source, none.desired, none.changed], ['', 'none', null, false])
+    const entered = L.creditField(settings({monthlyUsd: '200'}), undefined)
+    assert.deepEqual([entered.text, entered.source, entered.desired, entered.changed], ['200', 'dashboard', '200', false])
+    assert.deepEqual([L.creditField(settings({monthlyUsd: '200'}), {kind: 'set', text: '$200.00'}).changed], [false])
+    const cleared = L.creditField(settings({monthlyUsd: '260.50'}), {kind: 'drop'})
+    assert.deepEqual([cleared.text, cleared.desired, cleared.changed], ['', null, true])
+    // A configured value an older Quota Cache published is never the field's.
+    const configured = L.creditField(settings({configMonthlyUsd: '200', configRenews: '2026-09-29'}), undefined)
+    assert.deepEqual([configured.text, configured.source, configured.desired], ['', 'none', null])
+    assert.deepEqual([L.refillField(settings({configRenews: '2026-09-29'}), undefined).source], ['none'])
     assert.equal(L.creditField(settings(), {kind: 'set', text: '-1'}).error, L.AMOUNT_MESSAGE)
     assert.equal(L.creditField(settings(), {kind: 'set', text: '12,50'}).error, 'A comma is ambiguous. Did you mean 12.50 or 1,250.00?')
     assert.equal(L.refillField(settings(), {kind: 'set', text: '2026-11-31'}).error, 'November has 30 days.')
@@ -234,7 +241,7 @@ describe('fields and the API credit batch', () => {
     draft = L.editCredit(draft, accounts[0], 'alpha', 'monthlyUsd', {kind: 'drop'})
     draft = L.markRemoved(draft, {id: 'org-7c1e09a4d2b3', revision: '2'}, true)
     const plan = L.creditPlan(accounts, draft, NOW, of, limits)
-    assert.equal(plan.changes, 2, 'Use config on a value from the config is no change')
+    assert.equal(plan.changes, 2, 'Clear on a value not set is no change')
     assert.deepEqual(JSON.parse(JSON.stringify(plan.batch)), {kind: 'apiCredits', items: [
       {id: 'org-bbbbbbbbbbbb', baseRevision: '4', monthlyUsd: '275', renews: null, reading: null},
       {id: 'org-7c1e09a4d2b3', baseRevision: '2', monthlyUsd: null, renews: null, reading: null},
@@ -244,7 +251,7 @@ describe('fields and the API credit batch', () => {
   })
 
   test('a locked row is never sent, and a field to fix sends nothing', () => {
-    const locked = L.editCredit(L.emptyDraft(), accounts[2], 'item-3', 'monthlyUsd', {kind: 'set', text: '5'})
+    const locked = L.editCredit(L.emptyDraft(), accounts[2], 'charlie', 'monthlyUsd', {kind: 'set', text: '5'})
     assert.equal(L.creditPlan(accounts, locked, NOW, of, limits).batch, null)
     const bad = L.editCredit(L.emptyDraft(), accounts[0], 'alpha', 'monthlyUsd', {kind: 'set', text: 'about 30'})
     const plan = L.creditPlan(accounts, bad, NOW, of, limits)
@@ -264,9 +271,9 @@ describe('fields and the API credit batch', () => {
     assert.deepEqual(unsaved([['renews', {kind: 'set', text: '', incomplete: true}]]), [0, 1, 1], 'a date half typed')
     assert.deepEqual(unsaved([['reading', {kind: 'set', amount: 'x', at: ''}]]), [1, 2, 1], 'a reading with both parts to fix is one edit')
     assert.deepEqual(unsaved([['monthlyUsd', {kind: 'set', text: '$260.50'}]]), [0, 0, 0], 'typed back')
-    const unset = account('org-cccccccccccc', {configMonthlyUsd: ''})
-    const emptied = L.creditPlan([unset], L.editCredit(L.emptyDraft(), unset, 'charlie', 'monthlyUsd', {kind: 'set', text: ''}), NOW, of, limits)
-    assert.deepEqual([emptied.changes, emptied.errors, emptied.unsaved], [0, 0, 0], 'emptied with nothing set or configured')
+    const unset = account('org-dddddddddddd')
+    const emptied = L.creditPlan([unset], L.editCredit(L.emptyDraft(), unset, 'delta', 'monthlyUsd', {kind: 'set', text: ''}), NOW, of, limits)
+    assert.deepEqual([emptied.changes, emptied.errors, emptied.unsaved], [0, 0, 0], 'emptied with nothing set')
     assert.deepEqual(unsaved([['monthlyUsd', {kind: 'set', text: '275'}], ['renews', {kind: 'set', text: '2026-13-01'}]]), [1, 1, 2])
     const removed = L.markRemoved(L.emptyDraft(), {id: 'org-7c1e09a4d2b3', revision: '2'}, true)
     assert.equal(L.creditPlan(accounts, removed, NOW, of, limits).unsaved, 1, 'an orphan marked for removal')
@@ -309,7 +316,8 @@ describe('fields and the API credit batch', () => {
     assert.equal(L.creditsEditLabel([none], 0), 'Set credits and dates', 'an orphan beside organizations with no credit names this button')
     assert.equal(L.creditsEditLabel([], 0), 'Edit credits and dates', 'with only orphans')
     assert.equal(L.creditsEditLabel([none], 1), 'Edit credits and dates')
-    assert.equal(L.creditsEditLabel([none, {id: 'org-dddddddddddd', settings: {monthlyUsd: '', configMonthlyUsd: '200'}}], 0), 'Edit credits and dates')
+    assert.equal(L.creditsEditLabel([none, {id: 'org-dddddddddddd', settings: {monthlyUsd: '200'}}], 0), 'Edit credits and dates')
+    assert.equal(L.creditsEditLabel([none, {id: 'org-dddddddddddd', settings: {monthlyUsd: '', configMonthlyUsd: '200'}}], 0), 'Set credits and dates', 'a configured credit is no credit')
   })
 
   test('none counted: the head says to set credits and dates only when every organization lacks one', () => {
@@ -323,15 +331,14 @@ describe('fields and the API credit batch', () => {
     const pendingSet = {state: 'pending', dataIssues: ['meterMissing']}
     assert.equal(L.noneCountedText([pendingSet, {state: 'pending', dataIssues: ['orgNotCounted']}]), '2 organizations · none counted yet')
     assert.equal(L.noneCountedText([needs, pendingSet]), '2 organizations · none counted yet', 'one of them waits on something else')
-    assert.equal(L.noneCountedText([{state: 'misconfigured', dataIssues: ['misconfigured']}]), '1 organization · none counted yet')
-    assert.equal(L.noneCountedText([{state: 'cacheTooOld', dataIssues: ['cacheTooOld']}]), '1 organization · none counted yet')
   })
 })
 
-describe('a new Console reading is judged by the refill date the batch makes effective', () => {
-  // The plugin checks a new reading against the row's own new refill date,
-  // else the date in force: one entered here, else the configured one.
-  const configured = {id: 'org-dddddddddddd', label: 'delta', settings: settings({configRenews: '2026-10-11'})}
+describe('a new Console reading is judged by the refill date its row keeps', () => {
+  // The plugin checks a new reading against the row's refill date, the one
+  // entered here or typed now, and against nothing else.
+  const stored = {id: 'org-eeeeeeeeeeee', label: 'echo', settings: settings({revision: '6', renews: '2026-10-11'})}
+  const unset = {id: 'org-dddddddddddd', label: 'delta', settings: settings({configRenews: '2026-10-11'})}
   const of = a => a.settings
   const at = utc('2026-10-10T12:00:00Z')
   const reading = {kind: 'set', amount: '150', at: L.localInputValue(at)}
@@ -341,30 +348,27 @@ describe('a new Console reading is judged by the refill date the batch makes eff
     return L.creditPlan([account], draft, NOW, of, limits)
   }
 
-  test('the row’s own new date, before the configured one, takes the reading in its cycle', () => {
-    const plan = planOf(configured, [['renews', {kind: 'set', text: '2026-10-05'}], ['reading', reading]])
-    assert.equal(plan.errors, 0)
-    assert.deepEqual(JSON.parse(JSON.stringify(plan.batch)).items, [{id: 'org-dddddddddddd', baseRevision: '', monthlyUsd: null, renews: '2026-10-05', reading: {remainingUsd: '150', at: '2026-10-10T12:00:00Z'}}])
-  })
-
-  test('a date entered here and left as it is stands for the configured one', () => {
-    const stored = {id: 'org-eeeeeeeeeeee', label: 'echo', settings: settings({revision: '6', renews: '2026-10-05', configRenews: '2026-10-11'})}
-    const plan = planOf(stored, [['reading', reading]])
+  test('the row’s own new date, before the one entered here, takes the reading in its cycle', () => {
+    const plan = planOf(stored, [['renews', {kind: 'set', text: '2026-10-05'}], ['reading', reading]])
     assert.equal(plan.errors, 0)
     assert.deepEqual(JSON.parse(JSON.stringify(plan.batch)).items, [{id: 'org-eeeeeeeeeeee', baseRevision: '6', monthlyUsd: null, renews: '2026-10-05', reading: {remainingUsd: '150', at: '2026-10-10T12:00:00Z'}}])
   })
 
-  test('with no date of its own, the configured one refuses a reading from before it, and flags the refill day', () => {
-    const before = planOf(configured, [['reading', reading]])
+  test('a date entered here and left as it is refuses a reading from before it, and flags the refill day', () => {
+    const before = planOf(stored, [['reading', reading]])
     assert.deepEqual([before.errors, before.batch], [1, null])
-    const row = L.creditRow(configured.settings, {reading}, NOW)
+    const row = L.creditRow(stored.settings, {reading}, NOW)
     assert.match(row.reading.atError, /^The credit refilled on Oct 11, after this time/)
-    const sameDay = L.creditRow(configured.settings, {reading: {kind: 'set', amount: '150', at: L.localInputValue(NOW - 600)}}, NOW)
+    const sameDay = L.creditRow(stored.settings, {reading: {kind: 'set', amount: '150', at: L.localInputValue(NOW - 600)}}, NOW)
     assert.deepEqual([sameDay.reading.atError, sameDay.reading.onRefillDay], [null, true])
-    // Use config hands the date back to the configuration, which then
-    // judges the reading.
-    const dropped = L.creditRow(settings({renews: '2026-10-05', configRenews: '2026-10-11'}), {renews: {kind: 'drop'}, reading}, NOW)
-    assert.match(dropped.reading.atError, /^The credit refilled on Oct 11/)
+  })
+
+  test('with no date, nothing refuses the reading: not a configured date, and not one cleared', () => {
+    const plan = planOf(unset, [['reading', reading]])
+    assert.equal(plan.errors, 0)
+    assert.deepEqual(JSON.parse(JSON.stringify(plan.batch)).items, [{id: 'org-dddddddddddd', baseRevision: '', monthlyUsd: null, renews: null, reading: {remainingUsd: '150', at: '2026-10-10T12:00:00Z'}}])
+    const cleared = L.creditRow(stored.settings, {renews: {kind: 'drop'}, reading}, NOW)
+    assert.deepEqual([cleared.reading.atError, cleared.renews.desired], [null, null])
   })
 })
 
@@ -550,23 +554,16 @@ describe('organizations: the rules the save route applies to an organizations ba
     assert.equal(L.shortOrganizationID('00000000-0000-4000-8000-000000000001'), '00000000…0001')
   })
 
-  test('Remove says what goes with the organization and what an add brings back', () => {
-    const plain = L.removeQuestion('team', {has_default_monthly_usd: false, has_default_renews: false})
-    assert.equal(plain, 'Remove team? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.')
-    const moved = L.removeQuestion('team', {has_default_monthly_usd: true, has_default_renews: true})
-    assert.match(moved, /^Remove team\? Its monthly credit and refill date from Quota Cache’s configuration go with it, and adding the same Organization ID again does not bring them back\. /)
-    assert.match(moved, /entered here stay as an orphan you can clear below, and come back with it\.$/)
-    assert.match(L.removeQuestion('team', {has_default_monthly_usd: false, has_default_renews: true}), /Its refill date from Quota Cache’s configuration goes with it, and adding the same Organization ID again does not bring it back/)
+  test('Remove says what an add brings back', () => {
+    assert.equal(L.removeQuestion('team'), 'Remove team? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.')
   })
 
-  test('while the file cannot be read, the rows are the configuration’s, read-only', () => {
-    const doc = {accounts: [{id: 'org-a', label: 'alpha', organizationId: '00000000-0000-4000-8000-000000000001'}, {id: 'item-2', label: '', organizationId: ''}]}
-    const unreadable = L.organizationRows({available: false, reason: 'organizationsUnreadable', items: []}, doc)
-    assert.equal(unreadable.fromConfig, true)
-    assert.deepEqual(JSON.parse(JSON.stringify(unreadable.items)), [{id: 'org-a', label: 'alpha', organization_id: '00000000-0000-4000-8000-000000000001'}, {id: 'item-2', label: 'item-2', organization_id: ''}])
-    assert.deepEqual(L.organizationRows({available: false, reason: 'organizationsUnreadable', items: []}, null).items.length, 0)
-    const file = L.organizationRows({available: true, reason: '', items: [{id: 'org-b', label: 'bravo'}]}, doc)
-    assert.deepEqual([file.fromConfig, file.items.length, file.items[0].label], [false, 1, 'bravo'])
+  test('the notes: the configuration ignored, and an unreadable file', () => {
+    assert.equal(L.configIgnoredText(5), 'Quota Cache’s configuration still lists 5 organizations under claude-api-credits. This version doesn’t read them: add each one here with its label and Organization ID. ' +
+      'You can leave the configuration as it is; only an older Quota Cache reads it.')
+    assert.match(L.configIgnoredText(1), /^Quota Cache’s configuration still lists 1 organization under claude-api-credits\. This version doesn’t read it: /)
+    assert.equal(L.organizationsUnreadableText('snapshot.organizations.json'), 'Quota Cache cannot read its organizations file, so no organization is counted and editing them here is unavailable. ' +
+      'Fix the file’s owner or permissions, or move snapshot.organizations.json aside and add the organizations again. The page picks that up within a few seconds.')
   })
 
   test('the plugin naming an op by index lands under that op', () => {
@@ -614,31 +611,6 @@ describe('every answer the save route gives has copy', () => {
     assert.deepEqual([locked.kind, [...locked.ids]], ['failed', ['a', 'b']])
   })
 
-  test('an import that did not happen says import, never save, and keeps no changes', () => {
-    const answers = {
-      'no session': {kind: 'blocked', reason: 'session'},
-      'a refused key': {kind: 'refused', record: {reason: 'refused', status: 401}},
-      'a lockout': {kind: 'blocked', reason: 'refused', record: {reason: 'banned', until: NOW + 600, status: 403}},
-      'a proxy': {kind: 'refused', record: {reason: 'other', status: 403}},
-      'remote': {kind: 'refused', record: {reason: 'remote', status: 403}},
-      'stopped': {kind: 'answer', status: 503, body: {error: 'cache_stopped'}},
-      'unreadable': {kind: 'answer', status: 400, body: {error: 'invalid_request'}},
-      'throttled': {kind: 'answer', status: 429, body: {error: 'too_many_writes'}},
-      'full': {kind: 'answer', status: 409, body: {error: 'settings_full'}},
-      'something else': {kind: 'answer', status: 418, body: {}},
-    }
-    for (const [name, answer] of Object.entries(answers)) {
-      const text = L.outcomeOf(answer, 'import').text
-      assert.doesNotMatch(text, /save again|was saved|the save\b|this save\b|changes are kept/i, name)
-      assert.match(text, /import/, name)
-    }
-    assert.equal(L.outcomeOf(answers['no session'], 'import').text, 'Sign in to CPA’s management console on this address with “Remember password” ticked, then import again.')
-    assert.match(L.outcomeOf(answers['a proxy'], 'import').text, /^Something in front of CPA refused the import \(HTTP 403\), so nothing was imported\. Each refused try/)
-    // A card's Save keeps its own words.
-    assert.equal(L.outcomeOf(answers['no session']).text, L.SIGN_IN_FOOT)
-    assert.equal(L.outcomeOf(answers['throttled'], 'save').text, 'Too many saves in the last minute, so nothing was saved. Try again in a minute.')
-  })
-
   test('nothing sent, or a key refused: the reason, and no other try', () => {
     assert.equal(L.outcomeOf({kind: 'blocked', reason: 'session'}).text, L.SIGN_IN_FOOT)
     const refused = L.outcomeOf({kind: 'refused', record: {reason: 'refused', status: 401}})
@@ -666,165 +638,21 @@ describe('every answer the save route gives has copy', () => {
   })
 })
 
-describe('the import note and its confirmation', () => {
-  const now = utc('2026-10-12T12:00:00Z')
-  const counts = {monthly_credits: 2, refill_dates: 2, readings: 2, renewal_dates: 3}
-  const imported = {state: 'imported', kind: 'automatic', imported_at: '2026-10-12T09:00:00Z', legacy_updated_at: '2026-10-10T18:20:00Z', counts, following: false, importable: true}
-  const none = () => false
-  const FOLLOWING = 'Quota Glance older than 0.8.0 still saves these values in its own file, and this page picks up its changes until you save here. Update Quota Glance first.'
-  const AUTOMATIC_HEDGE = 'A value saved on this page before this import, if any, is not among these: enter it again.'
-
-  test('counts, zero items left out', () => {
-    assert.equal(L.countsText(counts), '2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates')
-    assert.equal(L.countsText({monthly_credits: 1, refill_dates: 0, readings: 0, renewal_dates: 1}), '1 monthly credit and 1 renewal date')
-    assert.equal(L.countsText({monthly_credits: 0, refill_dates: 0, readings: 1, renewal_dates: 0}), '1 Console reading')
-    assert.equal(L.countsText({monthly_credits: 0, refill_dates: 0, readings: 0, renewal_dates: 0}), '')
-  })
-
-  test('imported: shown for 30 days, until dismissed, with the following line while both hold', () => {
-    const matched = {...imported, kind: 'matched'}
-    const note = L.importNote(matched, true, '', now, none)
-    assert.match(note.lines[0], /^Imported from Quota Glance on .+: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates, last changed there .+\. Nothing needs entering again\.$/)
-    assert.equal(note.lines.length, 1)
-    assert.equal(note.dismiss, 'import:2026-10-12T09:00:00Z')
-    assert.equal(L.importNote({...matched, following: true}, true, '', now, none).lines[1], FOLLOWING)
-    assert.equal(L.importNote(imported, true, '', now + 31 * 86400, none), null)
-    assert.equal(L.importNote(imported, true, '', now, key => key === 'import:2026-10-12T09:00:00Z'), null)
-  })
-
-  // An automatic import is a first start, and also how a store is refilled
-  // after its settings file and import record were both lost: a cache-path
-  // move or redeploy that left them behind, or an unreadable settings file
-  // moved aside with no record. The store cannot tell these apart, and Quota
-  // Glance 0.8.0 never writes its settings.json again.
-  test('imported at a start: the note allows for values saved here before, never that nothing needs entering again', () => {
-    const note = L.importNote(imported, true, '', now, none)
-    assert.match(note.lines[0], /^Imported from Quota Glance on .+: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates, last changed there .+\.$/)
-    assert.doesNotMatch(note.lines[0], /Nothing needs entering again/)
-    assert.deepEqual([...note.lines.slice(1)], [AUTOMATIC_HEDGE])
-    assert.deepEqual([...L.importNote({...imported, following: true}, true, '', now, none).lines.slice(1)], [AUTOMATIC_HEDGE, FOLLOWING])
-  })
-
-  test('imported by the button: the note says what Quota Glance\'s file never had, never that nothing needs entering again', () => {
-    const manual = {...imported, kind: 'manual'}
-    const note = L.importNote(manual, true, '', now, none)
-    assert.match(note.lines[0], /^Imported from Quota Glance on .+: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates, last changed there .+\.$/)
-    assert.equal(note.lines[1], 'A value saved only on this page is not among these, since Quota Glance’s settings.json never had it: enter it again.')
-    assert.equal(note.lines.length, 2)
-    assert.equal(L.importNote({...manual, following: true}, true, '', now, none).lines.length, 3)
-    // Only a settings file that is Quota Glance's own, with nothing saved
-    // here since, needs nothing entered again. A follow that continues a
-    // manual or automatic import is published under that import's kind, with
-    // following set, which the cases above cover.
-    for (const kind of ['matched', 'follow']) {
-      const lines = L.importNote({...imported, kind}, true, '', now, none).lines
-      assert.match(lines[0], /\. Nothing needs entering again\.$/, kind)
-      assert.equal(lines.length, 1, kind)
-    }
-    for (const kind of ['automatic', 'manual', 'another', undefined]) {
-      assert.doesNotMatch(L.importNote({...imported, kind}, true, '', now, none).lines.join(' '), /Nothing needs entering again/, String(kind))
-    }
-  })
-
-  test('a drop-in is a copy Quota Glance never saves to: no following line, and no question before the first save', () => {
-    const dropIn = {...imported, source_path: '/CLIProxyAPI/plugins/data/quota-cache/quota-glance-settings.json'}
-    const own = {...imported, source_path: '/CLIProxyAPI/plugins/data/quota-glance/settings.json'}
-    assert.deepEqual([L.fromDropIn(dropIn), L.fromDropIn(own), L.fromDropIn(imported)], [true, false, false])
-    for (const following of [false, true]) {
-      const note = L.importNote({...dropIn, following}, true, '', now, none)
-      assert.deepEqual([...note.lines.slice(1)], [AUTOMATIC_HEDGE, 'These values came from a copy of Quota Glance’s settings.json beside Quota Cache’s snapshot, so changes saved later in Quota Glance older than 0.8.0 are not picked up. Update Quota Glance, or copy the file again.'])
-      assert.equal(L.followsQuotaGlance({...dropIn, following}), false)
-    }
-    assert.equal(L.followsQuotaGlance({...own, following: true}), true)
-    assert.deepEqual([...L.importNote({...own, following: true}, true, '', now, none).lines.slice(1)], [AUTOMATIC_HEDGE, FOLLOWING])
-    const changed = L.importNote({...dropIn, state: 'changedSinceImport'}, true, '', now, none)
-    assert.deepEqual([[...changed.lines], changed.button], [['The copy of Quota Glance’s settings.json beside Quota Cache’s snapshot changed after your last save here.'], 'Import Quota Glance’s settings again'])
-  })
-
-  test('each other state has its line, and the import button while the legacy file decodes', () => {
-    assert.equal(L.importNote({...imported, state: 'changedSinceImport'}, true, '', now, none).button, 'Import Quota Glance’s settings again')
-    assert.equal(L.importNote({state: 'notImported', importable: true}, true, '', now, none).button, 'Import Quota Glance’s settings')
-    const missing = L.importNote({state: 'settingsMissing', importable: true}, true, '', now, none)
-    assert.deepEqual([[...missing.lines], missing.button], [['This page’s saved settings are gone, so only config values apply until you enter values or import.'], 'Import Quota Glance’s settings again'])
-    // With no Quota Glance file that can be read, nothing on the page can
-    // import, and the line does not say it can.
-    const gone = L.importNote({state: 'settingsMissing', importable: false}, true, '', now, none)
-    assert.deepEqual([[...gone.lines], gone.button], [['This page’s saved settings are gone, so only config values apply until you enter values again. There is no Quota Glance settings.json to import.'], null])
-    assert.equal(L.importNote({state: 'notImported', importable: true}, false, 'settingsUnreadable', now, none).button, null, 'nothing can be imported while the settings cannot be edited')
-    assert.match(L.importNote({state: 'legacyUnreadable'}, true, '', now, none).lines[0], /^Quota Glance’s settings.json could not be read/)
-    assert.equal(L.importNote({state: 'legacyUnreadable'}, false, 'legacyUnreadable', now, none), null, 'the cards say it themselves while this file blocks editing')
-    // With the settings file unreadable too, the cards offer the import once
-    // it is moved aside, which only this note says cannot happen.
-    const both = L.importNote({state: 'legacyUnreadable'}, false, 'settingsUnreadable', now, none)
-    assert.match(both.lines[0], /^Quota Glance’s settings.json could not be read, so it cannot be imported again\./)
-    assert.equal(both.button, null)
-    assert.equal(L.importNote(null, true, '', now, none), null)
-  })
-
-  test('an unreadable settings file moved aside starts empty only once an import is on record', () => {
-    const file = 'snapshot.settings.json'
-    for (const legacy of [imported, {...imported, state: 'changedSinceImport'}, {...imported, state: 'legacyUnreadable', importable: false}]) {
-      assert.equal(L.settingsUnreadableText(file, legacy), 'Quota Cache cannot read its saved settings, so only config values apply. To keep the values saved here, put back a good copy of snapshot.settings.json. ' +
-        'Otherwise move it aside: Quota Cache then starts empty, and importing Quota Glance’s settings again brings back only what Quota Glance’s settings.json holds, without the values saved only on this page.')
-    }
-    // Saved here before anything was imported: moving the file aside is a
-    // first start, which imports Quota Glance's file even after the page
-    // offered it and nothing was imported, or keeps editing off while that
-    // file cannot be read.
-    for (const legacy of [{state: 'notImported', importable: true}, {state: 'legacyUnreadable', importable: false}, null, undefined]) {
-      const text = L.settingsUnreadableText(file, legacy)
-      assert.match(text, /^Quota Cache cannot read its saved settings, so only config values apply\. To keep the values saved here, put back a good copy of snapshot\.settings\.json\. /)
-      assert.match(text, /otherwise counts as a first start: Quota Glance’s settings\.json is imported if there is one, and one that cannot be read keeps editing off until it is fixed\.$/)
-      assert.doesNotMatch(text, /then starts empty/)
-    }
-  })
-
-  test('an import record that cannot be opened holds saving and importing, names the file, and keeps the saved values', () => {
-    assert.equal(L.IMPORT_RECORD_UNREADABLE, 'importRecordUnreadable')
-    assert.equal(L.importRecordUnreadableText('snapshot.settings-import.json'), 'Quota Cache cannot open or read its import record, snapshot.settings-import.json, so nothing can be saved or imported here until it can. ' +
-      'The values saved here still apply. Fix the file’s owner or permissions; the page picks that up within a few seconds.')
-    // The note stays as last published, and offers no import while editing
-    // is off.
-    assert.equal(L.importNote({state: 'changedSinceImport', importable: true}, false, L.IMPORT_RECORD_UNREADABLE, now, none).button, null)
-  })
-
-  test('the confirmation names what is replaced and what the file brings', () => {
-    const state = {api_credits: {accounts: [{settings: {monthlyUsd: '260.50', renews: '2026-09-20', reading: {remainingUsd: '1'}}}, {settings: {monthlyUsd: '', renews: '', reading: null}}], orphans: [{monthlyUsd: '5', renews: '', hasReading: false}]}, renewals: {a: {}, b: {}}}
-    const stored = L.storedCounts(state, null)
-    const zero = {monthly_credits: 0, refill_dates: 0, readings: 0, renewal_dates: 0}
-    assert.deepEqual({...stored}, {monthly_credits: 2, refill_dates: 1, readings: 1, renewal_dates: 2})
-    assert.equal(L.importQuestion(stored, counts), 'This replaces what is saved here: 2 monthly credits, 1 refill date, 1 Console reading and 2 renewal dates. Values entered here since the last import are lost. ' +
-      'It brings what Quota Glance’s settings.json holds now: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates. Import Quota Glance’s settings.json now?')
-    assert.equal(L.importQuestion(zero, counts), 'Nothing is saved here now, so nothing is replaced. It brings what Quota Glance’s settings.json holds now: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates. Import Quota Glance’s settings.json now?')
-    // When the file last changed: nothing saved on this page since is in it,
-    // which a store refilled after its saved settings were lost would miss.
-    const day = new Date(Date.parse('2026-10-10T18:20:00Z')).toLocaleDateString([], {month: 'short', day: 'numeric'})
-    assert.equal(L.importQuestion(zero, counts, '2026-10-10T18:20:00Z'), 'Nothing is saved here now, so nothing is replaced. It brings what Quota Glance’s settings.json holds now: 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates. ' +
-      'It was last changed there ' + day + ', so nothing saved on this page since is in it. Import Quota Glance’s settings.json now?')
-    assert.equal(L.importQuestion(zero, counts, null), L.importQuestion(zero, counts))
-    assert.equal(L.importQuestion(zero, zero, '2026-10-10T18:20:00Z'), L.importQuestion(zero, zero), 'a file with no values has no change to date')
-    assert.match(L.importQuestion(stored, zero), /lost\. Quota Glance’s settings\.json holds no values, so nothing stays saved here\. Import/)
-    assert.match(L.importQuestion(zero, zero), /replaced\. Quota Glance’s settings\.json holds no values either\. Import/)
-    // The file's counts are what the legacy file holds now, not what the last
-    // import brought: an older status without them names only what is here.
-    assert.equal(L.importQuestion(stored, undefined), 'This replaces what is saved here: 2 monthly credits, 1 refill date, 1 Console reading and 2 renewal dates. Values entered here since the last import are lost. Import Quota Glance’s settings.json now?')
-    assert.equal(L.importQuestion(stored, null), L.importQuestion(stored, undefined))
+describe('saved values', () => {
+  test('an unreadable settings file: put back a good copy, or move it aside and enter the values again', () => {
+    assert.equal(L.settingsUnreadableText('snapshot.settings.json'), 'Quota Cache cannot read its saved settings, so no value saved here applies. To keep the values saved here, put back a good copy of snapshot.settings.json. ' +
+      'Moving it aside instead starts Quota Cache empty, and every value saved here has to be entered again.')
   })
 
   test('values held while the organizations file cannot be read are saved here, and no orphans', () => {
     const editor = {credentials: [], renewal_orphans: [], api_credit_orphans: [], held_api_credits: [{id: 'org-a', monthlyUsd: '200', renews: '', hasReading: true}]}
-    const stored = L.storedCounts({api_credits: {accounts: [{settings: {monthlyUsd: '100'}}], orphans: []}, renewals: {}}, editor)
-    assert.deepEqual({...stored}, {monthly_credits: 2, refill_dates: 0, readings: 1, renewal_dates: 0})
     assert.deepEqual([...L.heldCreditsOf(editor).map(row => row.id)], ['org-a'])
     assert.equal(L.creditOrphansOf({orphans: []}, editor).length, 0)
     assert.equal(L.heldCreditsOf({}).length, 0)
   })
 
-  test('with no organization listed, what is saved here includes the orphans the editor lists', () => {
+  test('with no organization listed, the orphans are the editor\'s', () => {
     const editor = {credentials: [], renewal_orphans: [], api_credit_orphans: [{id: 'org-a', monthlyUsd: '200', renews: '2026-10-29', hasReading: true}]}
-    const stored = L.storedCounts({api_credits: null, renewals: {}}, editor)
-    assert.deepEqual({...stored}, {monthly_credits: 1, refill_dates: 1, readings: 1, renewal_dates: 0})
-    assert.match(L.importQuestion(stored, counts), /^This replaces what is saved here: 1 monthly credit, 1 refill date and 1 Console reading\./)
     assert.deepEqual(L.creditOrphansOf({orphans: [{id: 'org-b'}]}, editor).map(orphan => orphan.id), ['org-b'], 'api_credits carries its own orphans while it is published')
     assert.deepEqual(L.creditOrphansOf(null, editor).map(orphan => orphan.id), ['org-a'])
     assert.equal(L.creditOrphansOf(null, null).length, 0)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -76,6 +77,50 @@ func writeSettings(t *testing.T, dir string, value any) {
 	if err := os.WriteFile(FilePath(snapshotIn(dir)), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// place writes raw at path the way a file is restored or saved by rename: a
+// new file renamed over the old one.
+func place(t *testing.T, path string, raw []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".new", raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".new", path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// legacyFixture is one of Quota Glance's own settings files in
+// testdata/legacy.
+func legacyFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "legacy", name+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+func renewalSave(id, base, date string) Batch {
+	return Batch{Kind: KindRenewals, Renewals: []RenewalItem{{ID: id, BaseRevision: base, Date: ptr(date)}}}
 }
 
 func TestAMissingFileIsEmptyAndEditable(t *testing.T) {
@@ -242,10 +287,10 @@ func TestAFileThatCannotBeReadIsNeverOverwritten(t *testing.T) {
 	}
 }
 
-// A save and an import judge the settings file as it is on disk, read again
-// when it changed since the last tick: a good copy put back is kept and saved
-// on top of, and one replaced by a file that fails its rules is refused and
-// left as it is, never written over from what the store last held.
+// A save judges the settings file as it is on disk, read again when it
+// changed since the last tick: a good copy put back is kept and saved on top
+// of, and one replaced by a file that fails its rules is refused and left as
+// it is, never written over from what the store last held.
 func TestASaveSeesTheFileAsItIsOnDisk(t *testing.T) {
 	now := at(t, "2026-10-12T09:00:00Z")
 	first := uint64(now.Unix())
@@ -257,7 +302,7 @@ func TestASaveSeesTheFileAsItIsOnDisk(t *testing.T) {
 	if err := os.Rename(path, path+".aside"); err != nil {
 		t.Fatal(err)
 	}
-	if s.Sync(now); len(s.Current().Renewals) != 0 {
+	if !s.Sync() || len(s.Current().Renewals) != 0 {
 		t.Fatalf("moved aside: %+v", s.Current())
 	}
 	// Put back before the next tick, then a save from a page that read the
@@ -284,9 +329,6 @@ func TestASaveSeesTheFileAsItIsOnDisk(t *testing.T) {
 	}
 	if _, err := s.Apply(renewalSave("aaaaaaaaaaaaaaaa", RevisionText(first+1), "2026-11-04"), nil, now.Add(3*time.Second)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("a save over an unreadable file: %v", err)
-	}
-	if _, err := s.ImportLegacy(RevisionText(first+1), now.Add(3*time.Second)); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("an import over an unreadable file: %v", err)
 	}
 	if after := readFile(t, path); !bytes.Equal(after, bad) || s.Status().State != client.CreditSettingsUnreadable {
 		t.Fatalf("overwritten, or the status missed it: %q %+v", after, s.Status())
@@ -331,7 +373,7 @@ func TestARecreatedSettingsFileStartsPastEveryEarlierRevision(t *testing.T) {
 		if err := os.Remove(s.Path()); err != nil {
 			t.Fatal(err)
 		}
-		s.Sync(now)
+		s.Sync()
 	}
 
 	// Deleted and saved again within the second.
@@ -362,7 +404,7 @@ func TestARecreatedSettingsFileStartsPastEveryEarlierRevision(t *testing.T) {
 	}
 	held = RevisionText(first + 61)
 	place(t, s.Path(), older)
-	s.Sync(later)
+	s.Sync()
 	race("older copy put back", s, "2026-11-05")
 	if v := s.Current(); v.Revision != first+62 {
 		t.Fatalf("saved over the older copy at %d", v.Revision)
@@ -396,7 +438,6 @@ func TestAnOlderCopyPutBackWhileClosedStartsPastEveryEarlierRevision(t *testing.
 	place(t, s.Path(), backup)
 	later := now.Add(2 * time.Minute)
 	s = Open(snapshot)
-	s.Sync(later)
 	// The first page, reloaded, saves over the backup.
 	saved, err := s.Apply(renewalSave(row, RevisionText(first), "2026-11-05"), nil, later)
 	if err != nil {
@@ -408,6 +449,212 @@ func TestAnOlderCopyPutBackWhileClosedStartsPastEveryEarlierRevision(t *testing.
 	}
 	if got := Load(s.Path()).Renewals[row]; got.Date != "2026-11-05" || saved.Revision != first+120 {
 		t.Fatalf("saved at %d: stored %+v", saved.Revision, got)
+	}
+}
+
+// A settings file moved aside, while a page that read it still holds its card
+// open, is followed by an empty store at the next tick, and a file a save
+// starts there begins past every revision the moved file held: the stale
+// page's save conflicts instead of writing over the newer value, in the same
+// second as the move and after a restart a minute later.
+func TestASaveAfterAMoveAsideConflictsWithAnOpenPage(t *testing.T) {
+	now := at(t, "2026-10-12T09:00:00Z")
+	snapshot := snapshotIn(t.TempDir())
+	const row = "aaaaaaaaaaaaaaaa"
+	s := Open(snapshot)
+	if _, err := s.Apply(renewalSave(row, "", "2026-11-01"), nil, now); err != nil {
+		t.Fatal(err)
+	}
+	// Another device holds the card open from here.
+	held := RevisionText(s.Current().Renewals[row].Rev)
+	if held != RevisionText(uint64(now.Unix())) {
+		t.Fatalf("saved at %s", held)
+	}
+	moveAside := func(s *Store) {
+		t.Helper()
+		if err := os.Rename(s.Path(), s.Path()+".aside"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale := func(step string, s *Store, want string, at time.Time) {
+		t.Helper()
+		var conflict *ConflictError
+		if _, err := s.Apply(renewalSave(row, held, "2026-12-31"), nil, at); !errors.As(err, &conflict) || !reflect.DeepEqual(conflict.IDs, []string{row}) {
+			t.Fatalf("%s: the stale save: %v, want a conflict", step, err)
+		}
+		if got := Load(s.Path()).Renewals[row]; got.Date != want || RevisionText(got.Rev) == held {
+			t.Fatalf("%s: stored %+v", step, got)
+		}
+	}
+
+	// Moved aside, seen at the next tick, and a page that read the empty
+	// store saves the row again within the second.
+	moveAside(s)
+	if !s.Sync() || len(s.Current().Renewals) != 0 || s.Status().State != client.CreditSettingsOK {
+		t.Fatalf("moved aside: %+v, %+v", s.Current(), s.Status())
+	}
+	saved, err := s.Apply(renewalSave(row, "", "2026-11-02"), nil, now)
+	if err != nil || saved.Revision != uint64(now.Unix())+1 {
+		t.Fatalf("a save into the empty store: %+v, %v", saved, err)
+	}
+	stale("same second", s, "2026-11-02", now)
+
+	// Moved aside while the cache is stopped: the store opened after it never
+	// saw the moved file, and the time is past it.
+	s.Close()
+	if err := os.Remove(s.Path() + ".aside"); err != nil {
+		t.Fatal(err)
+	}
+	moveAside(s)
+	later := now.Add(time.Minute)
+	s = Open(snapshot)
+	if s.Current().Revision != 0 || !s.Status().Editable() {
+		t.Fatalf("reopened: %+v, %+v", s.Current(), s.Status())
+	}
+	if _, err := s.Apply(renewalSave(row, "", "2026-11-03"), nil, later); err != nil {
+		t.Fatal(err)
+	}
+	stale("after a restart", s, "2026-11-03", later)
+}
+
+// A settings file that cannot be read is read again at the tick after it is
+// moved aside or fixed, with no configure.
+func TestUnreadableSettingsReopenOnTheNextTick(t *testing.T) {
+	now := at(t, "2026-10-12T09:00:00Z")
+	bad := []byte(`{"schema":1,"revision":"x"}`)
+	dir := t.TempDir()
+	if err := os.WriteFile(FilePath(snapshotIn(dir)), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Open(snapshotIn(dir))
+	if s.Status().State != client.CreditSettingsUnreadable || !s.Current().Unreadable || s.Status().Editable() {
+		t.Fatalf("open: %+v", s.Status())
+	}
+	if s.Sync() || s.Status().State != client.CreditSettingsUnreadable {
+		t.Fatalf("unchanged: read again, or %+v", s.Status())
+	}
+	if err := os.Rename(s.Path(), s.Path()+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Sync() || s.Status().State != client.CreditSettingsOK || s.Current().Unreadable {
+		t.Fatalf("moved aside: %+v", s.Status())
+	}
+	if _, err := s.Apply(renewalSave(renewalA, "", "2026-11-01"), nil, now); err != nil {
+		t.Fatalf("a save once moved aside: %v", err)
+	}
+	if !bytes.Equal(readFile(t, s.Path()+".aside"), bad) {
+		t.Fatal("the file moved aside was touched")
+	}
+
+	// Fixed in place, the same file now reads.
+	dir = t.TempDir()
+	if err := os.WriteFile(FilePath(snapshotIn(dir)), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s = Open(snapshotIn(dir))
+	if err := os.WriteFile(FilePath(snapshotIn(dir)), legacyFixture(t, "api-credits"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Sync() || s.Status().State != client.CreditSettingsOK || s.Current().Revision != 2 {
+		t.Fatalf("fixed: %+v, %+v", s.Status(), s.Current())
+	}
+}
+
+// A settings file that could not be opened or read, as one restored as
+// another user, is read again at every tick, and by a save, until a read
+// settles, though its stamp never changed: fixing its owner changes none of
+// what the stamp compares. One that fails a load rule is read again only once
+// it changes.
+func TestASettingsFileThatCouldNotBeOpenedIsReadAgain(t *testing.T) {
+	now := at(t, "2026-10-12T09:00:00Z")
+	dir := t.TempDir()
+	if err := os.WriteFile(FilePath(snapshotIn(dir)), legacyFixture(t, "api-credits"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Open(snapshotIn(dir))
+	reads, fail := 0, true
+	s.read = func(path string, stamp fileStamp, limit int64) ([]byte, bool, bool) {
+		reads++
+		if fail {
+			return nil, false, false
+		}
+		return readStamped(path, stamp, limit)
+	}
+	touch := func(at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(s.Path(), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	touch(now.Add(time.Hour))
+	if !s.Sync() || s.Status().State != client.CreditSettingsUnreadable {
+		t.Fatalf("a failed open: %+v", s.Status())
+	}
+	// Still failing: read again, and nothing to report.
+	for range 2 {
+		if s.Sync() || s.Status().State != client.CreditSettingsUnreadable {
+			t.Fatalf("still failing: %+v", s.Status())
+		}
+	}
+	fail = false
+	if !s.Sync() || reads != 4 || s.Status().State != client.CreditSettingsOK || s.Current().Revision != 2 {
+		t.Fatalf("fixed: %d reads, %+v", reads, s.Status())
+	}
+	if s.Sync() || reads != 4 {
+		t.Fatalf("a settled read was read again: %d reads", reads)
+	}
+
+	// A save reads it again first.
+	fail = true
+	touch(now.Add(2 * time.Hour))
+	if _, err := s.Apply(renewalSave(renewalA, "", "2026-11-01"), nil, now); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a save over a failed open: %v", err)
+	}
+	fail = false
+	if _, err := s.Apply(renewalSave(renewalA, "", "2026-11-01"), nil, now); err != nil || s.Current().APICredits["org-752c8e5b3c4d"].MonthlyUSD != "300" {
+		t.Fatalf("a save once it opens: %v", err)
+	}
+
+	// A rule failure settles: no tick reads it again until it changes.
+	if err := os.WriteFile(s.Path(), []byte(`{"schema":1,"revision":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reads = 0
+	for i := range 3 {
+		if s.Sync() != (i == 0) || s.Status().State != client.CreditSettingsUnreadable {
+			t.Fatalf("a rule failure, tick %d: %+v", i, s.Status())
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("a rule failure read %d times", reads)
+	}
+}
+
+// A file at the highest revision there is, which only a hand edit makes,
+// loads, and no save writes over it: none is past it, and a revision wrapped
+// round could match one a page holds.
+func TestNoRevisionIsWrittenPastTheHighest(t *testing.T) {
+	const top = math.MaxUint64
+	const a, b = "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"
+	now := at(t, "2026-10-12T09:00:00Z")
+	atTop, err := encode(Values{Revision: top, APICredits: map[string]APICredit{}, Renewals: map[string]Renewal{
+		a: {Date: "2026-11-01", Rev: top, UpdatedAt: now},
+		b: {Date: "2026-11-02", Rev: 1, UpdatedAt: now},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	place(t, FilePath(snapshotIn(dir)), atTop)
+	s := Open(snapshotIn(dir))
+	if v := s.Current(); v.Unreadable || v.Revision != top {
+		t.Fatalf("a file at the top revision: %+v", v)
+	}
+	if _, err := s.Apply(renewalSave(b, "1", "2026-12-01"), nil, now); !errors.Is(err, ErrFull) {
+		t.Fatalf("a save: %v, want ErrFull", err)
+	}
+	if got := readFile(t, s.Path()); !bytes.Equal(got, atTop) || s.Current().Revision != top {
+		t.Fatalf("the settings file changed:\n%s", got)
 	}
 }
 
@@ -872,11 +1119,11 @@ func TestCloseWaitsForASaveAndRefusesLater(t *testing.T) {
 	if _, err := s.Apply(Batch{Kind: KindRenewals, Renewals: []RenewalItem{{ID: renewalA, BaseRevision: RevisionText(s.Current().Revision), Date: ptr("2026-11-29")}}}, nil, now); !errors.Is(err, ErrClosed) {
 		t.Fatalf("a save after Close: %v", err)
 	}
-	if _, err := s.ImportLegacy(RevisionText(s.Current().Revision), now); !errors.Is(err, ErrClosed) {
-		t.Fatalf("an import after Close: %v", err)
+	if err := os.Remove(s.Path()); err != nil {
+		t.Fatal(err)
 	}
-	if result := s.Sync(now); result != (SyncResult{}) {
-		t.Fatalf("Sync after Close: %+v", result)
+	if s.Sync() || s.Current().Revision != uint64(now.Unix()) {
+		t.Fatalf("Sync after Close read the file again: %+v", s.Current())
 	}
 }
 

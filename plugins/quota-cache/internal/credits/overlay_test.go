@@ -113,8 +113,8 @@ func readingsInput(t *testing.T) Input {
 	for _, e := range entries[:4] {
 		orgs[e.APICredit.OrganizationID] = healthyOrg(t)
 	}
-	return Input{Now: now, Items: itemsOf(entries...), Meter: meterOf(now.Add(-time.Minute), orgs), Settings: values,
-		SettingsState: client.CreditSettingsOK, Version: "0.2.0"}
+	return onPage(Input{Now: now, Items: itemsOf(entries...), Meter: meterOf(now.Add(-time.Minute), orgs), Settings: values,
+		SettingsState: client.CreditSettingsOK, Version: "0.2.0"})
 }
 
 // checkOverlay reports whether the state published at t0 and judged at t1 is

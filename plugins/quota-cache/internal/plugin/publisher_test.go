@@ -43,15 +43,20 @@ func newTestPublisher(t *testing.T) *testPublisher {
 	tp := &testPublisher{t: t}
 	raw, _ := json.Marshal(client.Snapshot{Schema: 1, WrittenAt: publishAt.Add(-time.Minute), Entries: map[string]client.Entry{}, ProviderCooldown: map[string]time.Time{}})
 	writeFile(t, path, raw)
+	// Alpha's credit and refill date, as entered on the page.
+	raw, _ = json.Marshal(map[string]any{"schema": 1, "revision": 1, "apiCredits": map[string]any{
+		alphaAccount: map[string]any{"monthlyUsd": "200", "renews": "2026-10-10", "rev": 1, "updatedAt": "2026-10-01T00:00:00Z"},
+	}})
+	writeFile(t, settings.FilePath(path), raw)
 	store := settings.Open(path)
-	items := []creditItem{{id: alphaAccount, credit: client.APICredit{Label: "alpha", OrganizationID: fakeOrgA, MonthlyUSD: "200", Renews: "2026-10-10"}}}
-	source := client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "1", Source: client.OrganizationsSourcePage}
+	items := []creditItem{{id: alphaAccount, credit: client.APICredit{Label: "alpha", OrganizationID: fakeOrgA}}}
+	source := client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "1"}
 	tp.publisher = newPublisher(path, "test", store, func() ([]creditItem, client.CreditOrganizations) { return items, source }, func(level, message string, fields map[string]any) {
 		tp.mu.Lock()
 		defer tp.mu.Unlock()
 		tp.lines = append(tp.lines, logLine{level, message, fields})
 	})
-	tp.prepare = func(now time.Time) { store.Sync(now) }
+	tp.prepare = func(time.Time) bool { return store.Sync() }
 	tp.write = func(path string, raw []byte) error {
 		tp.mu.Lock()
 		tp.writes++
@@ -187,9 +192,11 @@ func TestThePublisherWritesWhenTheStateChanges(t *testing.T) {
 		t.Fatalf("a snapshot save: %d writes", n)
 	}
 	// The settings file, which the tick's Sync reads again.
-	settingsRaw, _ := json.Marshal(map[string]any{"schema": 1, "revision": 1, "apiCredits": map[string]any{alphaAccount: map[string]any{"monthlyUsd": "300", "rev": 1, "updatedAt": "2026-10-09T12:00:00Z"}}})
+	settingsRaw, _ := json.Marshal(map[string]any{"schema": 1, "revision": 2, "apiCredits": map[string]any{
+		alphaAccount: map[string]any{"monthlyUsd": "300", "renews": "2026-10-10", "rev": 2, "updatedAt": "2026-10-09T12:00:00Z"},
+	}})
 	writeFile(t, settings.FilePath(path), settingsRaw)
-	if n := tp.wrote(publishAt.Add(45 * time.Second)); n != 1 || accountIn(t, tp.LastState(), alphaAccount).MonthlyCreditSource != client.CreditSourceDashboard {
+	if n := tp.wrote(publishAt.Add(45 * time.Second)); n != 1 || accountIn(t, tp.LastState(), alphaAccount).MonthlyCreditText != "$300.00" {
 		t.Fatalf("a settings save: %d writes", n)
 	}
 	// The heartbeat: 60 seconds after the last write, with nothing changed.
@@ -209,6 +216,38 @@ func TestThePublisherWritesWhenTheStateChanges(t *testing.T) {
 	}
 	if lines := tp.logged(); len(lines) != 0 {
 		t.Fatalf("logged %+v", lines)
+	}
+}
+
+// A tick whose prepare reports that the settings or organizations may have
+// changed computes whatever the stamps say, since fixing the owner of a file
+// that could not be opened changes none of them, and writes only when the
+// state changed.
+func TestATickComputesWhenItsPrepareReportsAChange(t *testing.T) {
+	tp := newTestPublisher(t)
+	items, source := tp.items()
+	unreadable := client.CreditOrganizations{State: client.OrganizationsStateUnreadable}
+	tp.items = func() ([]creditItem, client.CreditOrganizations) { return []creditItem{}, unreadable }
+	reported := false
+	tp.prepare = func(time.Time) bool { return reported }
+	if n := tp.wrote(publishAt); n != 1 || tp.LastState().Organizations.State != client.OrganizationsStateUnreadable {
+		t.Fatalf("first tick wrote %d", n)
+	}
+	// The organizations file opens again, with no file changed on disk.
+	tp.items = func() ([]creditItem, client.CreditOrganizations) { return items, source }
+	if n := tp.wrote(publishAt.Add(10 * time.Second)); n != 0 || !tp.LastState().ComputedAt.Equal(publishAt) {
+		t.Fatalf("computed with nothing reported: %d writes", n)
+	}
+	reported = true
+	if n := tp.wrote(publishAt.Add(20 * time.Second)); n != 1 || tp.LastState().Organizations.State != client.OrganizationsStateOK {
+		t.Fatalf("a reported change: %d writes, %+v", n, tp.LastState().Organizations)
+	}
+	if state, err := client.LoadCredits(client.CreditsPath(tp.path)); err != nil || state.Organizations.State != client.OrganizationsStateOK {
+		t.Fatalf("written %+v %v", state, err)
+	}
+	// Reported again with nothing changed: computed, and nothing written.
+	if n := tp.wrote(publishAt.Add(30 * time.Second)); n != 0 || !tp.LastState().ComputedAt.Equal(publishAt.Add(30*time.Second)) {
+		t.Fatalf("an unchanged state: %d writes, computed at %v", n, tp.LastState().ComputedAt)
 	}
 }
 

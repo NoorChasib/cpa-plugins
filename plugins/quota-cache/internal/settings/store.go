@@ -1,8 +1,6 @@
 package settings
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
@@ -19,21 +17,17 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 )
 
-// writeLimit bounds committed saves, imports included, per minute. It is a
-// brake on a page or script stuck in a loop, not an authentication limit:
+// writeLimit bounds committed saves per minute. It is a brake on a page or script stuck in a loop, not an authentication limit:
 // every save that reaches it was already authenticated.
 const (
 	writeLimit  = 30
 	writeWindow = time.Minute
 )
 
-// Errors Apply and ImportLegacy return, each answered with its own code.
+// Errors Apply returns, each answered with its own code.
 var (
-	// ErrUnavailable: the settings file could not be read, or there is none
-	// yet and Quota Glance's settings.json, which the first start imports,
-	// could not be read. Nothing may be saved until it is fixed or moved
-	// aside. Also while the import record is there but could not be opened
-	// or read (Status.RecordUnread), until a later read gets past that.
+	// ErrUnavailable: the settings file could not be read. Nothing may be
+	// saved until it is fixed or moved aside.
 	ErrUnavailable = errors.New("settings_unavailable")
 	// ErrUnwritable: the commit failed. Nothing changed, on disk or here.
 	ErrUnwritable = errors.New("settings_unwritable")
@@ -49,15 +43,13 @@ var (
 )
 
 // ConflictError is a batch with a row another save changed since the page
-// read it, or an import whose page read an older revision. Nothing was
-// written.
+// read it. Nothing was written.
 type ConflictError struct {
 	// Kind is the request's, which says whether IDs are API credit or renewal
-	// rows; KindImportLegacy carries no IDs.
+	// rows.
 	Kind string
-	// Revision is the file's revision now: decimal for a batch, as Quota
-	// Glance answered it, and RevisionText for an import, the form its
-	// baseRevision takes.
+	// Revision is the file's revision now, in decimal, as Quota Glance
+	// answered it.
 	Revision string
 	// IDs are the conflicting rows, in request order; APICredits or Renewals
 	// holds what is stored for each now, absent for a row with nothing stored.
@@ -92,69 +84,40 @@ type Result struct {
 
 // Status is what the published state says about the saved values.
 type Status struct {
-	// State is a client.CreditSettings value.
+	// State is client.CreditSettingsOK, or client.CreditSettingsUnreadable
+	// while the settings file fails a load rule or could not be read.
 	State string
-	// RecordUnread is set while the import record is there but could not be
-	// opened or read, as one restored as another user: nothing may be saved
-	// or imported until a read gets past that (Apply), though the saved values
-	// still apply: State does not change for it.
-	RecordUnread bool
-	// Import is where the import from Quota Glance's settings.json stands,
-	// published as settings.import; nil when there is no legacy file and no
-	// readable import record, or none that describes the settings file
-	// (holdsImport). While RecordUnread, what the record says is not known,
-	// so it stands as last published, nil when nothing was.
-	Import *client.CreditImport
-	// LegacyCounts count what the legacy file holds now, as an import
-	// record's counts do: what Import Quota Glance's settings would bring.
-	// Nil unless it can be read. Only the status route shows it.
-	LegacyCounts *client.CreditImportCounts
-	// LegacyUpdatedAt is the newest change in the legacy file now, as an
-	// import record's legacy_updated_at is: nothing saved here since then is
-	// in it. Nil unless it can be read, and while it holds no row. Only the
-	// status route shows it.
-	LegacyUpdatedAt *time.Time
 }
 
-// Editable reports whether a save or an import may reach the store: the
-// saved values can be read, and so can the import record.
-func (s Status) Editable() bool { return s.State == client.CreditSettingsOK && !s.RecordUnread }
+// Editable reports whether a save may reach the store: the saved values can
+// be read.
+func (s Status) Editable() bool { return s.State == client.CreditSettingsOK }
 
-// Store is the settings file beside one snapshot, with its import record.
+// Store is the settings file beside one snapshot.
 //
 // Its mutex is a leaf lock: nothing else is acquired while it is held, and no
 // caller may publish, log or call into the host while holding it. Under it
-// the store does nothing but read and write its own files and Quota Glance's
-// settings.json. Readers never take it: Current and Status return what the
-// last commit or Sync swapped in.
+// the store does nothing but read and write its own file. Readers never take
+// it: Current and Status return what the last commit or Sync swapped in.
 type Store struct {
-	dir, path, recordPath string
-	// candidates are client.LegacySettingsCandidates, the drop-in first.
-	candidates []string
+	dir, path string
 
-	mu         sync.Mutex
-	writes     writeLog
-	closed     bool
-	file       settingsFile
-	record     recordFile
-	legacy     legacyFile
-	blocked    bool
-	followSeen fileStamp
+	mu     sync.Mutex
+	writes writeLog
+	closed bool
+	file   settingsFile
 	// seen is the highest revision this store has read or written, kept
-	// across a delete and across a file put back with a lower revision, which
-	// nextRevision starts past. It is not kept across a reopen; the time in
-	// firstRevision covers that.
+	// across a delete, a move aside and a file put back with a lower
+	// revision, which nextRevision starts past. It is not kept across a
+	// reopen; the time in firstRevision covers that.
 	seen uint64
-	// pending is the record of an import that wrote the settings file but
-	// could not write its record, nil when there is none (writePending).
-	pending *pendingRecord
 
 	view atomic.Pointer[view]
 
-	// write and syncDir commit a file; tests replace them to fail a commit or
-	// to see the directory synced. read reads the settings file and the legacy
-	// file once their stamp changed, and the import record at each look;
-	// tests replace it to count the reads or to fail one.
+	// write and syncDir commit the file; tests replace them to fail a commit
+	// or to see the directory synced. read reads the settings file once its
+	// stamp changed or its last read did not settle; tests replace it to count
+	// the reads or to fail one.
 	write   func(path string, raw []byte) error
 	syncDir func(dir string) error
 	read    func(path string, stamp fileStamp, limit int64) (raw []byte, settled, ok bool)
@@ -170,9 +133,6 @@ type view struct {
 type settingsFile struct {
 	stamp  fileStamp
 	values Values
-	// sha is the hex SHA-256 of its bytes, "" when there is no file or it
-	// cannot be read.
-	sha string
 	// retry is set when the last read failed for a reason other than what
 	// the file holds: Lstat failed, or the file could not be opened or read,
 	// as when it belongs to another user or the process ran out of file
@@ -184,27 +144,18 @@ type settingsFile struct {
 // Open loads the settings beside the snapshot at snapshotPath. It never fails
 // for the file's sake: a missing file is empty and editable, and one that
 // cannot be read leaves an unreadable store that applies nothing and saves
-// nothing, and never overwrites what is there. It writes nothing: call Sync
-// once, which runs the first import, before a save can reach Apply.
+// nothing, and never overwrites what is there. It writes nothing.
 func Open(snapshotPath string) *Store {
 	s := &Store{
-		dir:        filepath.Dir(snapshotPath),
-		path:       FilePath(snapshotPath),
-		recordPath: RecordPath(snapshotPath),
-		write:      writeFile,
-		syncDir:    syncDirectory,
-		read:       readStamped,
-	}
-	own := map[string]bool{absolute(s.path): true, absolute(s.recordPath): true}
-	for _, path := range client.LegacySettingsCandidates(snapshotPath) {
-		if !own[path] {
-			s.candidates = append(s.candidates, path)
-		}
+		dir:     filepath.Dir(snapshotPath),
+		path:    FilePath(snapshotPath),
+		write:   writeFile,
+		syncDir: syncDirectory,
+		read:    readStamped,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setFile(s.readFile())
-	s.observe()
 	s.publish()
 	return s
 }
@@ -226,7 +177,7 @@ func Load(path string) Values {
 	return v
 }
 
-// readFile reads the settings file with its stamp and hash.
+// readFile reads the settings file with its stamp.
 func (s *Store) readFile() settingsFile {
 	stamp := stampOfFile(s.path)
 	f := settingsFile{stamp: stamp, values: empty()}
@@ -240,7 +191,7 @@ func (s *Store) readFile() settingsFile {
 		f.values = unreadable()
 		return f
 	}
-	f.values, f.sha = v, hashOf(raw)
+	f.values = v
 	return f
 }
 
@@ -252,9 +203,9 @@ func (s *Store) setFile(f settingsFile) {
 
 // nextRevision is the revision the next commit writes, firstRevision: one
 // past every revision this store has seen, and at least the time, so a page
-// that read a file since deleted, or since replaced by an older copy, holds
-// no row revision a new write can match, even when that happened while the
-// store was closed. False once the store has seen the highest revision there
+// that read a file since deleted or moved aside, or since replaced by an older
+// copy, holds no row revision a new write can match, even when that happened
+// while the store was closed. False once the store has seen the highest revision there
 // is, which only a file edited by hand holds: none is past it, so nothing is
 // written (ErrFull), rather than a revision wrapped round below one a page may
 // hold. The caller holds s.mu and has read the file again if it changed.
@@ -268,7 +219,8 @@ func (s *Store) nextRevision(now time.Time) (uint64, bool) {
 // firstRevision is the revision a commit writes: one past seen, the highest
 // revision its store has read or written, and at least now in Unix seconds.
 // The time covers revisions no store open now saw: those of a file deleted,
-// or replaced by an older copy, while CPA was stopped or the cache disabled.
+// moved aside or replaced by an older copy while CPA was stopped or the cache
+// disabled.
 // Each was at least the time it was given out, then one more per commit, at
 // most writeLimit a minute, so none is past the time by more than a minute's
 // commits: a store opened a minute after the last gives none out again.
@@ -283,97 +235,82 @@ func (s *Store) fileChanged() bool {
 	return s.file.retry || !stampOfFile(s.path).same(s.file.stamp)
 }
 
-// Dir is the snapshot's directory, where the store's files are.
+// Dir is the snapshot's directory, where the settings file is.
 func (s *Store) Dir() string { return s.dir }
 
 // Path is the settings file's path.
 func (s *Store) Path() string { return s.path }
 
-// RecordPath is the import record's path.
-func (s *Store) RecordPath() string { return s.recordPath }
-
 // Current is the committed values. They are never modified: a save swaps in
 // new ones, so a caller may hold these as long as it likes.
 func (s *Store) Current() Values { return s.view.Load().values }
 
-// Status is the state of the saved values and of the import, as the last
-// commit or Sync left them. The caller may modify what it returns.
-func (s *Store) Status() Status {
-	status := s.view.Load().status
-	status.Import, status.LegacyCounts, status.LegacyUpdatedAt = cloneImport(status.Import), copyOf(status.LegacyCounts), copyOf(status.LegacyUpdatedAt)
-	return status
-}
+// Status is the state of the saved values, as the last commit or Sync left
+// it.
+func (s *Store) Status() Status { return s.view.Load().status }
 
 // Snapshot is Current and Status as one consistent pair.
 func (s *Store) Snapshot() (Values, Status) {
 	v := s.view.Load()
-	status := v.status
-	status.Import, status.LegacyCounts, status.LegacyUpdatedAt = cloneImport(status.Import), copyOf(status.LegacyCounts), copyOf(status.LegacyUpdatedAt)
-	return v.values, status
+	return v.values, v.status
 }
 
-// Close stops every later write: Apply and ImportLegacy return ErrClosed and
-// Sync does nothing. It waits for a save in flight to finish first. What the
-// store last held stays readable.
+// Close stops every later write: Apply returns ErrClosed and Sync does
+// nothing. It waits for a save in flight to finish first. What the store last
+// held stays readable.
 func (s *Store) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
 }
 
-// publish swaps in the values and status the store's files now give. The
+// publish swaps in the values and status the settings file now gives. The
 // caller holds s.mu.
 func (s *Store) publish() {
-	status := Status{State: client.CreditSettingsOK, RecordUnread: s.recordUnread()}
-	if !status.RecordUnread {
-		status.Import = s.importStatus()
-	} else if last := s.view.Load(); last != nil {
-		// importStatus would count the record as none, and offer an import
-		// that replaces what was saved here.
-		status.Import = last.status.Import
-	}
-	if s.legacy.ok {
-		counts := countsOf(s.legacy.values)
-		status.LegacyCounts, status.LegacyUpdatedAt = &counts, newestUpdate(s.legacy.values)
-	}
-	switch {
-	case s.file.values.Unreadable:
+	status := Status{State: client.CreditSettingsOK}
+	if s.file.values.Unreadable {
 		status.State = client.CreditSettingsUnreadable
-	case s.blocked:
-		status.State = client.CreditSettingsLegacyUnreadable
 	}
 	s.view.Store(&view{values: s.file.values, status: status})
 }
 
+// Sync brings the store in line with its file, once per publisher tick and at
+// every configure. The settings file is read again when it changed on disk or
+// is gone: moving an unreadable file aside makes the store empty and
+// editable, and putting a good copy back makes it apply, with no configure.
+// One that could not be opened or read is read again at every tick until a
+// read settles, so fixing its owner or permissions is enough. It reports
+// whether what the file gives may have changed: a read again of a changed
+// file, or one that settled. After Close, Sync does nothing.
+func (s *Store) Sync() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.reloadChanged()
+}
+
 // reloadChanged reads the settings file again when it changed on disk since
-// the store last read or wrote it, or its last read did not settle, so a save
-// or an import is judged against what is there now. A good copy put back, a
-// file deleted or one that fails its rules is seen at once, not at the next
-// tick, and never written over from memory. The caller holds s.mu.
-func (s *Store) reloadChanged() {
+// the store last read or wrote it, or its last read did not settle, and
+// reports whether what it gives may have changed: the file changed, or the
+// read settled. A save is judged against what is there now: a good copy put
+// back, a file deleted or moved aside, or one that fails its rules is seen at
+// once, not at the next tick, and never written over from memory. The caller
+// holds s.mu.
+func (s *Store) reloadChanged() bool {
 	if !s.fileChanged() {
-		return
+		return false
 	}
+	moved := !stampOfFile(s.path).same(s.file.stamp)
 	s.setFile(s.readFile())
-	s.observe()
 	s.publish()
+	return moved || !s.file.retry
 }
 
 // Apply saves one batch, all or nothing: a conflict, the write limit, a
 // baseline the meter cannot cover, a reading with no organization to store, a
 // bound, or a failed commit leaves the file and the values exactly as they
 // were. meter is the one the publisher last loaded, nil when there was none;
-// it gives a new reading its baseline. A save that crosses the import
-// record's lineage, as one that starts a settings file where the imported one
-// went missing, or one over a file that holds the import put back after that,
-// writes the record first (saveRevision), and is refused with ErrUnwritable
-// when it cannot; a failed commit after that leaves a switch no file meets
-// yet. A save after an import that could not write its record writes that
-// record first (writePending), and is refused with ErrUnwritable when it
-// still cannot. While the record is there but could not be opened or read,
-// which a later read may get past, nothing is saved (ErrUnavailable): the
-// save could not tell which side its file is on. Once the store has seen the
-// highest revision there is, nothing is saved either (ErrFull).
+// it gives a new reading its baseline. Once the store has seen the highest
+// revision there is, nothing is saved (ErrFull).
 //
 // The batch must have passed Check against Current; Apply checks again under
 // its lock, against what is stored then, read again first if the file changed
@@ -390,13 +327,8 @@ func (s *Store) Apply(b Batch, meter *client.APIMeter, now time.Time) (Result, e
 		return Result{}, ErrClosed
 	}
 	s.reloadChanged()
-	// The save may write the import record first (saveRevision), and may be
-	// the first: the record and Quota Glance's file are judged as they are
-	// now, not at the last tick.
-	s.observe()
-	s.publish()
 	current := s.file.values
-	if current.Unreadable || s.blocked || s.recordUnread() {
+	if current.Unreadable {
 		return Result{}, ErrUnavailable
 	}
 	if fail := b.Check(current, now); fail != nil {
@@ -443,14 +375,9 @@ func (s *Store) Apply(b Batch, meter *client.APIMeter, now time.Time) (Result, e
 	if !s.writes.allows(now) {
 		return Result{}, ErrTooManyWrites
 	}
-	// The save is judged against the record of an import that could not
-	// write it, so that is written first.
-	if err := s.writePending(); err != nil {
-		return Result{}, err
-	}
-	revision, lineage, err := s.saveRevision(now)
-	if err != nil {
-		return Result{}, err
+	revision, ok := s.nextRevision(now)
+	if !ok {
+		return Result{}, ErrFull
 	}
 
 	next := current.clone()
@@ -520,15 +447,10 @@ func (s *Store) Apply(b Batch, meter *client.APIMeter, now time.Time) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	if lineage != nil {
-		if err := s.writeRecord(*lineage); err != nil {
-			return Result{}, err
-		}
-	}
 	if err := s.commit(raw); err != nil {
 		return Result{}, err
 	}
-	s.setFile(settingsFile{stamp: stampOfFile(s.path), values: next, sha: hashOf(raw)})
+	s.setFile(settingsFile{stamp: stampOfFile(s.path), values: next})
 	s.writes = append(s.writes, now)
 	s.publish()
 	return result, nil
@@ -817,37 +739,4 @@ func readStamped(path string, stamp fileStamp, limit int64) (raw []byte, settled
 		return nil, false, false
 	}
 	return raw, true, true
-}
-
-func hashOf(raw []byte) string {
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}
-
-func absolute(path string) string {
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
-	}
-	return filepath.Clean(path)
-}
-
-// cloneImport is a copy of in that shares nothing with it.
-func cloneImport(in *client.CreditImport) *client.CreditImport {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.Kind, out.SourcePath, out.SHA256, out.SettingsSHA256 = copyOf(in.Kind), copyOf(in.SourcePath), copyOf(in.SHA256), copyOf(in.SettingsSHA256)
-	out.LegacyRevision, out.LegacyUpdatedAt = copyOf(in.LegacyRevision), copyOf(in.LegacyUpdatedAt)
-	out.Counts, out.ImportedAt = copyOf(in.Counts), copyOf(in.ImportedAt)
-	return &out
-}
-
-// copyOf is a new pointer to a copy of *p, and nil for nil.
-func copyOf[T any](p *T) *T {
-	if p == nil {
-		return nil
-	}
-	v := *p
-	return &v
 }

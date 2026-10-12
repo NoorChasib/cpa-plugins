@@ -19,15 +19,16 @@ import (
 )
 
 // Item is one Claude Console organization quota-cache lists: its account id
-// and its configuration, as the anthropic-api snapshot entry for it carries
-// them.
+// and the organization, as the anthropic-api snapshot entry for it carries
+// them. Its credit and refill date are the settings file's, never the item's.
 type Item struct {
-	// ID is client.APICreditOrgAccount of the organization, or "item-<n>" for
-	// an item that cannot be linked to one.
+	// ID is client.APICreditOrgAccount of the organization.
 	ID string
-	// Credit is the item as quota-cache read it. quota-cache always sets it; a
-	// nil one, like an anthropic-api entry with no api_credit, is counted as
-	// misconfigured.
+	// Credit is the organization's label, position and Organization ID, from
+	// the page's list, so quota-cache always sets it, with an Organization ID
+	// and no Problem. A nil one, or one with a Problem, is misconfigured, and
+	// one with no Organization ID is cacheTooOld: the contract's states for
+	// what quota-cache 0.1.x listed from its configuration.
 	Credit *client.APICredit
 }
 
@@ -54,10 +55,8 @@ type Input struct {
 	// client.CreditSettingsOK. Either is client.CreditSettingsUnreadable
 	// when Settings.Unreadable is set.
 	SettingsState string
-	// Import is where the import from Quota Glance's settings.json stands,
-	// published as settings.import.
-	Import *client.CreditImport
-	// Organizations says where Items came from, published as organizations.
+	// Organizations is the state of the organizations file Items come from,
+	// published as organizations.
 	Organizations client.CreditOrganizations
 	// Version is quota-cache's version, published.
 	Version string
@@ -74,7 +73,7 @@ func Compute(in Input) *client.CreditState {
 	state := settingsStateOf(in)
 	in.SettingsState = state
 	if state != client.CreditSettingsOK {
-		// Nothing stored applies, only what is configured.
+		// Nothing stored applies.
 		in.Settings = settings.Values{APICredits: map[string]settings.APICredit{}, Renewals: map[string]settings.Renewal{}}
 	}
 	revision := settings.RevisionText(in.Settings.Revision)
@@ -91,7 +90,6 @@ func Compute(in Input) *client.CreditState {
 			State:    state,
 			Editable: state == client.CreditSettingsOK,
 			Revision: revision,
-			Import:   cloneImport(in.Import),
 		},
 		APICredits:    apiCreditsOf(in, now),
 		Renewals:      renewalsOf(in.Settings),
@@ -100,20 +98,15 @@ func Compute(in Input) *client.CreditState {
 	if in.Meter != nil {
 		out.Inputs.MeterFlushedAt = timePointerOf(in.Meter.FlushedAt)
 	}
-	out.Organizations.Migration = copyOf(in.Organizations.Migration)
 	out.ValidUntil = validUntilOf(out.APICredits)
 	return out
 }
 
-// settingsStateOf is the state of the saved values Compute publishes. Values
-// the store could not read are unreadable, unless the state already says why
-// nothing stored applies.
+// settingsStateOf is the state of the saved values Compute publishes: values
+// the store could not read are unreadable.
 func settingsStateOf(in Input) string {
-	switch {
-	case in.Settings.Unreadable && (in.SettingsState == "" || in.SettingsState == client.CreditSettingsOK):
+	if in.Settings.Unreadable || in.SettingsState == client.CreditSettingsUnreadable {
 		return client.CreditSettingsUnreadable
-	case in.SettingsState != "":
-		return in.SettingsState
 	}
 	return client.CreditSettingsOK
 }
@@ -173,25 +166,4 @@ func timePointerOf(t time.Time) *time.Time {
 	}
 	t = t.UTC()
 	return &t
-}
-
-// cloneImport is a copy of in that shares nothing with it.
-func cloneImport(in *client.CreditImport) *client.CreditImport {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.Kind, out.SourcePath, out.SHA256, out.SettingsSHA256 = copyOf(in.Kind), copyOf(in.SourcePath), copyOf(in.SHA256), copyOf(in.SettingsSHA256)
-	out.LegacyRevision, out.LegacyUpdatedAt = copyOf(in.LegacyRevision), copyOf(in.LegacyUpdatedAt)
-	out.Counts, out.ImportedAt = copyOf(in.Counts), copyOf(in.ImportedAt)
-	return &out
-}
-
-// copyOf is a new pointer to a copy of *p, and nil for nil.
-func copyOf[T any](p *T) *T {
-	if p == nil {
-		return nil
-	}
-	v := *p
-	return &v
 }

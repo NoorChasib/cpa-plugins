@@ -24,22 +24,6 @@ const (
 	CreditsAbandoned = "abandoned"
 )
 
-// editing.migration: whether the values saved in quota-glance's own
-// settings.json have reached Quota Cache. "" says there is nothing to say.
-// Working it out reads files, so the caller does it and passes the answer in
-// Input.Migration.
-const (
-	// MigrationNotImported: Quota Cache holds no import of this file.
-	MigrationNotImported = "notImported"
-	// MigrationChangedSinceImport: this file changed after Quota Cache
-	// imported it.
-	MigrationChangedSinceImport = "changedSinceImport"
-	// MigrationAwaitingImport: Quota Cache has not published a state yet, and
-	// the file a first start of Quota Cache 0.2.0 would import is this one,
-	// which it can read.
-	MigrationAwaitingImport = "awaitingImport"
-)
-
 // apiCreditsTitle is the card's heading, Quota Cache's own.
 const apiCreditsTitle = "Monthly API Credit"
 
@@ -76,7 +60,7 @@ func creditsCause(in Input) string {
 // figures. Nil when there is nothing to list.
 func apiCreditsOf(in Input, now time.Time) *APICredits {
 	if state := usableCredits(in); state != nil {
-		return readOnly(qc.CreditsAt(state, now, in.StaleAfter), in.Migration)
+		return readOnly(qc.CreditsAt(state, now, in.StaleAfter))
 	}
 	return fallbackCreditsOf(in)
 }
@@ -92,11 +76,11 @@ var structuralReasons = map[string]bool{
 }
 
 // readOnly is the published card as quota-glance shows it: nothing on it is
-// editable here. The reason is Quota Cache's own while it cannot use its saved
-// settings, settingsUnreadable or legacyUnreadable, so the page points at the
-// file to fix; otherwise it is quotaCache, edited on Quota Cache's page.
-// state is CreditsAt's copy, which this changes in place.
-func readOnly(state *qc.CreditState, migration string) *APICredits {
+// editable here. The reason is Quota Cache's own while it cannot read its
+// saved settings, settingsUnreadable, so the page points at that file;
+// otherwise it is quotaCache, edited on Quota Cache's page. state is
+// CreditsAt's copy, which this changes in place.
+func readOnly(state *qc.CreditState) *APICredits {
 	d := state.APICredits
 	if d == nil {
 		return nil
@@ -105,7 +89,7 @@ func readOnly(state *qc.CreditState, migration string) *APICredits {
 	if state.Settings.State != qc.CreditSettingsOK && d.Editing.Reason != "" {
 		reason = d.Editing.Reason
 	}
-	d.Editing = APICreditEditing{Reason: reason, Migration: migration}
+	d.Editing = APICreditEditing{Reason: reason}
 	for i := range d.Accounts {
 		settings := &d.Accounts[i].Settings
 		settings.Editable = false
@@ -117,9 +101,9 @@ func readOnly(state *qc.CreditState, migration string) *APICredits {
 }
 
 // fallbackCreditsOf is the card without a usable state, built from the
-// snapshot's anthropic-api entries alone: every organization with what the
-// configuration says of it, none counted, each saying why, and no figure that
-// only Quota Cache could work out. Nil when the snapshot has no such entry.
+// snapshot's anthropic-api entries alone: every organization with what its
+// entry says of it, none counted, each saying why, and no figure that only
+// Quota Cache could work out. Nil when the snapshot has no such entry.
 func fallbackCreditsOf(in Input) *APICredits {
 	entries := []qc.Entry{}
 	for _, entry := range in.Snapshot.Entries {
@@ -134,8 +118,8 @@ func fallbackCreditsOf(in Input) *APICredits {
 	for _, entry := range entries {
 		accounts = append(accounts, fallbackAccountOf(entry, fallbackIssues[creditsCause(in)]))
 	}
-	// Quota Cache's order: configured position, then label, then id. An entry
-	// with no configuration at all has no position and goes last.
+	// Quota Cache's order: position, then label, then id. An entry without
+	// api_credit has no position and goes last.
 	sort.Slice(accounts, func(i, j int) bool {
 		a, b := accounts[i], accounts[j]
 		if (a.Order < 0) != (b.Order < 0) {
@@ -152,7 +136,7 @@ func fallbackCreditsOf(in Input) *APICredits {
 	return &APICredits{
 		Title:    apiCreditsTitle,
 		Currency: "USD",
-		Editing:  APICreditEditing{Reason: qc.CreditEditingQuotaCache, Migration: in.Migration},
+		Editing:  APICreditEditing{Reason: qc.CreditEditingQuotaCache},
 		Pool:     APICreditPool{AccountCount: len(accounts), MissingCount: len(accounts)},
 		Accounts: accounts,
 		Unlinked: []APICreditUnlinked{},
@@ -161,8 +145,9 @@ func fallbackCreditsOf(in Input) *APICredits {
 }
 
 // fallbackAccountOf is one organization with no figures: its name, place and
-// organization, and the configured credit and refill date in the form Quota
-// Cache's own state carries them.
+// organization, and, from a Quota Cache older than 0.2.0, the credit and
+// refill date its configuration gave, in the form Quota Cache's own state
+// carries them. Quota Cache 0.2.0 writes neither into the snapshot.
 func fallbackAccountOf(entry qc.Entry, issue string) APICreditAccount {
 	account := APICreditAccount{
 		ID:                  entry.AuthIndex,

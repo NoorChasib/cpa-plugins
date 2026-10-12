@@ -2,9 +2,11 @@ package credits
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,10 +51,18 @@ func fixtureNamed(t *testing.T, name string) fixture {
 	return fixture{}
 }
 
-// inputOf is what the publisher would pass for the fixture at its instant: the
-// snapshot's anthropic-api entries as the item list, the meter, and the
-// settings, with nothing stale.
+// inputOf is what the publisher would pass for the fixture at its instant, once
+// its organizations are on the page with their credits and refill dates
+// (onPage): the item list, the meter, and the settings, with nothing stale.
 func inputOf(t *testing.T, f fixture) Input {
+	t.Helper()
+	return onPage(snapshotInput(t, f))
+}
+
+// snapshotInput is the fixture's input with the snapshot's anthropic-api
+// entries as the item list, as quota-cache 0.1.x wrote them: each still
+// carries the credit and refill date its configuration gave it.
+func snapshotInput(t *testing.T, f fixture) Input {
 	t.Helper()
 	path := filepath.Join("testdata", "snapshots", f.name+".json")
 	snapshot, err := client.Load(path)
@@ -82,9 +92,68 @@ func inputOf(t *testing.T, f fixture) Input {
 		Meter:         meter,
 		Settings:      loadSettings(t, f.settings),
 		SettingsState: client.CreditSettingsOK,
-		Organizations: client.CreditOrganizations{State: client.OrganizationsStateMissing, Source: client.OrganizationsSourceConfig},
+		Organizations: client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "1"},
 		Version:       "0.2.0",
 	}
+}
+
+// pageEnteredAt is when onPage enters the values it moves to the page: before
+// every fixture's instant.
+var pageEnteredAt = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+// onPage is in once each organization's monthly credit and refill date are
+// entered on Quota Cache's page, the only place they are kept: the values
+// quota-cache 0.1.x configured, which the fixtures' snapshot entries and
+// creditEntry carry on the item. A value already stored wins, field by field,
+// as it did over the configured one. Only an organization's own account takes
+// values, and an invalid one is left out, as the page refuses both. A new
+// entry is stamped with the settings file's revision, or 1 without one, and
+// pageEnteredAt. Each item keeps only its label, position and organization,
+// which is all the page's organizations give, and its problem. Only the
+// degraded-states fixture has items the page never gives: item-<n> and
+// label-<hex> accounts and items with a problem, which quota-cache 0.1.x
+// listed from its configuration and this one never lists. They stay so that
+// its golden, and the summary Quota Glance builds from it, cover the
+// contract's misconfigured, cacheTooOld and overLimit values.
+func onPage(in Input) Input {
+	values := in.Settings
+	values.APICredits = maps.Clone(values.APICredits)
+	if values.APICredits == nil {
+		values.APICredits = map[string]settings.APICredit{}
+	}
+	items := make([]Item, 0, len(in.Items))
+	for _, item := range in.Items {
+		c := item.Credit
+		if c == nil {
+			items = append(items, item)
+			continue
+		}
+		monthly, renews := "", ""
+		if client.ValidMonthlyUSD(c.MonthlyUSD) {
+			monthly = c.MonthlyUSD
+		}
+		if day, err := client.ParseRenewal(c.Renews); err == nil {
+			renews = day.Format(time.DateOnly)
+		}
+		if strings.HasPrefix(item.ID, "org-") && (monthly != "" || renews != "") {
+			stored, has := values.APICredits[item.ID]
+			if !has {
+				stored = settings.APICredit{Rev: max(values.Revision, 1), UpdatedAt: pageEnteredAt}
+				values.Revision = stored.Rev
+			}
+			if stored.MonthlyUSD == "" {
+				stored.MonthlyUSD = monthly
+			}
+			if stored.Renews == "" {
+				stored.Renews = renews
+			}
+			values.APICredits[item.ID] = stored
+		}
+		item.Credit = &client.APICredit{Label: c.Label, Position: c.Position, OrganizationID: c.OrganizationID, Problem: c.Problem}
+		items = append(items, item)
+	}
+	in.Items, in.Settings = items, values
+	return in
 }
 
 // computeFixture is the state quota-cache publishes for the fixture.

@@ -12,7 +12,6 @@
   </header>
   <div id="error" class="alert error" role="alert" hidden></div>
   <div id="content" hidden>
-    <div id="import-note" class="alert moved" role="status" hidden></div>
     <div id="refresh-round" class="alert" role="status" hidden></div>
     <div id="cooldowns" class="alert warn" hidden></div>
     <div id="activity-error" class="alert error" hidden></div>
@@ -37,7 +36,7 @@
         <h3>Gaps</h3>
         <ul id="meter-gaps" class="meter-list"></ul><p id="meter-gaps-empty" class="empty" hidden>No gaps recorded: the meter has counted without a stop since it began.</p>
         <h3>Organizations not listed</h3>
-        <ul id="meter-unlinked" class="meter-list"></ul><p id="meter-unlinked-empty" class="empty" hidden>None seen. An organization listed here sent Claude API-key traffic through CPA while it was not listed under Organizations (or, before they moved to this page, in claude-api-credits).</p>
+        <ul id="meter-unlinked" class="meter-list"></ul><p id="meter-unlinked-empty" class="empty" hidden>None seen. An organization listed here sent Claude API-key traffic through CPA while it was not listed under Organizations.</p>
       </div>
     </section>
     <section class="section" aria-labelledby="history-heading">
@@ -54,8 +53,8 @@
       <p>Refreshing this view reads cached information only. It never requests a provider refresh. Times use your browser’s time zone.</p>
       <p>Account Health and Reset Priority opt in through their configuration and wait when fresh data is unavailable. Their direct file reads cannot be counted here. CPA’s stock quota dashboard polls independently.</p>
       <p>The latest 100 completed polls and cumulative totals persist across restarts. No credentials, request headers, or provider response bodies are stored in this history.</p>
-      <p>Claude API credit organizations are never polled. The Claude API meter counts the tokens of Claude API-key traffic CPA serves, per Console organization, from CPA's usage records, and sends nothing to Anthropic. Quota Cache prices them at Anthropic's list prices for Claude API credits above; Quota Glance and Reset Priority read the same figures.</p>
-      <p>Organizations, monthly credits, refill dates, Console readings and Claude renewal dates are saved through CPA's management API with the console session this page reads with, and kept in files beside the cache. After a refusal, this page sends the remembered key again only when you select Refresh view, or Save or an import when the refusal was not about the key. Nothing is retried on its own, and each refused try counts toward CPA's limit of five failed sign-ins.</p>
+      <p>Claude API credit organizations are never polled. The Claude API meter counts the tokens of Claude API-key traffic CPA serves, per Console organization, from CPA's usage records, and sends nothing to Anthropic. Quota Cache prices them at Anthropic's list prices for Claude API credits above; Quota Glance 0.8.0 or newer and Reset Priority 0.2.0 or newer read the same figures.</p>
+      <p>Organizations, monthly credits, refill dates, Console readings and Claude renewal dates are saved through CPA's management API with the console session this page reads with, and kept in files beside the cache. After a refusal, this page sends the remembered key again only when you select Refresh view, or Save when the refusal was not about the key. Nothing is retried on its own, and each refused try counts toward CPA's limit of five failed sign-ins.</p>
     </footer>
   </div>
 </main>

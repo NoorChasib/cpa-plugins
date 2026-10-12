@@ -2,7 +2,7 @@
 // API credit's monthly amount and refill date, a Console reading of what is
 // left, and a Claude subscription's renewal date. They live in
 // snapshot.settings.json beside the snapshot, in exactly the schema of Quota
-// Glance's settings.json, and win over claude-api-credits, field by field.
+// Glance's settings.json.
 //
 // Loading checks shape only. A value that was valid when it was saved stays
 // loadable however old it gets: a reading taken before the last refill, or for
@@ -40,19 +40,12 @@ const (
 // Values is one committed state of the settings file. It is never modified
 // once a Store hands it out; a save swaps in a new one.
 type Values struct {
-	// Revision goes up with each committed write. A save, and Import Quota
-	// Glance's settings, writes past every revision its store has seen and at
-	// least at the time in Unix seconds, so a page that read an earlier file,
-	// since deleted or replaced by an older copy, even while CPA was stopped,
-	// holds no revision a new row can have. The automatic import keeps Quota
-	// Glance's revisions. So does a follow while the import record says the
-	// settings file is a byte copy of Quota Glance's file, no later revision
-	// was given out, and Quota Glance's newer file goes on from that copy;
-	// otherwise, as after Import Quota Glance's settings, after the imported
-	// file was put back over saves made here, or after an older copy of Quota
-	// Glance's file was put back, a follow raises every row past both files'
-	// revisions, as that import does. Each entry's Rev is the revision that
-	// last wrote it. 0 without a file.
+	// Revision goes up with each committed write. A save writes past every
+	// revision its store has seen and at least at the time in Unix seconds,
+	// so a page that read an earlier file, since deleted, moved aside or
+	// replaced by an older copy, even while CPA was stopped, holds no revision
+	// a new row can have. Each entry's Rev is the revision that last wrote it.
+	// 0 without a file.
 	Revision uint64
 	// APICredits is keyed by the anthropic-api account id, "org-" and 12 hex
 	// digits.
@@ -67,7 +60,7 @@ type Values struct {
 }
 
 // APICredit is the page's values for one Console organization. An empty
-// string is a value not set here, which leaves the configured one in force.
+// string is a value not set.
 type APICredit struct {
 	MonthlyUSD string
 	// Renews is a date, "2026-10-29".

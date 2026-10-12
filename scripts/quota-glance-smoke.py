@@ -109,41 +109,41 @@ CREDITS_ORG = '00000000-0000-4000-8000-00000000000a'
 
 def credit_state(now):
     """The smallest credit state Quota Cache 0.2.0 publishes beside its
-    snapshot: one Console organization with credit left, computed at now and
-    good until its refill. It says the organization is editable, because on
-    Quota Cache's page it is; Quota Glance must show it read-only."""
+    snapshot: one Console organization added on its page, with a credit and a
+    refill date entered there and credit left, computed at now and good until
+    its refill. It says the organization is editable, because on Quota Cache's
+    page it is; Quota Glance must show it read-only."""
     account = 'org-' + hashlib.sha256(CREDITS_ORG.encode()).hexdigest()[:12]
     day = now - now % 86400
     renews = day + 10 * 86400
-    settings = {'editable': True, 'notEditableReason': '', 'revision': '', 'monthlyUsd': None,
-                'configMonthlyUsd': '50', 'configMonthlyUsdInvalid': False, 'renews': None,
-                'configRenews': time.strftime('%Y-%m-%d', time.gmtime(renews)), 'configRenewsInvalid': False,
-                'reading': None, 'readingUnusedReason': '', 'updatedAtEpoch': None}
+    settings = {'editable': True, 'notEditableReason': '', 'revision': '1', 'monthlyUsd': '50',
+                'configMonthlyUsd': '', 'configMonthlyUsdInvalid': False,
+                'renews': time.strftime('%Y-%m-%d', time.gmtime(renews)), 'configRenews': '',
+                'configRenewsInvalid': False, 'reading': None, 'readingUnusedReason': '', 'updatedAtEpoch': day}
     return {
         'schema': 1, 'quota_cache_version': '0.2.0', 'computed_at': stamp(now), 'valid_until': stamp(renews),
         'inputs': {'snapshot_written_at': stamp(now), 'meter_flushed_at': stamp(now), 'meter_error': '',
-                   'settings_revision': ''},
-        'settings': {'state': 'ok', 'editable': True, 'revision': '', 'import': None},
+                   'settings_revision': '1'},
+        'settings': {'state': 'ok', 'editable': True, 'revision': '1'},
         'api_credits': {
             'title': 'Monthly API Credit', 'currency': 'USD',
             'meter': {'sinceEpoch': day, 'updatedAtEpoch': now, 'stale': False, 'gaps': []},
-            'editing': {'available': True, 'reason': '', 'migration': ''},
+            'editing': {'available': True, 'reason': ''},
             'pool': {'hasEstimate': True, 'monthlyCredit': 50, 'monthlyCreditText': '$50.00', 'used': 12.5,
                      'usedText': '$12.50', 'left': 37.5, 'leftText': '$37.50', 'remainingFraction': 0.75,
                      'remainingPercent': 75, 'level': 'ok', 'accountCount': 1, 'countedCount': 1},
             'accounts': [{
                 'id': account, 'label': 'smoke', 'order': 0, 'organizationId': CREDITS_ORG, 'state': 'ok',
                 'counted': True, 'hasEstimate': True, 'basis': 'credit', 'monthlyCredit': 50,
-                'monthlyCreditText': '$50.00', 'monthlyCreditSource': 'config', 'used': 12.5, 'usedText': '$12.50',
+                'monthlyCreditText': '$50.00', 'monthlyCreditSource': 'dashboard', 'used': 12.5, 'usedText': '$12.50',
                 'left': 37.5, 'leftText': '$37.50', 'remainingFraction': 0.75, 'remainingPercent': 75,
-                'level': 'ok', 'renewsAtEpoch': renews, 'renewsInSeconds': renews - now, 'renewsSource': 'config',
+                'level': 'ok', 'renewsAtEpoch': renews, 'renewsInSeconds': renews - now, 'renewsSource': 'dashboard',
                 'dataIssues': [], 'issue': '', 'settings': settings,
             }],
             'unlinked': [], 'orphans': [],
         },
         'renewals': {},
-        'organizations': {'state': 'ok', 'revision': '1', 'source': 'page', 'migration': None,
-                          'config_items_ignored': 0},
+        'organizations': {'state': 'ok', 'revision': '1', 'config_items_ignored': 0},
     }
 
 
@@ -627,7 +627,7 @@ def checks(container, cache_path, now):
     assert credits, 'the published credit state never reached the served document'
     account = credits['accounts'][0]
     assert (account['label'], account['state'], account['leftText']) == ('smoke', 'ok', '$37.50'), account
-    assert credits['editing']['reason'] == 'quotaCache' and credits['editing']['available'] is False, credits['editing']
+    assert credits['editing'] == {'available': False, 'reason': 'quotaCache'}, credits['editing']
     assert account['settings']['editable'] is False, account['settings']
     assert account['settings']['notEditableReason'] == 'quotaCache', account['settings']
     credit_health = health_document()['credit_state']

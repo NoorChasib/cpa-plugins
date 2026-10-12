@@ -151,23 +151,18 @@ describe("the Accounts card", () => {
     assert.equal(accountsCardNeeded("claude", 0), false)
   })
 
-  test("while Quota Cache cannot use its saved settings, the foot says the rows show estimates", () => {
+  test("while Quota Cache cannot read its saved settings, the foot says the rows show estimates", () => {
+    const unreadable = { available: false, reason: "settingsUnreadable" }
+    const sentence = renewalTrouble(unreadable)
     assert.equal(
-      renewalTrouble({ available: false, reason: "settingsUnreadable" }),
+      sentence,
       "Quota Cache cannot read its saved settings, so renewal dates entered there do not apply and estimates are shown. See Quota Cache's page.",
     )
-    assert.equal(
-      renewalTrouble({ available: false, reason: "legacyUnreadable" }),
-      "Quota Glance's settings.json could not be read, so Quota Cache imported no renewal dates and estimates are shown. Fix it or move it aside.",
-    )
-    // A renewal date has no configured value to fall back on, so the API
-    // credit card's sentence, which says config values apply, is not this
-    // card's.
-    for (const reason of ["settingsUnreadable", "legacyUnreadable"]) {
-      const sentence = renewalTrouble({ available: false, reason })
-      assert.doesNotMatch(sentence ?? "", /config/, reason)
-      assert.notEqual(sentence, editingTrouble({ available: false, reason }), reason)
-    }
+    // The API credit card's sentence is about its own values, not this card's.
+    assert.notEqual(sentence, editingTrouble(unreadable))
+    // Neither offers a configured value in their place: Quota Cache keeps none
+    // for a renewal date or an API credit.
+    for (const said of [sentence, editingTrouble(unreadable)]) assert.doesNotMatch(said ?? "", /config/i)
     // Otherwise the entered dates apply, and the foot has nothing more to say.
     for (const reason of ["quotaCache", "", "disabled"]) assert.equal(renewalTrouble({ available: false, reason }), null, reason)
     assert.equal(renewalTrouble({ available: true, reason: "" }), null)

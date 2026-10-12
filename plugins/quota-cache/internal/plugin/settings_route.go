@@ -30,11 +30,6 @@ const (
 	// organizationsUnreadable is the organizations editor's reason while its
 	// file cannot be read.
 	organizationsUnreadable = "organizationsUnreadable"
-	// importRecordUnreadable is the editor's reason while the import record
-	// is there but cannot be opened or read (settings.Status.RecordUnread).
-	// The saved values still apply, so the published state stays ok; only the
-	// page and this route hold.
-	importRecordUnreadable = "importRecordUnreadable"
 )
 
 // claudeCredential is one Claude credential on CPA's roster, as the page's
@@ -68,51 +63,29 @@ func credentialName(entry protocol.HostAuthFileEntry, provider string) string {
 // themselves are credit_state's accounts.
 type editorStatus struct {
 	// Available is whether the saved settings can be edited, and Reason why
-	// not: client.CreditEditingSettingsUnreadable, …LegacyUnreadable or
-	// importRecordUnreadable.
+	// not: client.CreditEditingSettingsUnreadable.
 	Available bool   `json:"available"`
 	Reason    string `json:"reason"`
-	// Revision is the settings file's, "" when there is none: an import's
-	// baseRevision.
-	Revision          string `json:"revision"`
-	MaxAPICreditItems int    `json:"max_api_credit_items"`
-	MaxRenewalItems   int    `json:"max_renewal_items"`
-	MaxBatchBytes     int    `json:"max_batch_bytes"`
-	// Legacy is where the import from Quota Glance's settings.json stands,
-	// as the credit state's settings.import, with what the file holds now;
-	// null when there is no legacy file and no readable import record.
-	Legacy         *editorLegacy      `json:"legacy"`
-	Credentials    []editorCredential `json:"credentials"`
-	RenewalOrphans []renewalOrphan    `json:"renewal_orphans"`
+	// Revision is the settings file's, "" when there is none.
+	Revision          string             `json:"revision"`
+	MaxAPICreditItems int                `json:"max_api_credit_items"`
+	MaxRenewalItems   int                `json:"max_renewal_items"`
+	MaxBatchBytes     int                `json:"max_batch_bytes"`
+	Credentials       []editorCredential `json:"credentials"`
+	RenewalOrphans    []renewalOrphan    `json:"renewal_orphans"`
 	// APICreditOrphans are the saved API credit values while the published
 	// state lists no organization. api_credits is null then and carries no
 	// orphans, yet the values of a removed last organization must still be
 	// shown and cleared. Empty while api_credits is published: its own
 	// orphans are the list.
 	APICreditOrphans []client.CreditOrphan `json:"api_credit_orphans"`
-	// HeldAPICredits are the saved API credit values the published state
-	// does not list while the organizations file cannot be read. The
-	// configuration's list stands in for the file then, and a value it lacks
-	// may belong to an organization in the file, so it is no orphan: the page
-	// shows it without offering to clear it, and the save route refuses to
-	// touch it until the file can be read. Empty otherwise.
+	// HeldAPICredits are the saved API credit values while the organizations
+	// file cannot be read. No organization is listed then, and any value may
+	// belong to one in the file, so none is an orphan: the page shows them
+	// without offering to clear them, and the save route refuses to touch
+	// them until the file can be read. Empty otherwise.
 	HeldAPICredits []client.CreditOrphan `json:"held_api_credits"`
 	Organizations  editorOrganizations   `json:"organizations"`
-}
-
-// editorLegacy is the credit state's settings.import, whose counts are what
-// the last import brought, and the counts of what the legacy file holds now,
-// which an import would bring, with when it last changed. The import's
-// confirmation names those beside what is saved here, which it replaces.
-type editorLegacy struct {
-	*client.CreditImport
-	// FileCounts count the legacy file as an import record's counts do; null
-	// unless it can be read.
-	FileCounts *client.CreditImportCounts `json:"file_counts"`
-	// FileUpdatedAt is the newest change in the legacy file, as
-	// legacy_updated_at is the import's: nothing saved on the page since is
-	// in it. Null unless it can be read, and while it holds no row.
-	FileUpdatedAt *time.Time `json:"file_updated_at"`
 }
 
 // editorCredential is one Claude credential on the roster, disabled ones
@@ -156,14 +129,11 @@ type editorOrganizations struct {
 	Items    []organizationItem `json:"items"`
 }
 
-// organizationItem is one organization in the file. The defaults themselves
-// are the accounts' configMonthlyUsd and configRenews in credit_state.
+// organizationItem is one organization in the file.
 type organizationItem struct {
-	ID                   string `json:"id"`
-	Label                string `json:"label"`
-	OrganizationID       string `json:"organization_id"`
-	HasDefaultMonthlyUSD bool   `json:"has_default_monthly_usd"`
-	HasDefaultRenews     bool   `json:"has_default_renews"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	OrganizationID string `json:"organization_id"`
 }
 
 // editorOf is the status route's editor key, from the stores as they are now
@@ -181,9 +151,6 @@ func (p *Plugin) editorOf(store *settings.Store, organizations *settings.Organiz
 	if status.State == client.CreditSettingsOK {
 		editor.APICreditOrphans = apiCreditOrphansOf(state, values)
 		editor.HeldAPICredits = heldAPICreditsOf(state, values)
-	}
-	if status.Import != nil {
-		editor.Legacy = &editorLegacy{CreditImport: status.Import, FileCounts: status.LegacyCounts, FileUpdatedAt: status.LegacyUpdatedAt}
 	}
 	roster := p.roster.Load()
 	if roster == nil {
@@ -217,13 +184,8 @@ func (p *Plugin) editorOf(store *settings.Store, organizations *settings.Organiz
 
 // editingReasonOf is the editor's reason while status is not editable.
 func editingReasonOf(status settings.Status) string {
-	switch {
-	case status.State == client.CreditSettingsUnreadable:
+	if status.State == client.CreditSettingsUnreadable {
 		return client.CreditEditingSettingsUnreadable
-	case status.State == client.CreditSettingsLegacyUnreadable:
-		return client.CreditEditingLegacyUnreadable
-	case status.RecordUnread:
-		return importRecordUnreadable
 	}
 	return ""
 }
@@ -242,10 +204,7 @@ func organizationsEditorOf(o settings.Organizations) editorOrganizations {
 func organizationItemsOf(o settings.Organizations) []organizationItem {
 	items := make([]organizationItem, 0, len(o.Items))
 	for _, item := range o.Items {
-		items = append(items, organizationItem{
-			ID: item.ID(), Label: item.Label, OrganizationID: item.OrganizationID,
-			HasDefaultMonthlyUSD: item.DefaultMonthlyUSD != "", HasDefaultRenews: item.DefaultRenews != "",
-		})
+		items = append(items, organizationItem{ID: item.ID(), Label: item.Label, OrganizationID: item.OrganizationID})
 	}
 	return items
 }
@@ -284,20 +243,15 @@ func apiCreditOrphansOf(state *client.CreditState, values settings.Values) []cli
 	return credits.Orphans(values)
 }
 
-// heldAPICreditsOf is every saved API credit row state does not list while
-// the organizations file cannot be read, oldest first: what would otherwise
-// be orphans, though they may belong to organizations in the file.
+// heldAPICreditsOf is every saved API credit row while the organizations file
+// cannot be read, oldest first: what would otherwise be orphans, though they
+// may belong to organizations in the file. No organization is listed then,
+// so that is every saved row.
 func heldAPICreditsOf(state *client.CreditState, values settings.Values) []client.CreditOrphan {
-	held := []client.CreditOrphan{}
 	if !organizationsUnread(state) || values.Unreadable {
-		return held
+		return []client.CreditOrphan{}
 	}
-	for _, row := range credits.Orphans(values) {
-		if _, listed := accountOf(state, row.ID); !listed {
-			held = append(held, row)
-		}
-	}
-	return held
+	return credits.Orphans(values)
 }
 
 // organizationsUnread reports whether state was published while the
@@ -356,9 +310,6 @@ func (p *Plugin) saveSettings(req protocol.ManagementRequest) protocol.Managemen
 	}
 	if !store.Status().Editable() {
 		return response(http.StatusServiceUnavailable, map[string]string{"error": "settings_unavailable"})
-	}
-	if kind == settings.KindImportLegacy {
-		return p.importLegacy(store, publisher, req.Body, now)
 	}
 	return p.saveBatch(store, publisher, req.Body, now)
 }
@@ -441,40 +392,21 @@ func (p *Plugin) saveBatch(store *settings.Store, publisher *publisher, raw []by
 	})
 }
 
-// importLegacy is Import Quota Glance's settings. The legacy file is the one
-// the store resolves itself; the request names only the revision the page
-// read.
-func (p *Plugin) importLegacy(store *settings.Store, publisher *publisher, raw []byte, now time.Time) protocol.ManagementResponse {
-	base, err := settings.ParseImportLegacy(raw)
-	if err != nil {
-		return response(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
-	}
-	imported, err := store.ImportLegacy(base, now)
-	var conflict *settings.ConflictError
-	switch {
-	case errors.As(err, &conflict):
-		return response(http.StatusConflict, map[string]any{"error": "conflict", "revision": conflict.Revision})
-	case errors.Is(err, settings.ErrNotImportable):
-		return response(http.StatusConflict, map[string]string{"error": "not_editable"})
-	case err != nil:
-		return storeRefusal(err)
-	}
-	publisher.PublishNow()
-	p.logImport(&imported)
-	return response(http.StatusOK, map[string]any{
-		"ok": true, "unchanged": false, "revision": settings.RevisionText(imported.Revision), "counts": imported.Counts,
-	})
-}
-
 // saveOrganizations is the organizations card's Save. The file is committed
 // under its store's lock alone; then, under linkMu, the item list and the
-// meter follow it; then the state is published, before the answer.
+// meter follow it; then the state is published, before the answer. They
+// follow the file whatever the batch comes to when Apply read it again.
 func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, publisher *publisher, raw []byte, now time.Time) protocol.ManagementResponse {
 	// The file as it is now, as the next tick would see it: one moved aside
-	// is gone, and one deleted to start over is moved again from the
-	// configuration, so a batch sent in the seconds before that tick
-	// conflicts with the moved list instead of taking its place.
-	p.followOrganizations(organizations, now)
+	// or deleted is gone, so a batch sent in the seconds before that tick
+	// conflicts with the empty list instead of writing over a list the page
+	// no longer shows, and one that could not be opened is read again. What
+	// that changed is published here, whatever the batch comes to: that tick
+	// has nothing left to follow, and a file that opened again once its owner
+	// was fixed changed none of the stamps the publisher compares.
+	if p.followOrganizations(organizations, now) {
+		publisher.PublishNow()
+	}
 	if organizations.Current().State == client.OrganizationsStateUnreadable {
 		return response(http.StatusServiceUnavailable, map[string]string{"error": "organizations_unavailable"})
 	}
@@ -482,7 +414,26 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 	if err != nil {
 		return response(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 	}
+	p.step("apply organizations")
 	result, err := organizations.Apply(batch, now)
+	saved := err == nil && !result.Unchanged
+	// Apply reads the file again first when it changed since the
+	// followOrganizations above, and the store keeps what it read, whatever
+	// the batch comes to. The item list and the meter follow it here, as the
+	// next tick would.
+	followed := p.followOrganizations(organizations, now)
+	if saved && !followed {
+		p.linkMu.Lock()
+		// A stop that began meanwhile has let go of this run's stores, and
+		// the next start lists the items from the file.
+		if p.linkOrganizations == organizations {
+			p.relinkLocked(now, false)
+		}
+		p.linkMu.Unlock()
+	}
+	if saved || followed {
+		publisher.PublishNow()
+	}
 	var conflict *settings.OrganizationsConflictError
 	var op *settings.OpError
 	switch {
@@ -497,15 +448,7 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 	case err != nil:
 		return storeRefusal(err)
 	}
-	if !result.Unchanged {
-		p.linkMu.Lock()
-		// A stop that began meanwhile has let go of this run's stores, and
-		// the next start lists the items from the file.
-		if p.linkOrganizations == organizations {
-			p.relinkLocked(now, false)
-		}
-		p.linkMu.Unlock()
-		publisher.PublishNow()
+	if saved {
 		p.host.Log(context.Background(), "info", "quota-cache organizations changed", map[string]any{"added": result.Added, "renamed": result.Renamed, "removed": result.Removed})
 	}
 	return response(http.StatusOK, map[string]any{
@@ -542,11 +485,9 @@ func notEditableRefusal(ids []string) protocol.ManagementResponse {
 }
 
 // fillFromState gives each row what only the published state knows: the
-// account's organization, which a new reading stores, and its configured
-// refill date, which a reading is checked against when the row leaves the
-// date to the configuration; and every Claude credential on the roster, whose
-// renewal dates are never evicted to make room. Nothing of it comes from the
-// request.
+// account's organization, which a new reading stores; and every Claude
+// credential on the roster, whose renewal dates are never evicted to make
+// room. Nothing of it comes from the request.
 func fillFromState(batch *settings.Batch, state *client.CreditState, roster []claudeCredential) {
 	if state != nil && state.APICredits != nil {
 		accounts := map[string]client.CreditAccount{}
@@ -556,7 +497,6 @@ func fillFromState(batch *settings.Batch, state *client.CreditState, roster []cl
 		for i, item := range batch.APICredits {
 			if account, ok := accounts[item.ID]; ok {
 				batch.APICredits[i].OrganizationID = account.OrganizationID
-				batch.APICredits[i].ConfigRenews = account.Settings.ConfigRenews
 			}
 		}
 	}
@@ -566,22 +506,14 @@ func fillFromState(batch *settings.Batch, state *client.CreditState, roster []cl
 	}
 }
 
-// heldByOrganizations reports whether batch names an API credit row state
-// does not list, while the organizations file cannot be read. Such a row may
-// belong to an organization in the file, so it is neither set nor cleared
-// until the file can be read: a clear would delete values that are still in
-// use, and nothing could bring back a reading older than 48 hours with its
-// time.
+// heldByOrganizations reports whether batch names any API credit row while
+// the organizations file cannot be read. No organization is listed then, so
+// every row is held: it may belong to an organization in the file, so it is
+// neither set nor cleared until the file can be read. A clear would delete
+// values that are still in use, and nothing could bring back a reading older
+// than 48 hours with its time.
 func heldByOrganizations(batch settings.Batch, state *client.CreditState) bool {
-	if !organizationsUnread(state) {
-		return false
-	}
-	for _, item := range batch.APICredits {
-		if _, listed := accountOf(state, item.ID); !listed {
-			return true
-		}
-	}
-	return false
+	return organizationsUnread(state) && len(batch.APICredits) > 0
 }
 
 // notEditable is every row the published state does not offer for editing.

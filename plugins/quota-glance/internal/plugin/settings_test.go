@@ -13,14 +13,12 @@ import (
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
 )
 
 // API credit amounts, refill dates, Console readings and Claude renewal dates
 // are Quota Cache's to keep and edit since quota-glance 0.8.0. These test
-// that this plugin shows what Quota Cache publishes, read-only, reads its own
-// old settings.json without ever writing it, and still accepts the
-// configuration 0.7 accepted.
+// that this plugin shows what Quota Cache publishes, read-only, and still
+// accepts the configuration 0.7 accepted.
 
 // alphaAccount is the fixture's first API credit account.
 var alphaAccount = qc.APICreditOrgAccount("00000000-0000-4000-8000-000000000001")
@@ -38,8 +36,7 @@ func publishedState(t *testing.T) []byte {
 
 // newPublishedPlugin is newFixturePlugin with Quota Cache's credit state
 // beside the snapshot, configured with extra appended. The data directory is
-// quota-glance's default beside quota-cache's, plugins/data/quota-glance, so
-// it is where Quota Cache would look for settings.json.
+// quota-glance's default beside quota-cache's, plugins/data/quota-glance.
 func newPublishedPlugin(t *testing.T, extra string) (p *Plugin, host *fakeHost, cachePath, dataDir string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "plugins", "data")
@@ -144,7 +141,7 @@ func TestThePublishedStateIsShownReadOnly(t *testing.T) {
 	p, host, _, dataDir := newPublishedPlugin(t, "")
 	doc := waitForDocument(t, p, publishedDocument)
 	credits, _ := creditsOf(doc)
-	if editing := credits["editing"].(map[string]any); editing["available"] != false || editing["reason"] != "quotaCache" || editing["migration"] != "" {
+	if editing := credits["editing"].(map[string]any); len(editing) != 2 || editing["available"] != false || editing["reason"] != "quotaCache" {
 		t.Fatalf("editing = %v", editing)
 	}
 	alpha := accountOf(t, doc, alphaAccount)
@@ -156,7 +153,7 @@ func TestThePublishedStateIsShownReadOnly(t *testing.T) {
 	if renewal["renewalSource"] != "dashboard" || renewal["renewalEditable"] != false || renewal["renewalSetting"].(map[string]any)["date"] != "2026-09-10" {
 		t.Fatalf("renewal = %v", renewal)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, source.LegacySettingsFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dataDir, "settings.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("settings.json appeared: %v", err)
 	}
 	if len(host.providerRequests()) != 0 {
@@ -280,14 +277,6 @@ func TestConfigFieldsCoverEveryKey(t *testing.T) {
 
 // health is the parts of /health these tests read.
 type health struct {
-	Settings struct {
-		Path         string `json:"path"`
-		Present      bool   `json:"present"`
-		Revision     uint64 `json:"revision"`
-		SHA256Prefix string `json:"sha256_prefix"`
-		LastError    string `json:"last_error"`
-		Migration    string `json:"migration"`
-	} `json:"settings"`
 	Meter struct {
 		Path      string    `json:"path"`
 		FlushedAt time.Time `json:"flushed_at"`
@@ -299,7 +288,6 @@ type health struct {
 		ComputedAt        *time.Time `json:"computed_at"`
 		ValidUntil        *time.Time `json:"valid_until"`
 		SettingsState     string     `json:"settings_state"`
-		ImportState       string     `json:"import_state"`
 		QuotaCacheVersion string     `json:"quota_cache_version"`
 	} `json:"credit_state"`
 }
@@ -314,42 +302,27 @@ func healthOf(t *testing.T, p *Plugin) (health, map[string]any) {
 	return h, decode(t, res)
 }
 
-// Health reports quota-glance's own settings.json, the meter as Quota
-// Cache's state describes it, and the state itself, each with why not. There
-// is no router: routing is Reset Priority's.
-func TestHealthReportsLegacySettingsAndCreditState(t *testing.T) {
-	p, _, cachePath, dataDir := newPublishedPlugin(t, "")
+// Health reports the meter as Quota Cache's state describes it, and the state
+// itself, each with why not. There is no router, routing being Reset
+// Priority's, and no settings: the values are Quota Cache's.
+func TestHealthReportsCreditState(t *testing.T) {
+	p, _, cachePath, _ := newPublishedPlugin(t, "")
 	waitForDocument(t, p, publishedDocument)
 	h, raw := healthOf(t, p)
-	if _, ok := raw["router"]; ok {
-		t.Fatal("health still reports a router")
+	for _, gone := range []string{"router", "settings"} {
+		if _, ok := raw[gone]; ok {
+			t.Fatalf("health still reports %s", gone)
+		}
 	}
-	legacyPath := filepath.Join(dataDir, source.LegacySettingsFile)
 	computed, until := time.Date(2026, 9, 10, 4, 0, 0, 0, time.UTC), time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
-	if h.Settings.Path != legacyPath || h.Settings.Present || h.Settings.LastError != "" || h.Settings.Migration != "" ||
-		h.Meter.Path != qc.MeterPath(cachePath) || !h.Meter.FlushedAt.Equal(time.Date(2026, 9, 10, 3, 59, 0, 0, time.UTC)) || h.Meter.LastError != "" ||
+	if h.Meter.Path != qc.MeterPath(cachePath) || !h.Meter.FlushedAt.Equal(time.Date(2026, 9, 10, 3, 59, 0, 0, time.UTC)) || h.Meter.LastError != "" ||
 		h.CreditState.Path != qc.CreditsPath(cachePath) || h.CreditState.LastError != "" || h.CreditState.ComputedAt == nil ||
 		!h.CreditState.ComputedAt.Equal(computed) || h.CreditState.ValidUntil == nil || !h.CreditState.ValidUntil.Equal(until) ||
-		h.CreditState.SettingsState != "ok" || h.CreditState.ImportState != "" || h.CreditState.QuotaCacheVersion != "0.2.0" {
+		h.CreditState.SettingsState != "ok" || h.CreditState.QuotaCacheVersion != "0.2.0" {
 		t.Fatalf("health = %+v", h)
 	}
-
-	// quota-glance 0.7's settings.json, which this state never imported.
-	const legacy = `{"schema":1,"revision":12,"apiCredits":{},"renewals":{}}`
-	if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.Rebuild()
-	if h, _ = healthOf(t, p); !h.Settings.Present || h.Settings.Revision != 12 || len(h.Settings.SHA256Prefix) != 12 ||
-		h.Settings.LastError != "" || h.Settings.Migration != "notImported" {
-		t.Fatalf("settings = %+v", h.Settings)
-	}
-	if err := os.WriteFile(legacyPath, []byte(`{"revision":`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.Rebuild()
-	if h, _ = healthOf(t, p); h.Settings.LastError != "unreadable" {
-		t.Fatalf("settings = %+v", h.Settings)
+	if _, ok := raw["credit_state"].(map[string]any)["import_state"]; ok {
+		t.Fatal("health still reports an import state")
 	}
 
 	if err := os.Remove(qc.CreditsPath(cachePath)); err != nil {
@@ -398,49 +371,6 @@ func TestAnAbandonedStateFallsBack(t *testing.T) {
 	if h.CreditState.LastError != "abandoned" || h.CreditState.ComputedAt == nil ||
 		!h.CreditState.ComputedAt.Equal(time.Date(2026, 9, 10, 3, 49, 59, 0, time.UTC)) {
 		t.Fatalf("credit state = %+v", h.CreditState)
-	}
-}
-
-// Before Quota Cache publishes, the card says what its first start will do
-// with quota-glance's settings.json, here at Quota Cache's sibling path, the
-// one it imports: nothing, once the file cannot be read. Reading the file
-// never writes it.
-func TestTheMigrationNoteFollowsGlancesOwnFile(t *testing.T) {
-	p, _, cachePath, dataDir := newPublishedPlugin(t, "")
-	waitForDocument(t, p, publishedDocument)
-	legacyPath := filepath.Join(dataDir, source.LegacySettingsFile)
-	const legacy = `{"schema":1,"revision":12,"apiCredits":{},"renewals":{}}`
-	if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	if err := os.Chtimes(legacyPath, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(qc.CreditsPath(cachePath)); err != nil {
-		t.Fatal(err)
-	}
-	p.Rebuild()
-	credits, _ := creditsOf(decode(t, summary(t, p)))
-	if editing := credits["editing"].(map[string]any); editing["reason"] != "quotaCache" || editing["migration"] != "awaitingImport" {
-		t.Fatalf("editing = %v", editing)
-	}
-	info, err := os.Stat(legacyPath)
-	if err != nil || !info.ModTime().Equal(old) {
-		t.Fatalf("settings.json was written: %v %v", info, err)
-	}
-
-	// Cut short, it is no longer awaited, on the card and in /health alike.
-	if err := os.WriteFile(legacyPath, []byte(legacy[:20]), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.Rebuild()
-	credits, _ = creditsOf(decode(t, summary(t, p)))
-	if editing := credits["editing"].(map[string]any); editing["reason"] != "quotaCache" || editing["migration"] != "notImported" {
-		t.Fatalf("unreadable: editing = %v", editing)
-	}
-	if h, _ := healthOf(t, p); h.Settings.LastError != "unreadable" || h.Settings.Migration != "notImported" {
-		t.Fatalf("unreadable: settings = %+v", h.Settings)
 	}
 }
 

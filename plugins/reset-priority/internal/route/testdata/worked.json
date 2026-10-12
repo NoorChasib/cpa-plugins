@@ -5,7 +5,7 @@
     "quota_cache_version": "0.2.0",
     "computed_at": "2026-10-11T11:59:50Z",
     "valid_until": null,
-    "settings": {"state": "ok", "editable": true, "revision": "", "import": null},
+    "settings": {"state": "ok", "editable": true, "revision": ""},
     "api_credits": {
       "accounts": [
         {

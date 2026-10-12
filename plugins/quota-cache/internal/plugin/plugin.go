@@ -70,14 +70,16 @@ type Plugin struct {
 	// fetcher reads it on every scan, so adding, rotating or removing the key
 	// takes effect without restarting the writer.
 	openRouterKey atomic.Pointer[string]
-	// configItems is claude-api-credits as the last configure parsed it.
-	configItems atomic.Pointer[[]creditItem]
-	// apiCredits is the item list in force, from the organizations file or
-	// from configItems (itemsOf), and itemSource says which. The fetcher reads
-	// apiCredits on every scan, like openRouterKey, so a change on the page or
-	// in the configuration needs no restart.
+	// configItems is how many items claude-api-credits lists in the
+	// configuration, as the last configure read it. They are ignored, and only
+	// counted.
+	configItems atomic.Int64
+	// apiCredits is the item list in force, the organizations file's
+	// (itemsOf), and itemsState is the organizations block published with
+	// it. The fetcher reads apiCredits on every scan, like openRouterKey, so a
+	// change on the page needs no restart.
 	apiCredits atomic.Pointer[[]creditItem]
-	itemSource atomic.Pointer[client.CreditOrganizations]
+	itemsState atomic.Pointer[client.CreditOrganizations]
 	// roster is every Claude credential CPA last listed, for the page's
 	// renewal dates. The fetcher fills it on every scan; it is held in memory
 	// only, never written to a file or a log.
@@ -102,7 +104,8 @@ type Plugin struct {
 	// keeps its file. Guarded by linkMu.
 	linkPath string
 
-	// trace, when a test sets it, is told each step of a stop as it begins.
+	// trace, when a test sets it, is told each step of a stop as it begins,
+	// and when the save route is about to apply an organizations batch.
 	trace func(step string)
 }
 
@@ -216,9 +219,11 @@ type configuration struct {
 	Interval      string `yaml:"poll-interval"`
 	Spacing       string `yaml:"request-spacing"`
 	OpenRouterKey string `yaml:"openrouter-management-key"`
-	// CreditItems is decoded as raw nodes so that each item is judged on its
-	// own by parseAPICredits. A value that is not a list still fails the
-	// whole configuration, as any mistyped key does.
+	// CreditItems is claude-api-credits, where quota-cache 0.1.x listed its
+	// organizations. They are listed on the page now, so its items are only
+	// counted. It is decoded as raw nodes, as in 0.1.x, so a configuration
+	// written for one still loads, and a value that is not a list still fails
+	// the whole configuration, as any mistyped key does.
 	CreditItems []yaml.Node    `yaml:"claude-api-credits"`
 	Enabled     *bool          `yaml:"enabled"`
 	Priority    *int           `yaml:"priority"`
@@ -285,11 +290,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	// Stored before a writer starts, so its first scan already sees the keys.
 	openRouterKey := strings.TrimSpace(cfg.OpenRouterKey)
 	p.openRouterKey.Store(&openRouterKey)
-	config := parseAPICredits(cfg.CreditItems)
-	p.configItems.Store(&config)
-	if n := adminKeysIgnored(config); n > 0 {
-		p.host.Log(context.Background(), "warn", "quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration", map[string]any{"items": n})
-	}
+	p.configItems.Store(int64(len(cfg.CreditItems)))
 	if cfg.Enabled != nil && !*cfg.Enabled && p.cache != nil {
 		p.closeLocked(client.MeterStopDisabled)
 	}
@@ -300,26 +301,19 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 			return p.reject(err)
 		}
 		p.opts, p.cache, opened = opts, current, true
-		// Neither store fails to open or writes anything when it does; the
-		// first Sync below runs the first import of Quota Glance's settings.
+		// Neither store fails to open or writes anything when it does.
 		p.store, p.organizations = settings.Open(opts.Path), settings.OpenOrganizations(opts.Path)
 		p.publisher = newPublisher(opts.Path, Version, p.store, p.itemsInForce, p.logLine)
 		p.publisher.prepare = p.prepareTick(p.store, p.organizations)
 		p.refresh = newRefreshWatch(opts.Path)
 	}
 	now := time.Now().UTC()
-	moved := false
 	if p.cache != nil {
-		result := p.store.Sync(now)
-		p.logImport(result.Imported)
-		if result.LegacyUnreadable {
-			p.host.Log(context.Background(), "warn", "quota-cache cannot read Quota Glance's settings.json, so nothing was imported; fix or move it aside", nil)
-		}
+		p.store.Sync()
 		if p.store.Status().State == client.CreditSettingsUnreadable {
-			p.host.Log(context.Background(), "warn", "quota-cache cannot read its saved API credit settings; only config values apply until the file is moved aside", nil)
+			p.host.Log(context.Background(), "warn", "quota-cache cannot read its saved API credit settings; none apply until the file is moved aside", nil)
 		}
 		p.organizations.Sync()
-		moved = p.migrate(p.organizations, now)
 	}
 	// The meter runs while the cache does and at least one organization is
 	// linked, and the usage capability is declared whenever the cache runs, so
@@ -330,7 +324,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.linkOrganizations, p.metering, p.linkPath = p.organizations, p.cache != nil, opts.Path
 	p.relinkLocked(now, true)
 	p.linkMu.Unlock()
-	if source := p.itemSource.Load(); p.cache != nil && !moved && source.Source == client.OrganizationsSourcePage && source.ConfigItemsIgnored > 0 {
+	if p.cache != nil && len(cfg.CreditItems) > 0 {
 		p.host.Log(context.Background(), "info", "quota-cache keeps Claude Console organizations on its page; claude-api-credits in its configuration is ignored", nil)
 	}
 	if opened {
@@ -350,24 +344,21 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		Capabilities: protocol.RegistrationCapabilities{UsagePlugin: p.cache != nil, ManagementAPI: true}}, nil
 }
 
-// relinkLocked puts the item list in force, from the organizations file or the
-// configuration, and brings the meter in line with it: the organizations it
-// links, a meter opened from its file when one is now linked and none runs,
-// which records the gap, or a stop with no_items when none is. Only a
-// configure, with replaceFailed, replaces a meter that stopped itself. While
-// no meter may run, it stops one with disabled. The caller holds linkMu.
+// relinkLocked puts the item list in force, from the organizations file, and
+// brings the meter in line with it: the organizations it links, a meter opened
+// from its file when one is now linked and none runs, which records the gap,
+// or the running one stopped with no_items when none is. With none linked and
+// none running, the file keeps the stop its last run wrote. Only a configure,
+// with replaceFailed, replaces a meter that stopped itself. While no meter may
+// run, it stops one with disabled. The caller holds linkMu.
 func (p *Plugin) relinkLocked(now time.Time, replaceFailed bool) {
 	organizations := settings.Organizations{}
 	if p.linkOrganizations != nil {
 		organizations = p.linkOrganizations.Current()
 	}
-	config := []creditItem{}
-	if loaded := p.configItems.Load(); loaded != nil {
-		config = *loaded
-	}
-	items, source := itemsOf(organizations, config)
+	items, state := itemsOf(organizations, int(p.configItems.Load()))
 	p.apiCredits.Store(&items)
-	p.itemSource.Store(&source)
+	p.itemsState.Store(&state)
 	linked := linkedOrganizations(items)
 	switch m := p.meter.Load(); {
 	case !p.metering:
@@ -384,42 +375,41 @@ func (p *Plugin) relinkLocked(now time.Time, replaceFailed bool) {
 	}
 }
 
-// itemsInForce is what the publisher computes from: the item list and where
-// it came from.
+// itemsInForce is what the publisher computes from: the item list and the
+// organizations block published with it.
 func (p *Plugin) itemsInForce() ([]creditItem, client.CreditOrganizations) {
-	items, source := []creditItem{}, client.CreditOrganizations{State: client.OrganizationsStateMissing, Source: client.OrganizationsSourceConfig}
+	items, state := []creditItem{}, client.CreditOrganizations{State: client.OrganizationsStateMissing}
 	if loaded := p.apiCredits.Load(); loaded != nil {
 		items = *loaded
 	}
-	if loaded := p.itemSource.Load(); loaded != nil {
-		source = *loaded
+	if loaded := p.itemsState.Load(); loaded != nil {
+		state = *loaded
 	}
-	return items, source
+	return items, state
 }
 
 // prepareTick is what each publisher tick does before it looks at the files:
-// the settings store's Sync, which imports Quota Glance's settings and reopens
-// a file that changed, then followOrganizations. It never takes mu.
-func (p *Plugin) prepareTick(store *settings.Store, organizations *settings.OrganizationStore) func(time.Time) {
-	return func(now time.Time) {
-		p.logImport(store.Sync(now).Imported)
-		p.followOrganizations(organizations, now)
+// the settings store's Sync, which reopens a file that changed, then
+// followOrganizations. It reports whether either may have changed what the
+// state is computed from, so the tick computes even when no file's stamp
+// changed, as when a file that could not be opened opens once its owner is
+// fixed. It never takes mu.
+func (p *Plugin) prepareTick(store *settings.Store, organizations *settings.OrganizationStore) func(time.Time) bool {
+	return func(now time.Time) bool {
+		synced := store.Sync()
+		return p.followOrganizations(organizations, now) || synced
 	}
 }
 
 // followOrganizations brings the item list in line with the organizations
 // file: the store's Sync, which reopens an unreadable file once it is moved
-// aside and sees a deleted one, then the move from the configuration while
-// there is no file. When the organizations changed, the item list and the
-// meter follow, with no configure. Each tick runs it, and so does the save
-// route before an organizations batch. It never takes mu.
-func (p *Plugin) followOrganizations(organizations *settings.OrganizationStore, now time.Time) {
-	changed := organizations.Sync()
-	if p.migrate(organizations, now) {
-		changed = true
-	}
-	if !changed {
-		return
+// aside and sees a deleted one. When the organizations changed, the item list
+// and the meter follow, with no configure. It reports whether the
+// organizations changed. Each tick runs it, and so does the save route before
+// and after an organizations batch. It never takes mu.
+func (p *Plugin) followOrganizations(organizations *settings.OrganizationStore, now time.Time) bool {
+	if !organizations.Sync() {
+		return false
 	}
 	p.linkMu.Lock()
 	defer p.linkMu.Unlock()
@@ -427,35 +417,7 @@ func (p *Plugin) followOrganizations(organizations *settings.OrganizationStore, 
 	if p.linkOrganizations == organizations {
 		p.relinkLocked(now, false)
 	}
-}
-
-// migrate moves claude-api-credits into the organizations file, once, while
-// there is no file and the configuration lists an item. It reports whether it
-// wrote the file. Deleting the file brings the configuration's list back at
-// the next tick, which is the way to start over from the configuration.
-func (p *Plugin) migrate(organizations *settings.OrganizationStore, now time.Time) bool {
-	config := p.configItems.Load()
-	if config == nil || len(*config) == 0 {
-		return false
-	}
-	result, err := organizations.Migrate(creditsOfItems(*config), now)
-	if err != nil || !result.Written {
-		return false
-	}
-	p.host.Log(context.Background(), "info", "quota-cache moved its Claude Console organizations to its page", map[string]any{"moved": result.Moved, "skipped": result.Skipped})
 	return true
-}
-
-// logImport logs an import that changed the saved settings: what it moved,
-// counted, and never a value.
-func (p *Plugin) logImport(imported *settings.Imported) {
-	if imported == nil {
-		return
-	}
-	p.host.Log(context.Background(), "info", "quota-cache imported Quota Glance's settings", map[string]any{
-		"kind": imported.Kind, "monthly_credits": imported.Counts.MonthlyCredits, "refill_dates": imported.Counts.RefillDates,
-		"readings": imported.Counts.Readings, "renewal_dates": imported.Counts.RenewalDates,
-	})
 }
 
 func (p *Plugin) logLine(level, message string, fields map[string]any) {
@@ -729,8 +691,7 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 	if key := f.openRouter(); key != "" {
 		accounts = append(accounts, cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)})
 	}
-	// Every configured item is listed, misconfigured or not, so the snapshot
-	// can say what is wrong with one. None is ever polled: what an
+	// Every organization on the page is listed. None is ever polled: what an
 	// organization spent comes from the meter, not from Anthropic.
 	for _, item := range f.credits() {
 		credit := item.credit

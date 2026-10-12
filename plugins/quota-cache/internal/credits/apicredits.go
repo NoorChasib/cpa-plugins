@@ -63,9 +63,9 @@ func apiCreditsOf(in Input, now time.Time) *client.CreditDocument {
 	if len(accounts) == 0 {
 		return nil
 	}
-	// Configured order, then label, then id, so a document built twice is
-	// byte-identical. An entry with no configuration at all has no position
-	// and goes last.
+	// The list's order, then label, then id, so a document built twice is
+	// byte-identical. An entry with no api_credit at all has no position and
+	// goes last.
 	for _, a := range accounts {
 		a.out = client.CreditAccount{ID: a.entry.AuthIndex, Order: -1}
 		if a.credit != nil {
@@ -96,12 +96,6 @@ func apiCreditsOf(in Input, now time.Time) *client.CreditDocument {
 		Unlinked: unlinkedOf(in.Meter, accounts),
 		Orphans:  orphansOf(in.Settings, accounts),
 	}
-	if in.Organizations.State == client.OrganizationsStateUnreadable {
-		// The configuration's list is in force while the organizations file
-		// cannot be read, and a stored entry it lacks may well belong to an
-		// organization in the file: none is known to be an orphan.
-		credits.Orphans = []client.CreditOrphan{}
-	}
 	for _, a := range accounts {
 		a.judge(in, editing, now)
 		credits.Accounts = append(credits.Accounts, a.out)
@@ -111,14 +105,10 @@ func apiCreditsOf(in Input, now time.Time) *client.CreditDocument {
 }
 
 // editingOf is whether the page may offer to change anything. A settings file
-// that cannot be read applies nothing, and neither does anything while Quota
-// Glance's settings.json blocks the first import.
+// that cannot be read applies nothing.
 func editingOf(in Input) client.CreditEditing {
-	switch settingsStateOf(in) {
-	case client.CreditSettingsUnreadable:
+	if settingsStateOf(in) == client.CreditSettingsUnreadable {
 		return client.CreditEditing{Reason: client.CreditEditingSettingsUnreadable}
-	case client.CreditSettingsLegacyUnreadable:
-		return client.CreditEditing{Reason: client.CreditEditingLegacyUnreadable}
 	}
 	return client.CreditEditing{Available: true}
 }
@@ -134,24 +124,17 @@ func (a *creditAccount) judge(in Input, editing client.CreditEditing, now time.T
 		out.OrganizationID = c.OrganizationID
 	}
 
-	// 1. The grant: the dashboard's, else the configured one.
+	// 1. The grant, as entered on the page.
 	out.MonthlyCreditSource = client.CreditSourceNone
-	switch {
-	case stored.MonthlyUSD != "":
+	if stored.MonthlyUSD != "" {
 		a.grant, out.MonthlyCreditSource = exactDollars(stored.MonthlyUSD), client.CreditSourceDashboard
-	case c != nil && client.ValidMonthlyUSD(c.MonthlyUSD):
-		a.grant, out.MonthlyCreditSource = exactDollars(c.MonthlyUSD), client.CreditSourceConfig
 	}
-	// 2. The cycle, from the refill date in force.
-	renews := ""
+	// 2. The cycle, from the refill date entered on the page.
 	out.RenewsSource = client.CreditSourceNone
-	switch {
-	case stored.Renews != "":
-		renews, out.RenewsSource = stored.Renews, client.CreditSourceDashboard
-	case c != nil && c.Renews != "":
-		renews, out.RenewsSource = c.Renews, client.CreditSourceConfig
+	if stored.Renews != "" {
+		out.RenewsSource = client.CreditSourceDashboard
 	}
-	if cycle, err := client.CreditCycleAt(renews, now); err == nil {
+	if cycle, err := client.CreditCycleAt(stored.Renews, now); err == nil {
 		a.cycle = creditCycle{CreditCycle: cycle, OK: true}
 		out.CycleStartEpoch = epochPointerOf(cycle.Start)
 		out.RenewsAtEpoch = epochPointerOf(cycle.End)
@@ -168,15 +151,13 @@ func (a *creditAccount) judge(in Input, editing client.CreditEditing, now time.T
 	}
 	out.Settings = a.settingsOf(stored, hasStored, editing)
 
-	if c != nil {
-		a.flag(c.MonthlyUSDInvalid, client.CreditIssueConfigMonthlyUSDInvalid)
-		a.flag(c.RenewsInvalid, client.CreditIssueConfigRenewsInvalid)
-		a.flag(c.AdminKeyIgnored, client.CreditIssueAdminKeyIgnored)
-	}
 	org, inMeter := client.MeterOrganization{}, false
 	if m != nil && c != nil && c.OrganizationID != "" {
 		org, inMeter = m.Organizations[c.OrganizationID]
 	}
+	// The first two cases are the contract's states for an item quota-cache
+	// 0.1.x listed from its configuration. The page's organizations meet
+	// neither.
 	switch {
 	case c == nil || c.Problem != "":
 		out.State = client.CreditStateMisconfigured
@@ -389,8 +370,8 @@ func (a *creditAccount) readingUnusedReason(r *settings.Reading, now time.Time) 
 	return ""
 }
 
-// settingsOf is the editor's view of the account: what is stored, what
-// quota-cache has configured, and whether the page may change it.
+// settingsOf is the editor's view of the account: what is stored, and whether
+// the page may change it.
 func (a *creditAccount) settingsOf(stored settings.APICredit, hasStored bool, editing client.CreditEditing) client.CreditSettings {
 	c := a.credit
 	s := client.CreditSettings{
@@ -404,15 +385,6 @@ func (a *creditAccount) settingsOf(stored settings.APICredit, hasStored bool, ed
 	}
 	if r := stored.Reading; r != nil {
 		s.Reading = &client.StoredReading{RemainingUSD: r.RemainingUSD, AtEpoch: r.At.Unix(), EnteredAtEpoch: r.EnteredAt.Unix()}
-	}
-	if c != nil {
-		if client.ValidMonthlyUSD(c.MonthlyUSD) {
-			s.ConfigMonthlyUSD = c.MonthlyUSD
-		}
-		if day, err := client.ParseRenewal(c.Renews); err == nil {
-			s.ConfigRenews = day.Format(time.DateOnly)
-		}
-		s.ConfigMonthlyUSDInvalid, s.ConfigRenewsInvalid = c.MonthlyUSDInvalid, c.RenewsInvalid
 	}
 	id := a.entry.AuthIndex
 	switch {
@@ -521,12 +493,6 @@ func (a *creditAccount) sentenceOf(issue string, c *client.APICredit) string {
 		return "Anthropic refused requests from a Claude Code-based client (Claude Code or the Agent SDK) for low credit. If they were Agent SDK requests, this credit may be spent; enter a Console reading."
 	case client.CreditIssueNoTraffic:
 		return "No API traffic for this organization has reached CPA since counting began."
-	case client.CreditIssueConfigMonthlyUSDInvalid:
-		return "monthly-usd in Quota Cache's config is not a dollar amount, so it is ignored."
-	case client.CreditIssueConfigRenewsInvalid:
-		return "renews in Quota Cache's config is not a date, so it is ignored."
-	case client.CreditIssueAdminKeyIgnored:
-		return "Quota Cache no longer uses this item's admin-key. Delete it from the config."
 	}
 	return ""
 }
@@ -762,8 +728,9 @@ func creditPoolOf(accounts []*creditAccount, now time.Time) client.CreditPool {
 	return pool
 }
 
-// problemIssueOf turns quota-cache's configuration problem into the sentence
-// that tells the operator what to change. An unknown problem still reads as a
+// problemIssueOf turns the configuration problem quota-cache 0.1.x recorded
+// on an item into the sentence that tells the operator what to change. The
+// page's organizations have none. An unknown problem still reads as a
 // problem, so a newer quota-cache's codes degrade to something true; so do the
 // codes only 0.1.13 wrote, which name settings 0.1.14 no longer needs.
 func problemIssueOf(c *client.APICredit) string {

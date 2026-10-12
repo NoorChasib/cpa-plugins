@@ -36,11 +36,9 @@ func validOrganizations() map[string]any {
 		"schema":   1,
 		"revision": "4",
 		"organizations": []any{
-			map[string]any{"label": "personal-1", "organization_id": orgOne, "default_monthly_usd": "200",
-				"default_renews": "2026-10-29", "rev": "3", "updated_at": "2026-10-12T09:00:00Z"},
+			map[string]any{"label": "personal-1", "organization_id": orgOne, "rev": "3", "updated_at": "2026-10-12T09:00:00Z"},
 			map[string]any{"label": "team", "organization_id": orgTwo, "rev": "4", "updated_at": "2026-10-12T10:00:00Z"},
 		},
-		"migration": map[string]any{"at": "2026-10-12T09:00:00Z", "moved": 1, "skipped": 0},
 	}
 }
 
@@ -89,10 +87,9 @@ func TestOrganizationsFileLoads(t *testing.T) {
 	want := Organizations{
 		State: client.OrganizationsStateOK, Revision: 4,
 		Items: []Organization{
-			{Label: "personal-1", OrganizationID: orgOne, DefaultMonthlyUSD: "200", DefaultRenews: "2026-10-29", Rev: 3, UpdatedAt: orgNow},
+			{Label: "personal-1", OrganizationID: orgOne, Rev: 3, UpdatedAt: orgNow},
 			{Label: "team", OrganizationID: orgTwo, Rev: 4, UpdatedAt: orgNow.Add(time.Hour)},
 		},
-		Migration: &client.OrganizationsMigration{At: orgNow, Moved: 1, Skipped: 0},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("loaded\n%+v\nwant\n%+v", got, want)
@@ -105,25 +102,22 @@ func TestOrganizationsFileLoads(t *testing.T) {
 	if again, err := decodeOrganizations(raw); err != nil || !reflect.DeepEqual(again, want) {
 		t.Fatalf("round trip: %+v, %v", again, err)
 	}
-	// What the configuration may hold also loads: a renews in the RFC 3339
-	// form a configuration save writes, no migration, a label with inner
-	// spaces and other scripts, and an empty list.
+	// A label with inner spaces and other scripts loads, and so does an empty
+	// list.
 	f := validOrganizations()
-	f["organizations"].([]any)[0].(map[string]any)["default_renews"] = "2026-10-29T00:00:00Z"
 	f["organizations"].([]any)[1].(map[string]any)["label"] = "Équipe Two 二"
-	delete(f, "migration")
 	writeOrganizations(t, snapshot, f)
-	if o := LoadOrganizations(client.OrganizationsPath(snapshot)); o.State != client.OrganizationsStateOK || o.Migration != nil ||
-		o.Items[0].DefaultRenews != "2026-10-29T00:00:00Z" || o.Items[1].Label != "Équipe Two 二" {
+	if o := LoadOrganizations(client.OrganizationsPath(snapshot)); o.State != client.OrganizationsStateOK || o.Items[1].Label != "Équipe Two 二" {
 		t.Fatalf("loaded %+v", o)
 	}
-	writeOrganizations(t, snapshot, []byte(`{"schema":1,"revision":"0","organizations":[],"migration":null}`))
+	writeOrganizations(t, snapshot, []byte(`{"schema":1,"revision":"0","organizations":[]}`))
 	if o := LoadOrganizations(client.OrganizationsPath(snapshot)); o.State != client.OrganizationsStateOK || o.Items == nil || len(o.Items) != 0 {
 		t.Fatalf("empty list: %+v", o)
 	}
-	// A list of organizations is what claude-api-credits would have been.
+	// As the snapshot's entries carry them: the label, the organization and
+	// the position, nothing else.
 	credits := want.APICredits()
-	if len(credits) != 2 || credits[0] != (client.APICredit{Label: "personal-1", OrganizationID: orgOne, MonthlyUSD: "200", Renews: "2026-10-29"}) ||
+	if len(credits) != 2 || credits[0] != (client.APICredit{Label: "personal-1", OrganizationID: orgOne}) ||
 		credits[1] != (client.APICredit{Label: "team", Position: 1, OrganizationID: orgTwo}) || want.Items[1].ID() != client.APICreditOrgAccount(orgTwo) {
 		t.Fatalf("credits %+v", credits)
 	}
@@ -133,51 +127,47 @@ func TestOrganizationsFileLoads(t *testing.T) {
 // unreadable, applies nothing, and is never written over.
 func TestEachOrganizationsLoadRule(t *testing.T) {
 	entry := func(f map[string]any, i int) map[string]any { return f["organizations"].([]any)[i].(map[string]any) }
-	migration := func(f map[string]any) map[string]any { return f["migration"].(map[string]any) }
 	for name, break_ := range map[string]func(map[string]any){
-		"schema 2":                     func(f map[string]any) { f["schema"] = 2 },
-		"no schema":                    func(f map[string]any) { delete(f, "schema") },
-		"no revision":                  func(f map[string]any) { delete(f, "revision") },
-		"a numeric revision":           func(f map[string]any) { f["revision"] = 4 },
-		"an empty revision":            func(f map[string]any) { f["revision"] = "" },
-		"a padded revision":            func(f map[string]any) { f["revision"] = "04" },
-		"a negative revision":          func(f map[string]any) { f["revision"] = "-4" },
-		"no list":                      func(f map[string]any) { delete(f, "organizations") },
-		"a null list":                  func(f map[string]any) { f["organizations"] = nil },
-		"an unknown top-level key":     func(f map[string]any) { f["extra"] = true },
-		"an unknown entry key":         func(f map[string]any) { entry(f, 0)["note"] = "x" },
-		"an unknown migration key":     func(f map[string]any) { migration(f)["by"] = "x" },
-		"no label":                     func(f map[string]any) { delete(entry(f, 0), "label") },
-		"an empty label":               func(f map[string]any) { entry(f, 0)["label"] = "" },
-		"a label with outer spaces":    func(f map[string]any) { entry(f, 0)["label"] = " personal-1" },
-		"a label of 65 characters":     func(f map[string]any) { entry(f, 0)["label"] = strings.Repeat("é", 65) },
-		"a label with a control":       func(f map[string]any) { entry(f, 0)["label"] = "a\tb" },
-		"a label with a joiner":        func(f map[string]any) { entry(f, 0)["label"] = "a‍b" },
-		"a label with a no-break":      func(f map[string]any) { entry(f, 0)["label"] = "a b" },
-		"a label repeated in a case":   func(f map[string]any) { entry(f, 1)["label"] = "PERSONAL-1" },
-		"no organization":              func(f map[string]any) { delete(entry(f, 0), "organization_id") },
-		"an upper-case organization":   func(f map[string]any) { entry(f, 0)["organization_id"] = strings.ToUpper(orgOne) },
-		"a padded organization":        func(f map[string]any) { entry(f, 0)["organization_id"] = " " + orgOne },
-		"the nil organization":         func(f map[string]any) { entry(f, 0)["organization_id"] = "00000000-0000-0000-0000-000000000000" },
-		"not an organization":          func(f map[string]any) { entry(f, 0)["organization_id"] = "personal" },
-		"an organization twice":        func(f map[string]any) { entry(f, 1)["organization_id"] = orgOne },
-		"rev zero":                     func(f map[string]any) { entry(f, 0)["rev"] = "0" },
-		"rev past revision":            func(f map[string]any) { entry(f, 0)["rev"] = "5" },
-		"a numeric rev":                func(f map[string]any) { entry(f, 0)["rev"] = 3 },
-		"no rev":                       func(f map[string]any) { delete(entry(f, 0), "rev") },
-		"updated_at with a fraction":   func(f map[string]any) { entry(f, 0)["updated_at"] = "2026-10-12T09:00:00.5Z" },
-		"updated_at with an offset":    func(f map[string]any) { entry(f, 0)["updated_at"] = "2026-10-12T09:00:00+00:00" },
-		"no updated_at":                func(f map[string]any) { delete(entry(f, 0), "updated_at") },
-		"a credit with 3 decimals":     func(f map[string]any) { entry(f, 0)["default_monthly_usd"] = "1.234" },
-		"an empty credit":              func(f map[string]any) { entry(f, 0)["default_monthly_usd"] = "" },
-		"a numeric credit":             func(f map[string]any) { entry(f, 0)["default_monthly_usd"] = 200 },
-		"an impossible renews":         func(f map[string]any) { entry(f, 0)["default_renews"] = "2026-02-30" },
-		"an empty renews":              func(f map[string]any) { entry(f, 0)["default_renews"] = "" },
-		"a migration without skipped":  func(f map[string]any) { delete(migration(f), "skipped") },
-		"a migration without at":       func(f map[string]any) { delete(migration(f), "at") },
-		"a negative moved":             func(f map[string]any) { migration(f)["moved"] = -1 },
-		"a migration at not a time":    func(f map[string]any) { migration(f)["at"] = "today" },
-		"a migration that is a string": func(f map[string]any) { f["migration"] = "done" },
+		"schema 2":                   func(f map[string]any) { f["schema"] = 2 },
+		"no schema":                  func(f map[string]any) { delete(f, "schema") },
+		"no revision":                func(f map[string]any) { delete(f, "revision") },
+		"a numeric revision":         func(f map[string]any) { f["revision"] = 4 },
+		"an empty revision":          func(f map[string]any) { f["revision"] = "" },
+		"a padded revision":          func(f map[string]any) { f["revision"] = "04" },
+		"a negative revision":        func(f map[string]any) { f["revision"] = "-4" },
+		"no list":                    func(f map[string]any) { delete(f, "organizations") },
+		"a null list":                func(f map[string]any) { f["organizations"] = nil },
+		"an unknown top-level key":   func(f map[string]any) { f["extra"] = true },
+		"an unknown entry key":       func(f map[string]any) { entry(f, 0)["note"] = "x" },
+		"no label":                   func(f map[string]any) { delete(entry(f, 0), "label") },
+		"an empty label":             func(f map[string]any) { entry(f, 0)["label"] = "" },
+		"a label with outer spaces":  func(f map[string]any) { entry(f, 0)["label"] = " personal-1" },
+		"a label of 65 characters":   func(f map[string]any) { entry(f, 0)["label"] = strings.Repeat("é", 65) },
+		"a label with a control":     func(f map[string]any) { entry(f, 0)["label"] = "a\tb" },
+		"a label with a joiner":      func(f map[string]any) { entry(f, 0)["label"] = "a‍b" },
+		"a label with a no-break":    func(f map[string]any) { entry(f, 0)["label"] = "a b" },
+		"a label repeated in a case": func(f map[string]any) { entry(f, 1)["label"] = "PERSONAL-1" },
+		"no organization":            func(f map[string]any) { delete(entry(f, 0), "organization_id") },
+		"an upper-case organization": func(f map[string]any) { entry(f, 0)["organization_id"] = strings.ToUpper(orgOne) },
+		"a padded organization":      func(f map[string]any) { entry(f, 0)["organization_id"] = " " + orgOne },
+		"the nil organization":       func(f map[string]any) { entry(f, 0)["organization_id"] = "00000000-0000-0000-0000-000000000000" },
+		"not an organization":        func(f map[string]any) { entry(f, 0)["organization_id"] = "personal" },
+		"an organization twice":      func(f map[string]any) { entry(f, 1)["organization_id"] = orgOne },
+		"rev zero":                   func(f map[string]any) { entry(f, 0)["rev"] = "0" },
+		"rev past revision":          func(f map[string]any) { entry(f, 0)["rev"] = "5" },
+		"a numeric rev":              func(f map[string]any) { entry(f, 0)["rev"] = 3 },
+		"no rev":                     func(f map[string]any) { delete(entry(f, 0), "rev") },
+		"updated_at with a fraction": func(f map[string]any) { entry(f, 0)["updated_at"] = "2026-10-12T09:00:00.5Z" },
+		"updated_at with an offset":  func(f map[string]any) { entry(f, 0)["updated_at"] = "2026-10-12T09:00:00+00:00" },
+		"no updated_at":              func(f map[string]any) { delete(entry(f, 0), "updated_at") },
+		// No credit, refill date or record of a move from the configuration:
+		// the credit and refill date are the settings file's.
+		"a default credit": func(f map[string]any) { entry(f, 0)["default_monthly_usd"] = "200" },
+		"a default refill": func(f map[string]any) { entry(f, 0)["default_renews"] = "2026-10-29" },
+		"a migration": func(f map[string]any) {
+			f["migration"] = map[string]any{"at": "2026-10-12T09:00:00Z", "moved": 1, "skipped": 0}
+		},
+		"a null migration": func(f map[string]any) { f["migration"] = nil },
 		"seventeen organizations": func(f map[string]any) {
 			items := []any{}
 			for i := range MaxOrganizations + 1 {
@@ -238,9 +228,6 @@ func checkUnreadableOrganizations(t *testing.T, name, snapshot string, raw []byt
 	}
 	if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("a", orgThree)}}, orgNow); !errors.Is(err, ErrOrganizationsUnavailable) {
 		t.Errorf("%s: a save answered %v", name, err)
-	}
-	if _, err := s.Migrate([]client.APICredit{{Label: "a", OrganizationID: orgThree}}, orgNow); err != nil {
-		t.Errorf("%s: migrate: %v", name, err)
 	}
 	if after, _ := os.ReadFile(s.Path()); !bytes.Equal(after, raw) {
 		t.Errorf("%s: overwritten", name)
@@ -479,11 +466,8 @@ func TestOrganizationsCloseWaitsAndRefuses(t *testing.T) {
 	if err := os.Remove(s.Path()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Migrate([]client.APICredit{{Label: "two", OrganizationID: orgTwo}}, orgNow); !errors.Is(err, ErrClosed) {
-		t.Fatalf("a migration after Close: %v", err)
-	}
-	if s.Sync() || exists(s.Path()) {
-		t.Fatal("a closed store read or wrote")
+	if s.Sync() || len(s.Current().Items) != 1 {
+		t.Fatal("a closed store read its file again")
 	}
 }
 
@@ -545,118 +529,10 @@ func TestParseOrganizationsBatch(t *testing.T) {
 	}
 }
 
-// The move from the configuration, the store's part: claude-api-credits moves
-// into the file once, with every valid item and its defaults; an item with a
-// problem is skipped and counted; with nothing to move, nothing is written;
-// the file is the marker.
-func TestMigration(t *testing.T) {
-	items := []client.APICredit{
-		{Label: "personal-1", Position: 0, OrganizationID: orgOne, MonthlyUSD: "200", Renews: "2026-10-29"},
-		{Label: "personal-2", Position: 1, OrganizationID: orgTwo, Renews: "2026-10-15T00:00:00Z"},
-		{Label: "team", Position: 2, OrganizationID: orgThree, MonthlyUSD: "1200.50"},
-		{Label: "agency", Position: 3, OrganizationID: "00000000-0000-4000-8000-000000000004", MonthlyUSDInvalid: true},
-		{Label: "lab", Position: 4, OrganizationID: "00000000-0000-4000-8000-000000000005", RenewsInvalid: true},
-	}
-	dir := t.TempDir()
-	snapshot := snapshotIn(dir)
-	settingsBytes := legacyFixture(t, "five-orgs")
-	if err := os.WriteFile(FilePath(snapshot), settingsBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s := OpenOrganizations(snapshot)
-	result, err := s.Migrate(items, orgNow)
-	if err != nil || result != (MigrationResult{Written: true, Moved: 5}) {
-		t.Fatalf("five: %+v, %v", result, err)
-	}
-	want := Organizations{State: client.OrganizationsStateOK, Revision: orgFirst, Migration: &client.OrganizationsMigration{At: orgNow, Moved: 5}}
-	for _, item := range items {
-		want.Items = append(want.Items, Organization{Label: item.Label, OrganizationID: item.OrganizationID,
-			DefaultMonthlyUSD: item.MonthlyUSD, DefaultRenews: item.Renews, Rev: orgFirst, UpdatedAt: orgNow})
-	}
-	if got := LoadOrganizations(s.Path()); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(s.Current(), want) {
-		t.Fatalf("migrated\n%+v\nwant\n%+v", got, want)
-	}
-	for i, credit := range s.Current().APICredits() {
-		if credit.Position != i || credit.MonthlyUSD != items[i].MonthlyUSD || credit.Renews != items[i].Renews {
-			t.Fatalf("item %d: %+v", i, credit)
-		}
-	}
-	if !bytes.Equal(readFile(t, FilePath(snapshot)), settingsBytes) {
-		t.Fatal("migration changed the settings file")
-	}
-	// A rename keeps an organization's defaults; only removing it drops them.
-	if _, err := s.Apply(OrganizationsBatch{BaseRevision: orgRev(0), Ops: []OrganizationOp{renameOp(orgOne, "personal-one")}}, orgNow); err != nil {
-		t.Fatal(err)
-	}
-	if item := s.Current().Items[0]; item.Label != "personal-one" || item.DefaultMonthlyUSD != "200" || item.DefaultRenews != "2026-10-29" {
-		t.Fatalf("renamed: %+v", item)
-	}
-	if _, err := s.Apply(OrganizationsBatch{BaseRevision: orgRev(1), Ops: []OrganizationOp{removeOp(orgOne), addOp("personal-1", orgOne)}}, orgNow); err != nil {
-		t.Fatal(err)
-	}
-	if item := s.Current().Items[4]; item.OrganizationID != orgOne || item.DefaultMonthlyUSD != "" || item.DefaultRenews != "" || s.Current().Migration.Moved != 5 {
-		t.Fatalf("removed and added back: %+v", item)
-	}
-	// Once there is a file, the configuration's items are not moved again,
-	// even when the list has changed since.
-	before := readFile(t, s.Path())
-	if result, err := s.Migrate(items[:1], orgNow.Add(time.Hour)); err != nil || result != (MigrationResult{}) || !bytes.Equal(readFile(t, s.Path()), before) {
-		t.Fatalf("an existing file: %+v, %v", result, err)
-	}
-	// Deleting the file starts over from the configuration at the next tick.
-	if err := os.Remove(s.Path()); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Sync() || s.Current().State != client.OrganizationsStateMissing || len(s.Current().Items) != 0 {
-		t.Fatalf("deleted: %+v", s.Current())
-	}
-	if s.Sync() {
-		t.Fatal("an unchanged file was read again")
-	}
-	result, err = s.Migrate(items[:2], orgNow.Add(2*time.Hour))
-	if err != nil || result != (MigrationResult{Written: true, Moved: 2}) || len(s.Current().Items) != 2 || s.Current().Migration.Moved != 2 {
-		t.Fatalf("re-migrated: %+v, %v", result, err)
-	}
-
-	// Items with a problem are skipped and counted, and so is anything a
-	// validated file could not hold.
-	s = OpenOrganizations(snapshotIn(t.TempDir()))
-	mixed := []client.APICredit{
-		{Label: "one", OrganizationID: orgOne, MonthlyUSD: "10"},
-		{Label: "", OrganizationID: orgTwo, Problem: client.CreditProblemLabelMissing},
-		{Label: "One", OrganizationID: orgThree, Problem: client.CreditProblemLabelDuplicate},
-		{Label: "dup", OrganizationID: orgOne, Problem: client.CreditProblemOrganizationIDDuplicate},
-		{Label: "no problem said", OrganizationID: "not-an-id"},
-		{Label: "three", OrganizationID: orgThree, Renews: "2026-10-01"},
-	}
-	result, err = s.Migrate(mixed, orgNow)
-	if err != nil || result != (MigrationResult{Written: true, Moved: 2, Skipped: 4}) {
-		t.Fatalf("mixed: %+v, %v", result, err)
-	}
-	if o := s.Current(); len(o.Items) != 2 || o.Items[0].Label != "one" || o.Items[1].DefaultRenews != "2026-10-01" ||
-		*o.Migration != (client.OrganizationsMigration{At: orgNow, Moved: 2, Skipped: 4}) {
-		t.Fatalf("mixed: %+v", o)
-	}
-
-	// Every item with a problem, or none at all: nothing is written.
-	s = OpenOrganizations(snapshotIn(t.TempDir()))
-	if result, err := s.Migrate(mixed[1:4], orgNow); err != nil || result != (MigrationResult{Skipped: 3}) || exists(s.Path()) {
-		t.Fatalf("all invalid: %+v, %v", result, err)
-	}
-	if result, err := s.Migrate(nil, orgNow); err != nil || result != (MigrationResult{}) || exists(s.Path()) {
-		t.Fatalf("none: %+v, %v", result, err)
-	}
-	if s.Current().State != client.OrganizationsStateMissing {
-		t.Fatalf("state %+v", s.Current())
-	}
-}
-
-// An organizations file that cannot be read is read again at the tick after it
-// is moved aside, with no configure.
 // A batch judges the organizations file as it is on disk, read again when it
-// changed since the last tick: one deleted to start over from the
-// configuration conflicts and stays deleted, so the move runs again, and one
-// replaced by a file that fails its rules is unavailable and left as it is.
+// changed since the last tick: one deleted conflicts and stays deleted, with
+// nothing put back from the configuration, and one replaced by a file that
+// fails its rules is unavailable and left as it is.
 func TestAnOrganizationsBatchSeesTheFileAsItIsOnDisk(t *testing.T) {
 	s, _ := newOrganizationStore(t)
 	if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("one", orgOne)}}, orgNow); err != nil {
@@ -670,17 +546,18 @@ func TestAnOrganizationsBatchSeesTheFileAsItIsOnDisk(t *testing.T) {
 		conflict.Revision != "" || len(conflict.Organizations.Items) != 0 {
 		t.Fatalf("a rename after the file was deleted: %v", err)
 	}
-	if exists(s.Path()) {
-		t.Fatal("the deleted file was written again")
+	if exists(s.Path()) || s.Current().State != client.OrganizationsStateMissing {
+		t.Fatalf("the deleted file was written again, or is listed: %+v", s.Current())
 	}
-	if result, err := s.Migrate([]client.APICredit{{Label: "one", OrganizationID: orgOne}}, orgNow); err != nil || !result.Written {
-		t.Fatalf("the move after the delete: %+v, %v", result, err)
+	// A page that read the empty list adds the organization again. The new
+	// file, in the same second, starts past the deleted file's revision, so
+	// the page that read that file still conflicts.
+	if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("one", orgOne)}}, orgNow); err != nil {
+		t.Fatalf("an add after the delete: %v", err)
 	}
-	// The move, in the same second, starts past the deleted file's revision,
-	// so the page that read that file still conflicts.
 	if _, err := s.Apply(OrganizationsBatch{BaseRevision: orgRev(0), Ops: []OrganizationOp{renameOp(orgOne, "uno")}}, orgNow); !errors.As(err, &conflict) ||
 		conflict.Revision != orgRev(1) || conflict.Organizations.Items[0].Label != "one" {
-		t.Fatalf("a rename against the deleted file, after the move: %v", err)
+		t.Fatalf("a rename against the deleted file, after the add: %v", err)
 	}
 
 	bad := []byte(`{"schema":1}`)
@@ -695,17 +572,66 @@ func TestAnOrganizationsBatchSeesTheFileAsItIsOnDisk(t *testing.T) {
 	}
 }
 
+// A batch that read the file again leaves the next Sync to report it, once,
+// whatever the batch came to: the stamp no longer says the file changed, and
+// the caller's item list has not followed it. A batch that read nothing again
+// leaves Sync nothing to report, a saved one included.
+func TestSyncReportsWhatABatchReadAgain(t *testing.T) {
+	s, _ := newOrganizationStore(t)
+	if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("one", orgOne)}}, orgNow); err != nil {
+		t.Fatal(err)
+	}
+	if s.Sync() {
+		t.Fatal("Sync reported a batch that read nothing again")
+	}
+	if err := os.Remove(s.Path()); err != nil {
+		t.Fatal(err)
+	}
+	var conflict *OrganizationsConflictError
+	if _, err := s.Apply(OrganizationsBatch{BaseRevision: orgRev(0), Ops: []OrganizationOp{renameOp(orgOne, "uno")}}, orgNow); !errors.As(err, &conflict) {
+		t.Fatalf("a rename after the file was deleted: %v", err)
+	}
+	if !s.Sync() || s.Sync() || s.Current().State != client.OrganizationsStateMissing {
+		t.Fatalf("after a conflict with the deleted file: %+v", s.Current())
+	}
+	raw, err := json.Marshal(validOrganizations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Path(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Apply(OrganizationsBatch{BaseRevision: "4", Ops: []OrganizationOp{renameOp(orgOne, "personal-1")}}, orgNow)
+	if err != nil || !result.Unchanged {
+		t.Fatalf("an unchanged batch over a file put back: %+v %v", result, err)
+	}
+	if !s.Sync() || s.Sync() || s.Current().Revision != 4 || len(s.Current().Items) != 2 {
+		t.Fatalf("after an unchanged batch over a file put back: %+v", s.Current())
+	}
+	if _, err := s.Apply(OrganizationsBatch{BaseRevision: "4", Ops: []OrganizationOp{addOp("three", orgThree)}}, orgNow); err != nil {
+		t.Fatal(err)
+	}
+	if s.Sync() {
+		t.Fatal("Sync reported a batch saved over the file it had read")
+	}
+}
+
 // A file written where there was none never takes a revision an earlier file
 // had, so a page that read the earlier one conflicts rather than changing a
-// list it never showed: not after a delete and a move in the same second, not
-// after a restart that forgot the deleted file, and not for the page's first
-// add.
+// list it never showed: not after a delete and an add in the same second, and
+// not after a restart that forgot the deleted file.
 func TestARecreatedOrganizationsFileStartsPastEveryEarlierRevision(t *testing.T) {
-	items := []client.APICredit{{Label: "one", OrganizationID: orgOne}}
+	add := func(s *OrganizationStore, now time.Time) {
+		t.Helper()
+		if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("one", orgOne)}}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
 	snapshot := snapshotIn(t.TempDir())
 	s := OpenOrganizations(snapshot)
-	if _, err := s.Migrate(items, orgNow); err != nil || s.Current().Revision != orgFirst {
-		t.Fatalf("the first move: %+v, %v", s.Current(), err)
+	add(s, orgNow)
+	if s.Current().Revision != orgFirst {
+		t.Fatalf("the first add: %+v", s.Current())
 	}
 	// What a page read before any delete, and holds while its card is open.
 	read := RevisionText(s.Current().Revision)
@@ -727,28 +653,22 @@ func TestARecreatedOrganizationsFileStartsPastEveryEarlierRevision(t *testing.T)
 		s.Sync()
 	}
 
-	// Deleted and moved again within the second.
+	// Deleted and added again within the second.
 	remove()
-	if _, err := s.Migrate(items, orgNow); err != nil {
-		t.Fatal(err)
-	}
-	stale("moved again", s, orgFirst+1)
+	add(s, orgNow)
+	stale("added again", s, orgFirst+1)
 
 	// Deleted while stopped: a new store has never seen the old file, and the
 	// time is past it.
 	remove()
 	s = OpenOrganizations(snapshot)
-	if _, err := s.Migrate(items, orgNow.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	stale("moved after a restart", s, orgFirst+60)
+	add(s, orgNow.Add(time.Minute))
+	stale("added after a restart", s, orgFirst+60)
 
-	// The page's first add after a delete, with nothing to move.
+	// Deleted again, and added again with the clock behind.
 	remove()
-	if _, err := s.Apply(OrganizationsBatch{Ops: []OrganizationOp{addOp("one", orgOne)}}, orgNow); err != nil {
-		t.Fatal(err)
-	}
-	stale("added again", s, orgFirst+61)
+	add(s, orgNow)
+	stale("added with the clock behind", s, orgFirst+61)
 	if o := LoadOrganizations(s.Path()); o.Revision != orgFirst+61 || o.Items[0].Rev != orgFirst+61 {
 		t.Fatalf("the file %+v", o)
 	}

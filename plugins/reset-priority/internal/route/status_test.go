@@ -278,58 +278,18 @@ func TestReferenceNamesEveryHealthValue(t *testing.T) {
 }
 
 // The router declines with settings_unavailable for every settings state but
-// ok, and the states point at different files: Quota Cache's own settings
-// file, or, before it has one, Quota Glance's settings.json, which its first
-// start imports. So the reason's row in REFERENCE.md and in the
+// ok, and each such state has a file to fix: Quota Cache's own settings file
+// for unreadable. So the reason's row in REFERENCE.md and in the
 // troubleshooting guide names the file for every state Quota Cache declares,
 // read from its client so a new one cannot ship unnamed.
 func TestDocsNameEverySettingsCause(t *testing.T) {
 	files := map[string]string{
-		qc.CreditSettingsUnreadable:       "`snapshot.settings.json`",
-		qc.CreditSettingsLegacyUnreadable: "Quota Glance's `settings.json`",
+		qc.CreditSettingsUnreadable: "`snapshot.settings.json`",
 	}
-	sources, err := filepath.Glob(filepath.Join("..", "..", "..", "quota-cache", "client", "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	states := 0
-	for _, source := range sources {
-		if strings.HasSuffix(source, "_test.go") {
-			continue
+	for state, name := range quotaCacheConstants(t, "CreditSettings") {
+		if _, named := files[state]; !named && state != qc.CreditSettingsOK {
+			t.Errorf("Quota Cache declares settings state %q (%s), which this test does not know the file for", state, name)
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				spec := spec.(*ast.ValueSpec)
-				for i, name := range spec.Names {
-					if !strings.HasPrefix(name.Name, "CreditSettings") || i >= len(spec.Values) {
-						continue
-					}
-					literal, ok := spec.Values[i].(*ast.BasicLit)
-					if !ok || literal.Kind != token.STRING {
-						continue
-					}
-					state, err := strconv.Unquote(literal.Value)
-					if err != nil {
-						t.Fatal(err)
-					}
-					states++
-					if _, named := files[state]; !named && state != qc.CreditSettingsOK {
-						t.Errorf("Quota Cache declares settings state %q (%s), which this test does not know the file for", state, name.Name)
-					}
-				}
-			}
-		}
-	}
-	if states == 0 {
-		t.Fatal("Quota Cache's client declares no settings states")
 	}
 	f := worked(t)
 	for state := range files {
@@ -370,6 +330,112 @@ func TestDocsNameEverySettingsCause(t *testing.T) {
 	if !strings.Contains(string(guide), "\n## When a file cannot be read\n") {
 		t.Error("Quota Cache's credit-settings.md no longer has the When a file cannot be read section both rows link to")
 	}
+}
+
+// Quota Cache records a meter stop only when it stops a running meter, and
+// starts none while it lists no organization. One that starts listing none,
+// as right after updating from 0.1.14, when 0.2.0 has none until they are
+// added on its page, or after a restart with an organizations file it cannot
+// read, leaves the file with the stop its last run recorded: shutdown or
+// quiesce, never no_items. The router then declines meter_stopped, ahead of
+// no_api_credits and meter_too_old (TestBuildInactiveReasonsInOrder). So the
+// meter_stopped row in REFERENCE.md and in the troubleshooting guide says
+// what a shutdown or quiesce that stays means, sends the operator to add the
+// organizations, and promises no quiesce that clears with nothing listed;
+// REFERENCE.md explains every stop reason Quota Cache declares, read from its
+// client so a new one cannot ship unexplained.
+func TestDocsSayALingeringStopMeansNoOrganization(t *testing.T) {
+	stops := quotaCacheConstants(t, "MeterStop")
+	for _, doc := range []string{"REFERENCE.md", filepath.Join("docs", "troubleshooting.md")} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := ""
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "| `meter_stopped` |") {
+				row = line
+			}
+		}
+		if row == "" {
+			t.Errorf("%s has no `meter_stopped` row", doc)
+			continue
+		}
+		for _, want := range []string{
+			"A `shutdown` or `quiesce` that stays while Quota Cache runs means its meter has not started since CPA loaded it",
+			"lists no organization", "updating from Quota Cache 0.1.14", "the organizations on its page", "not `no_items`",
+			"**Claude API meter**", "credit-settings.md#when-a-file-cannot-be-read)",
+		} {
+			if !strings.Contains(row, want) {
+				t.Errorf("%s's `meter_stopped` row never says %q", doc, want)
+			}
+		}
+		if strings.Contains(row, "clears on its own") && !strings.Contains(row, "provided it lists an organization") {
+			t.Errorf("%s's `meter_stopped` row says a quiesce clears on its own, which it does not while Quota Cache lists no organization", doc)
+		}
+		if doc != "REFERENCE.md" {
+			continue
+		}
+		for stop, name := range stops {
+			if !strings.Contains(row, "`"+stop+"` (") {
+				t.Errorf("REFERENCE.md's `meter_stopped` row never explains stop reason %q (%s)", stop, name)
+			}
+		}
+	}
+	page, err := os.ReadFile(filepath.Join("..", "..", "..", "quota-cache", "internal", "plugin", "pageassets", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), ">Claude API meter</h2>") {
+		t.Error("Quota Cache's page no longer has the Claude API meter section both rows send the operator to")
+	}
+}
+
+// quotaCacheConstants is every string constant Quota Cache's client declares
+// whose name starts with prefix: each value, with its name.
+func quotaCacheConstants(t *testing.T, prefix string) map[string]string {
+	t.Helper()
+	sources, err := filepath.Glob(filepath.Join("..", "..", "..", "quota-cache", "client", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				spec := spec.(*ast.ValueSpec)
+				for i, name := range spec.Names {
+					if !strings.HasPrefix(name.Name, prefix) || i >= len(spec.Values) {
+						continue
+					}
+					literal, ok := spec.Values[i].(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					values[value] = name.Name
+				}
+			}
+		}
+	}
+	if len(values) == 0 {
+		t.Fatalf("Quota Cache's client declares no %s constants", prefix)
+	}
+	return values
 }
 
 // Routing supports CPA from v8.0.4, but CPA stops a plugin that is turned off
@@ -455,9 +521,8 @@ func TestDocsSayAnOlderCPALeavesQuotaCacheRunning(t *testing.T) {
 // date a day early turns the ranking over a day early and lets the rest of
 // that credit expire, so REFERENCE.md's "Renewal day" asks for the same date
 // as Quota Cache's README, and links to it. The date is set on Quota Cache's
-// page only: once the organizations are there, Quota Cache ignores
-// claude-api-credits, so a renews edited in its configuration changes nothing
-// and the instruction must not offer it.
+// page only: Quota Cache ignores claude-api-credits, so a renews edited in its
+// configuration changes nothing and the instruction must not offer it.
 func TestReferenceRenewalDayFollowsQuotaCache(t *testing.T) {
 	reference, err := os.ReadFile(filepath.Join("..", "..", "REFERENCE.md"))
 	if err != nil {
@@ -485,7 +550,7 @@ func TestReferenceRenewalDayFollowsQuotaCache(t *testing.T) {
 		}
 	}
 	if strings.Contains(instruction, "configuration") {
-		t.Errorf("REFERENCE.md's Renewal day offers Quota Cache's configuration, which it ignores once the organizations are on its page: %q", instruction)
+		t.Errorf("REFERENCE.md's Renewal day offers Quota Cache's configuration, which it ignores: %q", instruction)
 	}
 	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "quota-cache", "README.md"))
 	if err != nil {

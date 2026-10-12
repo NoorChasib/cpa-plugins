@@ -31,11 +31,8 @@ button.danger{border-color:var(--err-fg);background:var(--err-bg);color:var(--er
 .card-foot p{margin:0;max-width:110ch}
 .saved{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--ok-fg)}
 .saved svg{width:12px;height:12px}
-.moved{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
-.moved p{margin:0;flex:1 1 400px}
-.moved .confirm{flex-basis:100%}
-.moved .bad{flex-basis:100%;color:var(--err-fg);font-size:12px;font-weight:500}
-.moved p.saved{flex-basis:100%}
+.dismissible{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.dismissible p{margin:0;flex:1 1 400px}
 tfoot td{background:var(--neutral-bg);font-size:12px;color:var(--muted);border-bottom:0;border-top:1px solid var(--border)}
 tfoot td b{color:var(--text);font-weight:600}
 .org-edit{padding:16px;border-bottom:1px solid var(--border)}

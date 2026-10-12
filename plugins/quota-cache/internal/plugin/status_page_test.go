@@ -119,14 +119,13 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 		"'anthropic-api': 'CPA usage meter (no requests)'",
 		"item.api_credit.label",
 		"const noWeekly = ['openrouter', 'anthropic-api'];",
-		"const label = problem ? 'Not polled' : credit ? 'Metered' :",
+		"const label = credit ? 'Metered' :",
 		"const polled = all.filter(e => e.provider !== 'anthropic-api');",
-		"problem ? node('span', 'Not polled', 'secondary') : credit ? '—' :",
+		"addCell(row, credit ? '—' :",
 		"const flushed = date(s.api_meter && s.api_meter.flushed_at);",
 		"now - flushed <= 30 * 60000",
 		"if (entry.provider === 'anthropic-api') return creditDetails(entry, now, s);",
 		"'Organization: ' + (c.organization_id || 'not set')",
-		"c.monthly_usd_invalid", "c.renews_invalid", "c.admin_key_ignored",
 		"m.organizations[c.organization_id]",
 		"' ok, ' + (u.failed || 0) + ' failed, in ' + (u.input || 0) + ', out ' + (u.output || 0) + ', cache read ' + (u.cache_read || 0) + ', cache write ' + (u.cache_write || 0) + ' tokens'",
 		"function meterPanel(s, now)",
@@ -143,14 +142,62 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 			t.Fatalf("page script still reads the cost report (%q)", gone)
 		}
 	}
+	// The entry carries the organization only: the monthly credit and refill
+	// date are the page's, and nothing of claude-api-credits is read.
+	for _, gone := range []string{"monthly_usd", "renews_invalid", "admin_key_ignored", ".problem", "(configured)"} {
+		if strings.Contains(script, gone) {
+			t.Fatalf("page script still reads a configured value (%q)", gone)
+		}
+	}
 	credit := script[strings.Index(script, "function creditDetails("):strings.Index(script, "function render(")]
 	for _, arithmetic := range []string{"Number(", "parseFloat", "reduce(", " + Number", "+= "} {
 		if strings.Contains(credit, arithmetic) {
 			t.Fatalf("the credit reading or the meter panel does arithmetic (%q); totals are Quota Glance's", arithmetic)
 		}
 	}
-	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, "claude-api-credits", `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
+	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
 		if !strings.Contains(sidebarHTML, rule) {
+			t.Fatalf("the page lost %q", rule)
+		}
+	}
+}
+
+// The organizations are entered on this page and nothing moves from the
+// configuration, so the page names no configured value, offers none back, and
+// tells of no move; it says when claude-api-credits is ignored, and what an
+// unreadable organizations file means.
+func TestStatusPageNamesNoConfiguredValue(t *testing.T) {
+	page := sidebarHTML + sidebarScript
+	for _, gone := range []string{"Use config", "from config", "'config '", "not in config", "back to config", "the config’s is not", "Moved ", "has_default", "migration"} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the page still says %q", gone)
+		}
+	}
+	for _, rule := range []string{
+		"' under claude-api-credits. This version doesn’t read '",
+		"'Quota Cache cannot read its organizations file, so no organization is counted and editing them here is unavailable. Fix the file’s owner or permissions, or move '",
+		"'No Console organizations yet. Add one to start counting its API credit.'",
+	} {
+		if !strings.Contains(page, rule) {
+			t.Errorf("the page lost %q", rule)
+		}
+	}
+}
+
+// Values are entered on this page while Quota Glance 0.7 is still installed,
+// and 0.7 never reads them, so every line saying Quota Glance shows or reads
+// them names the version that does.
+func TestStatusPageNamesTheQuotaGlanceThatReadsTheFigures(t *testing.T) {
+	page := sidebarHTML + sidebarScript
+	if claim := regexp.MustCompile(`Quota Glance (?:shows|reads?|and)\b`).FindString(page); claim != "" {
+		t.Fatalf("the page says %q without naming Quota Glance 0.8.0", claim)
+	}
+	for _, rule := range []string{
+		"'. Quota Glance 0.8.0 or newer shows them from its next read of the cache.'",
+		"'. Quota Glance 0.8.0 or newer shows these figures, and Reset Priority routes by them when its API-credit routing is on.'",
+		"Quota Glance 0.8.0 or newer and Reset Priority 0.2.0 or newer read the same figures.",
+	} {
+		if !strings.Contains(page, rule) {
 			t.Fatalf("the page lost %q", rule)
 		}
 	}
@@ -243,8 +290,8 @@ func TestSidebarIsOneScriptUnderOneHash(t *testing.T) {
 // only from a button press: nothing on a timer calls it.
 func TestEditorSavesOnlyFromAPressWithTheConsoleKey(t *testing.T) {
 	script := sidebarEditor
-	if strings.Count(script, "fetch(") != 1 || strings.Count(script, "await send(") != 4 {
-		t.Fatal("expected one request site, used by the three cards' Save and the import")
+	if strings.Count(script, "fetch(") != 1 || strings.Count(script, "await send(") != 3 {
+		t.Fatal("expected one request site, used by the three cards' Save")
 	}
 	if strings.Contains(script, "setInterval") || strings.Count(script, "window.QuotaCachePage") != 1 {
 		t.Fatal("the editor must not poll or read any global but the page's namespace")
@@ -294,18 +341,11 @@ func TestEditorSavesOnlyFromAPressWithTheConsoleKey(t *testing.T) {
 	if !strings.Contains(script, "const SETTINGS_PATH = '/v0/management/plugins/quota-cache/settings';") {
 		t.Fatal("the editor must save through the management route")
 	}
-	// Save, the import and Remove are buttons; the forms submit only to Save.
+	// Save and Remove are buttons; the forms submit only to Save.
 	for _, rule := range []string{
 		"on: {submit: event => { event.preventDefault(); saveOrganizations(); }}",
 		"on: {submit: event => { event.preventDefault(); saveCredits(); }}",
 		"on: {submit: event => { event.preventDefault(); saveRenewals(); }}",
-		"on: {click: runImport}",
-		// A save while the page follows Quota Glance's file asks, and Save
-		// anyway answers for that one save only: the forms never send one
-		// confirmed.
-		"if (!confirmed && following()) { askFollowing(credits, saveCredits); return; }",
-		"if (!confirmed && following()) { askFollowing(renewals, saveRenewals); return; }",
-		"label: 'Save anyway', go: () => { target.confirm = null; go(true); }};",
 		// Save is off without a session or with a refused key.
 		"if (!page.root || !session) return {block: SIGN_IN_FOOT};",
 		"const blocked = session.block ||",

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # scripts and workflows and the plugins without a check of their own.
 UNCOMMITTED_CITATION = re.compile(
     r'\u00a7|api-credits-[a-z0-9-]*\.md|'
-    r'\b(?:QC-[A-Z]?|RP-?|G-T)[0-9]+\b|\bQC-[a-z]\b|\b[A-N]\.[0-9]+\b|\bboard [A-Z][0-9]+\b|\(L[0-9]+\)')
+    r'\b(?:QC-[A-Z]?|RP-?|G-T)[0-9]+\b|\bQC-[a-z]\b|\b[A-P]\.[0-9]+\b|\bboard [A-Z][0-9]+\b|\(L[0-9]+\)')
 
 # A section of an RFC, which anyone can look up.
 RFC_SECTION = re.compile(r'RFC [0-9]+ \u00a7[0-9.]+')
@@ -29,7 +29,7 @@ SKIP_PATHS = {Path('plugins/quota-glance/web/design')}
 
 # The lettered parts the notes had when the section pattern was last widened.
 # Each amendment to them adds a part, headed by its capital letter and a dot.
-NOTES_PARTS = set('ABCDEFGHIJKLMN')
+NOTES_PARTS = set('ABCDEFGHIJKLMNOP')
 PART_HEADING = re.compile(r'^#+ ([A-Z])\. ', re.MULTILINE)
 
 

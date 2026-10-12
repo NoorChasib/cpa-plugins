@@ -76,15 +76,15 @@ def answer_of(body, headers):
 
 
 def snapshot(now):
-    """Quota Cache's snapshot with the one claude-api-credits item it lists,
-    keyed the way it keys it. The router does not read it; Reset Priority's
+    """Quota Cache's snapshot with the one organization on its page, keyed
+    the way it keys it. The router does not read it; Reset Priority's
     OAuth engine would, and stays standalone here."""
     zero = '0001-01-01T00:00:00Z'
     return {'schema': 1, 'written_at': stamp(now), 'next_request': stamp(now + 600), 'provider_cooldown': {},
             'entries': {f'anthropic-api:{ACCOUNT}': {
                 'provider': 'anthropic-api', 'auth_index': ACCOUNT, 'used_percent': 0,
                 'reset_at': zero, 'observed_at': zero, 'last_attempt': zero, 'next_attempt': zero, 'failures': 0,
-                'api_credit': {'label': 'smoke', 'position': 0, 'monthly_usd': '50', 'organization_id': CREDITS_ORG}}}}
+                'api_credit': {'label': 'smoke', 'position': 0, 'organization_id': CREDITS_ORG}}}}
 
 
 def meter(started, now):
@@ -105,11 +105,11 @@ def credit_state(now):
         'schema': 1, 'quota_cache_version': '0.2.0', 'computed_at': stamp(now), 'valid_until': stamp(renews),
         'inputs': {'snapshot_written_at': stamp(now), 'meter_flushed_at': stamp(now), 'meter_error': '',
                    'settings_revision': ''},
-        'settings': {'state': 'ok', 'editable': True, 'revision': '', 'import': None},
+        'settings': {'state': 'ok', 'editable': True, 'revision': ''},
         'api_credits': {
             'title': 'Monthly API Credit', 'currency': 'USD',
             'meter': {'sinceEpoch': day, 'updatedAtEpoch': now, 'stale': False, 'gaps': []},
-            'editing': {'available': True, 'reason': '', 'migration': ''},
+            'editing': {'available': True, 'reason': ''},
             'pool': {'hasEstimate': True, 'left': 37.5, 'leftText': '$37.50', 'accountCount': 1, 'countedCount': 1},
             'accounts': [{
                 'id': ACCOUNT, 'label': 'smoke', 'order': 0, 'organizationId': CREDITS_ORG, 'state': 'ok',
@@ -120,8 +120,7 @@ def credit_state(now):
             'unlinked': [], 'orphans': [],
         },
         'renewals': {},
-        'organizations': {'state': 'ok', 'revision': '1', 'source': 'page', 'migration': None,
-                          'config_items_ignored': 0},
+        'organizations': {'state': 'ok', 'revision': '1', 'config_items_ignored': 0},
     }
 
 

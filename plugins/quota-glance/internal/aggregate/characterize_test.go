@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,9 +59,65 @@ func withoutEditing(t *testing.T, raw []byte) map[string]any {
 	return block
 }
 
+// configIssues are the issues about the values quota-glance 0.7 read from
+// Quota Cache's configuration, which Quota Cache 0.2.0 never raises.
+var configIssues = []string{qc.CreditIssueConfigMonthlyUSDInvalid, qc.CreditIssueConfigRenewsInvalid, qc.CreditIssueAdminKeyIgnored}
+
+// enteredOnPage turns a characterization into the card for the same values
+// entered on Quota Cache's page, which is where Quota Cache 0.2.0 takes them
+// from; it reads none from its configuration. A linked organization's
+// configured credit or refill date is the page's, stamped with the revision
+// and time got's entry carries. Any other account's is none, so a refill date
+// gives it no cycle. The configured values and the issues about them are
+// gone, which changes no sentence: none was an account's first issue.
+func enteredOnPage(t *testing.T, want, got map[string]any) {
+	t.Helper()
+	gotAccounts, _ := got["accounts"].([]any)
+	for i, raw := range want["accounts"].([]any) {
+		account := raw.(map[string]any)
+		stored := account["settings"].(map[string]any)
+		linked, entered := strings.HasPrefix(account["id"].(string), "org-"), false
+		for _, field := range [][3]string{{"monthlyCreditSource", "monthlyUsd", "configMonthlyUsd"}, {"renewsSource", "renews", "configRenews"}} {
+			source, value, configured := field[0], field[1], field[2]
+			switch {
+			case account[source] != qc.CreditSourceConfig:
+			case linked:
+				account[source], stored[value], entered = qc.CreditSourceDashboard, stored[configured], true
+			default:
+				account[source] = qc.CreditSourceNone
+				if source == "renewsSource" {
+					account["cycleStartEpoch"], account["renewsAtEpoch"], account["renewsInSeconds"] = nil, nil, nil
+				}
+			}
+			stored[configured] = ""
+		}
+		stored["configMonthlyUsdInvalid"], stored["configRenewsInvalid"] = false, false
+		if entered && stored["revision"] == "" && i < len(gotAccounts) {
+			page := gotAccounts[i].(map[string]any)["settings"].(map[string]any)
+			if page["revision"] == "" || page["updatedAtEpoch"] == nil {
+				t.Errorf("%s: a value entered on the page has no revision or time: %v", account["id"], page)
+			}
+			stored["revision"], stored["updatedAtEpoch"] = page["revision"], page["updatedAtEpoch"]
+		}
+		issues := []any{}
+		for j, issue := range account["dataIssues"].([]any) {
+			if slices.Contains(configIssues, issue.(string)) {
+				if j == 0 {
+					t.Fatalf("%s: %s is the first issue, so the sentence changes", account["id"], issue)
+				}
+				continue
+			}
+			issues = append(issues, issue)
+		}
+		account["dataIssues"] = issues
+	}
+}
+
 // After the move to Quota Cache, each fixture's card, built from Quota Cache's
 // published state for it, is the characterization byte for byte once the
-// read-only fields are set aside, and those are read-only.
+// read-only fields are set aside, and those are read-only, and once the values
+// quota-glance 0.7 read from Quota Cache's configuration are entered on its
+// page instead.
 func TestPublishedCreditsMatchTheCharacterization(t *testing.T) {
 	for _, c := range characterizations {
 		t.Run(c.name, func(t *testing.T) {
@@ -67,16 +125,20 @@ func TestPublishedCreditsMatchTheCharacterization(t *testing.T) {
 			if credits == nil {
 				t.Fatal("apiCredits is null")
 			}
-			got, err := json.MarshalIndent(credits, "", "  ")
+			raw, err := json.MarshalIndent(credits, "", "  ")
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := os.ReadFile(characterizationPath(c.name))
+			characterization, err := os.ReadFile(characterizationPath(c.name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(withoutEditing(t, got), withoutEditing(t, want)) {
-				t.Fatalf("%s: the published card differs from the characterization outside the read-only fields", c.name)
+			got, want := withoutEditing(t, raw), withoutEditing(t, characterization)
+			enteredOnPage(t, want, got)
+			if !reflect.DeepEqual(got, want) {
+				gotText, _ := json.MarshalIndent(got, "", "  ")
+				wantText, _ := json.MarshalIndent(want, "", "  ")
+				t.Fatalf("%s: the published card differs from the characterization outside the read-only fields:\n got %s\nwant %s", c.name, gotText, wantText)
 			}
 			if credits.Editing != (APICreditEditing{Reason: qc.CreditEditingQuotaCache}) {
 				t.Errorf("editing = %+v", credits.Editing)

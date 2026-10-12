@@ -15,7 +15,9 @@ import (
 func fakeOrg(last string) string { return "00000000-0000-4000-8000-00000000000" + last }
 
 // creditEntry is quota-cache 0.1.14's entry for one configured organization:
-// the configured facts and nothing else. It is never polled.
+// the configured facts and nothing else. It is never polled. onPage, which
+// buildCredits applies, enters its credit and refill date on the page, where
+// quota-cache keeps them now.
 func creditEntry(label string, position int, org, monthly, renews string) client.Entry {
 	return client.Entry{
 		Provider:  client.ProviderAnthropicAPI,
@@ -74,12 +76,13 @@ func itemsOf(entries ...client.Entry) []Item {
 	return items
 }
 
-// buildCredits computes the card for in at now, and holds it to the sums the
+// buildCredits computes the card for in at now, with each item's credit and
+// refill date entered on the page (onPage), and holds it to the sums the
 // contract promises.
 func buildCredits(t *testing.T, in Input, now time.Time) *client.CreditDocument {
 	t.Helper()
 	in.Now = now
-	state := Compute(in)
+	state := Compute(onPage(in))
 	if state.APICredits == nil {
 		t.Fatal("api_credits is null with items listed")
 	}
@@ -136,17 +139,6 @@ func checkCreditPoolAddsUp(t *testing.T, credits *client.CreditDocument) {
 	}
 }
 
-func creditAccountByLabel(t *testing.T, credits *client.CreditDocument, label string) client.CreditAccount {
-	t.Helper()
-	for _, account := range credits.Accounts {
-		if account.Label == label {
-			return account
-		}
-	}
-	t.Fatalf("no account %q in %+v", label, credits.Accounts)
-	return client.CreditAccount{}
-}
-
 func epoch(value int64) *int64 { return &value }
 
 func jsonOf(t *testing.T, value any) string {
@@ -193,17 +185,19 @@ func TestAPICreditsWorkedExample(t *testing.T) {
 	alpha := client.CreditAccount{
 		ID: client.APICreditOrgAccount(fakeOrg("a")), Label: "alpha", Order: 0, OrganizationID: fakeOrg("a"),
 		State: client.CreditStateOK, Counted: true, HasEstimate: true, Basis: client.CreditBasisCredit,
-		MonthlyCredit: 200, MonthlyCreditText: "$200.00", MonthlyCreditSource: client.CreditSourceConfig,
+		MonthlyCredit: 200, MonthlyCreditText: "$200.00", MonthlyCreditSource: client.CreditSourceDashboard,
 		Spent: 55, SpentText: "$55.00", SpentSinceEpoch: epoch(instant(t, "2026-09-29T00:00:00Z").Unix()),
 		Used: 55, UsedText: "$55.00", Left: 145, LeftText: "$145.00", Overage: 0, OverageText: "$0.00",
 		RemainingFraction: 0.725, RemainingPercent: 73, Level: client.LevelOK,
 		CycleStartEpoch: epoch(instant(t, "2026-09-29T00:00:00Z").Unix()), RenewsAtEpoch: epoch(1793232000), RenewsInSeconds: epoch(1684800),
-		RenewsSource:    client.CreditSourceConfig,
+		RenewsSource:    client.CreditSourceDashboard,
 		CacheWriteExtra: 6, CacheWriteExtraText: "$6.00",
 		Unpriced:        []client.CreditUnpriced{},
 		MeterSinceEpoch: epoch(instant(t, "2026-09-20T00:00:00Z").Unix()), LastSeenEpoch: epoch(instant(t, "2026-10-01T18:20:00Z").Unix()),
 		DataIssues: []string{},
-		Settings:   client.CreditSettings{Editable: true, ConfigMonthlyUSD: "200", ConfigRenews: "2026-10-29"},
+		Settings: client.CreditSettings{
+			Editable: true, Revision: "2", MonthlyUSD: "200", Renews: "2026-10-29", UpdatedAtEpoch: epoch(pageEnteredAt.Unix()),
+		},
 	}
 	if got := credits.Accounts[0]; !reflect.DeepEqual(got, alpha) {
 		t.Errorf("alpha:\n got %s\nwant %s", jsonOf(t, got), jsonOf(t, alpha))
@@ -217,7 +211,7 @@ func TestAPICreditsWorkedExample(t *testing.T) {
 		Used: 194, UsedText: "$194.00", Left: 106, LeftText: "$106.00", Overage: 0, OverageText: "$0.00",
 		RemainingFraction: 106.0 / 300, RemainingPercent: 35, Level: client.LevelLow,
 		CycleStartEpoch: epoch(instant(t, "2026-09-15T00:00:00Z").Unix()), RenewsAtEpoch: epoch(1792022400), RenewsInSeconds: epoch(475200),
-		RenewsSource: client.CreditSourceConfig,
+		RenewsSource: client.CreditSourceDashboard,
 		Reading: &client.CreditReading{
 			Remaining: 120, RemainingText: "$120.00",
 			AtEpoch: instant(t, "2026-10-08T15:40:00Z").Unix(), EnteredAtEpoch: instant(t, "2026-10-08T15:44:00Z").Unix(),
@@ -227,7 +221,7 @@ func TestAPICreditsWorkedExample(t *testing.T) {
 		MeterSinceEpoch: epoch(instant(t, "2026-09-01T00:00:00Z").Unix()), LastSeenEpoch: epoch(instant(t, "2026-10-08T16:30:00Z").Unix()),
 		DataIssues: []string{},
 		Settings: client.CreditSettings{
-			Editable: true, Revision: "2", MonthlyUSD: "300", ConfigMonthlyUSD: "200", ConfigRenews: "2026-10-15",
+			Editable: true, Revision: "2", MonthlyUSD: "300", Renews: "2026-10-15",
 			Reading:        &client.StoredReading{RemainingUSD: "120.00", AtEpoch: instant(t, "2026-10-08T15:40:00Z").Unix(), EnteredAtEpoch: instant(t, "2026-10-08T15:44:00Z").Unix()},
 			UpdatedAtEpoch: epoch(instant(t, "2026-10-08T15:44:00Z").Unix()),
 		},
@@ -320,15 +314,14 @@ func TestAPICreditsMeterGaps(t *testing.T) {
 // One counted organization, metered and configured as given, for the rule
 // tests below.
 type creditCase struct {
-	entry    client.Entry
-	org      client.MeterOrganization
-	meter    func(*client.APIMeter)
-	stored   *settings.APICredit
-	now      string
-	stale    time.Duration
-	noMeter  bool
-	noOrg    bool
-	editable bool
+	entry   client.Entry
+	org     client.MeterOrganization
+	meter   func(*client.APIMeter)
+	stored  *settings.APICredit
+	now     string
+	stale   time.Duration
+	noMeter bool
+	noOrg   bool
 }
 
 func (c creditCase) build(t *testing.T) client.CreditAccount {
@@ -444,30 +437,19 @@ func TestProblemSentences(t *testing.T) {
 	}
 }
 
-// A misconfigured, too old or pending account shows no amounts at all, and
-// its flags still say what is wrong with its configuration.
+// A misconfigured or pending account shows no amounts at all, and carries
+// only the flags its own state gives.
 func TestAccountsWithoutAnEstimateCarryOnlyTheirFlags(t *testing.T) {
 	e := creditEntry("alpha", 0, fakeOrg("a"), "", "")
-	e.APICredit.MonthlyUSDInvalid, e.APICredit.RenewsInvalid, e.APICredit.AdminKeyIgnored = true, true, true
 	got := creditCase{entry: e, noOrg: true}.build(t)
-	want := []string{client.CreditIssueOrgNotCounted, client.CreditIssueNeedsCredit, client.CreditIssueNeedsRefillDate, client.CreditIssueConfigMonthlyUSDInvalid, client.CreditIssueConfigRenewsInvalid, client.CreditIssueAdminKeyIgnored}
-	if !reflect.DeepEqual(got.DataIssues, want) || got.Settings.ConfigMonthlyUSDInvalid != true || !got.Settings.ConfigRenewsInvalid {
-		t.Errorf("issues %v settings %+v", got.DataIssues, got.Settings)
+	want := []string{client.CreditIssueOrgNotCounted, client.CreditIssueNeedsCredit, client.CreditIssueNeedsRefillDate}
+	if !reflect.DeepEqual(got.DataIssues, want) || got.SpentText != "" || got.MonthlyCreditText != "" {
+		t.Errorf("pending: %s", jsonOf(t, got))
 	}
 	e.APICredit.Problem = client.CreditProblemLabelMissing
 	got = creditCase{entry: e, org: healthyOrg(t)}.build(t)
-	if !reflect.DeepEqual(got.DataIssues, []string{client.CreditIssueMisconfigured, client.CreditIssueConfigMonthlyUSDInvalid, client.CreditIssueConfigRenewsInvalid, client.CreditIssueAdminKeyIgnored}) {
-		t.Errorf("misconfigured issues %v", got.DataIssues)
-	}
-	for issue, sentence := range map[string]string{
-		client.CreditIssueConfigMonthlyUSDInvalid: "monthly-usd in Quota Cache's config is not a dollar amount, so it is ignored.",
-		client.CreditIssueConfigRenewsInvalid:     "renews in Quota Cache's config is not a date, so it is ignored.",
-		client.CreditIssueAdminKeyIgnored:         "Quota Cache no longer uses this item's admin-key. Delete it from the config.",
-	} {
-		a := &creditAccount{issues: map[string]bool{}}
-		if got := a.sentenceOf(issue, nil); got != sentence {
-			t.Errorf("%s: %q", issue, got)
-		}
+	if !reflect.DeepEqual(got.DataIssues, []string{client.CreditIssueMisconfigured}) || got.SpentText != "" {
+		t.Errorf("misconfigured: %s", jsonOf(t, got))
 	}
 }
 
@@ -801,26 +783,29 @@ func TestReadingAboveTheCredit(t *testing.T) {
 	}
 }
 
-// Dashboard values win field by field; the config's are always shown beside
-// them; and Use config, which deletes the dashboard's, brings them back.
-func TestDashboardValuesWinFieldByField(t *testing.T) {
+// The values entered on the page are the only ones, field by field: a credit
+// with no refill date has no cycle, a refill date with no credit counts
+// nothing, and with nothing stored both are none.
+func TestThePagesValuesApplyFieldByField(t *testing.T) {
 	org := fakeOrg("a")
-	entry := creditEntry("alpha", 0, org, "200", "2026-10-29T00:00:00Z")
+	entry := creditEntry("alpha", 0, org, "", "")
 	stored := &settings.APICredit{MonthlyUSD: "300", Rev: 4, UpdatedAt: instant(t, "2026-10-08T00:00:00Z")}
 	got := creditCase{entry: entry, org: healthyOrg(t), stored: stored}.build(t)
-	if got.MonthlyCreditText != "$300.00" || got.MonthlyCreditSource != client.CreditSourceDashboard || got.RenewsSource != client.CreditSourceConfig ||
-		got.Settings.MonthlyUSD != "300" || got.Settings.ConfigMonthlyUSD != "200" || got.Settings.ConfigRenews != "2026-10-29" ||
-		got.Settings.Renews != "" || got.Settings.Revision != "4" || *got.Settings.UpdatedAtEpoch != instant(t, "2026-10-08T00:00:00Z").Unix() {
-		t.Errorf("%s", jsonOf(t, got))
+	if got.MonthlyCreditText != "$300.00" || got.MonthlyCreditSource != client.CreditSourceDashboard || got.RenewsSource != client.CreditSourceNone ||
+		got.CycleStartEpoch != nil || got.State != client.CreditStateNeedsSettings || got.Settings.MonthlyUSD != "300" || got.Settings.Renews != "" ||
+		got.Settings.Revision != "4" || *got.Settings.UpdatedAtEpoch != instant(t, "2026-10-08T00:00:00Z").Unix() {
+		t.Errorf("a credit: %s", jsonOf(t, got))
 	}
 	stored = &settings.APICredit{Renews: "2026-10-05", Rev: 5, UpdatedAt: instant(t, "2026-10-08T00:00:00Z")}
 	got = creditCase{entry: entry, org: healthyOrg(t), stored: stored}.build(t)
-	if got.MonthlyCreditSource != client.CreditSourceConfig || got.RenewsSource != client.CreditSourceDashboard ||
-		*got.CycleStartEpoch != instant(t, "2026-10-05T00:00:00Z").Unix() || got.SpentText != "$0.00" {
-		t.Errorf("%s", jsonOf(t, got))
+	if got.MonthlyCreditSource != client.CreditSourceNone || got.RenewsSource != client.CreditSourceDashboard || got.MonthlyCreditText != "" ||
+		*got.CycleStartEpoch != instant(t, "2026-10-05T00:00:00Z").Unix() || got.SpentText != "$0.00" || got.State != client.CreditStateNeedsSettings {
+		t.Errorf("a refill date: %s", jsonOf(t, got))
 	}
-	if got := (creditCase{entry: entry, org: healthyOrg(t)}).build(t); got.Settings.Revision != "" || got.Settings.UpdatedAtEpoch != nil {
-		t.Errorf("nothing stored: %+v", got.Settings)
+	got = creditCase{entry: entry, org: healthyOrg(t)}.build(t)
+	if got.MonthlyCreditSource != client.CreditSourceNone || got.RenewsSource != client.CreditSourceNone ||
+		got.Settings.Revision != "" || got.Settings.UpdatedAtEpoch != nil {
+		t.Errorf("nothing stored: %s", jsonOf(t, got))
 	}
 }
 
@@ -858,20 +843,16 @@ func TestNotEditableReasons(t *testing.T) {
 	in := Input{Items: itemsOf(entry), Meter: meterOf(instant(t, "2026-10-09T11:59:00Z"), map[string]client.MeterOrganization{org: healthyOrg(t)})}
 	in.Settings = settings.Values{Unreadable: true}
 	unreadable := buildCredits(t, in, instant(t, workedNow))
-	in.Settings, in.SettingsState = settings.Values{}, client.CreditSettingsLegacyUnreadable
-	legacy := buildCredits(t, in, instant(t, workedNow))
-	if unreadable.Editing != (client.CreditEditing{Reason: "settingsUnreadable"}) || unreadable.Accounts[0].Settings.NotEditableReason != "settingsUnreadable" ||
-		legacy.Editing != (client.CreditEditing{Reason: "legacyUnreadable"}) || legacy.Accounts[0].Settings.NotEditableReason != "legacyUnreadable" {
-		t.Errorf("unreadable %+v %+v; legacy %+v %+v", unreadable.Editing, unreadable.Accounts[0].Settings, legacy.Editing, legacy.Accounts[0].Settings)
+	if unreadable.Editing != (client.CreditEditing{Reason: "settingsUnreadable"}) || unreadable.Accounts[0].Settings.NotEditableReason != "settingsUnreadable" {
+		t.Errorf("unreadable %+v %+v", unreadable.Editing, unreadable.Accounts[0].Settings)
 	}
 }
 
 // Stored values apply only while the settings can be read: an unreadable
-// settings file, or a Quota Glance settings.json that blocks the first import,
-// leaves only the configured values in force.
+// settings file leaves no credit and no refill date in force.
 func TestStoredValuesApplyOnlyWhileReadable(t *testing.T) {
 	org := fakeOrg("a")
-	entry := creditEntry("alpha", 0, org, "200", "2026-10-29")
+	entry := creditEntry("alpha", 0, org, "", "")
 	values := settings.Values{APICredits: map[string]settings.APICredit{
 		entry.AuthIndex: {MonthlyUSD: "300", Rev: 1, UpdatedAt: instant(t, "2026-10-08T00:00:00Z")},
 	}}
@@ -880,12 +861,10 @@ func TestStoredValuesApplyOnlyWhileReadable(t *testing.T) {
 	if got := buildCredits(t, in, instant(t, workedNow)).Accounts[0]; got.MonthlyCreditText != "$300.00" || !got.Settings.Editable {
 		t.Errorf("readable: %s", jsonOf(t, got))
 	}
-	for _, state := range []string{client.CreditSettingsUnreadable, client.CreditSettingsLegacyUnreadable} {
-		in.SettingsState = state
-		if got := buildCredits(t, in, instant(t, workedNow)).Accounts[0]; got.MonthlyCreditText != "$200.00" || got.MonthlyCreditSource != client.CreditSourceConfig ||
-			got.Settings.Editable || got.Settings.MonthlyUSD != "" {
-			t.Errorf("%s: %s", state, jsonOf(t, got))
-		}
+	in.SettingsState = client.CreditSettingsUnreadable
+	if got := buildCredits(t, in, instant(t, workedNow)).Accounts[0]; got.MonthlyCreditText != "" || got.MonthlyCreditSource != client.CreditSourceNone ||
+		got.State != client.CreditStateNeedsSettings || got.Settings.Editable || got.Settings.MonthlyUSD != "" {
+		t.Errorf("unreadable: %s", jsonOf(t, got))
 	}
 }
 
@@ -907,12 +886,6 @@ func TestOrphans(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("orphans:\n got %s\nwant %s", jsonOf(t, got), jsonOf(t, want))
-	}
-	// While the organizations file cannot be read, the configuration's list
-	// stands in for it, and none of those values is known to be an orphan.
-	in.Organizations = client.CreditOrganizations{State: client.OrganizationsStateUnreadable, Source: client.OrganizationsSourceConfig}
-	if got := buildCredits(t, in, instant(t, workedNow)); got.Orphans == nil || len(got.Orphans) != 0 || got.Accounts[0].Settings.MonthlyUSD != "300" {
-		t.Errorf("unreadable organizations: orphans %s", jsonOf(t, got.Orphans))
 	}
 }
 

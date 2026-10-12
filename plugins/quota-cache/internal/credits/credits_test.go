@@ -93,9 +93,60 @@ func maskEditing(t *testing.T, gotRaw, wantRaw []byte) (got, want map[string]any
 	return got, want
 }
 
+// configIssues are the issues about quota-cache 0.1.x's configuration, which
+// quota-cache never raises now that it ignores it.
+var configIssues = []string{client.CreditIssueConfigMonthlyUSDInvalid, client.CreditIssueConfigRenewsInvalid, client.CreditIssueAdminKeyIgnored}
+
+// enteredOnPage turns Quota Glance's card for f into the card for the same
+// values entered on Quota Cache's page, as onPage enters them. An
+// organization's configured credit or refill date is the page's, with the
+// revision and time onPage stamps a new entry with. Any other account's is
+// none, so a refill date gives it no cycle. The configured values and the
+// issues about them are gone, which changes no sentence: none was an
+// account's first issue.
+func enteredOnPage(t *testing.T, f fixture, want map[string]any) {
+	t.Helper()
+	revision := settings.RevisionText(max(loadSettings(t, f.settings).Revision, 1))
+	for _, raw := range want["accounts"].([]any) {
+		account := raw.(map[string]any)
+		stored := account["settings"].(map[string]any)
+		linked, entered := strings.HasPrefix(account["id"].(string), "org-"), false
+		for _, field := range [][3]string{{"monthlyCreditSource", "monthlyUsd", "configMonthlyUsd"}, {"renewsSource", "renews", "configRenews"}} {
+			source, value, configured := field[0], field[1], field[2]
+			switch {
+			case account[source] != client.CreditSourceConfig:
+			case linked:
+				account[source], stored[value], entered = client.CreditSourceDashboard, stored[configured], true
+			default:
+				account[source] = client.CreditSourceNone
+				if source == "renewsSource" {
+					account["cycleStartEpoch"], account["renewsAtEpoch"], account["renewsInSeconds"] = nil, nil, nil
+				}
+			}
+			stored[configured] = ""
+		}
+		stored["configMonthlyUsdInvalid"], stored["configRenewsInvalid"] = false, false
+		if entered && stored["revision"] == "" {
+			stored["revision"], stored["updatedAtEpoch"] = revision, float64(pageEnteredAt.Unix())
+		}
+		issues := []any{}
+		for i, issue := range account["dataIssues"].([]any) {
+			if slices.Contains(configIssues, issue.(string)) {
+				if i == 0 {
+					t.Fatalf("%s: %s is the first issue, so the sentence changes", f.name, issue)
+				}
+				continue
+			}
+			issues = append(issues, issue)
+		}
+		account["dataIssues"] = issues
+	}
+}
+
 // The proof of the move: for every fixture, the published state as a reader
 // with Quota Glance's stale-after sees it is Quota Glance's own card, field
-// for field, but for editing.
+// for field, but for editing, once the values Quota Glance read from Quota
+// Cache's configuration are entered on its page instead.
 func TestCharacterizationMatchesGlance(t *testing.T) {
 	for _, f := range fixtures {
 		seen := client.CreditsAt(computeFixture(t, f.name), f.at, 45*time.Minute)
@@ -104,6 +155,7 @@ func TestCharacterizationMatchesGlance(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, want := maskEditing(t, raw, characterization(t, f.name))
+		enteredOnPage(t, f, want)
 		if !reflect.DeepEqual(got, want) {
 			gotText, _ := json.MarshalIndent(got, "", "  ")
 			wantText, _ := json.MarshalIndent(want, "", "  ")
@@ -151,23 +203,15 @@ func keyPaths(t *testing.T, raw []byte) []string {
 }
 
 // api_credits keeps the summary contract's names and order: every key path of
-// Quota Glance's card, in order, and one more, editing.migration, which
-// quota-cache always leaves empty.
+// Quota Glance's card, in order.
 func TestCreditWireNames(t *testing.T) {
 	for _, f := range fixtures {
 		state := computeFixture(t, f.name)
-		if state.APICredits.Editing.Migration != "" {
-			t.Errorf("%s: editing.migration = %q", f.name, state.APICredits.Editing.Migration)
-		}
 		raw, err := json.Marshal(client.CreditsAt(state, f.at, 45*time.Minute).APICredits)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := keyPaths(t, raw)
-		if !slices.Contains(got, ".editing.migration") {
-			t.Errorf("%s: no editing.migration", f.name)
-		}
-		got = slices.DeleteFunc(got, func(path string) bool { return path == ".editing.migration" })
 		if want := keyPaths(t, characterization(t, f.name)); !slices.Equal(got, want) {
 			t.Errorf("%s: key paths\n got %v\nwant %v", f.name, got, want)
 		}
@@ -217,7 +261,7 @@ func TestValidUntil(t *testing.T) {
 			}
 			in.Meter = meterOf(now.Add(-time.Minute), orgs)
 		}
-		got := Compute(in).ValidUntil
+		got := Compute(onPage(in)).ValidUntil
 		switch {
 		case tc.want == "" && got != nil:
 			t.Errorf("%s: valid_until %s, want null", tc.name, got)
@@ -227,17 +271,12 @@ func TestValidUntil(t *testing.T) {
 	}
 }
 
-// What surrounds api_credits: the inputs, the settings and the import as
-// given, the stored renewal dates, and the organizations block.
+// What surrounds api_credits: the inputs, the settings, the stored renewal
+// dates, and the organizations block.
 func TestComputeEnvelope(t *testing.T) {
 	f := fixtureNamed(t, "seven-credentials")
 	in := inputOf(t, f)
-	kind, source := client.CreditImportKindAutomatic, "/CLIProxyAPI/plugins/data/quota-glance/settings.json"
-	imported := instant(t, "2026-09-01T12:00:00Z")
-	in.Import = &client.CreditImport{State: client.CreditImportStateImported, Kind: &kind, SourcePath: &source,
-		Counts: &client.CreditImportCounts{MonthlyCredits: 1, Readings: 1, RenewalDates: 1}, ImportedAt: &imported, Following: true, Importable: true}
-	in.Organizations = client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "4", Source: client.OrganizationsSourcePage,
-		Migration: &client.OrganizationsMigration{At: imported, Moved: 5}, ConfigItemsIgnored: 5}
+	in.Organizations = client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "4", ConfigItemsIgnored: 5}
 	in.MeterError = ""
 	in.Now = f.at.Add(1500 * time.Millisecond)
 	state := Compute(in)
@@ -250,14 +289,13 @@ func TestComputeEnvelope(t *testing.T) {
 		state.Inputs.MeterError != "" || state.Inputs.SettingsRevision != "3" {
 		t.Errorf("inputs: %s", jsonOf(t, state.Inputs))
 	}
-	if state.Settings.State != client.CreditSettingsOK || !state.Settings.Editable || state.Settings.Revision != "3" ||
-		!reflect.DeepEqual(state.Settings.Import, in.Import) || state.Settings.Import == in.Import || state.Settings.Import.Kind == in.Import.Kind {
+	if state.Settings != (client.CreditSettingsState{State: client.CreditSettingsOK, Editable: true, Revision: "3"}) {
 		t.Errorf("settings: %s", jsonOf(t, state.Settings))
 	}
 	if want := map[string]client.RenewalSetting{"5f2b8c41d09e7a36": {Date: "2026-09-10", Revision: "3", UpdatedAtEpoch: instant(t, "2026-09-09T20:00:00Z").Unix()}}; !reflect.DeepEqual(state.Renewals, want) {
 		t.Errorf("renewals: %s", jsonOf(t, state.Renewals))
 	}
-	if !reflect.DeepEqual(state.Organizations, in.Organizations) || state.Organizations.Migration == in.Organizations.Migration {
+	if state.Organizations != in.Organizations {
 		t.Errorf("organizations: %s", jsonOf(t, state.Organizations))
 	}
 
@@ -273,16 +311,66 @@ func TestComputeEnvelope(t *testing.T) {
 		len(state.Renewals) != 0 || state.Renewals == nil || len(state.APICredits.Orphans) != 0 {
 		t.Errorf("unreadable: %s renewals %v", jsonOf(t, state.Settings), state.Renewals)
 	}
-	in.Settings, in.SettingsState = loadSettings(t, f.settings), client.CreditSettingsLegacyUnreadable
-	if state = Compute(in); state.Settings.State != client.CreditSettingsLegacyUnreadable || state.Settings.Editable || len(state.Renewals) != 0 ||
-		state.APICredits.Editing.Reason != client.CreditEditingLegacyUnreadable {
-		t.Errorf("legacy unreadable: %s", jsonOf(t, state.Settings))
+	// The store's own word that the file is unreadable is enough.
+	in.Settings, in.SettingsState = loadSettings(t, f.settings), client.CreditSettingsUnreadable
+	if state = Compute(in); state.Settings.State != client.CreditSettingsUnreadable || state.Settings.Editable || len(state.Renewals) != 0 ||
+		state.APICredits.Editing.Reason != client.CreditEditingSettingsUnreadable {
+		t.Errorf("unreadable by state: %s", jsonOf(t, state.Settings))
 	}
 
 	// A snapshot that never said when it was written.
 	in.Snapshot.WrittenAt = time.Time{}
 	if raw := jsonOf(t, Compute(in).Inputs); !strings.Contains(raw, `"snapshot_written_at":null`) || !strings.Contains(raw, `"meter_flushed_at":null`) {
 		t.Errorf("inputs: %s", raw)
+	}
+}
+
+// Compute never says a credit or a refill date comes from quota-cache's
+// configuration, and never raises an issue about it: the page's values are the
+// only ones. That holds for the organizations the page lists, and for items
+// that still carry quota-cache 0.1.x's configured values, invalid ones and an
+// admin-key included, which are ignored.
+func TestComputeNeverYieldsTheConfiguration(t *testing.T) {
+	check := func(name string, state *client.CreditState) {
+		t.Helper()
+		if state.APICredits == nil {
+			t.Fatalf("%s: no api_credits", name)
+		}
+		for _, a := range state.APICredits.Accounts {
+			s := a.Settings
+			if a.MonthlyCreditSource == client.CreditSourceConfig || a.RenewsSource == client.CreditSourceConfig ||
+				s.ConfigMonthlyUSD != "" || s.ConfigRenews != "" || s.ConfigMonthlyUSDInvalid || s.ConfigRenewsInvalid {
+				t.Errorf("%s: %s has a configured value: %s", name, a.ID, jsonOf(t, a))
+			}
+			for _, issue := range a.DataIssues {
+				if slices.Contains(configIssues, issue) {
+					t.Errorf("%s: %s raises %s", name, a.ID, issue)
+				}
+			}
+		}
+	}
+	for _, f := range fixtures {
+		check(f.name, Compute(inputOf(t, f)))
+		check(f.name+" as quota-cache 0.1.x listed it", Compute(snapshotInput(t, f)))
+	}
+	// The page's organizations, as the publisher passes them, beside items
+	// carrying every configured value and flag.
+	page := settings.Organizations{Items: []settings.Organization{
+		{Label: "alpha", OrganizationID: fakeOrg("a")}, {Label: "bravo", OrganizationID: fakeOrg("b")},
+	}}
+	in := Input{Now: instant(t, workedNow), Settings: settings.Values{APICredits: map[string]settings.APICredit{}},
+		Meter: meterOf(instant(t, "2026-10-09T11:59:00Z"), map[string]client.MeterOrganization{fakeOrg("a"): healthyOrg(t), fakeOrg("c"): healthyOrg(t)})}
+	for _, credit := range page.APICredits() {
+		in.Items = append(in.Items, Item{ID: client.APICreditOrgAccount(credit.OrganizationID), Credit: &credit})
+	}
+	configured := creditEntry("charlie", 2, fakeOrg("c"), "200", "2026-10-29")
+	configured.APICredit.MonthlyUSDInvalid, configured.APICredit.RenewsInvalid, configured.APICredit.AdminKeyIgnored = true, true, true
+	in.Items = append(in.Items, itemsOf(configured)...)
+	state := Compute(in)
+	check("the page's organizations", state)
+	if charlie := state.APICredits.Accounts[2]; charlie.State != client.CreditStateNeedsSettings || charlie.MonthlyCreditSource != client.CreditSourceNone ||
+		charlie.RenewsSource != client.CreditSourceNone || charlie.MonthlyCreditText != "" {
+		t.Errorf("a configured value was used: %s", jsonOf(t, charlie))
 	}
 }
 

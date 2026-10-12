@@ -7,13 +7,12 @@
     "snapshot_written_at": "2026-10-11T11:55:00Z",
     "meter_flushed_at": "2026-10-11T11:59:30Z",
     "meter_error": "",
-    "settings_revision": ""
+    "settings_revision": "1"
   },
   "settings": {
     "state": "ok",
     "editable": true,
-    "revision": "",
-    "import": null
+    "revision": "1"
   },
   "api_credits": {
     "title": "Monthly API Credit",
@@ -40,8 +39,7 @@
     },
     "editing": {
       "available": true,
-      "reason": "",
-      "migration": ""
+      "reason": ""
     },
     "pool": {
       "hasEstimate": true,
@@ -87,7 +85,7 @@
         "lowerBound": false,
         "monthlyCredit": 50,
         "monthlyCreditText": "$50.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 30,
         "spentText": "$30.00",
         "spentSinceEpoch": 1789257600,
@@ -104,7 +102,7 @@
         "cycleStartEpoch": 1789257600,
         "renewsAtEpoch": 1791849600,
         "renewsInSeconds": 129600,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -124,16 +122,16 @@
         "settings": {
           "editable": true,
           "notEditableReason": "",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "50",
+          "revision": "1",
+          "monthlyUsd": "50",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-10-13",
+          "renews": "2026-10-13",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -148,7 +146,7 @@
         "lowerBound": false,
         "monthlyCredit": 100,
         "monthlyCreditText": "$100.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 60,
         "spentText": "$60.00",
         "spentSinceEpoch": 1789516800,
@@ -165,7 +163,7 @@
         "cycleStartEpoch": 1789516800,
         "renewsAtEpoch": 1792108800,
         "renewsInSeconds": 388800,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -183,16 +181,16 @@
         "settings": {
           "editable": true,
           "notEditableReason": "",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "100",
+          "revision": "1",
+          "monthlyUsd": "100",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-10-16",
+          "renews": "2026-10-16",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -207,7 +205,7 @@
         "lowerBound": false,
         "monthlyCredit": 50,
         "monthlyCreditText": "$50.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 60,
         "spentText": "$60.00",
         "spentSinceEpoch": 1789948800,
@@ -224,7 +222,7 @@
         "cycleStartEpoch": 1789948800,
         "renewsAtEpoch": 1792540800,
         "renewsInSeconds": 820800,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -245,16 +243,16 @@
         "settings": {
           "editable": true,
           "notEditableReason": "",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "50",
+          "revision": "1",
+          "monthlyUsd": "50",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-10-21",
+          "renews": "2026-10-21",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -269,7 +267,7 @@
         "lowerBound": false,
         "monthlyCredit": 200,
         "monthlyCreditText": "$200.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 20,
         "spentText": "$20.00",
         "spentSinceEpoch": 1790380800,
@@ -286,7 +284,7 @@
         "cycleStartEpoch": 1790380800,
         "renewsAtEpoch": 1792972800,
         "renewsInSeconds": 1252800,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -304,16 +302,16 @@
         "settings": {
           "editable": true,
           "notEditableReason": "",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "200",
+          "revision": "1",
+          "monthlyUsd": "200",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-10-26",
+          "renews": "2026-10-26",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       }
     ],
@@ -322,10 +320,8 @@
   },
   "renewals": {},
   "organizations": {
-    "state": "missing",
-    "revision": "",
-    "source": "config",
-    "migration": null,
+    "state": "ok",
+    "revision": "1",
     "config_items_ignored": 0
   }
 }

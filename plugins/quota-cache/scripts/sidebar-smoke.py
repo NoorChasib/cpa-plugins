@@ -57,9 +57,8 @@ fixture['totals'] = {'attempts':3,'requests':3,'successes':1,'failures':2,'rate_
 # A round of polls Quota Glance asked for after a banked reset, two left.
 fixture['refresh'] = {'requested_at':iso(now-timedelta(seconds=30)),'remaining':2}
 # Claude API credit entries and the meter file, served only in the 'credits'
-# mode: one metered organization and one misconfigured item, which is listed
-# but never counted. Neither is ever polled. The organization ids are the
-# spec's fakes.
+# mode: one metered organization, as listed on the page, never polled. The
+# organization ids are placeholders.
 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
 this_hour = now.replace(minute=0, second=0, microsecond=0)
 fake_org = '00000000-0000-4000-8000-00000000000a'
@@ -67,10 +66,7 @@ credits = {
     'anthropic-api:org-1ad35d608dd7': {'provider':'anthropic-api','auth_index':'org-1ad35d608dd7','used_percent':0,
         'reset_at':'0001-01-01T00:00:00Z','observed_at':'0001-01-01T00:00:00Z','last_attempt':'0001-01-01T00:00:00Z',
         'next_attempt':'0001-01-01T00:00:00Z','failures':0,
-        'api_credit':{'label':'siphorchannel','position':0,'monthly_usd':'200','renews':'2026-10-29','organization_id':fake_org,'admin_key_ignored':True}},
-    'anthropic-api:item-2': {'provider':'anthropic-api','auth_index':'item-2','used_percent':0,'reset_at':'0001-01-01T00:00:00Z',
-        'observed_at':'0001-01-01T00:00:00Z','last_attempt':'0001-01-01T00:00:00Z','next_attempt':'0001-01-01T00:00:00Z','failures':0,
-        'api_credit':{'label':'','position':1,'monthly_usd':'500','problem':'organization_id_missing'}},
+        'api_credit':{'label':'siphorchannel','position':0,'organization_id':fake_org}},
 }
 usage = [{'model':'claude-sonnet-5-5','requests':3,'failed':1,'input':1200,'output':800,'cache_read':50,'cache_write':10},
          {'model':'claude-haiku-5-5','prompt':'over_100k','requests':1,'input':150000}]
@@ -101,57 +97,51 @@ org_id = lambda n: '00000000-0000-4000-8000-%012x' % n
 org_account = lambda organization: 'org-' + hashlib.sha256(organization.encode()).hexdigest()[:12]
 ESCAPED_LABEL = "o'neil & co"
 ESCAPED_ISSUE = "Quota Cache's meter was full & dropped records, so this is a lower bound."
-def account(order, label, organization, state_, monthly='', config_monthly='', renews='', config_renews='', reading=None, issue='', issues=(),
-            editable=True, reason='', used='$40.00', left='$160.00', credit='$200.00', source='config', estimate=True, remaining=80, revision=''):
-    effective = renews or config_renews
-    start, end = cycle_of(int(effective[8:10])) if effective else (None, None)
-    return {'id': org_account(organization) if organization else 'item-%d' % (order + 1), 'label': label, 'order': order, 'organizationId': organization,
+def account(order, label, organization, state_, monthly='', renews='', reading=None, issue='', issues=(),
+            editable=True, reason='', used='$40.00', left='$160.00', credit='$200.00', estimate=True, remaining=80, revision=''):
+    # The values are the ones entered on the page; the config fields stay
+    # empty, as Quota Cache publishes them.
+    start, end = cycle_of(int(renews[8:10])) if renews else (None, None)
+    return {'id': org_account(organization), 'label': label, 'order': order, 'organizationId': organization,
         'state': state_, 'counted': estimate, 'hasEstimate': estimate, 'basis': 'reading' if reading else 'credit', 'lowerBound': False,
-        'monthlyCredit': 0, 'monthlyCreditText': credit if (monthly or config_monthly) else '', 'monthlyCreditSource': source if (monthly or config_monthly) else 'none',
+        'monthlyCredit': 0, 'monthlyCreditText': credit if monthly else '', 'monthlyCreditSource': 'dashboard' if monthly else 'none',
         'spent': 0, 'spentText': used, 'spentSinceEpoch': epoch(start) if start else None, 'used': 0, 'usedText': used, 'left': 0, 'leftText': left,
         'estimateLeftText': '', 'overage': 0, 'overageText': '$0.00', 'remainingFraction': remaining / 100, 'remainingPercent': remaining, 'level': 'ok',
         'cycleStartEpoch': epoch(start) if start else None, 'renewsAtEpoch': epoch(end) if end else None, 'renewsInSeconds': epoch(end) - epoch(now) if end else None,
-        'renewsSource': ('dashboard' if renews else 'config') if effective else 'none', 'reading': None, 'cacheWriteExtra': 0, 'cacheWriteExtraText': '', 'unpriced': [],
+        'renewsSource': 'dashboard' if renews else 'none', 'reading': None, 'cacheWriteExtra': 0, 'cacheWriteExtraText': '', 'unpriced': [],
         'refusals': {'total': 0, 'lastAtEpoch': None, 'claudeCodeTotal': 0, 'claudeCodeLastAtEpoch': None},
         'meterSinceEpoch': epoch(now - timedelta(days=3)), 'lastSeenEpoch': epoch(now - timedelta(minutes=5)), 'dataIssues': list(issues), 'issue': issue,
-        'settings': {'editable': editable, 'notEditableReason': reason, 'revision': revision, 'monthlyUsd': monthly, 'configMonthlyUsd': config_monthly,
-            'configMonthlyUsdInvalid': False, 'renews': renews, 'configRenews': config_renews, 'configRenewsInvalid': False, 'reading': reading,
+        'settings': {'editable': editable, 'notEditableReason': reason, 'revision': revision, 'monthlyUsd': monthly, 'configMonthlyUsd': '',
+            'configMonthlyUsdInvalid': False, 'renews': renews, 'configRenews': '', 'configRenewsInvalid': False, 'reading': reading,
             'readingUnusedReason': '', 'updatedAtEpoch': epoch(now - timedelta(days=1)) if revision else None}}
 def editor_state():
     reading_at = epoch(now - timedelta(hours=20))
     accounts = [
-        account(0, 'alpha', org_id(1), 'ok', config_monthly='200', config_renews='2026-09-29'),
-        account(1, ESCAPED_LABEL, org_id(2), 'ok', monthly='260.50', config_monthly='200', renews='2026-09-20', source='dashboard', revision='12',
+        account(0, 'alpha', org_id(1), 'ok', monthly='200', renews='2026-09-29', revision='11'),
+        account(1, ESCAPED_LABEL, org_id(2), 'ok', monthly='260.50', renews='2026-09-20', revision='12',
                 reading={'remainingUsd': '180.00', 'atEpoch': reading_at, 'enteredAtEpoch': reading_at}, issue=ESCAPED_ISSUE, issues=['meterFull'],
                 used='$88.50', left='$172.00', credit='$260.50', remaining=66),
-        account(2, 'charlie', org_id(3), 'needsSettings', config_monthly='100', issue='Set the refill date, or enter a Console reading.', issues=['needsRefillDate'], estimate=False),
-        account(3, 'foxtrot', '', 'misconfigured', editable=False, reason='noOrganization', issue='This item has no organization-id.', estimate=False),
+        account(2, 'charlie', org_id(3), 'needsSettings', monthly='100', revision='10', issue='Set the refill date, or enter a Console reading.', issues=['needsRefillDate'], estimate=False),
     ]
     alpha_end, oneil_end = accounts[0]['renewsAtEpoch'], accounts[1]['renewsAtEpoch']
-    counts = {'monthly_credits': 2, 'refill_dates': 2, 'readings': 2, 'renewal_dates': 3}
-    legacy = {'state': 'imported', 'kind': 'automatic', 'source_path': '/CLIProxyAPI/plugins/data/quota-glance/settings.json', 'sha256': 'a' * 64,
-              'settings_sha256': 'a' * 64, 'legacy_revision': '12', 'legacy_updated_at': iso(now - timedelta(days=1)), 'counts': counts,
-              'imported_at': iso(now - timedelta(hours=1)), 'following': False, 'importable': True}
     renewal = {'date': '2026-09-10', 'revision': '3', 'updatedAtEpoch': epoch(now - timedelta(days=2))}
     orphan_renewal = {'id': '9c1e00000000a1a1', 'date': '2026-08-01', 'revision': '2', 'updatedAtEpoch': epoch(now - timedelta(days=9))}
-    organizations = [{'id': org_account(org_id(n)), 'label': label, 'organization_id': org_id(n), 'has_default_monthly_usd': True, 'has_default_renews': n == 1}
-                     for n, label in ((1, 'alpha'), (2, ESCAPED_LABEL), (3, 'charlie'))]
+    organizations = [{'id': org_account(org_id(n)), 'label': label, 'organization_id': org_id(n)} for n, label in ((1, 'alpha'), (2, ESCAPED_LABEL), (3, 'charlie'))]
     return {
         'credit_state': {'schema': 1, 'quota_cache_version': '0.2.0', 'computed_at': iso(now), 'valid_until': None,
             'inputs': {'snapshot_written_at': iso(now), 'meter_flushed_at': iso(now - timedelta(minutes=2)), 'meter_error': '', 'settings_revision': '12'},
-            'settings': {'state': 'ok', 'editable': True, 'revision': '12', 'import': legacy},
+            'settings': {'state': 'ok', 'editable': True, 'revision': '12'},
             'api_credits': {'title': 'Monthly API Credit', 'currency': 'USD', 'pricing': {'asOf': '2026-10-09', 'source': 'https://docs.anthropic.com/pricing', 'cacheWrites': '5m'},
-                'meter': None, 'editing': {'available': True, 'reason': '', 'migration': ''},
+                'meter': None, 'editing': {'available': True, 'reason': ''},
                 'pool': {'hasEstimate': True, 'lowerBound': False, 'monthlyCredit': 0, 'monthlyCreditText': '$460.50', 'used': 0, 'usedText': '$128.50', 'left': 0,
                     'leftText': '$332.00', 'overage': 0, 'overageText': '$0.00', 'remainingFraction': .72, 'remainingPercent': 72, 'level': 'ok',
                     'nextRefill': {'accountIds': [accounts[1]['id']], 'refillAtEpoch': oneil_end, 'refillInSeconds': 0, 'gain': 0, 'gainText': '$88.50', 'gainFraction': .2, 'gainPercent': 20},
-                    'fullAtEpoch': max(alpha_end, oneil_end), 'fullInSeconds': 0, 'accountCount': 4, 'countedCount': 2, 'missingCount': 2},
+                    'fullAtEpoch': max(alpha_end, oneil_end), 'fullInSeconds': 0, 'accountCount': 3, 'countedCount': 2, 'missingCount': 1},
                 'accounts': accounts, 'unlinked': [],
                 'orphans': [{'id': 'org-7c1e09a4d2b3', 'monthlyUsd': '50', 'renews': '', 'hasReading': False, 'revision': '3', 'updatedAtEpoch': epoch(now - timedelta(days=5))}]},
             'renewals': {'5f2b8c41d09e7a36': renewal, orphan_renewal['id']: {k: orphan_renewal[k] for k in ('date', 'revision', 'updatedAtEpoch')}},
-            'organizations': {'state': 'ok', 'revision': '4', 'source': 'page', 'migration': {'at': iso(now - timedelta(hours=2)), 'moved': 3, 'skipped': 1}, 'config_items_ignored': 3}},
+            'organizations': {'state': 'ok', 'revision': '4', 'config_items_ignored': 3}},
         'editor': {'available': True, 'reason': '', 'revision': '12', 'max_api_credit_items': 16, 'max_renewal_items': 32, 'max_batch_bytes': 4096,
-            'legacy': dict(legacy, file_counts={'monthly_credits': 3, 'refill_dates': 1, 'readings': 0, 'renewal_dates': 4}),
             'credentials': [
                 {'auth_index': '5f2b8c41d09e7a36', 'name': 'foxtrot@example.com', 'disabled': False, 'billing_period': 'monthly', 'renewal_editable': True, 'renewal': renewal,
                  'renewal_at_epoch': epoch(cycle_of(10)[1]), 'renewal_source': 'dashboard', 'renewal_estimate_at_epoch': epoch(cycle_of(12)[1])},
@@ -190,7 +180,7 @@ def saved(raw):
                 continue
             s_ = found[0]['settings']
             s_['monthlyUsd'] = item['monthlyUsd'] or ''
-            found[0]['monthlyCreditSource'] = 'dashboard' if item['monthlyUsd'] else 'config'
+            found[0]['monthlyCreditSource'] = 'dashboard' if item['monthlyUsd'] else 'none'
             s_['revision'] = '13'
             blocks[item['id']] = s_
         return 200, {'ok': True, 'unchanged': False, 'revision': '13', 'settings': blocks}
@@ -205,12 +195,6 @@ def saved(raw):
                     blocks[item['id']] = c['renewal']
             editor['editor']['renewal_orphans'] = [o for o in editor['editor']['renewal_orphans'] if o['id'] != item['id']]
         return 200, {'ok': True, 'unchanged': False, 'revision': '13', 'settings': blocks}
-    if body['kind'] == 'importLegacy':
-        # The plugin records the import before it answers, so the status read
-        # that follows already says it was imported.
-        for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-            block.update(state='imported', imported_at=iso(now))
-        return 200, {'ok': True, 'unchanged': False, 'revision': '13', 'counts': {'monthly_credits': 2, 'refill_dates': 2, 'readings': 2, 'renewal_dates': 3}}
     organizations = editor['editor']['organizations']
     if body['baseRevision'] != organizations['revision']:
         return 409, {'error': 'conflict', 'revision': organizations['revision'], 'organizations': organizations['items']}
@@ -221,7 +205,7 @@ def saved(raw):
             for i in organizations['items']:
                 if i['id'] == op['id']: i['label'] = op['label']
         else:
-            organizations['items'].append({'id': org_account(op['organizationId']), 'label': op['label'], 'organization_id': op['organizationId'], 'has_default_monthly_usd': False, 'has_default_renews': False})
+            organizations['items'].append({'id': org_account(op['organizationId']), 'label': op['label'], 'organization_id': op['organizationId']})
     organizations['revision'] = str(int(organizations['revision']) + 1)
     return 200, {'ok': True, 'unchanged': False, 'revision': organizations['revision'], 'organizations': organizations['items']}
 
@@ -441,12 +425,11 @@ def editor_checks():
     check("!document.querySelector('#organizations').hidden && !document.querySelector('#api-credits').hidden && !document.querySelector('#renewals').hidden")
     # At rest: the organizations, their notes, and the cards' rows with the
     # marks that say where each value comes from.
-    check("(t => t.includes('alpha') && t.includes('00000000…0001') && t.includes('Edit organizations') && t.includes('Moved 3 organizations here from Quota Cache’s configuration') && t.includes('1 skipped because of a problem in the configuration') && t.includes('still lists organizations under claude-api-credits'))(%s)" % text_of('#organizations'))
+    check("(t => t.includes('alpha') && t.includes('00000000…0001') && t.includes('Edit organizations') && t.includes('still lists 3 organizations under claude-api-credits. This version doesn’t read them') && !t.includes('Moved'))(%s)" % text_of('#organizations'))
     check("document.querySelector('#organizations span.org-id').title === '00000000-0000-4000-8000-000000000001'")
     check("document.querySelector('#api-credits tbody td.account .secondary').textContent === '00000000…0001'")
-    check("(t => t.includes('$260.50') && t.includes('entered here · config $200.00') && t.includes('$180.00') && t.includes('in use') && t.includes('from config') && t.includes('every 29th') && t.includes('Needs refill date') && t.includes('Enter Console reading') && t.includes('org-7c1e09a4d2b3'))(%s)" % text_of('#api-credits'))
+    check("(t => t.includes('$260.50') && t.includes('entered here') && !t.includes('config') && t.includes('$180.00') && t.includes('in use') && t.includes('Needs refill date') && t.includes('Enter Console reading') && t.includes('org-7c1e09a4d2b3'))(%s)" % text_of('#api-credits'))
     check("(t => t.includes('foxtrot@example.com') && t.includes('Max 20x') && t.includes('entered here') && t.includes('estimated') && t.includes('not known yet') && t.includes('9c1e…a1a1'))(%s)" % text_of('#renewals'))
-    check("(t => t.includes('Imported from Quota Glance on') && t.includes('2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates') && t.includes('last changed there') && !t.includes('older than 0.8.0'))(%s)" % text_of('#import-note'))
     screenshot = lambda name: browser('screenshot', str(args.artifacts / name), '--full')
     def named_by_text(container):
         # Every button with an aria-label is named with the words it shows,
@@ -474,13 +457,6 @@ def editor_checks():
     check("%s.includes('$331.00 left') && document.activeElement.id === 'qc-credits-edit' && document.activeElement.kept !== true" % text_of('#api-credits .section-head'))
     editor['credit_state']['api_credits']['pool']['leftText'] = '$332.00'
     tick_drawn()
-    # The import note is dismissed for good, per import. Its Dismiss goes
-    # with it, so focus moves on to the next control, as Tab would.
-    browser('focus', '#qc-import-dismiss')
-    browser('press', 'Enter')
-    check("document.querySelector('#import-note').hidden && document.activeElement === document.querySelector('#qc-orgs-edit')")
-    refreshed()
-    check("document.querySelector('#import-note').hidden && JSON.parse(localStorage.getItem('quota-cache.dismissed')).keys.some(k => k.startsWith('import:'))")
     # Quota Glance's Edit in Quota Cache links name a section, which the page
     # scrolls to once the first status has drawn it.
     browser('set', 'viewport', '1280', '600')
@@ -497,8 +473,8 @@ def editor_checks():
     press('#api-credits', 'Edit credits and dates')
     check("document.querySelector('#api-credits form') && document.querySelector('#view-status').textContent === 'View updates paused while you edit' && document.querySelector('#refresh').disabled")
     check("document.activeElement === document.querySelector('#qc-credit-0-monthly')")
-    # A locked row says why, and where organizations are edited.
-    check("(t => t.includes('no usable organization-id. Add the organization under Organizations above to edit it here.') && t.includes('Labels and Organization IDs are edited under Organizations.'))(%s)" % text_of('#api-credits'))
+    # The foot says where organizations are edited.
+    check("%s.includes('Labels and Organization IDs are edited under Organizations.')" % text_of('#api-credits'))
     # Every row's fields share their labels, so each is named by its
     # organization first.
     named = "(e => e.getAttribute('aria-labelledby').split(' ').map(id => document.getElementById(id).textContent).join(' '))(document.querySelector(%s))"
@@ -557,10 +533,10 @@ def editor_checks():
     browser('press', 'Enter')
     post = posted(1, 'Save did not send exactly one request')
     assert post['type'] == 'application/json' and post['auth'] == 'Bearer synthetic-sidebar-key' and post['site'] == 'same-origin', post
-    assert post['body'] == {'kind': 'apiCredits', 'items': [{'id': org_account(org_id(1)), 'baseRevision': '', 'monthlyUsd': '275', 'renews': None, 'reading': None}]}, post['body']
+    assert post['body'] == {'kind': 'apiCredits', 'items': [{'id': org_account(org_id(1)), 'baseRevision': '11', 'monthlyUsd': '275', 'renews': '2026-09-29', 'reading': None}]}, post['body']
     check("!document.querySelector('#api-credits form') && %s.includes('Saved 1 change')" % text_of('#api-credits'))
     until(lambda: state['reads'] > reads, 'the view was not read again after a save')
-    check("%s.includes('entered here · config $200.00') && !document.querySelector('#refresh').disabled" % text_of('#api-credits tbody tr'))
+    check("%s.includes('entered here') && !document.querySelector('#refresh').disabled" % text_of('#api-credits tbody tr'))
     check("document.activeElement === document.querySelector('#qc-credits-edit')")
     # The saved line goes after 20 seconds. That redraws only the cards at
     # rest: a card being edited keeps its nodes, so a date typed halfway,
@@ -589,25 +565,25 @@ def editor_checks():
     # away the link the reader is pressing or is on. Real clicks: one lands
     # only if the button pressed is still there when the mouse comes up.
     press('#api-credits', 'Edit credits and dates')
-    use_config = lambda field: '#qc-credit-1-%s-caps button[aria-label^="Use config"]' % field
+    clear = lambda field: '#qc-credit-1-%s-caps button[aria-label^="Clear"]' % field
     browser('focus', '#qc-credit-1-refill')
     check("document.querySelector('#qc-credit-1-refill-caps .cap.help') !== null")
-    browser('click', use_config('refill'))
+    browser('click', clear('refill'))
     check("%s.includes('cleared') && document.activeElement === document.querySelector('#qc-credit-1-refill')" % text_of('#qc-credit-1-refill-caps'))
     press('#qc-credit-1-refill-caps', 'Undo')
     browser('focus', '#qc-credit-1-refill')
-    browser('click', use_config('monthly'))
-    check("%s.includes('back to config') && document.activeElement === document.querySelector('#qc-credit-1-monthly')" % text_of('#qc-credit-1-monthly-caps'))
+    browser('click', clear('monthly'))
+    check("%s.includes('cleared') && document.activeElement === document.querySelector('#qc-credit-1-monthly')" % text_of('#qc-credit-1-monthly-caps'))
     press('#qc-credit-1-monthly-caps', 'Undo')
-    # From the keyboard: focus moves from the date to its Use config, then
-    # the window takes focus again.
+    # From the keyboard: focus moves from the date to its Clear, then the
+    # window takes focus again.
     def stays_on(link):
         browser('eval', "window.__link = document.querySelector(%s); window.__link.focus()" % json.dumps(link))
         check("document.activeElement === window.__link")
         browser('eval', "dispatchEvent(new Event('focus'))")
         check("document.activeElement === window.__link && window.__link.isConnected")
     browser('focus', '#qc-credit-1-refill')
-    stays_on(use_config('refill'))
+    stays_on(clear('refill'))
     check("%s === 'no changes'" % text_of('#api-credits .edit-foot .count'))
     press('#api-credits .edit-foot', 'Cancel')
     press('#renewals', 'Set renewal dates')
@@ -619,15 +595,15 @@ def editor_checks():
     press('#organizations .edit-foot', 'Cancel')
     check("!document.querySelector('#api-credits form') && !document.querySelector('#renewals form') && !document.querySelector('#organizations form')")
 
-    # Use config sends null; an orphan is cleared with every value null.
+    # Clear sends null; an orphan is cleared with every value null.
     press('#api-credits', 'Edit credits and dates')
     named_by_text('#api-credits')
-    press('#api-credits', "Use config: monthly credit for o'neil & co")
-    check("%s.includes('back to config')" % text_of('#api-credits'))
+    press('#api-credits', "Clear the monthly credit for o'neil & co")
+    check("%s.includes('cleared')" % text_of('#qc-credit-1-monthly-caps'))
     press('#api-credits', 'Remove saved values for org-7c1e09a4d2b3')
     check("%s.includes('2 changes') && /^qc-credit-orphan-\\d+-undo$/.test(document.activeElement.id)" % text_of('#api-credits'))
     press('#api-credits', 'Save')
-    post = posted(2, 'Use config did not send one request')
+    post = posted(2, 'Clear did not send one request')
     assert post['body']['items'] == [{'id': org_account(org_id(2)), 'baseRevision': '12', 'monthlyUsd': None, 'renews': '2026-09-20', 'reading': {'remainingUsd': '180.00', 'at': iso(datetime.fromtimestamp(editor['credit_state']['api_credits']['accounts'][1]['settings']['reading']['atEpoch'], timezone.utc))}},
                                      {'id': 'org-7c1e09a4d2b3', 'baseRevision': '3', 'monthlyUsd': None, 'renews': None, 'reading': None}], post['body']
     check("!document.querySelector('#api-credits form')")
@@ -721,99 +697,6 @@ def editor_checks():
     check("%s.includes('Left in Console') && %s.includes('= ')" % (text_of('#api-credits'), text_of('#api-credits')))
     press('#api-credits .edit-foot', 'Cancel')
 
-    # Quota Glance older than 0.8.0 is still followed: the note says so, and
-    # the first save asks before it ends that.
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block.update(following=True, imported_at=iso(now - timedelta(minutes=30)))
-    refreshed()
-    check("(t => t.includes('Imported from Quota Glance') && t.includes('Quota Glance older than 0.8.0 still saves these values in its own file'))(%s)" % text_of('#import-note'))
-    press('#api-credits', 'Edit credits and dates')
-    browser('fill', '#qc-credit-0-monthly', '295')
-    press('#api-credits', 'Save')
-    check("%s.includes('Saving here stops picking up changes made in Quota Glance older than 0.8.0. Save anyway?')" % text_of('#api-credits'))
-    # The question names its group and takes focus, so it is read out.
-    check("document.activeElement === document.querySelector('#qc-credits-keep-editing') && document.getElementById(document.activeElement.closest('[role=group]').getAttribute('aria-labelledby')).textContent.endsWith('Save anyway?')")
-    press('#api-credits', 'Keep editing')
-    check("!document.querySelector('#api-credits .confirm') && document.activeElement === document.querySelector('#qc-credits-save')")
-    press('#api-credits', 'Save')
-    time.sleep(.3)
-    assert len(state['posts']) == 6, 'the first save while following was sent before it was confirmed'
-    press('#api-credits', 'Save anyway')
-    posted(7, 'Save anyway did not send once')
-    check("!document.querySelector('#api-credits form') && document.activeElement === document.querySelector('#qc-credits-edit')")
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['following'] = False
-    # That save ended follow mode, and importing again on the same page brings
-    # it back: Save anyway answered that one save, so the next one asks again.
-    refreshed()
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['following'] = True
-    refreshed()
-    press('#api-credits', 'Edit credits and dates')
-    browser('fill', '#qc-credit-0-monthly', '296')
-    press('#api-credits', 'Save')
-    check("%s.includes('Saving here stops picking up changes made in Quota Glance older than 0.8.0. Save anyway?')" % text_of('#api-credits'))
-    time.sleep(.3)
-    assert len(state['posts']) == 7, 'a save after follow mode came back was sent without asking'
-    press('#api-credits', 'Keep editing')
-    press('#api-credits .edit-foot', 'Cancel')
-    check("!document.querySelector('#api-credits form')")
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['following'] = False
-    # A drop-in is a copy Quota Glance never saves to: the note says its later
-    # saves are not picked up, never that this page follows them, and a copy
-    # that changed is said to be the copy.
-    own_file = editor['editor']['legacy']['source_path']
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['source_path'] = '/CLIProxyAPI/plugins/data/quota-cache/quota-glance-settings.json'
-    refreshed()
-    check("(t => t.includes('These values came from a copy of Quota Glance’s settings.json') && t.includes('are not picked up') && !t.includes('picks up its changes'))(%s)" % text_of('#import-note'))
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['state'] = 'changedSinceImport'
-    refreshed()
-    check("(t => t.includes('The copy of Quota Glance’s settings.json beside Quota Cache’s snapshot changed after your last save here.') && !t.includes('still edits it'))(%s)" % text_of('#import-note'))
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block.update(state='imported', source_path=own_file)
-
-    # Every other import state: its line, its button and its confirmation,
-    # which names what is saved here, which it replaces, and what Quota
-    # Glance's file holds now, not what the last import brought; keeping sends
-    # nothing.
-    for legacy_state, line, button in (('notImported', 'has values that were not imported here', 'Import Quota Glance’s settings'),
-                                       ('changedSinceImport', 'changed after your last save here', 'Import Quota Glance’s settings again'),
-                                       ('settingsMissing', 'saved settings are gone', 'Import Quota Glance’s settings again')):
-        for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-            block['state'] = legacy_state
-        refreshed()
-        check("(t => t.includes(%s))(%s)" % (json.dumps(line), text_of('#import-note')))
-        press('#import-note', button)
-        check("(t => t.includes('This replaces what is saved here:') && t.includes(%s) && t.includes('Import Quota Glance’s settings.json now?'))(%s)"
-              % (json.dumps('It brings what Quota Glance’s settings.json holds now: 3 monthly credits, 1 refill date and 4 renewal dates.'), text_of('#import-note')))
-        screenshot('editor-import-%s.png' % legacy_state)
-        press('#import-note', 'Keep what is here')
-        check("!%s.includes('This replaces')" % text_of('#import-note'))
-    assert len(state['posts']) == 7, 'an import was sent without being confirmed'
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block['state'] = 'notImported'
-    refreshed()
-    check("%s.includes('has values that were not imported here')" % text_of('#import-note'))
-    press('#import-note', 'Import Quota Glance’s settings')
-    # The confirmation does not hold the view, and an update keeps it and
-    # focus on it.
-    browser('eval', "document.querySelector('#qc-import-go').focus()")
-    tick_drawn()
-    check("%s.includes('Import Quota Glance’s settings.json now?') && document.activeElement === document.querySelector('#qc-import-go')" % text_of('#import-note'))
-    reads = state['reads']
-    press('#import-note', 'Import')
-    post = posted(8, 'the import was not sent once')
-    assert post['body'] == {'kind': 'importLegacy', 'baseRevision': '12'}, post['body']
-    check("%s.includes('Imported 2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal dates from Quota Glance.')" % text_of('#import-note'))
-    # The status read the import asks for takes the import button away and
-    # brings Dismiss. Focus waits on the result line, which that read keeps,
-    # rather than on the button.
-    until(lambda: state['reads'] > reads, 'the view was not read again after the import')
-    check("(t => t.includes('Imported from Quota Glance on') && t.includes('Imported 2 monthly credits'))(%s) && !document.querySelector('#qc-import-open') && document.querySelector('#qc-import-dismiss') && document.activeElement === document.querySelector('#qc-import-status')" % text_of('#import-note'))
-
     # Claude renewal dates: a date set, one back to the estimate, and a
     # leftover date named by its shortened auth index.
     press('#renewals', 'Set renewal dates')
@@ -826,7 +709,7 @@ def editor_checks():
     screenshot('editor-renewals.png')
     audit('editor-renewals')
     press('#renewals', 'Save')
-    post = posted(9, 'the renewal save was not sent once')
+    post = posted(7, 'the renewal save was not sent once')
     assert post['body'] == {'kind': 'renewals', 'items': [{'id': '5f2b8c41d09e7a36', 'baseRevision': '3', 'date': None}, {'id': '0a1b2c3d4e5f6071', 'baseRevision': '', 'date': '2026-11-05'},
                                                        {'id': '9c1e00000000a1a1', 'baseRevision': '2', 'date': None}]}, post['body']
     check("!document.querySelector('#renewals form') && %s.includes('Saved 3 renewal dates')" % text_of('#renewals'))
@@ -837,7 +720,7 @@ def editor_checks():
     press('#organizations', 'Edit organizations')
     browser('fill', '#qc-org-0-label', 'alpha-one')
     press('#organizations', 'Remove charlie')
-    check("%s.includes('Remove charlie? Its monthly credit from Quota Cache’s configuration goes with it, and adding the same Organization ID again does not bring it back. Amounts and readings entered here stay as an orphan you can clear below, and come back with it.')" % text_of('#organizations'))
+    check("%s.includes('Remove charlie? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.')" % text_of('#organizations'))
     check("document.activeElement === document.querySelector('#qc-org-keep')")
     press('#organizations', 'Keep')
     check("!document.querySelector('#qc-org-keep') && document.activeElement.getAttribute('aria-label') === 'Remove charlie'")
@@ -863,25 +746,30 @@ def editor_checks():
     check("(t => t.includes('Will be saved as 00000000-0000-4000-8000-0000000000aa') && t.includes('3 changes') && t.includes('Console → Settings → Organization. It is not a secret.'))(%s)" % text_of('#organizations'))
     screenshot('editor-organizations.png')
     audit('editor-organizations')
-    elsewhere = copy.deepcopy(editor['editor']['organizations']['items']) + [{'id': org_account(org_id(4)), 'label': 'delta', 'organization_id': org_id(4), 'has_default_monthly_usd': False, 'has_default_renews': False}]
+    elsewhere = copy.deepcopy(editor['editor']['organizations']['items']) + [{'id': org_account(org_id(4)), 'label': 'delta', 'organization_id': org_id(4)}]
     editor['editor']['organizations'].update(items=elsewhere, revision='5')
     press('#organizations', 'Save')
-    post = posted(10, 'the organizations save was not sent once')
+    post = posted(8, 'the organizations save was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '4', 'ops': [{'op': 'remove', 'id': org_account(org_id(3))}, {'op': 'rename', 'id': org_account(org_id(1)), 'label': 'alpha-one'},
                                                                               {'op': 'add', 'label': 'team-2', 'organizationId': '00000000-0000-4000-8000-0000000000aa'}]}, post['body']
     check("(t => t.includes('Another device changed the organizations first') && t.includes('1 change'))(%s) && document.querySelector('#qc-org-3-label').value === 'delta' && document.querySelector('#qc-org-0-label').value === 'alpha' && document.querySelector('#qc-org-add-label').value === 'team-2'" % text_of('#organizations'))
     press('#organizations', 'Try again')
-    post = posted(11, 'the organizations retry was not sent once')
+    post = posted(9, 'the organizations retry was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '5', 'ops': [{'op': 'add', 'label': 'team-2', 'organizationId': '00000000-0000-4000-8000-0000000000aa'}]}, post['body']
     check("!document.querySelector('#organizations form') && %s.includes('Saved 1 change')" % text_of('#organizations'))
     check("%s.includes('team-2')" % text_of('#organizations tbody'))
-    # A note's Dismiss puts focus on what followed the note: the next note,
-    # then the table.
-    browser('focus', '#qc-orgs-moved-dismiss')
+    # A note's Dismiss puts focus on what followed the note: the table.
+    browser('focus', '#qc-orgs-config-dismiss')
     browser('press', 'Enter')
-    check("!%s.includes('Moved 3 organizations') && document.activeElement === document.querySelector('#qc-orgs-config-dismiss')" % text_of('#organizations'))
-    browser('press', 'Enter')
-    check("!%s.includes('still lists organizations under claude-api-credits') && document.activeElement === document.querySelector('#qc-orgs-table')" % text_of('#organizations'))
+    check("!%s.includes('under claude-api-credits') && document.activeElement === document.querySelector('#qc-orgs-table')" % text_of('#organizations'))
+    # The note is dismissed for the count it showed: listing another item
+    # brings it back, and the count dismissed stays dismissed.
+    editor['credit_state']['organizations']['config_items_ignored'] = 4
+    refreshed()
+    check("%s.includes('still lists 4 organizations under claude-api-credits')" % text_of('#organizations'))
+    editor['credit_state']['organizations']['config_items_ignored'] = 3
+    refreshed()
+    check("!%s.includes('under claude-api-credits')" % text_of('#organizations'))
 
     # Strings CPA escaped below schema 6 render as they were meant.
     state['escaped'] = True
@@ -889,38 +777,24 @@ def editor_checks():
     check("(t => t.includes(\"o'neil & co\") && t.includes(\"Quota Cache's meter was full & dropped records\") && !t.includes('&#39;') && !t.includes('&amp;'))(%s)" % text_of('#content'))
     state['escaped'] = False
 
-    # Unreadable files: the cards are read-only and say why and what to do.
-    editor['editor']['organizations'].update(available=False, reason='organizationsUnreadable', items=[])
+    # Unreadable files: no organization is listed, the cards are read-only,
+    # and they say why and what to do.
+    editor['credit_state']['api_credits'] = None
+    editor['credit_state']['organizations'].update(state='unreadable', revision='')
+    editor['editor']['organizations'].update(available=False, reason='organizationsUnreadable', revision='', items=[])
     editor['editor'].update(available=False, reason='settingsUnreadable')
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block.update(state='legacyUnreadable', importable=False)
     refreshed()
-    # The settings card offers the import once the file is moved aside, so
-    # the note says Quota Glance's file rules that out.
-    check("(t => t.includes('Quota Glance’s settings.json could not be read, so it cannot be imported again.'))(%s) && !document.querySelector('#import-note').hidden" % text_of('#import-note'))
-    # Fixing the file comes first: moving it aside drops what was changed here.
-    check("(t => t.includes('Quota Cache cannot read its organizations file') && t.includes('Fix snapshot.organizations.json in place, or put back a good copy') && t.includes('Moving it aside instead moves the configuration’s list in again and drops the organization changes made here'))(%s) && !document.querySelector('#organizations .head-actions')" % text_of('#organizations'))
-    check("(t => !t.includes('No Console organizations yet') && t.includes('4 Claude Console organizations from Quota Cache’s configuration') && t.includes('charlie') && t.includes('no Organization ID') && t.includes('cannot be changed here'))(%s) && !document.querySelector('#organizations button:not(.link)')" % text_of('#organizations'))
-    # A good copy put back comes first, and importing again brings only what
-    # Quota Glance's file holds.
-    check("(t => t.includes('Quota Cache cannot read its saved settings, so only config values apply. To keep the values saved here, put back a good copy of snapshot.settings.json. Otherwise move it aside: Quota Cache then starts empty') && t.includes('brings back only what Quota Glance’s settings.json holds') && !t.includes('save Quota Cache'))(%s) && !document.querySelector('#api-credits .head-actions') && !document.querySelector('#renewals .head-actions')" % text_of('#api-credits'))
-    # A view update keeps each alert's node and the import note's, so a
-    # screen reader announces each once, not at every update.
-    kept = "[...['#organizations', '#api-credits', '#renewals'].map(s => document.querySelector(s + ' .alert.error')), document.querySelector('#import-note').firstChild]"
+    check("(t => t.includes('Quota Cache cannot read its organizations file, so no organization is counted and editing them here is unavailable. Fix the file’s owner or permissions, or move snapshot.organizations.json aside and add the organizations again. The page picks that up within a few seconds.'))(%s) && !document.querySelector('#organizations .head-actions')" % text_of('#organizations'))
+    check("(t => !t.includes('No Console organizations yet') && !t.includes('configuration’s'))(%s) && !document.querySelector('#organizations table') && !document.querySelector('#organizations button:not(.link)')" % text_of('#organizations'))
+    # A good copy put back comes first; moved aside, the values have to be
+    # entered again.
+    check("(t => t.includes('Quota Cache cannot read its saved settings, so no value saved here applies. To keep the values saved here, put back a good copy of snapshot.settings.json. Moving it aside instead starts Quota Cache empty, and every value saved here has to be entered again.'))(%s) && !document.querySelector('#api-credits .head-actions') && !document.querySelector('#renewals .head-actions')" % text_of('#api-credits'))
+    # A view update keeps each alert's node, so a screen reader announces
+    # each once, not at every update.
+    kept = "[...['#organizations', '#api-credits', '#renewals'].map(s => document.querySelector(s + ' .alert.error'))]"
     browser('eval', kept + ".forEach(node => { node.kept = true })")
     refreshed()
     check(kept + ".every(node => node.isConnected && node.kept === true)")
-    # With no import on record, moving the settings file aside is a first
-    # start, not an empty store, so the remedy says so.
-    for block in (editor['editor']['legacy'], editor['credit_state']['settings']['import']):
-        block.update(kind=None)
-    refreshed()
-    check("(t => t.includes('To keep the values saved here, put back a good copy of snapshot.settings.json. Moving it aside instead starts Quota Cache empty once an import from Quota Glance is on record, and otherwise counts as a first start') && !t.includes('then starts empty'))(%s)" % text_of('#api-credits'))
-    editor['editor'].update(reason='legacyUnreadable')
-    refreshed()
-    check("%s.includes('Quota Glance’s settings.json could not be read, so nothing was imported and only config values apply. Fix it or move it aside.')" % text_of('#renewals'))
-    # When that file is what blocks editing, the cards say so and the note does not.
-    check("document.querySelector('#import-note').hidden")
     screenshot('editor-unavailable.png')
     editor = editor_state()
 
@@ -939,7 +813,7 @@ def editor_checks():
     # goes to the card's heading, never to the top of the page.
     browser('focus', '#qc-credits-save')
     browser('press', 'Enter')
-    post = posted(12, 'clearing an orphan with no organization listed was not sent once')
+    post = posted(10, 'clearing an orphan with no organization listed was not sent once')
     assert post['body'] == {'kind': 'apiCredits', 'items': [{'id': alpha, 'baseRevision': '13', 'monthlyUsd': None, 'renews': None, 'reading': None}]}, post['body']
     check("!document.querySelector('#api-credits form') && !%s.includes('Saved values for an organization') && !document.querySelector('#qc-credits-edit') && document.activeElement === document.querySelector('#api-credits-heading')" % text_of('#api-credits'))
     editor = editor_state()
@@ -953,7 +827,7 @@ def editor_checks():
     press('#api-credits', 'Edit credits and dates')
     browser('fill', '#qc-credit-0-monthly', '263')
     press('#api-credits', 'Save')
-    posted(13, 'a save a proxy refused was not sent once')
+    posted(11, 'a save a proxy refused was not sent once')
     check("(t => t.includes('Something in front of CPA refused the save (HTTP 403)') && t.includes('Select Save to try once more.'))(%s) && !document.querySelector('#api-credits button.save').disabled" % text_of('#api-credits .edit-foot'))
     check("(t => t.includes('refused the save (HTTP 403)') && t.includes('Save again to try once more.') && !t.includes('Refresh view'))(%s)" % text_of('#error'))
     # Once the card is cancelled Refresh view is the way to try again, and the
@@ -964,9 +838,9 @@ def editor_checks():
     check("(t => t.includes('refused the save (HTTP 403)') && t.includes('Save again to try once more.'))(%s) && document.querySelector('#refresh').disabled" % text_of('#error'))
     browser('fill', '#qc-credit-0-monthly', '263')
     ticks(3)
-    assert len(state['posts']) == 13 and state['reads'] == reads, 'a refused save was sent again on its own'
+    assert len(state['posts']) == 11 and state['reads'] == reads, 'a refused save was sent again on its own'
     press('#api-credits', 'Save')
-    posted(14, 'Save after a proxy refusal did not send once')
+    posted(12, 'Save after a proxy refusal did not send once')
     check("!document.querySelector('#api-credits form') && localStorage.getItem('%s') === null" % REFUSED)
     until(lambda: state['reads'] > reads, 'the view was not read again after the save that followed a refusal')
     check("document.querySelector('#error').hidden && document.querySelector('#health').textContent !== 'Session refused'")
@@ -977,12 +851,12 @@ def editor_checks():
     press('#api-credits', 'Edit credits and dates')
     browser('fill', '#qc-credit-0-monthly', '264')
     press('#api-credits', 'Save')
-    posted(15, 'a save met by a lockout was not sent once')
+    posted(13, 'a save met by a lockout was not sent once')
     check("(t => t.includes('until about') && t.includes('Save turns back on then.'))(%s) && document.querySelector('#api-credits button.save').disabled" % text_of('#api-credits .edit-foot'))
     check("(t => t.includes('should be over') && t.includes('Select Save to try once more.'))(%s) && !document.querySelector('#api-credits button.save').disabled && document.querySelector('#qc-credit-0-monthly').value === '264'" % text_of('#api-credits .edit-foot'))
-    assert len(state['posts']) == 15, 'a save was sent when the lockout ended'
+    assert len(state['posts']) == 13, 'a save was sent when the lockout ended'
     press('#api-credits', 'Save')
-    posted(16, 'Save after the lockout did not send once')
+    posted(14, 'Save after the lockout did not send once')
     check("!document.querySelector('#api-credits form')")
     refreshed()
 
@@ -1012,12 +886,12 @@ def editor_checks():
     press('#api-credits', remove_orphan)
     state['answers'] = [(409, {'error': 'not_editable', 'id': org_account(org_id(1)), 'ids': [org_account(org_id(1)), orphan]}, {})]
     press('#api-credits', 'Save')
-    posted(17, 'a save the plugin refused rows of was not sent once')
+    posted(15, 'a save the plugin refused rows of was not sent once')
     offered = "[...document.querySelectorAll('#api-credits button')].some(b => b.getAttribute('aria-label') === %s)" % json.dumps(remove_orphan)
     check("(t => t.includes('Not saved. alpha and %s can no longer be edited here, so their changes were dropped. Your other changes are kept.') && t.includes('no longer offers this organization'))(%s) && !document.querySelector('#qc-credit-0-monthly') && !%s && %s.includes('Try again')"
           % (orphan, text_of('#api-credits'), offered, text_of('#api-credits button.save')))
     press('#api-credits', 'Try again')
-    post = posted(18, 'the save after a refusal was not sent once')
+    post = posted(16, 'the save after a refusal was not sent once')
     assert [item['id'] for item in post['body']['items']] == [org_account(org_id(3))], post['body']
     check("!document.querySelector('#api-credits form')")
     # An orphan another device stored again conflicts; marked again, its
@@ -1026,31 +900,26 @@ def editor_checks():
     press('#api-credits', remove_orphan)
     state['answers'] = [(409, {'error': 'conflict', 'revision': '20', 'conflicts': [orphan], 'current': {orphan: {'revision': '20', 'monthlyUsd': '50', 'renews': '', 'reading': None}}}, {})]
     press('#api-credits', 'Save')
-    posted(19, 'a save that conflicted on an orphan was not sent once')
+    posted(17, 'a save that conflicted on an orphan was not sent once')
     check("%s.includes('Not saved. Another device saved first.') && %s" % (text_of('#api-credits .edit-foot'), offered))
     press('#api-credits', remove_orphan)
     press('#api-credits', 'Save')
-    post = posted(20, 'the orphan removal was not sent again once')
+    post = posted(18, 'the orphan removal was not sent again once')
     assert post['body'] == {'kind': 'apiCredits', 'items': [{'id': orphan, 'baseRevision': '20', 'monthlyUsd': None, 'renews': None, 'reading': None}]}, post['body']
     check("!document.querySelector('#api-credits form')")
 
-    # While the organizations file cannot be read, values saved for an
-    # organization the configuration lacks are shown as kept, never offered
-    # for removal.
+    # While the organizations file cannot be read, no organization is listed,
+    # and every value saved here is shown as kept, never offered for removal.
     held = 'org-0123456789ab'
-    editor['credit_state']['organizations'].update(state='unreadable', source='config')
-    editor['editor']['organizations'].update(available=False, reason='organizationsUnreadable')
+    editor['credit_state']['api_credits'] = None
+    editor['credit_state']['organizations'].update(state='unreadable', revision='')
+    editor['editor']['organizations'].update(available=False, reason='organizationsUnreadable', revision='', items=[])
     editor['editor']['held_api_credits'] = [{'id': held, 'monthlyUsd': '40', 'renews': '', 'hasReading': False, 'revision': '9', 'updatedAtEpoch': epoch(now)}]
     refreshed()
-    kept = 'Saved values for an organization Quota Cache’s configuration does not list: %s · kept, and used again once Quota Cache’s organizations file is fixed or a good copy put back' % held
-    check("%s.includes(%s)" % (text_of('#api-credits'), json.dumps(kept)))
-    check("(t => t.includes('The organizations come from Quota Cache’s configuration until it can read its organizations file again.') && !t.includes('and organizations above'))(%s)" % text_of('#api-credits'))
-    press('#api-credits', 'Edit credits and dates')
-    check("%s.includes(%s) && ![...document.querySelectorAll('#api-credits button')].some(b => (b.getAttribute('aria-label') || '').includes(%s))" % (text_of('#api-credits form'), json.dumps(kept), json.dumps(held)))
-    # The locked row and the foot point to what can be done while the
-    # Organizations card cannot edit, never to that card.
-    check("(t => t.includes('no usable organization-id. Organizations can be added above again once Quota Cache can read its organizations file.') && !t.includes('Add the organization under Organizations above') && t.includes('Labels and Organization IDs come from Quota Cache’s configuration until it can read its organizations file again.'))(%s)" % text_of('#api-credits'))
-    press('#api-credits .edit-foot', 'Cancel')
+    kept = 'Saved values kept while Quota Cache cannot read its organizations file: %s · used again once the file is fixed or a good copy put back' % held
+    check("(t => t.includes(%s) && t.includes('No Claude Console organizations are listed: Quota Cache cannot read its organizations file. Organizations can be added above once it can read that file again.'))(%s)"
+          % (json.dumps(kept), text_of('#api-credits')))
+    check("!document.querySelector('#qc-credits-edit') && ![...document.querySelectorAll('#api-credits button')].some(b => (b.getAttribute('aria-label') || b.textContent).includes(%s))" % json.dumps(held))
     editor = editor_state()
 
     # A reading's time is judged by the page's rule, 48 hours back to 5
@@ -1064,7 +933,7 @@ def editor_checks():
     browser('eval', "(e => { const at = new Date(Date.now() + 120000), pad = n => String(n).padStart(2, '0'); e.value = at.getFullYear() + '-' + pad(at.getMonth() + 1) + '-' + pad(at.getDate()) + 'T' + pad(at.getHours()) + ':' + pad(at.getMinutes()); e.dispatchEvent(new Event('input', {bubbles: true})); })(document.querySelector('#qc-credit-2-at'))")
     check("%s.includes('1 change') && !document.querySelector('#api-credits button.save').disabled" % text_of('#api-credits .edit-foot'))
     press('#api-credits', 'Save')
-    post = posted(21, 'a reading taken after the card opened was not sent once')
+    post = posted(19, 'a reading taken after the card opened was not sent once')
     assert [(item['id'], item['reading']['remainingUsd']) for item in post['body']['items']] == [(org_account(org_id(3)), '31.80')], post['body']
     check("!document.querySelector('#api-credits form')")
     editor = editor_state()
@@ -1078,7 +947,7 @@ def editor_checks():
     browser('fill', '#qc-credit-1-monthly', '270')
     check("document.querySelector('#qc-credit-1-at').validity.rangeUnderflow && %s.includes('1 change')" % text_of('#api-credits .edit-foot'))
     press('#api-credits', 'Save')
-    post = posted(22, 'a row whose reading is older than the time control allows was not sent once')
+    post = posted(20, 'a row whose reading is older than the time control allows was not sent once')
     assert post['body']['items'] == [{'id': org_account(org_id(2)), 'baseRevision': '12', 'monthlyUsd': '270', 'renews': '2026-09-20',
                                       'reading': {'remainingUsd': '180.00', 'at': iso(datetime.fromtimestamp(old_reading, timezone.utc))}}], post['body']
     check("!document.querySelector('#api-credits form')")
@@ -1093,7 +962,7 @@ def editor_checks():
     browser('press', 'Backspace')
     check("document.querySelector('#qc-org-0-label').value.length === 78 && %s.includes('1 change')" % text_of('#organizations .edit-foot'))
     press('#organizations', 'Save')
-    post = posted(23, 'a rename to 39 emoji was not sent once')
+    post = posted(21, 'a rename to 39 emoji was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '4', 'ops': [{'op': 'rename', 'id': org_account(org_id(1)), 'label': '\U0001F600' * 39}]}, post['body']
     check("!document.querySelector('#organizations form')")
     editor = editor_state()
@@ -1117,7 +986,7 @@ def editor_checks():
     until(lambda: state['reads'] > reads, 'Refresh view did not read the status')
     check("!document.querySelector('#content').hidden && document.querySelector('#qc-org-0-label').value === 'alpha-mine'")
     press('#organizations', 'Save')
-    post = posted(24, 'a rename carried onto a newer status was not sent once')
+    post = posted(22, 'a rename carried onto a newer status was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '4', 'ops': [{'op': 'rename', 'id': org_account(org_id(1)), 'label': 'alpha-mine'}]}, post['body']
     check("%s.includes('so your change to alpha was dropped') && document.querySelector('#qc-org-0-label').value === 'alpha-theirs'" % text_of('#organizations'))
     press('#organizations .edit-foot', 'Cancel')
@@ -1137,7 +1006,7 @@ def editor_checks():
     browser('press', 'Enter')
     browser('focus', '#qc-renewals-save')
     browser('press', 'Enter')
-    post = posted(25, 'removing the last renewal date was not sent once')
+    post = posted(23, 'removing the last renewal date was not sent once')
     assert post['body'] == {'kind': 'renewals', 'items': [{'id': last_date['id'], 'baseRevision': last_date['revision'], 'date': None}]}, post['body']
     check("!document.querySelector('#renewals form') && %s.includes('No Claude subscriptions in CPA yet') && document.activeElement === document.querySelector('#renewals-heading')" % text_of('#renewals'))
     editor = editor_state()
@@ -1154,7 +1023,7 @@ def editor_checks():
     browser('fill', '#qc-org-add-id', org_id(6))
     browser('focus', '#qc-orgs-save')
     browser('press', 'Enter')
-    post = posted(26, 'the first organization was not sent once')
+    post = posted(24, 'the first organization was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '4', 'ops': [{'op': 'add', 'label': 'lima', 'organizationId': org_id(6)}]}, post['body']
     check("!document.querySelector('#organizations form') && %s.includes('lima') && document.activeElement === document.querySelector('#qc-orgs-edit')" % text_of('#organizations'))
     browser('press', 'Enter')
@@ -1162,7 +1031,7 @@ def editor_checks():
     browser('eval', "document.querySelector('#organizations button.danger').click()")
     browser('focus', '#qc-orgs-save')
     browser('press', 'Enter')
-    post = posted(27, 'removing the last organization was not sent once')
+    post = posted(25, 'removing the last organization was not sent once')
     assert post['body'] == {'kind': 'organizations', 'baseRevision': '5', 'ops': [{'op': 'remove', 'id': org_account(org_id(6))}]}, post['body']
     check("!document.querySelector('#organizations form') && %s.includes('No Console organizations yet') && document.activeElement === document.querySelector('#qc-orgs-add')" % text_of('#organizations'))
     editor = editor_state()
@@ -1177,7 +1046,7 @@ def editor_checks():
     check("%s === '1 organization · none counted yet: set each one’s monthly credit and refill date'" % text_of('#api-credits .section-head .hint'))
     # One with its credit and date, waiting on the meter: the head says none
     # is counted and leaves why to the row.
-    credit_doc['accounts'] = [account(0, 'kilo', org_id(5), 'pending', config_monthly='200', config_renews='2026-09-29', estimate=False,
+    credit_doc['accounts'] = [account(0, 'kilo', org_id(5), 'pending', monthly='200', renews='2026-09-29', estimate=False,
                                       issue='Quota Cache has not saved its API meter yet; counting starts when it next saves.', issues=['meterMissing'])]
     refreshed()
     check("%s === '1 organization · none counted yet' && %s.includes('Quota Cache has not saved its API meter yet')" % (text_of('#api-credits .section-head .hint'), text_of('#api-credits')))
@@ -1198,7 +1067,7 @@ def editor_checks():
     press('#api-credits', 'Edit credits and dates')
     browser('fill', '#qc-credit-0-monthly', '268')
     press('#api-credits', 'Save')
-    posted(28, 'a save the plugin refused a monthly credit of was not sent once')
+    posted(26, 'a save the plugin refused a monthly credit of was not sent once')
     check("%s.includes('Not saved. Fix the marked field.') && %s" % (text_of('#api-credits .edit-foot'), marked_bad('#qc-credit-0-monthly', 'Enter a dollar amount, like 200 or 260.50.')))
     audit('editor-credits-refused')
     browser('fill', '#qc-credit-0-monthly', '269')
@@ -1208,14 +1077,14 @@ def editor_checks():
     press('#api-credits', 'Enter Console reading for charlie')
     browser('fill', '#qc-credit-2-amount', '31.80')
     press('#api-credits', 'Save')
-    posted(29, 'a save the plugin refused a reading time of was not sent once')
+    posted(27, 'a save the plugin refused a reading time of was not sent once')
     check("%s && %s" % (marked_bad('#qc-credit-2-at', 'by CPA’s clock'), unmarked('#qc-credit-2-amount')))
     press('#api-credits .edit-foot', 'Cancel')
     state['answers'] = [(400, {'error': 'invalid_date', 'id': '0a1b2c3d4e5f6071', 'field': 'date'}, {})]
     press('#renewals', 'Set renewal dates')
     pick_date('#qc-renewal-1', '2026-11-06')
     press('#renewals', 'Save')
-    posted(30, 'a save the plugin refused a renewal date of was not sent once')
+    posted(28, 'a save the plugin refused a renewal date of was not sent once')
     check("%s.includes('Not saved. Fix the marked field.') && %s" % (text_of('#renewals .edit-foot'), marked_bad('#qc-renewal-1', 'Enter a real date between 2000 and 2099.')))
     audit('editor-renewals-refused')
     pick_date('#qc-renewal-1', '2026-11-07')
@@ -1233,7 +1102,7 @@ def editor_checks():
     screenshot('editor-mobile.png')
     press('#api-credits .edit-foot', 'Cancel')
     assert browser('errors').get('errors', []) == [], 'the page threw'
-    assert len(state['posts']) == 30 and all(p['auth'] == 'Bearer synthetic-sidebar-key' and p['type'] == 'application/json' for p in state['posts']), state['posts']
+    assert len(state['posts']) == 28 and all(p['auth'] == 'Bearer synthetic-sidebar-key' and p['type'] == 'application/json' for p in state['posts']), state['posts']
 
 try:
     if args.serve_only:
@@ -1343,19 +1212,17 @@ try:
     browser('screenshot',str(args.artifacts/'mobile.png'),'--full')
     state['mode']='untrusted';browser('click','#refresh')
     check("document.body.innerText.includes('<img src=x') && !window.injected && !document.querySelector('#accounts img')")
-    # Claude API credits: named by label, metered rather than polled, a
-    # misconfigured item says so, and the meter's counts are printed as
-    # counted, never priced or added up.
+    # Claude API credits: named by label, metered rather than polled, and
+    # the meter's counts are printed as counted, never priced or added up.
     state['mode']='credits';browser('click','#refresh')
     browser('select','#provider','anthropic-api')
-    check("document.querySelectorAll('#accounts tr').length === 2 && document.querySelector('#accounts').innerText.includes('siphorchannel') && document.querySelector('#accounts').innerText.includes('Metered') && document.querySelector('#accounts').innerText.includes('Not polled') && document.querySelector('#accounts').innerText.includes('organization_id_missing')")
-    # Neither credit item has a next poll, and neither pulls the header's
-    # next eligible poll forward to now: every polled entry is due twelve
-    # minutes or more from now.
-    check("[...document.querySelectorAll('#accounts tr')].find(r => r.textContent.includes('organization_id_missing')).cells[4].textContent === 'Not polled'")
+    check("document.querySelectorAll('#accounts tr').length === 1 && document.querySelector('#accounts').innerText.includes('siphorchannel') && document.querySelector('#accounts').innerText.includes('Metered')")
+    # The credit item has no next poll, and does not pull the header's next
+    # eligible poll forward to now: every polled entry is due twelve minutes
+    # or more from now.
     check("[...document.querySelectorAll('#accounts tr')].find(r => r.textContent.includes('siphorchannel')).cells[4].textContent === '—'")
     check("Date.parse(document.querySelector('#next-call time').dateTime) - Date.now() > 5 * 60000")
-    check("(t => t.includes('Organization: 00000000-0000-4000-8000-00000000000a') && t.includes('Monthly credit: 200 USD (configured)') && t.includes('Renews: 2026-10-29 (configured)') && t.includes('admin-key is no longer used') && t.includes('Low-credit refusals: 1') && t.includes('claude-sonnet-5-5: 3 ok, 1 failed, in 1200, out 800, cache read 50, cache write 10 tokens') && t.includes('claude-haiku-5-5 over_100k: 1 ok, 0 failed, in 150000, out 0, cache read 0, cache write 0 tokens') && !t.includes('9000') && t.includes('Configuration problem: organization_id_missing') && !t.includes('key-'))(document.querySelector('#accounts').textContent)")
+    check("(t => t.includes('Organization: 00000000-0000-4000-8000-00000000000a') && !t.includes('configured') && t.includes('Low-credit refusals: 1') && t.includes('claude-sonnet-5-5: 3 ok, 1 failed, in 1200, out 800, cache read 50, cache write 10 tokens') && t.includes('claude-haiku-5-5 over_100k: 1 ok, 0 failed, in 150000, out 0, cache read 0, cache write 0 tokens') && !t.includes('9000') && !t.includes('key-'))(document.querySelector('#accounts').textContent)")
     # The meter panel: counters, the gap and the organization no item names.
     check("!document.querySelector('#meter-section').hidden && (t => t.includes('Saved within 30 minutes') && t.includes('Records received') && t.includes('120') && t.includes('Counting') && t.includes('shutdown') && t.includes('00000000-0000-4000-8000-00000000000e') && t.includes('37 requests'))(document.querySelector('#meter-section').textContent)")
     audit = browser('a11y','--tags','wcag2a,wcag2aa')
@@ -1431,7 +1298,7 @@ try:
     check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
     editor_checks()
     assert state['keyless'] == 0, 'the page sent a management request without a key'
-    print('PASS: native sidebar, strict session reading, no keyless requests, refusal and lockout stop with a persistent record (kept per CPA prefix, and in the tab when the origin storage is full), no automatic retry after a request gets no answer, provider filters, Claude API credits, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh; editor: organizations, API credits, renewal dates, import notes, saves only from a press with the remembered key, no retry after a refusal or a lost answer, conflicts (organizations across a newer status too), fields judged by the page and never blocked by the browser, a field Quota Cache refused marked on the field and read with it, the drop-in import note, focus on opening every card, keyboard focus never hidden under a pinned foot, caption links kept while focus moves and the window takes focus again, escaped strings')
+    print('PASS: native sidebar, strict session reading, no keyless requests, refusal and lockout stop with a persistent record (kept per CPA prefix, and in the tab when the origin storage is full), no automatic retry after a request gets no answer, provider filters, Claude API credits, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh; editor: organizations, API credits, renewal dates, saves only from a press with the remembered key, no retry after a refusal or a lost answer, conflicts (organizations across a newer status too), fields judged by the page and never blocked by the browser, a field Quota Cache refused marked on the field and read with it, focus on opening every card, keyboard focus never hidden under a pinned foot, caption links kept while focus moves and the window takes focus again, escaped strings')
 finally:
     if not args.serve_only:
         subprocess.run([binary,'--session',session,'close'],stdout=subprocess.DEVNULL,check=False,timeout=30)

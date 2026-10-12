@@ -534,7 +534,7 @@ function withAPIStates(doc: Doc): Doc {
     lowerBound: false,
     meterSinceEpoch: echo.meterSinceEpoch,
     lastSeenEpoch: built - 20 * 60,
-    settings: { ...(echo.settings as Doc), configMonthlyUsd: "100", configRenews: "2026-09-10" },
+    settings: { ...(echo.settings as Doc), monthlyUsd: "100", renews: "2026-09-10" },
     ...patch,
   })
   const cycleStart = echo.cycleStartEpoch as number
@@ -563,8 +563,8 @@ function withAPIStates(doc: Doc): Doc {
       },
       settings: {
         ...(echo.settings as Doc),
-        configMonthlyUsd: "100",
-        configRenews: "2026-09-10",
+        monthlyUsd: "100",
+        renews: "2026-09-10",
         revision: "3",
         reading: { remainingUsd: "100.00", atEpoch: cycleStart + HOUR, enteredAtEpoch: cycleStart + HOUR + 300 },
         updatedAtEpoch: cycleStart + HOUR + 300,
@@ -587,8 +587,8 @@ function withAPIStates(doc: Doc): Doc {
       level: "ok",
       settings: {
         ...(echo.settings as Doc),
-        configMonthlyUsd: "200",
-        configRenews: "2026-09-10",
+        monthlyUsd: "200",
+        renews: "2026-09-10",
         revision: "2",
         reading: { remainingUsd: "143.20", atEpoch: cycleStart - 10 * DAY, enteredAtEpoch: cycleStart - 10 * DAY + 600 },
         readingUnusedReason: "beforeRefill",
@@ -732,38 +732,54 @@ function withoutMeter(doc: Doc): Doc {
 }
 
 /**
- * Quota Cache cannot use its saved settings: `reason` is settingsUnreadable
- * (its own file cannot be read) or legacyUnreadable (Quota Glance's could
- * not, so nothing was imported). Nothing entered on its page applies, so each
- * value falls back to the config's, and the card says why. Bravo is the
- * golden's one row with entered values, figured again from its config the
- * simple way; a stand-in for review, never a contract.
+ * Quota Cache cannot read its saved settings (settingsUnreadable). Nothing
+ * entered on its page applies and nothing else gives a credit or a refill
+ * date, so no organization is counted, each asks for both, and the card says
+ * why. A stand-in for review, never a contract.
  */
-function withSavedSettingsUnusable(doc: Doc, reason: "settingsUnreadable" | "legacyUnreadable"): Doc {
+function withSavedSettingsUnreadable(doc: Doc): Doc {
+  const reason = "settingsUnreadable"
   const built = doc.generatedAtEpoch as number
-  let next = patchAccounts(doc, {
-    bravo: (account) => {
-      const settings = account.settings as Doc
-      const credit = Number(settings.configMonthlyUsd)
-      const spent = account.spent as number
-      const left = Math.max(0, credit - spent)
-      return {
+  let next: Doc = {
+    ...doc,
+    apiCredits: {
+      ...(doc.apiCredits as Doc),
+      accounts: ((doc.apiCredits as Doc).accounts as Doc[]).map((account) => ({
         ...account,
-        basis: "credit",
-        monthlyCredit: credit,
-        monthlyCreditText: usd(credit),
-        monthlyCreditSource: "config",
-        used: Math.min(credit, spent),
-        usedText: usd(Math.min(credit, spent)),
-        left,
-        leftText: usd(left),
-        remainingFraction: credit > 0 ? left / credit : 0,
-        remainingPercent: credit > 0 ? Math.round((left / credit) * 100) : 0,
-        level: levelOf(credit > 0 ? left / credit : 0),
+        state: "needsSettings",
+        counted: false,
+        hasEstimate: false,
+        basis: "",
+        lowerBound: false,
+        monthlyCredit: 0,
+        monthlyCreditText: "",
+        monthlyCreditSource: "none",
+        spent: 0,
+        spentText: "",
+        spentSinceEpoch: null,
+        used: 0,
+        usedText: "",
+        left: 0,
+        leftText: "",
+        estimateLeftText: "",
+        overage: 0,
+        overageText: "",
+        remainingFraction: 0,
+        remainingPercent: 0,
+        level: "",
+        cycleStartEpoch: null,
+        renewsAtEpoch: null,
+        renewsInSeconds: null,
+        renewsSource: "none",
         reading: null,
-      }
+        cacheWriteExtra: 0,
+        cacheWriteExtraText: "",
+        unpriced: [],
+        dataIssues: ["needsCredit", "needsRefillDate"],
+        issue: "Set this organization's monthly credit and refill date.",
+      })),
     },
-  })
+  }
   const credits = next.apiCredits as Doc
   const structural = ["noOrganization", "duplicateOrganization", "overLimit", "cacheTooOld"]
   const accounts = (credits.accounts as Doc[]).map((account) => {
@@ -797,15 +813,9 @@ function withSavedSettingsUnusable(doc: Doc, reason: "settingsUnreadable" | "leg
   next = {
     ...next,
     credentials,
-    apiCredits: recountPool({ ...credits, accounts, orphans: [], editing: { available: false, reason, migration: "" } }, built),
+    apiCredits: recountPool({ ...credits, accounts, orphans: [], editing: { available: false, reason } }, built),
   }
   return next
-}
-
-/** The golden document with a migration note: Quota Glance's own settings.json says what it says. */
-function withMigration(doc: Doc, migration: string): Doc {
-  const credits = doc.apiCredits as Doc
-  return { ...doc, apiCredits: { ...credits, editing: { ...(credits.editing as Doc), migration } } }
 }
 
 /** The fallback's sentence for each reason there is no usable credit state: the plugin's own. */
@@ -824,7 +834,7 @@ const FALLBACK_ISSUES = {
  * says, none counted, each with the sentence for the cause, and no figure
  * only Quota Cache could work out. No renewal date entered there is known.
  */
-function withoutCreditState(doc: Doc, cause: keyof typeof FALLBACK_ISSUES, migration: string): Doc {
+function withoutCreditState(doc: Doc, cause: keyof typeof FALLBACK_ISSUES): Doc {
   const credits = doc.apiCredits as Doc
   const accounts = (credits.accounts as Doc[]).map((account) => {
     const settings = account.settings as Doc
@@ -903,7 +913,7 @@ function withoutCreditState(doc: Doc, cause: keyof typeof FALLBACK_ISSUES, migra
       currency: credits.currency,
       pricing: { asOf: "", source: "", cacheWrites: "" },
       meter: null,
-      editing: { available: false, reason: "quotaCache", migration },
+      editing: { available: false, reason: "quotaCache" },
       pool: {
         hasEstimate: false,
         lowerBound: false,
@@ -1017,18 +1027,11 @@ function scenarios(): Record<string, () => Outcome> {
     "first-day": () => withFirstDay(golden()),
     "no-meter": () => withoutMeter(golden()),
 
-    // Quota Cache cannot use its saved settings, by which file is at fault.
-    "quota-cache-unreadable": () => withSavedSettingsUnusable(golden(), "settingsUnreadable"),
-    "legacy-unreadable": () => withSavedSettingsUnusable(golden(), "legacyUnreadable"),
-    // The values saved in Quota Glance's own settings.json are not in Quota
-    // Cache: never imported, or changed since.
-    "not-imported": () => withMigration(golden(), "notImported"),
-    "changed-since-import": () => withMigration(golden(), "changedSinceImport"),
-    // No usable credit state. Quota Cache older than 0.2.0, which will import
-    // Quota Glance's settings when it updates; and one rolled back below
-    // 0.2.0 over a newer file, which the plugin finds abandoned.
-    "awaiting-import": () => withoutCreditState(golden(), "missing", "awaitingImport"),
-    fallback: () => withoutCreditState(golden(), "abandoned", ""),
+    // Quota Cache cannot read its saved settings.
+    "quota-cache-unreadable": () => withSavedSettingsUnreadable(golden()),
+    // No usable credit state: Quota Cache rolled back below 0.2.0 over a
+    // newer file, which the plugin finds abandoned.
+    fallback: () => withoutCreditState(golden(), "abandoned"),
 
     // The plugin has been updated past what this bundle knows how to read.
     "future-schema": () => ({ ...golden(), schemaVersion: 2 }),

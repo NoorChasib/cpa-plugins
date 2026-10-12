@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,12 +47,14 @@ func (h routeHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, erro
 	return h.roster, nil
 }
 
+// alphaCredit is claude-api-credits as quota-cache 0.1.x read it, listing
+// alpha with a credit and a refill date. This quota-cache ignores it.
 const alphaCredit = "claude-api-credits:\n  - label: alpha\n    organization-id: " + fakeOrgA + "\n    monthly-usd: \"200\"\n    renews: \"2026-10-05\"\n"
 
 // newRoutePlugin is a running plugin whose page can save: the credential
-// above on the roster, alpha moved from the configuration to the page, the
-// settings file holding an orphan of each kind at revision 2, and a published
-// state. setup runs before the first configure.
+// above on the roster, alpha on the page, the settings file holding an orphan
+// of each kind at revision 2, and a published state. setup runs before the
+// first configure.
 func newRoutePlugin(t *testing.T, setup ...func(p *meterPlugin)) *meterPlugin {
 	t.Helper()
 	return newRoutePluginListing(t, routeRoster(), setup...)
@@ -77,12 +80,29 @@ func newRoutePluginListing(t *testing.T, roster []protocol.HostAuthFileEntry, se
 		"apiCredits": map[string]any{orphanAccount: map[string]any{"monthlyUsd": "10", "rev": 1, "updatedAt": "2026-10-01T00:00:00Z"}},
 		"renewals":   map[string]any{orphanRenewal: map[string]any{"date": "2026-10-29", "rev": 2, "updatedAt": "2026-10-02T00:00:00Z"}},
 	})
+	p.writeOrganizations([2]string{"alpha", fakeOrgA})
 	for _, f := range setup {
 		f(p)
 	}
-	p.configure(protocol.MethodPluginRegister, alphaCredit)
+	p.configure(protocol.MethodPluginRegister, "")
 	p.published()
 	return p
+}
+
+// writeOrganizations writes the organizations file beside the snapshot, as
+// the page saves it: each organization a label and an Organization ID, at
+// revision 1.
+func (p *meterPlugin) writeOrganizations(organizations ...[2]string) {
+	p.t.Helper()
+	items := []any{}
+	for _, o := range organizations {
+		items = append(items, map[string]any{"label": o[0], "organization_id": o[1], "rev": "1", "updated_at": "2026-10-01T00:00:00Z"})
+	}
+	raw, _ := json.Marshal(map[string]any{"schema": 1, "revision": "1", "organizations": items})
+	if err := os.MkdirAll(filepath.Dir(p.path), 0o700); err != nil {
+		p.t.Fatal(err)
+	}
+	writeFile(p.t, client.OrganizationsPath(p.path), raw)
 }
 
 // writeSettings writes the settings file beside the snapshot.
@@ -228,14 +248,11 @@ func (p *meterPlugin) removeAll() {
 	p.organizationOps(ops...)
 }
 
-// keepConfigItems makes the organizations file unreadable before the first
-// configure, so claude-api-credits stays the item list as in 0.1.x: nothing
-// moves, and nothing can be saved over it.
-func (p *meterPlugin) keepConfigItems() {
+// breakOrganizations makes the organizations file one its load rules refuse,
+// so no organization is listed and none can be saved until it is fixed.
+func (p *meterPlugin) breakOrganizations() {
 	p.t.Helper()
-	if err := os.MkdirAll(client.OrganizationsPath(p.path), 0o700); err != nil {
-		p.t.Fatal(err)
-	}
+	writeFile(p.t, client.OrganizationsPath(p.path), []byte(`{`))
 }
 
 func batchOf(kind string, items ...map[string]any) map[string]any {
@@ -294,7 +311,7 @@ func TestASaveIsCommittedPublishedAndLogged(t *testing.T) {
 	// Past the file's revision 2, at the time.
 	saved := strconv.FormatUint(p.revision(), 10)
 	if code != http.StatusOK || body["ok"] != true || body["unchanged"] != false || body["revision"] != saved || p.revision() <= 2 ||
-		block["monthlyUsd"] != "300.25" || block["configMonthlyUsd"] != "200" || block["revision"] != saved || block["editable"] != true {
+		block["monthlyUsd"] != "300.25" || block["configMonthlyUsd"] != "" || block["revision"] != saved || block["editable"] != true {
 		t.Fatalf("%d %v", code, body)
 	}
 	// Published before the route answered: the file already shows it.
@@ -391,7 +408,6 @@ func TestTheOrderOfChecks(t *testing.T) {
 		"a batch":   batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "300", nil, nil)),
 		"malformed": map[string]any{"kind": "budgets"},
 		"no kind":   []any{1},
-		"an import": map[string]any{"kind": settings.KindImportLegacy, "baseRevision": ""},
 	} {
 		unreadable.wantError(name, http.StatusServiceUnavailable, "settings_unavailable", body)
 	}
@@ -404,24 +420,24 @@ func TestTheOrderOfChecks(t *testing.T) {
 // Everything that is not exactly a batch is invalid_request.
 func TestMalformedBatchesAreRefused(t *testing.T) {
 	p := newRoutePlugin(t)
-	moved := p.organizationsRevision()
+	read := p.organizationsRevision()
 	row := creditRow(alphaAccount, "", "300", nil, nil)
 	missing := creditRow(alphaAccount, "", "300", nil, nil)
 	delete(missing, "reading")
 	unknown := creditRow(alphaAccount, "", "300", nil, nil)
 	unknown["note"] = "x"
 	cases := map[string]any{
-		"null":                  nil,
-		"an array":              []any{row},
-		"unknown kind":          batchOf("budgets", row),
-		"no items":              batchOf(settings.KindAPICredits),
-		"a missing key":         batchOf(settings.KindAPICredits, missing),
-		"an unknown key":        batchOf(settings.KindAPICredits, unknown),
-		"a repeated id":         batchOf(settings.KindAPICredits, row, row),
-		"a bad revision":        batchOf(settings.KindAPICredits, creditRow(alphaAccount, "01", "300", nil, nil)),
-		"an import with a path": map[string]any{"kind": settings.KindImportLegacy, "baseRevision": "2", "path": "/etc/passwd"},
-		"an op with no id":      map[string]any{"kind": settings.KindOrganizations, "baseRevision": moved, "ops": []any{map[string]any{"op": "remove"}}},
-		"no op":                 map[string]any{"kind": settings.KindOrganizations, "baseRevision": moved, "ops": []any{}},
+		"null":             nil,
+		"an array":         []any{row},
+		"unknown kind":     batchOf("budgets", row),
+		"no items":         batchOf(settings.KindAPICredits),
+		"a missing key":    batchOf(settings.KindAPICredits, missing),
+		"an unknown key":   batchOf(settings.KindAPICredits, unknown),
+		"a repeated id":    batchOf(settings.KindAPICredits, row, row),
+		"a bad revision":   batchOf(settings.KindAPICredits, creditRow(alphaAccount, "01", "300", nil, nil)),
+		"importLegacy":     map[string]any{"kind": "importLegacy", "baseRevision": "2"},
+		"an op with no id": map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{map[string]any{"op": "remove"}}},
+		"no op":            map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{}},
 	}
 	seventeen := []map[string]any{}
 	for i := range 17 {
@@ -431,7 +447,7 @@ func TestMalformedBatchesAreRefused(t *testing.T) {
 	for name, body := range cases {
 		p.wantError(name, http.StatusBadRequest, "invalid_request", body)
 	}
-	if p.revision() != 2 || p.organizationsRevision() != moved {
+	if p.revision() != 2 || p.organizationsRevision() != read {
 		t.Fatal("a malformed batch reached a store")
 	}
 }
@@ -460,7 +476,7 @@ func TestEachValueRuleNamesItsField(t *testing.T) {
 		}
 	}
 	// A value rule is judged before whether the row may be edited at all.
-	if body := p.wantError("both", http.StatusBadRequest, "invalid_monthly_usd", batchOf(settings.KindAPICredits, creditRow("item-2", "", "x", nil, nil))); body["id"] != "item-2" {
+	if body := p.wantError("both", http.StatusBadRequest, "invalid_monthly_usd", batchOf(settings.KindAPICredits, creditRow("org-000000000000", "", "x", nil, nil))); body["id"] != "org-000000000000" {
 		t.Errorf("%v", body)
 	}
 	if p.revision() != 2 {
@@ -468,35 +484,23 @@ func TestEachValueRuleNamesItsField(t *testing.T) {
 	}
 }
 
-// A row that leaves its refill date to the organization's default from the
-// move, as every row does after the move until a date is saved on the page,
-// sends no date. The route takes that default from the published state, so a
-// reading from before today's refill is still refused.
-func TestAReadingBeforeTheDefaultRefillIsRefused(t *testing.T) {
+// A new reading is checked against the refill date its row keeps, and only
+// that one: a row that keeps today's refill date refuses a reading from before
+// it, and a row that keeps none takes it, though the configuration lists
+// today's for the organization.
+func TestAReadingIsCheckedAgainstTheRowsRefillDate(t *testing.T) {
 	now := time.Now().UTC()
 	today := client.MeterDayStart(now)
-	p := newRoutePlugin(t, func(p *meterPlugin) {
-		raw, err := json.Marshal(map[string]any{
-			"schema": 1, "revision": "1",
-			"organizations": []any{map[string]any{"label": "alpha", "organization_id": fakeOrgA, "default_monthly_usd": "200",
-				"default_renews": today.Format(time.DateOnly), "rev": "1", "updated_at": "2026-10-01T00:00:00Z"}},
-			"migration": map[string]any{"at": "2026-10-01T00:00:00Z", "moved": 1, "skipped": 0},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, client.OrganizationsPath(p.path), raw)
-	})
-	if renews := accountIn(t, p.published(), alphaAccount).Settings.ConfigRenews; renews != today.Format(time.DateOnly) {
-		t.Fatalf("the published default refill date %q", renews)
-	}
-	body := p.wantError("before the default refill", http.StatusBadRequest, "reading_before_refill",
-		batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", nil, nil, readingOf("100.00", today.Add(-time.Hour)))))
-	if body["id"] != alphaAccount || body["field"] != "reading.at" {
+	p := newRoutePlugin(t)
+	p.configure(protocol.MethodPluginReconfigure, "claude-api-credits:\n  - label: alpha\n    organization-id: "+fakeOrgA+"\n    renews: \""+today.Format(time.DateOnly)+"\"\n")
+	reading := readingOf("100.00", today.Add(-time.Hour))
+	body := p.wantError("before the row's refill", http.StatusBadRequest, "reading_before_refill",
+		batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", nil, today.Format(time.DateOnly), reading)))
+	if body["id"] != alphaAccount || body["field"] != "reading.at" || p.revision() != 2 {
 		t.Fatalf("%v", body)
 	}
-	if p.revision() != 2 {
-		t.Fatal("a reading from before the refill reached the store")
+	if code, body, _ := p.post(batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", nil, nil, reading))); code != http.StatusOK {
+		t.Fatalf("no refill date kept: %d %v", code, body)
 	}
 }
 
@@ -509,8 +513,7 @@ func TestOnlyWhatTheStateOffersIsSaved(t *testing.T) {
 		ids  []any
 	}{
 		"an unknown account":       {batchOf(settings.KindAPICredits, creditRow("org-000000000000", "", "300", nil, nil)), []any{"org-000000000000"}},
-		"an unlinked item":         {batchOf(settings.KindAPICredits, creditRow("item-2", "", "300", nil, nil)), []any{"item-2"}},
-		"one bad row of two":       {batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "300", nil, nil), creditRow("item-2", "", "1", nil, nil)), []any{"item-2"}},
+		"one bad row of two":       {batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "300", nil, nil), creditRow("org-000000000000", "", "1", nil, nil)), []any{"org-000000000000"}},
 		"a credential not listed":  {batchOf(settings.KindRenewals, renewalRow("00000000000000aa", "", "2026-10-29")), []any{"00000000000000aa"}},
 		"an index that is no key":  {batchOf(settings.KindRenewals, renewalRow(claudeFileID, "", "2026-10-29")), []any{claudeFileID}},
 		"setting an orphan":        {batchOf(settings.KindAPICredits, creditRow(orphanAccount, "1", "20", nil, nil)), []any{orphanAccount}},
@@ -534,15 +537,6 @@ func TestOnlyWhatTheStateOffersIsSaved(t *testing.T) {
 	if state := p.creditsFile(); len(state.APICredits.Orphans) != 0 || len(state.Renewals) != 0 {
 		t.Fatalf("orphans left: %+v %+v", state.APICredits.Orphans, state.Renewals)
 	}
-
-	// A configured item the meter cannot link is listed but not editable.
-	config := newRoutePlugin(t, func(p *meterPlugin) { p.keepConfigItems() })
-	config.configure(protocol.MethodPluginReconfigure, alphaCredit+"  - label: bravo\n")
-	config.published()
-	if account := accountIn(t, config.creditsFile(), "item-2"); account.Settings.Editable || account.Settings.NotEditableReason != client.CreditNotEditableNoOrganization {
-		t.Fatalf("item-2: %+v", account.Settings)
-	}
-	config.wantError("item-2", http.StatusConflict, "not_editable", batchOf(settings.KindAPICredits, creditRow("item-2", "", "300", nil, nil)))
 }
 
 // A row another device saved since the page read it is a conflict, with what
@@ -555,7 +549,7 @@ func TestConflictsCarryTheCurrentValues(t *testing.T) {
 	saved := strconv.FormatUint(p.revision(), 10)
 	body := p.wantError("credit", http.StatusConflict, "conflict", batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "250", nil, nil)))
 	block, _ := body["current"].(map[string]any)[alphaAccount].(map[string]any)
-	if body["revision"] != saved || !reflect.DeepEqual(body["conflicts"], []any{alphaAccount}) || block["monthlyUsd"] != "300" || block["revision"] != saved || block["configMonthlyUsd"] != "200" {
+	if body["revision"] != saved || !reflect.DeepEqual(body["conflicts"], []any{alphaAccount}) || block["monthlyUsd"] != "300" || block["revision"] != saved || block["configMonthlyUsd"] != "" {
 		t.Fatalf("%v", body)
 	}
 	if code, body, _ := p.post(batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "300", nil, nil))); code != http.StatusOK || body["unchanged"] != true {
@@ -591,8 +585,7 @@ func TestAReadingTakesItsBaselineFromThePublishedMeter(t *testing.T) {
 		}
 	})
 	// A minute back, but never before today's start: on the previous day the
-	// baseline would start a day earlier, and on alpha's refill day, the 5th,
-	// the reading would be from before the refill and refused.
+	// baseline would start a day earlier.
 	at := now.Add(-time.Minute)
 	if at.Before(day) {
 		at = day
@@ -740,186 +733,20 @@ func TestAFullSettingsFileKeepsTheDatesOfListedCredentials(t *testing.T) {
 	}
 }
 
-// legacyOf is the status's editor.legacy block, nil when it is null.
-func (p *meterPlugin) legacyOf() map[string]any {
-	p.t.Helper()
-	legacy, _ := p.statusOf()["editor"].(map[string]any)["legacy"].(map[string]any)
-	return legacy
-}
-
-// Import Quota Glance's settings: the legacy file the store resolves, only
-// with the revision the page read, replacing every value, published and
-// logged; never with a path from the request. Until then the status says
-// what the file would bring, so the page's confirmation can name it.
-func TestImportLegacyThroughTheRoute(t *testing.T) {
-	p := newRoutePlugin(t)
-	legacy := filepath.Join(filepath.Dir(filepath.Dir(p.path)), "quota-glance", "settings.json")
-	p.wantError("nothing to import", http.StatusConflict, "not_editable", map[string]any{"kind": settings.KindImportLegacy, "baseRevision": "2"})
-	if block := p.legacyOf(); block != nil {
-		t.Fatalf("legacy with no file: %v", block)
-	}
-	raw, err := os.ReadFile(filepath.Join("..", "settings", "testdata", "legacy", "five-orgs.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(legacy, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if body := p.wantError("stale", http.StatusConflict, "conflict", map[string]any{"kind": settings.KindImportLegacy, "baseRevision": "1"}); body["revision"] != "2" {
-		t.Fatalf("%v", body)
-	}
-	fileCounts := map[string]any{"monthly_credits": 2.0, "refill_dates": 2.0, "readings": 2.0, "renewal_dates": 3.0}
-	if block := p.legacyOf(); block["state"] != client.CreditImportStateNotImported || block["importable"] != true || block["counts"] != nil ||
-		!reflect.DeepEqual(block["file_counts"], fileCounts) || block["file_updated_at"] != "2026-10-10T18:20:00Z" {
-		t.Fatalf("legacy before the import: %v", block)
-	}
-	code, body, _ := p.post(map[string]any{"kind": settings.KindImportLegacy, "baseRevision": "2"})
-	counts, _ := body["counts"].(map[string]any)
-	// Past both files' revisions, 2 and 12, at the time.
-	imported := strconv.FormatUint(p.revision(), 10)
-	if code != http.StatusOK || body["revision"] != imported || p.revision() <= 12 || counts["monthly_credits"] != 2.0 || counts["renewal_dates"] != 3.0 {
-		t.Fatalf("%d %v", code, body)
-	}
-	state := p.creditsFile()
-	if state.Settings.Revision != imported || state.Settings.Import == nil || *state.Settings.Import.Kind != client.CreditImportKindManual || state.Settings.Import.State != client.CreditImportStateImported {
-		t.Fatalf("published %+v %+v", state.Settings, state.Settings.Import)
-	}
-	if again, _ := os.ReadFile(legacy); string(again) != string(raw) {
-		t.Fatal("the import changed Quota Glance's file")
-	}
-	if block := p.legacyOf(); block["state"] != client.CreditImportStateImported || !reflect.DeepEqual(block["counts"], fileCounts) ||
-		!reflect.DeepEqual(block["file_counts"], fileCounts) {
-		t.Fatalf("legacy after the import: %v", block)
-	}
-	logged := false
-	for _, line := range p.host.logged() {
-		if line.message == "quota-cache imported Quota Glance's settings" && line.fields["kind"] == client.CreditImportKindManual && line.fields["renewal_dates"] == 3 {
-			logged = true
-		}
-	}
-	if !logged {
-		t.Fatalf("not logged: %+v", p.host.logged())
-	}
-	p.noValueLogged(legacy, "260.50", "143.20")
-
-	// A file that cannot be read brings nothing.
-	if err := os.WriteFile(legacy, []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.wantError("unreadable", http.StatusConflict, "not_editable", map[string]any{"kind": settings.KindImportLegacy, "baseRevision": imported})
-	if block := p.legacyOf(); block["state"] != client.CreditImportStateLegacyUnreadable || block["importable"] != false ||
-		block["file_counts"] != nil || block["file_updated_at"] != nil || !reflect.DeepEqual(block["counts"], fileCounts) {
-		t.Fatalf("legacy unreadable: %v", block)
-	}
-}
-
-// While the import record is there but cannot be opened, as one restored as
-// another user, the editor is off with its own reason and the route refuses
-// every settings kind at the state check, the import included, while the
-// saved values still apply and the import note stays as it was: read as no
-// record, it would offer an import that replaces the date saved here. Fixing
-// the file's mode is enough.
-func TestAnImportRecordThatCannotBeReadHoldsTheEditor(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root opens a file whatever its mode")
-	}
-	p := newRoutePlugin(t, func(p *meterPlugin) {
-		if err := os.Remove(settings.FilePath(p.path)); err != nil {
-			t.Fatal(err)
-		}
-		p.placeLegacy(fiveOrgs(t))
-	})
-	store, _ := p.storesOf()
-	// A date saved after the automatic import, so the settings file is no
-	// longer a copy of Quota Glance's.
-	rev := p.published().Renewals[claudeHexID].Revision
-	if code, body, _ := p.post(batchOf(settings.KindRenewals, renewalRow(claudeHexID, rev, "2026-11-01"))); code != http.StatusOK {
-		t.Fatalf("saved: %d %v", code, body)
-	}
-	revision := settings.RevisionText(p.revision())
-	editorOf := func() map[string]any {
-		t.Helper()
-		editor, _ := p.statusOf()["editor"].(map[string]any)
-		return editor
-	}
-	// With no organization listed, the editor lists the imported credits as
-	// orphans itself.
-	p.removeAll()
-	orphans := editorOf()["api_credit_orphans"]
-	if listed, _ := orphans.([]any); len(listed) != 5 {
-		t.Fatalf("orphans: %v", orphans)
-	}
-	if editor := editorOf(); editor["available"] != true || editor["reason"] != "" {
-		t.Fatalf("imported: %v %v", editor["available"], editor["reason"])
-	}
-	note := p.legacyOf()
-	if note["state"] != client.CreditImportStateImported || note["kind"] != client.CreditImportKindAutomatic || note["following"] != false {
-		t.Fatalf("imported: %v", note)
-	}
-	before, err := os.ReadFile(settings.FilePath(p.path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := settings.RecordPath(p.path)
-	if err := os.Chmod(record, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(record, 0o600) })
-	store.Sync(time.Now())
-	editor := editorOf()
-	if editor["available"] != false || editor["reason"] != importRecordUnreadable || !reflect.DeepEqual(editor["legacy"], note) {
-		t.Fatalf("record unread: %v %v, legacy %v, want %v", editor["available"], editor["reason"], editor["legacy"], note)
-	}
-	if !reflect.DeepEqual(editor["api_credit_orphans"], orphans) {
-		t.Fatalf("the saved values' orphans with the record unread: %v, want %v", editor["api_credit_orphans"], orphans)
-	}
-	for _, c := range editor["credentials"].([]any) {
-		if c.(map[string]any)["renewal_editable"] != false {
-			t.Fatalf("a renewal offered with the record unread: %v", c)
-		}
-	}
-	if state := p.published(); state.Settings.State != client.CreditSettingsOK || state.Settings.Revision != revision || state.Renewals[claudeHexID].Date != "2026-11-01" {
-		t.Fatalf("the saved values stopped applying: %+v %+v", state.Settings, state.Renewals)
-	}
-	// At the state check, so before the request's own rules.
-	for name, body := range map[string]any{
-		"a batch":   batchOf(settings.KindRenewals, renewalRow(claudeHexID, revision, "2026-11-02")),
-		"an import": map[string]any{"kind": settings.KindImportLegacy, "baseRevision": revision},
-		"malformed": map[string]any{"kind": "budgets"},
-		"no kind":   []any{1},
-	} {
-		p.wantError(name, http.StatusServiceUnavailable, "settings_unavailable", body)
-	}
-	if after, _ := os.ReadFile(settings.FilePath(p.path)); string(after) != string(before) {
-		t.Fatal("written while the record was unread")
-	}
-
-	if err := os.Chmod(record, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store.Sync(time.Now())
-	if editor := editorOf(); editor["available"] != true || editor["reason"] != "" || !reflect.DeepEqual(editor["legacy"], note) {
-		t.Fatalf("the record reads again: %v %v, legacy %v", editor["available"], editor["reason"], editor["legacy"])
-	}
-}
-
 // The organizations card's batch: add, rename and remove, all or nothing,
 // against the file's revision, published before the answer, and logged by
 // count only.
 func TestOrganizationsBatchThroughTheRoute(t *testing.T) {
 	p := newRoutePlugin(t)
-	moved := p.organizationsRevision()
-	saved := organizationsAfter(t, moved, 1)
+	read := p.organizationsRevision()
+	saved := organizationsAfter(t, read, 1)
 	body := p.organizationOps(addOp(" bravo ", strings.ToUpper(fakeOrgB)), map[string]any{"op": settings.OpRename, "id": alphaAccount, "label": "alpha-one"})
 	items, _ := body["organizations"].([]any)
 	if body["revision"] != saved || body["unchanged"] != false || len(items) != 2 {
 		t.Fatalf("%v", body)
 	}
 	if second := items[1].(map[string]any); second["label"] != "bravo" || second["organization_id"] != fakeOrgB || second["id"] != client.APICreditOrgAccount(fakeOrgB) ||
-		second["has_default_monthly_usd"] != false || items[0].(map[string]any)["has_default_monthly_usd"] != true {
+		!slices.Equal(slices.Sorted(maps.Keys(second)), []string{"id", "label", "organization_id"}) {
 		t.Fatalf("%v", items)
 	}
 	// Published before the answer: both are accounts already.
@@ -927,7 +754,7 @@ func TestOrganizationsBatchThroughTheRoute(t *testing.T) {
 	if accountIn(t, state, alphaAccount).Label != "alpha-one" || accountIn(t, state, client.APICreditOrgAccount(fakeOrgB)).Label != "bravo" || state.Organizations.Revision != saved {
 		t.Fatalf("published %+v", state.Organizations)
 	}
-	if body := p.wantError("stale", http.StatusConflict, "conflict", map[string]any{"kind": settings.KindOrganizations, "baseRevision": moved, "ops": []any{removeOp(fakeOrgB)}}); body["revision"] != saved || len(body["organizations"].([]any)) != 2 {
+	if body := p.wantError("stale", http.StatusConflict, "conflict", map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{removeOp(fakeOrgB)}}); body["revision"] != saved || len(body["organizations"].([]any)) != 2 {
 		t.Fatalf("%v", body)
 	}
 	for name, tc := range map[string]struct {
@@ -966,12 +793,14 @@ func TestOrganizationsBatchThroughTheRoute(t *testing.T) {
 	}
 	p.noValueLogged("bravo", "alpha-one", fakeOrgB, fakeOrgA)
 
-	// An organizations file that cannot be read refuses the card's batch,
-	// and the configuration's list applies meanwhile.
-	unreadable := newRoutePlugin(t, func(p *meterPlugin) { p.keepConfigItems() })
+	// An organizations file that cannot be read refuses the card's batch, and
+	// no organization is listed meanwhile, though the configuration lists
+	// one.
+	unreadable := newRoutePlugin(t, func(p *meterPlugin) { p.breakOrganizations() })
+	unreadable.configure(protocol.MethodPluginReconfigure, alphaCredit)
 	unreadable.wantError("unreadable", http.StatusServiceUnavailable, "organizations_unavailable", map[string]any{"kind": settings.KindOrganizations, "baseRevision": "", "ops": []any{addOp("bravo", fakeOrgB)}})
-	if state := unreadable.creditsFile(); state.Organizations.State != client.OrganizationsStateUnreadable || state.Organizations.Source != client.OrganizationsSourceConfig || accountIn(t, state, alphaAccount).Label != "alpha" {
-		t.Fatalf("%+v", state.Organizations)
+	if state := unreadable.creditsFile(); state.APICredits != nil || state.Organizations != (client.CreditOrganizations{State: client.OrganizationsStateUnreadable, ConfigItemsIgnored: 1}) {
+		t.Fatalf("%+v %+v", state.Organizations, state.APICredits)
 	}
 }
 
@@ -992,7 +821,7 @@ func TestOrganizationsChangeTheMeterWithoutAConfigure(t *testing.T) {
 		t.Fatalf("file %+v", file)
 	}
 	state := p.creditsFile()
-	if state.APICredits != nil || state.Organizations.Source != client.OrganizationsSourcePage || state.Organizations.State != client.OrganizationsStateOK {
+	if state.APICredits != nil || state.Organizations.State != client.OrganizationsStateOK {
 		t.Fatalf("published %+v %+v", state.APICredits, state.Organizations)
 	}
 	p.organizationOps(addOp("alpha", fakeOrgA))
@@ -1035,31 +864,187 @@ func TestOrganizationsRelinkTheRunningMeter(t *testing.T) {
 	}
 }
 
-// A batch sent after the organizations file was deleted to start over, before
-// the next tick, meets the configuration's list moved again rather than the
-// list it was made against: it conflicts, and the file is the move's. That
-// holds for a list never edited on the page too, whose revision is still the
-// first move's: the second move starts past it.
-func TestABatchAfterTheOrganizationsFileIsDeletedMeetsTheMove(t *testing.T) {
+// A batch sent after the organizations file was deleted, before the next tick,
+// meets the file as it is now: no list, and nothing put back from the
+// configuration, though it lists an organization. The batch conflicts with the
+// empty list, and the page's next add starts a file past the deleted one's
+// revision.
+func TestABatchAfterTheOrganizationsFileIsDeletedConflicts(t *testing.T) {
+	p := newRoutePlugin(t)
+	p.configure(protocol.MethodPluginReconfigure, alphaCredit)
+	p.organizationOps(addOp("bravo", fakeOrgB))
+	read := p.organizationsRevision()
+	if err := os.Remove(client.OrganizationsPath(p.path)); err != nil {
+		t.Fatal(err)
+	}
 	rename := map[string]any{"op": settings.OpRename, "id": alphaAccount, "label": "alpha-one"}
-	for name, edit := range map[string]bool{"edited on the page": true, "as moved": false} {
-		p := newRoutePlugin(t)
-		if edit {
+	body := p.wantError("deleted", http.StatusConflict, "conflict", map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{rename}})
+	if items, _ := body["organizations"].([]any); body["revision"] != "" || len(items) != 0 {
+		t.Fatalf("%v", body)
+	}
+	if _, err := os.Lstat(client.OrganizationsPath(p.path)); !os.IsNotExist(err) {
+		t.Fatal("the deleted file was written again")
+	}
+	state := p.creditsFile()
+	if state.APICredits != nil || state.Organizations != (client.CreditOrganizations{State: client.OrganizationsStateMissing, ConfigItemsIgnored: 1}) {
+		t.Fatalf("published %+v %+v", state.Organizations, state.APICredits)
+	}
+	body = p.organizationOps(addOp("alpha", fakeOrgA))
+	revision, _ := strconv.ParseUint(fmt.Sprint(body["revision"]), 10, 64)
+	if before, _ := strconv.ParseUint(read, 10, 64); revision <= before || len(body["organizations"].([]any)) != 1 {
+		t.Fatalf("the add after the delete: %v, read %s", body, read)
+	}
+}
+
+// An organizations batch sent before the next tick reads an organizations
+// file that could not be opened again, as that tick would. Once its owner is
+// fixed, which changes none of the stamps the publisher compares, the page's
+// list is published before the answer whatever the batch comes to, since the
+// tick has nothing left to follow.
+func TestAnOrganizationsBatchPublishesTheFileItOpenedAgain(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a file whatever its mode")
+	}
+	bravo := client.APICreditOrgAccount(fakeOrgB)
+	for _, tc := range []struct {
+		name, code string
+		status     int
+		body       func(read, saved string) map[string]any
+	}{
+		{"invalid", "invalid_request", http.StatusBadRequest, func(_, saved string) map[string]any {
+			return map[string]any{"kind": settings.KindOrganizations, "baseRevision": saved, "ops": []any{}}
+		}},
+		{"stale", "conflict", http.StatusConflict, func(read, _ string) map[string]any {
+			return map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{removeOp(fakeOrgB)}}
+		}},
+		{"refused", settings.CodeDuplicateOrganization, http.StatusBadRequest, func(_, saved string) map[string]any {
+			return map[string]any{"kind": settings.KindOrganizations, "baseRevision": saved, "ops": []any{addOp("charlie", fakeOrgB)}}
+		}},
+		{"unchanged", "", http.StatusOK, func(_, saved string) map[string]any {
+			return map[string]any{"kind": settings.KindOrganizations, "baseRevision": saved, "ops": []any{map[string]any{"op": settings.OpRename, "id": bravo, "label": "bravo"}}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newRoutePlugin(t)
+			read := p.organizationsRevision()
 			p.organizationOps(addOp("bravo", fakeOrgB))
+			saved := p.organizationsRevision()
+			_, organizations := p.storesOf()
+			fixed := unopenable(t, client.OrganizationsPath(p.path))
+			p.followOrganizations(organizations, time.Now().UTC())
+			fixed()
+			p.publisher.PublishNow()
+			state := p.creditsFile()
+			if _, listed := accountOf(state, bravo); listed || state.Organizations.State != client.OrganizationsStateUnreadable {
+				t.Fatalf("before the batch, published %+v with bravo listed %v", state.Organizations, listed)
+			}
+			code, body, _ := p.post(tc.body(read, saved))
+			if code != tc.status || tc.code != "" && body["error"] != tc.code || tc.code == "" && body["unchanged"] != true {
+				t.Fatalf("%d %v", code, body)
+			}
+			state = p.creditsFile()
+			if _, listed := accountOf(state, bravo); !listed || len(unreadFiles(state)) != 0 || state.Organizations.Revision != saved {
+				t.Fatalf("after the batch, published %+v with bravo listed %v", state.Organizations, listed)
+			}
+		})
+	}
+}
+
+// A batch reads the organizations file again when it changed after the route
+// followed it and before Apply judged the batch, and the store then holds what
+// it read whatever the batch comes to. The item list, the meter and the
+// published state follow that before the route answers, with no tick, and so
+// does a tick that comes between Apply and the route's own follow. Replaced by
+// a file with the same revision, the list differs in nothing but its
+// organizations.
+func TestAFileABatchReadAgainIsFollowed(t *testing.T) {
+	bravo := client.APICreditOrgAccount(fakeOrgB)
+	for _, tc := range []struct {
+		name   string
+		change func(p *meterPlugin)
+		op     map[string]any
+		status int
+		// code is the route's error, "" for an unchanged batch.
+		code   string
+		state  string
+		listed []string
+	}{
+		{"moved aside", func(p *meterPlugin) {
+			if err := os.Rename(client.OrganizationsPath(p.path), client.OrganizationsPath(p.path)+".aside"); err != nil {
+				p.t.Fatal(err)
+			}
+		}, addOp("charlie", fakeOrgC), http.StatusConflict, "conflict", client.OrganizationsStateMissing, nil},
+		{"unreadable", (*meterPlugin).breakOrganizations, addOp("charlie", fakeOrgC),
+			http.StatusServiceUnavailable, "organizations_unavailable", client.OrganizationsStateUnreadable, nil},
+		{"replaced", func(p *meterPlugin) { p.writeOrganizations([2]string{"bravo-one", fakeOrgB}) },
+			map[string]any{"op": settings.OpRename, "id": bravo, "label": "bravo-one"}, http.StatusOK, "", client.OrganizationsStateOK, []string{bravo}},
+	} {
+		body := map[string]any{"kind": settings.KindOrganizations, "baseRevision": "1", "ops": []any{tc.op}}
+		t.Run(tc.name+", before the answer", func(t *testing.T) {
+			p := newRoutePlugin(t)
+			// The route has followed the file, and it changes before Apply.
+			p.trace = func(step string) {
+				if step == "apply organizations" {
+					tc.change(p)
+				}
+			}
+			code, answer, _ := p.post(body)
+			if code != tc.status || tc.code != "" && answer["error"] != tc.code || tc.code == "" && answer["unchanged"] != true {
+				t.Fatalf("%d %v", code, answer)
+			}
+			p.wantFollowed(tc.state, tc.listed)
+		})
+		t.Run(tc.name+", at a tick", func(t *testing.T) {
+			p := newRoutePlugin(t)
+			_, organizations := p.storesOf()
+			raw, _ := json.Marshal(body)
+			batch, err := settings.ParseOrganizationsBatch(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.change(p)
+			result, err := organizations.Apply(batch, time.Now().UTC())
+			var conflict *settings.OrganizationsConflictError
+			if applied := map[string]bool{
+				"conflict":                  errors.As(err, &conflict),
+				"organizations_unavailable": errors.Is(err, settings.ErrOrganizationsUnavailable),
+				"":                          err == nil && result.Unchanged,
+			}; !applied[tc.code] {
+				t.Fatalf("Apply: %+v %v", result, err)
+			}
+			if current := organizations.Current(); current.State != tc.state {
+				t.Fatalf("the store holds %+v", current)
+			}
+			p.publisher.tick(time.Now().UTC())
+			p.wantFollowed(tc.state, tc.listed)
+		})
+	}
+}
+
+// wantFollowed requires the item list in force, the meter and the published
+// state to follow an organizations file in state that lists the accounts
+// listed.
+func (p *meterPlugin) wantFollowed(state string, listed []string) {
+	p.t.Helper()
+	items := []string{}
+	for _, item := range *p.apiCredits.Load() {
+		items = append(items, item.id)
+	}
+	if !slices.Equal(items, listed) {
+		p.t.Fatalf("in force %v, want %v", items, listed)
+	}
+	if running := p.meter.Load() != nil; running != (len(listed) > 0) {
+		p.t.Fatalf("meter running %v", running)
+	}
+	published := p.creditsFile()
+	accounts := []string{}
+	if published.APICredits != nil {
+		for _, account := range published.APICredits.Accounts {
+			accounts = append(accounts, account.ID)
 		}
-		read := p.organizationsRevision()
-		if err := os.Remove(client.OrganizationsPath(p.path)); err != nil {
-			t.Fatal(err)
-		}
-		body := p.wantError(name, http.StatusConflict, "conflict", map[string]any{"kind": settings.KindOrganizations, "baseRevision": read, "ops": []any{rename}})
-		items, _ := body["organizations"].([]any)
-		revision, _ := strconv.ParseUint(fmt.Sprint(body["revision"]), 10, 64)
-		if before, _ := strconv.ParseUint(read, 10, 64); revision <= before || len(items) != 1 || items[0].(map[string]any)["label"] != "alpha" {
-			t.Fatalf("%s: %v, read %s", name, body, read)
-		}
-		if moved := settings.LoadOrganizations(client.OrganizationsPath(p.path)); moved.Migration == nil || len(moved.Items) != 1 || moved.Items[0].Label != "alpha" {
-			t.Fatalf("%s: the file %+v", name, moved)
-		}
+	}
+	if published.Organizations.State != state || !slices.Equal(accounts, listed) {
+		p.t.Fatalf("published %+v listing %v", published.Organizations, accounts)
 	}
 }
 
@@ -1110,11 +1095,10 @@ func TestOrphansOutliveTheLastOrganization(t *testing.T) {
 	}
 }
 
-// While the organizations file cannot be read, the configuration's list is in
-// force, and a value saved for an organization it lacks may belong to one in
-// the file: it is no orphan, in the published state or the editor, and the
-// save route refuses to clear or set it. Values for the listed organizations
-// still save. Once the file reads again, nothing was lost.
+// While the organizations file cannot be read, no organization is listed, and
+// any value saved here may belong to one in the file: none is an orphan, in
+// the published state or the editor, and the save route refuses to clear or
+// set any. Once the file reads again, nothing was lost.
 func TestSavedValuesAreHeldWhileTheOrganizationsFileCannotBeRead(t *testing.T) {
 	p := newRoutePlugin(t)
 	bravo := client.APICreditOrgAccount(fakeOrgB)
@@ -1135,66 +1119,77 @@ func TestSavedValuesAreHeldWhileTheOrganizationsFileCannotBeRead(t *testing.T) {
 		}
 		return ids
 	}
-	held := func(step string, published *client.CreditState) {
-		t.Helper()
-		if published.Organizations.State != client.OrganizationsStateUnreadable || (published.APICredits != nil && len(published.APICredits.Orphans) != 0) {
-			t.Fatalf("%s: published %+v %+v", step, published.Organizations, published.APICredits)
-		}
-		if orphans, kept := editorKey("api_credit_orphans"), editorKey("held_api_credits"); len(orphans) != 0 || !reflect.DeepEqual(kept, []string{orphanAccount, bravo}) {
-			t.Fatalf("%s: editor orphans %v, held %v", step, orphans, kept)
-		}
-		for name, row := range map[string]map[string]any{
-			"clearing bravo":         creditRow(bravo, bravoRev, nil, nil, nil),
-			"clearing an old orphan": creditRow(orphanAccount, "1", nil, nil, nil),
-			"setting bravo":          creditRow(bravo, bravoRev, "400", nil, nil),
-		} {
-			p.wantError(step+": "+name, http.StatusServiceUnavailable, "organizations_unavailable", batchOf(settings.KindAPICredits, row))
-		}
-		if stored := p.store.Current().APICredits; stored[bravo].MonthlyUSD != "300" || stored[orphanAccount].MonthlyUSD != "10" {
-			t.Fatalf("%s: stored %+v", step, stored)
-		}
-	}
 
-	writeFile(t, client.OrganizationsPath(p.path), []byte(`{`))
+	p.breakOrganizations()
 	p.publisher.tick(time.Now().UTC())
-	state := p.creditsFile()
-	if len(state.APICredits.Accounts) != 1 || state.APICredits.Accounts[0].ID != alphaAccount {
-		t.Fatalf("the configuration's list: %+v", state.APICredits.Accounts)
+	if state := p.creditsFile(); state.Organizations.State != client.OrganizationsStateUnreadable || state.APICredits != nil {
+		t.Fatalf("published %+v %+v", state.Organizations, state.APICredits)
 	}
-	held("with the configuration's list", state)
-	// A listed organization still saves, and its value is not held.
-	if code, body, _ := p.post(batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", "250", nil, nil))); code != http.StatusOK {
-		t.Fatalf("alpha: %d %v", code, body)
+	if orphans, kept := editorKey("api_credit_orphans"), editorKey("held_api_credits"); len(orphans) != 0 || !reflect.DeepEqual(kept, []string{orphanAccount, bravo}) {
+		t.Fatalf("editor orphans %v, held %v", orphans, kept)
 	}
-	if kept := editorKey("held_api_credits"); !reflect.DeepEqual(kept, []string{orphanAccount, bravo}) {
-		t.Fatalf("held after alpha's save: %v", kept)
+	for name, row := range map[string]map[string]any{
+		"clearing bravo":         creditRow(bravo, bravoRev, nil, nil, nil),
+		"clearing an old orphan": creditRow(orphanAccount, "1", nil, nil, nil),
+		"setting bravo":          creditRow(bravo, bravoRev, "400", nil, nil),
+		"setting alpha":          creditRow(alphaAccount, "", "250", nil, nil),
+	} {
+		p.wantError(name, http.StatusServiceUnavailable, "organizations_unavailable", batchOf(settings.KindAPICredits, row))
 	}
-
-	// With no configured organization api_credits is null, and the editor
-	// still holds the values rather than listing them as orphans.
-	p.configure(protocol.MethodPluginReconfigure, "")
-	if state := p.published(); state.APICredits != nil {
-		t.Fatalf("published %+v", state.APICredits)
+	if stored := p.store.Current().APICredits; len(stored) != 2 || stored[bravo].MonthlyUSD != "300" || stored[orphanAccount].MonthlyUSD != "10" {
+		t.Fatalf("stored %+v", stored)
 	}
-	if kept := editorKey("held_api_credits"); len(kept) != 3 || kept[0] != orphanAccount || !slices.Contains(kept, alphaAccount) || !slices.Contains(kept, bravo) {
-		t.Fatalf("held with nothing listed: %v", kept)
-	}
-	if orphans := editorKey("api_credit_orphans"); len(orphans) != 0 {
-		t.Fatalf("orphans with nothing listed: %v", orphans)
-	}
-	p.wantError("nothing listed", http.StatusServiceUnavailable, "organizations_unavailable", batchOf(settings.KindAPICredits, creditRow(bravo, bravoRev, nil, nil, nil)))
 
 	// The file read again: bravo is listed with its credit, and only the old
 	// orphan is one.
-	p.configure(protocol.MethodPluginReconfigure, alphaCredit)
 	writeFile(t, client.OrganizationsPath(p.path), good)
 	p.publisher.tick(time.Now().UTC())
-	state = p.creditsFile()
+	state := p.creditsFile()
 	if accountIn(t, state, bravo).Settings.MonthlyUSD != "300" || len(state.APICredits.Orphans) != 1 || state.APICredits.Orphans[0].ID != orphanAccount {
 		t.Fatalf("after the fix: %+v", state.APICredits)
 	}
 	if kept := editorKey("held_api_credits"); len(kept) != 0 {
 		t.Fatalf("held after the fix: %v", kept)
+	}
+}
+
+// While the organizations file cannot be read, every saved API credit row is
+// held and a batch naming any of them is refused, even in a state that still
+// lists an account: a publish can pair the item list from before the file
+// broke with the organizations block from after. A batch with no API credit
+// row is not held.
+func TestEveryAPICreditRowIsHeldWhileTheOrganizationsFileCannotBeRead(t *testing.T) {
+	bravo := client.APICreditOrgAccount(fakeOrgB)
+	values := settings.Values{APICredits: map[string]settings.APICredit{
+		alphaAccount: {MonthlyUSD: "200", Rev: 1, UpdatedAt: time.Unix(1, 0)},
+		bravo:        {MonthlyUSD: "300", Rev: 2, UpdatedAt: time.Unix(2, 0)},
+	}}
+	state := &client.CreditState{
+		Organizations: client.CreditOrganizations{State: client.OrganizationsStateUnreadable},
+		APICredits:    &client.CreditDocument{Accounts: []client.CreditAccount{{ID: alphaAccount}}},
+	}
+	rowBatch := func(id string) settings.Batch {
+		return settings.Batch{Kind: settings.KindAPICredits, APICredits: []settings.APICreditItem{{ID: id}}}
+	}
+	held := []string{}
+	for _, row := range heldAPICreditsOf(state, values) {
+		held = append(held, row.ID)
+	}
+	if !reflect.DeepEqual(held, []string{alphaAccount, bravo}) {
+		t.Fatalf("held %v", held)
+	}
+	for _, id := range []string{alphaAccount, bravo} {
+		if !heldByOrganizations(rowBatch(id), state) {
+			t.Fatalf("a batch naming %s is not held", id)
+		}
+	}
+	if heldByOrganizations(settings.Batch{Kind: settings.KindRenewals}, state) {
+		t.Fatal("a batch with no API credit row is held")
+	}
+
+	state.Organizations.State = client.OrganizationsStateOK
+	if held := heldAPICreditsOf(state, values); len(held) != 0 || heldByOrganizations(rowBatch(bravo), state) {
+		t.Fatalf("held while the file reads: %v", held)
 	}
 }
 

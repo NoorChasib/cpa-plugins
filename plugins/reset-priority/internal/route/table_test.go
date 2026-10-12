@@ -28,14 +28,12 @@ func TestBuildInactiveReasonsInOrder(t *testing.T) {
 		noSettings   change = func(in *Input) {
 			in.Credits.Settings = qc.CreditSettingsState{State: qc.CreditSettingsUnreadable}
 		}
-		noLegacy change = func(in *Input) {
-			in.Credits.Settings = qc.CreditSettingsState{State: qc.CreditSettingsLegacyUnreadable}
-		}
 		meterGone   change = func(in *Input) { in.Meter, in.MeterError = nil, "missing" }
 		meterBroken change = func(in *Input) { in.Meter, in.MeterError = nil, "unreadable" }
 		meterErred  change = func(in *Input) { in.MeterError = "missing" }
 		oldCache    change = func(in *Input) { in.Meter.AuthIDsSince = nil }
 		stopped     change = func(in *Input) { in.Meter.StoppedAt, in.Meter.StopReason = ptr(in.Now), qc.MeterStopShutdown }
+		quiesced    change = func(in *Input) { in.Meter.StoppedAt, in.Meter.StopReason = ptr(in.Now), qc.MeterStopQuiesce }
 		stale       change = func(in *Input) { in.Meter.FlushedAt = in.Now.Add(-MaxMeterAge - time.Second) }
 		noCredits   change = func(in *Input) { in.Credits.APICredits = nil }
 		noLinks     change = func(in *Input) {
@@ -63,7 +61,6 @@ func TestBuildInactiveReasonsInOrder(t *testing.T) {
 		{"state too old", []change{oldState}, ReasonCreditsStale},
 		{"state at its valid_until", []change{boundary}, ReasonCreditsStale},
 		{"settings unreadable", []change{noSettings}, ReasonSettingsUnavailable},
-		{"Quota Glance's settings unreadable", []change{noLegacy}, ReasonSettingsUnavailable},
 		{"meter missing", []change{meterGone}, ReasonMeterMissing},
 		{"meter unreadable", []change{meterBroken}, ReasonMeterUnreadable},
 		{"a meter error beside a meter", []change{meterErred}, ReasonMeterMissing},
@@ -81,6 +78,11 @@ func TestBuildInactiveReasonsInOrder(t *testing.T) {
 		// A file Quota Cache 0.1.14 left stopped has no auth_ids_since, and
 		// 0.2.0 adds it only when its meter starts: the stop is what to fix.
 		{"stopped before too old", []change{oldCache, stopped}, ReasonMeterStopped},
+		// Quota Cache starts no meter while it lists no organization, so the
+		// file keeps the stop its last run recorded: 0.1.14's quiesce right
+		// after the update, or a shutdown after a restart with none listed.
+		{"0.1.14's stop before api credits", []change{noCredits, oldCache, quiesced}, ReasonMeterStopped},
+		{"stopped before api credits", []change{noCredits, stopped}, ReasonMeterStopped},
 		{"too old before stale", []change{stale, oldCache, noCredits}, ReasonMeterTooOld},
 		{"stopped before stale", []change{noLinks, stale, stopped}, ReasonMeterStopped},
 		{"stale before credits", []change{noCredits, stale}, ReasonMeterStale},
@@ -164,8 +166,8 @@ func orgIDs(orgs []Org) []string {
 }
 
 // Clean eligible organizations first, by soonest refill with no date last,
-// then configured order, then account ID; demoted ones after them; the
-// ineligible ones in document order, unranked.
+// then the order on Quota Cache's page, then account ID; demoted ones after
+// them; the ineligible ones in document order, unranked.
 func TestBuildRanksSoonestRefillFirst(t *testing.T) {
 	now := at(t, "2026-10-11T12:00:00Z")
 	soon, later := epoch(t, "2026-10-21T00:00:00Z"), epoch(t, "2026-11-01T00:00:00Z")
@@ -278,19 +280,19 @@ func TestBuildEligibility(t *testing.T) {
 		}
 	}
 
-	// One organization, one Org: the org- account wins over an earlier
-	// duplicate or over-limit item, and without one the first item does.
-	dup := account("item-3", fakeOrg("20"), 3, renews)
-	dup.State = qc.CreditStatePending
-	kept := account("org-000000000020", fakeOrg("20"), 4, renews)
-	firstItem, secondItem := account("item-7", fakeOrg("21"), 7, renews), account("item-8", fakeOrg("21"), 8, renews)
-	unlinked := account("item-9", "", 9, renews)
-	table = Build(Input{Now: now, Meter: meterFor(now), Credits: credits(now, dup, kept, firstItem, secondItem, unlinked)})
-	if got := orgIDs(table.Orgs); !reflect.DeepEqual(got, []string{"org-000000000020", "item-7"}) {
-		t.Fatalf("kept %v; want the org- account and the first item", got)
+	// One organization, one Org: of two accounts naming the same
+	// organization, in any letter case, the first is kept, and an account
+	// naming none is skipped.
+	first := account("org-00000000002a", fakeOrg("2a"), 3, renews)
+	first.State = qc.CreditStatePending
+	second := account("org-00000000002b", strings.ToUpper(fakeOrg("2a")), 4, renews)
+	unlinked := account("org-00000000002c", "", 5, renews)
+	table = Build(Input{Now: now, Meter: meterFor(now), Credits: credits(now, first, second, unlinked)})
+	if got := orgIDs(table.Orgs); !reflect.DeepEqual(got, []string{"org-00000000002a"}) {
+		t.Fatalf("kept %v; want the first account", got)
 	}
-	if !table.Orgs[0].Eligible || table.Orgs[0].Rank != 1 {
-		t.Fatalf("the kept org- account is %+v", table.Orgs[0])
+	if table.Orgs[0].Eligible || table.Orgs[0].Reason != "pending" {
+		t.Fatalf("the kept account is %+v", table.Orgs[0])
 	}
 }
 

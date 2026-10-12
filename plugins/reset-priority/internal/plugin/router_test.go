@@ -914,7 +914,7 @@ func TestLastingInactiveWarnsOnce(t *testing.T) {
 			}, stopped)
 		}, warnAt: 34 * time.Minute},
 		{name: "settings_unavailable", each: edit(func(c map[string]any) {
-			object(c, "settings")["state"] = qc.CreditSettingsLegacyUnreadable
+			object(c, "settings")["state"] = qc.CreditSettingsUnreadable
 		}, nil), warnAt: 31 * time.Minute},
 		{name: "meter_missing", each: removeFile(qc.MeterPath), warnAt: 31 * time.Minute},
 		{name: "meter_stopped", each: edit(nil, stopped), warnAt: 31 * time.Minute},

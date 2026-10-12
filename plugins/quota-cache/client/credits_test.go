@@ -68,8 +68,6 @@ func epochOf(t time.Time) *int64 {
 	return &e
 }
 
-func textOf(s string) *string { return &s }
-
 // creditT is the instant sampleState is computed at.
 var creditT = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
@@ -118,7 +116,7 @@ func sampleState() *CreditState {
 			Unlinked: []CreditUnlinked{}, Orphans: []CreditOrphan{},
 		},
 		Renewals:      map[string]RenewalSetting{},
-		Organizations: CreditOrganizations{State: OrganizationsStateOK, Source: OrganizationsSourcePage},
+		Organizations: CreditOrganizations{State: OrganizationsStateOK, Revision: "4"},
 	}
 }
 
@@ -324,11 +322,7 @@ func TestCreditsAtInsertionRule(t *testing.T) {
 func fullState() *CreditState {
 	s := sampleState()
 	at := creditT.Add(-time.Hour)
-	s.Settings.Import = &CreditImport{State: CreditImportStateImported, Kind: textOf(CreditImportKindAutomatic), SourcePath: textOf("/data/settings.json"),
-		SHA256: textOf("aa"), SettingsSHA256: textOf("bb"), LegacyRevision: textOf("12"), LegacyUpdatedAt: &at,
-		Counts: &CreditImportCounts{MonthlyCredits: 1}, ImportedAt: &at}
 	s.Renewals["5f2b8c41d09e7a36"] = RenewalSetting{Date: "2026-09-10", Revision: "3", UpdatedAtEpoch: at.Unix()}
-	s.Organizations.Migration = &OrganizationsMigration{At: at, Moved: 5}
 	d := s.APICredits
 	d.Meter.StoppedAtEpoch, d.Meter.LastDroppedEpoch, d.Meter.LastUnattributedEpoch, d.Meter.LastRejectedEpoch = epochOf(creditT), epochOf(at), epochOf(at), epochOf(at)
 	d.Meter.Gaps = []CreditGap{{FromEpoch: 1, ToEpoch: 2, Reason: MeterStopShutdown}}
@@ -576,14 +570,11 @@ func TestCreditStateWireNames(t *testing.T) {
 	}{
 		{nil, "schema quota_cache_version computed_at valid_until inputs settings api_credits renewals organizations"},
 		{[]string{"inputs"}, "snapshot_written_at meter_flushed_at meter_error settings_revision"},
-		{[]string{"settings"}, "state editable revision import"},
-		{[]string{"settings", "import"}, "state kind source_path sha256 settings_sha256 legacy_revision legacy_updated_at counts imported_at following importable"},
-		{[]string{"settings", "import", "counts"}, "monthly_credits refill_dates readings renewal_dates"},
-		{[]string{"organizations"}, "state revision source migration config_items_ignored"},
-		{[]string{"organizations", "migration"}, "at moved skipped"},
+		{[]string{"settings"}, "state editable revision"},
+		{[]string{"organizations"}, "state revision config_items_ignored"},
 		{[]string{"renewals", "5f2b8c41d09e7a36"}, "date revision updatedAtEpoch"},
 		{[]string{"api_credits"}, "title currency pricing meter editing pool accounts unlinked orphans"},
-		{[]string{"api_credits", "editing"}, "available reason migration"},
+		{[]string{"api_credits", "editing"}, "available reason"},
 	} {
 		if got := strings.Join(keysOf(t, raw, tc.path...), " "); got != tc.want {
 			t.Errorf("%v:\n got %s\nwant %s", tc.path, got, tc.want)
@@ -594,7 +585,7 @@ func TestCreditStateWireNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"valid_until":null`, `"api_credits":null`, `"import":null`, `"migration":null`, `"snapshot_written_at":null`, `"renewals":{}`} {
+	for _, want := range []string{`"valid_until":null`, `"api_credits":null`, `"snapshot_written_at":null`, `"renewals":{}`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("%s missing from %s", want, raw)
 		}

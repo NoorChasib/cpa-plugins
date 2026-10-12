@@ -55,16 +55,19 @@ type publisher struct {
 	// path is the snapshot's, and version quota-cache's, published.
 	path, version string
 	store         *settings.Store
-	// items is the item list to compute from and where it came from.
+	// items is the item list to compute from and the organizations block
+	// published with it.
 	items func() ([]creditItem, client.CreditOrganizations)
 	// prepare runs at the start of every tick, before publishMu is taken:
-	// the settings and organizations files' syncs and the move from the
-	// configuration. Nil in a test that needs none.
-	prepare func(now time.Time)
+	// the settings and organizations files' syncs. It reports whether what
+	// those files give may have
+	// changed, which their stamps do not always show: fixing the owner of
+	// one that could not be opened changes none of what a stamp compares.
+	// Nil in a test that needs none.
+	prepare func(now time.Time) bool
 	log     func(level, message string, fields map[string]any)
 	// watched are the files whose change makes a tick compute: the snapshot,
-	// the meter, the settings file, its import record, the organizations file
-	// and Quota Glance's settings.json candidates.
+	// the meter, the settings file and the organizations file.
 	watched []string
 	// limit is the largest encoding written, client.MaxCreditsBytes; write
 	// commits a file. Tests lower the one and replace the other.
@@ -74,8 +77,7 @@ type publisher struct {
 	publishMu sync.Mutex
 	stopped   bool
 	// seen are the watched files' stamps at the last compute, in watched
-	// order, followed by the import record's source when it is not one of
-	// them.
+	// order.
 	seen []fileStamp
 	// snapshotAt is the written_at of the last snapshot that could be read;
 	// haveSnapshot is false until there has been one.
@@ -101,12 +103,7 @@ type publisher struct {
 }
 
 func newPublisher(snapshotPath, version string, store *settings.Store, items func() ([]creditItem, client.CreditOrganizations), log func(string, string, map[string]any)) *publisher {
-	watched := []string{snapshotPath, client.MeterPath(snapshotPath), settings.FilePath(snapshotPath), settings.RecordPath(snapshotPath), client.OrganizationsPath(snapshotPath)}
-	for _, candidate := range client.LegacySettingsCandidates(snapshotPath) {
-		if !slices.Contains(watched, candidate) {
-			watched = append(watched, candidate)
-		}
-	}
+	watched := []string{snapshotPath, client.MeterPath(snapshotPath), settings.FilePath(snapshotPath), client.OrganizationsPath(snapshotPath)}
 	return &publisher{
 		path: snapshotPath, version: version, store: store, items: items, log: log, watched: watched,
 		limit: client.MaxCreditsBytes, write: writeCreditsFile,
@@ -136,15 +133,17 @@ func (p *publisher) run() {
 	}
 }
 
-// tick is one look at the inputs: prepare, then a publish if one is due.
+// tick is one look at the inputs: prepare, then a publish if one is due, or
+// a compute whatever the stamps say when prepare reports a change.
 func (p *publisher) tick(now time.Time) {
-	if p.prepare != nil {
-		p.prepare(now)
+	mode := publishIfDue
+	if p.prepare != nil && p.prepare(now) {
+		mode = publishForced
 	}
 	p.publishMu.Lock()
 	defer p.publishMu.Unlock()
 	if !p.stopped {
-		p.publishLocked(now, publishIfDue)
+		p.publishLocked(now, mode)
 	}
 }
 
@@ -287,7 +286,7 @@ func (p *publisher) compute(now time.Time) (*client.CreditState, bool) {
 	items, organizations := p.items()
 	in := credits.Input{
 		Now: now, Snapshot: client.Snapshot{WrittenAt: p.snapshotAt}, Meter: meter, MeterError: meterError,
-		Settings: values, SettingsState: status.State, Import: status.Import, Organizations: organizations, Version: p.version,
+		Settings: values, SettingsState: status.State, Organizations: organizations, Version: p.version,
 	}
 	for _, item := range items {
 		credit := item.credit
@@ -296,16 +295,11 @@ func (p *publisher) compute(now time.Time) (*client.CreditState, bool) {
 	return credits.Compute(in), true
 }
 
-// stamps are the watched files' stamps now, and the import record's source
-// last when it is not watched: a record left by another layout can name a
-// file that is not a candidate here.
+// stamps are the watched files' stamps now.
 func (p *publisher) stamps() []fileStamp {
-	stamps := make([]fileStamp, 0, len(p.watched)+1)
+	stamps := make([]fileStamp, 0, len(p.watched))
 	for _, path := range p.watched {
 		stamps = append(stamps, stampOf(path))
-	}
-	if imp := p.store.Status().Import; imp != nil && imp.SourcePath != nil && !slices.Contains(p.watched, *imp.SourcePath) {
-		stamps = append(stamps, stampOf(*imp.SourcePath))
 	}
 	return stamps
 }

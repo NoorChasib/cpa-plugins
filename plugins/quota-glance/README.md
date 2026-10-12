@@ -27,13 +27,13 @@ Spending the API credit that refills soonest first is Reset Priority's
 ## Requirements
 
 - Quota Cache installed and polling, with a snapshot on disk.
-- Quota Cache **0.2.0 or newer**, with Claude Console organizations set up as
-  [its README](../quota-cache/README.md#claude-api-credits-optional) says, for
-  the [Monthly API Credit](#claude-api-credits) and for renewal dates entered
-  on its page. Without organizations `apiCredits` is `null`, the card is absent
-  and nothing else changes. Against an older Quota Cache the card lists each
-  organization with no figures and says to update Quota Cache, and renewal
-  dates are reported or estimated only.
+- Quota Cache **0.2.0 or newer**, with Claude Console organizations added on
+  its page as [its README](../quota-cache/README.md#claude-api-credits-optional)
+  says, for the [Monthly API Credit](#claude-api-credits) and for renewal dates
+  entered on its page. Without organizations `apiCredits` is `null`, the card
+  is absent and nothing else changes. Against an older Quota Cache the card
+  lists each organization with no figures and says to update Quota Cache, and
+  renewal dates are reported or estimated only.
 - Quota Cache **0.2.0 or newer**, running, for the poll a spent
   [banked reset](#banked-resets) asks for, organizations or not. Against an
   older or stopped Quota Cache the card updates at its next scheduled poll,
@@ -131,7 +131,7 @@ log says it does nothing; remove it when convenient.
 | `GET /v0/resource/plugins/quota-glance/app` | none | The page. Contains no data. |
 | `GET /v0/management/plugins/quota-glance/summary` | CPA management key | The document the page renders. Supports `If-None-Match`. |
 | `GET /v0/resource/plugins/quota-glance/summary` | `Authorization: Bearer <web-token>` | The same document, for a reader signed in with the dashboard password. |
-| `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error, Quota Cache's credit state, and Quota Glance 0.7's `settings.json`. |
+| `GET /v0/management/plugins/quota-glance/health` | CPA management key | Snapshot time, watcher state, last error, and Quota Cache's credit state. |
 | `GET /v0/management/plugins/quota-glance/windows` | CPA management key | Observed window keys and which credentials report them. |
 | `POST /v0/management/plugins/quota-glance/redeem` | CPA management key | Spend one banked Codex or Claude rate-limit reset. |
 | `GET /v0/resource/plugins/quota-glance/spend` | `Authorization: Bearer <web-token>` + `X-Quota-Glance-Spend` | Spend one banked reset, for a reader signed in with the dashboard password. |
@@ -349,9 +349,9 @@ for the fields.
 The **Monthly API Credit** card estimates how much of each Claude Console
 organization's monthly API credit is left, for the credit a Max or Team plan
 deposits each billing cycle. It needs Quota Cache **0.2.0 or newer** with the
-organizations set up, as described in
+organizations added on its page, as described in
 [its README](../quota-cache/README.md#claude-api-credits-optional): one per
-organization, naming its Organization ID. Neither plugin asks Anthropic
+organization, with a label and its Organization ID. Neither plugin asks Anthropic
 anything and neither holds an Anthropic key.
 
 **Where the estimate comes from.** Quota Cache counts the tokens of every
@@ -363,15 +363,14 @@ estimate, with `≈` before the headline figure and "est." in the column heads:
 traffic that does not go through CPA, web search, code execution and a few
 other charges are not in the count.
 
-**Set it up on Quota Cache's page.** Each organization's monthly credit and the
-date it refills, if Quota Cache's configuration does not already say, are set
-on **Quota Cache**'s page in the CPA sidebar. A value set there wins over the
-configuration; the card marks it, and its hover names the configured value.
-Signed in to CPA's console, the card's foot has **Edit in Quota Cache**, which
-opens that page in a new tab. From a phone, a bookmark or the menu bar the link
-is absent: Quota Cache's page needs a console session. An organization without
-a credit and either a refill date or a Console reading reads "not set" and is
-left out of the total.
+**Set it up on Quota Cache's page.** The organizations, and each one's monthly
+credit and the date it refills, are added on **Quota Cache**'s page in the CPA
+sidebar; Quota Cache 0.2.0 ignores `claude-api-credits` in its configuration.
+The card marks each value entered there. Signed in to CPA's console, the
+card's foot has **Edit in Quota Cache**, which opens that page in a new tab.
+From a phone, a bookmark or the menu bar the link is absent: Quota Cache's page
+needs a console session. An organization without a credit and either a refill
+date or a Console reading reads "not set" and is left out of the total.
 
 **Console readings correct it.** From time to time, copy what Console shows
 under Settings, Billing, Promotional credits into the organization's **Console
@@ -405,20 +404,16 @@ for the fields and Quota Cache's
 [docs/credit-settings.md](../quota-cache/docs/credit-settings.md) for how they
 are saved.
 
-**Moving from Quota Glance 0.7.** Quota Cache imports your saved values; nothing
-to re-enter. Update Quota Cache to 0.2.0 first, then Quota Glance. Quota Cache
-cannot see this plugin's configuration, so it finds the `settings.json` Quota
-Glance 0.7 kept in `data-dir` by itself only where `data-dir` is left unset or
-is the `quota-glance` directory beside the one holding `cache-path`, as in the
-configuration above. For any other `data-dir`, copy that `settings.json` to
-`quota-glance-settings.json` in the directory holding `cache-path`: see
-[moving from Quota Glance](../quota-cache/README.md#moving-from-quota-glance)
-in Quota Cache's README. Quota Glance never changes the file again. Until Quota
-Cache has imported it, the Monthly API Credit card says so. While Quota Cache
-lists no organization there is no card, as when only renewal dates were saved:
-check instead that Quota Cache's page shows your saved renewal dates, or read
-`settings.migration` in `.../health`, which carries the same note
-([its values](docs/summary-contract.md#editingmigration)).
+**Updating from Quota Glance 0.7.** Quota Cache 0.2.0 does not read the
+organizations in its own `claude-api-credits` or the values saved in Quota
+Glance 0.7, so they are entered again on Quota Cache's page before Quota Glance
+is updated. Follow
+[updating from Quota Glance 0.7](../quota-cache/README.md#updating-from-quota-glance-07)
+in Quota Cache's README, including what to write down before you start. Until
+Quota Glance is updated, save nothing in its editor: while only some
+organizations are added, Quota Glance 0.7.2 offers **Remove** for the others'
+saved values. Quota Glance 0.7's `settings.json` stays in `data-dir`, unread;
+rolling back to 0.7.2 shows its values again.
 
 ## The dashboard
 

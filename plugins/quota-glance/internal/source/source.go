@@ -1,9 +1,8 @@
 // Package source reads the quota-cache snapshot, the credit state quota-cache
-// publishes beside it, and the host's credential roster, and checks
-// quota-glance's own settings.json, read-only, against what quota-cache has
-// imported. It makes no network request of any kind: quota-cache is the only
-// component in this system that ever contacts a provider, and a second poller
-// would compete for the exact rate limits quota-cache exists to protect.
+// publishes beside it, and the host's credential roster. It makes no network
+// request of any kind: quota-cache is the only component in this system that
+// ever contacts a provider, and a second poller would compete for the exact
+// rate limits quota-cache exists to protect.
 package source
 
 import (

@@ -193,7 +193,7 @@ describe("the read-only scenarios", () => {
   }
 
   test("every one is read-only, as the plugin serves it from 0.8.0", async () => {
-    for (const scenario of ["golden", "degraded", "quota-cache-unreadable", "legacy-unreadable", "not-imported", "changed-since-import", "awaiting-import", "fallback"]) {
+    for (const scenario of ["golden", "degraded", "quota-cache-unreadable", "fallback"]) {
       const doc = await summary(scenario)
       assert.equal(doc.apiCredits!.editing.available, false, scenario)
       for (const account of doc.apiCredits!.accounts) assert.equal(account.settings.editable, false, `${scenario}: ${account.id}`)
@@ -201,40 +201,28 @@ describe("the read-only scenarios", () => {
     }
   })
 
-  test("Quota Cache unable to use its saved settings: its reason, and nothing entered there applies", async () => {
-    for (const [scenario, reason] of [["quota-cache-unreadable", "settingsUnreadable"], ["legacy-unreadable", "legacyUnreadable"]] as const) {
-      const doc = await summary(scenario)
-      assert.deepEqual(doc.apiCredits!.editing, { available: false, reason, migration: "" }, scenario)
-      for (const account of doc.apiCredits!.accounts) {
-        assert.notEqual(account.monthlyCreditSource, "dashboard", `${scenario}: ${account.label}`)
-        assert.notEqual(account.renewsSource, "dashboard", `${scenario}: ${account.label}`)
-        assert.equal(account.settings.reading, null, `${scenario}: ${account.label}`)
-      }
-      assert.ok(doc.apiCredits!.accounts.every((account) => account.settings.notEditableReason === reason), scenario)
-      assert.ok(doc.credentials.every((credential) => credential.renewalSource !== "dashboard" && !credential.renewalSetting), scenario)
+  test("Quota Cache unable to read its saved settings: its reason, and nothing entered there applies", async () => {
+    const reason = "settingsUnreadable"
+    const doc = await summary("quota-cache-unreadable")
+    assert.deepEqual(doc.apiCredits!.editing, { available: false, reason })
+    for (const account of doc.apiCredits!.accounts) {
+      assert.notEqual(account.monthlyCreditSource, "dashboard", account.label)
+      assert.notEqual(account.renewsSource, "dashboard", account.label)
+      assert.equal(account.settings.reading, null, account.label)
     }
-  })
-
-  test("the migration notes", async () => {
-    assert.equal((await summary("not-imported")).apiCredits!.editing.migration, "notImported")
-    assert.equal((await summary("changed-since-import")).apiCredits!.editing.migration, "changedSinceImport")
+    assert.ok(doc.apiCredits!.accounts.every((account) => account.settings.notEditableReason === reason))
+    assert.ok(doc.credentials.every((credential) => credential.renewalSource !== "dashboard" && !credential.renewalSetting))
   })
 
   test("without a credit state: every organization listed with the plugin's sentence for the cause", async () => {
-    const cases = [
-      ["awaiting-import", "awaitingImport", "Quota Cache has not published this organization's credit."],
-      ["fallback", "", "Quota Cache is running but no longer publishes API credit figures."],
-    ] as const
-    for (const [scenario, migration, sentence] of cases) {
-      const credits = (await summary(scenario)).apiCredits!
-      assert.equal(credits.editing.migration, migration, scenario)
-      assert.equal(credits.meter, null, scenario)
-      assert.deepEqual([credits.pool.hasEstimate, credits.pool.countedCount, credits.pool.missingCount], [false, 0, 5], scenario)
-      for (const account of credits.accounts) {
-        assert.deepEqual([account.state, account.counted, account.dataIssues], ["cacheTooOld", false, ["cacheTooOld"]], scenario)
-        assert.ok(account.issue.startsWith(sentence), `${scenario}: ${account.issue}`)
-        assert.equal(account.settings.notEditableReason, "quotaCache", scenario)
-      }
+    const credits = (await summary("fallback")).apiCredits!
+    assert.deepEqual(credits.editing, { available: false, reason: "quotaCache" })
+    assert.equal(credits.meter, null)
+    assert.deepEqual([credits.pool.hasEstimate, credits.pool.countedCount, credits.pool.missingCount], [false, 0, 5])
+    for (const account of credits.accounts) {
+      assert.deepEqual([account.state, account.counted, account.dataIssues], ["cacheTooOld", false, ["cacheTooOld"]], account.id)
+      assert.ok(account.issue.startsWith("Quota Cache is running but no longer publishes API credit figures."), account.issue)
+      assert.equal(account.settings.notEditableReason, "quotaCache", account.id)
     }
   })
 })
@@ -542,10 +530,6 @@ describe("rebasing", () => {
       "first-day",
       "no-meter",
       "quota-cache-unreadable",
-      "legacy-unreadable",
-      "not-imported",
-      "changed-since-import",
-      "awaiting-import",
       "fallback",
       "single-claude",
     ]) {

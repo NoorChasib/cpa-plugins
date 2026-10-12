@@ -14,33 +14,34 @@ import (
 // subscription poll.
 //
 // Its entries are not CPA credentials. quota-cache creates one per Claude
-// Console organization on its page, or, before they move there, per item of
-// its claude-api-credits configuration, and keys it
-// APICreditOrgAccount(organization-id), or "item-<position+1>" for a
-// configured item that cannot be linked to its organization. Since quota-cache 0.1.14 they are never
-// polled: Anthropic is never asked anything. What the organization spent comes
-// from quota-cache's API meter, the file at MeterPath beside the snapshot, and
-// the entry carries only the configuration in APICredit. Like OpenRouter's, an
-// entry has no weekly window: used_percent, reset_at and observed_at stay
-// empty, and so does quota.
+// Console organization listed on its page and keys it
+// APICreditOrgAccount(organization-id). quota-cache 0.1.x created one per item
+// of its claude-api-credits configuration instead, and keyed an item it could
+// not link to its organization "item-<position+1>". Since quota-cache 0.1.14
+// they are never polled: Anthropic is never asked anything. What the
+// organization spent comes from quota-cache's API meter, the file at MeterPath
+// beside the snapshot, and the entry carries only the organization in
+// APICredit. Like OpenRouter's, an entry has no weekly window: used_percent,
+// reset_at and observed_at stay empty, and so does quota.
 const ProviderAnthropicAPI = "anthropic-api"
 
-// APICredit is what the operator configured for one Console organization's
-// monthly API credit, copied onto the entry at every scan. Values are kept as
-// the operator wrote them (trimmed), validated but never converted.
-//
-// MonthlyUSD and Renews are only the configured defaults. A monthly credit,
-// refill date or Console reading entered on Quota Cache's page is never on the
-// entry: it is in the settings file and wins over these. The figures in force,
-// with the cycle and the spend priced from the meter, are in the credit state
-// (CreditsPath, LoadCredits, CreditsAt), which is what a consumer reads.
+// APICredit is one Console organization whose monthly API credit is tracked,
+// copied onto the entry at every scan: its label, its position and its
+// Organization ID. quota-cache 0.1.x filled the rest from its claude-api-credits
+// configuration; this quota-cache leaves MonthlyUSD, Renews, Problem and the
+// flags empty. A monthly credit, refill date or Console reading entered on
+// Quota Cache's page is never on the entry: it is in the settings file. The
+// figures in force, with the cycle and the spend priced from the meter, are in
+// the credit state (CreditsPath, LoadCredits, CreditsAt), which is what a
+// consumer reads.
 type APICredit struct {
 	// Label is the operator's unique display name for the organization. Empty
 	// when the configured label is missing or invalid; Problem then says so.
 	Label string `json:"label"`
-	// Position is the item's zero-based index in the configured list. It orders
-	// the accounts for display, and when two items name the same organization
-	// the one listed first is the one counted.
+	// Position is the item's zero-based index in the list: the page's, or
+	// quota-cache 0.1.x's configured one. It orders the accounts for display,
+	// and when two items of a configured list named the same organization the
+	// one listed first was the one counted.
 	Position int `json:"position"`
 	// MonthlyUSD is the monthly credit in US dollars, a decimal with at most two
 	// places ("200", "260.50"). Empty when it is not set or invalid;
@@ -116,8 +117,9 @@ const (
 	CreditProblemRenewsInvalid    = "renews_invalid" // not a real calendar date accepted by ParseRenewal
 )
 
-// MaxAPICreditItems bounds the configured list. Items past it are kept, with
-// CreditProblemTooManyItems, and never linked to the meter.
+// MaxAPICreditItems bounds the list: the organizations on quota-cache's page,
+// as it bounded quota-cache 0.1.x's configured list, which kept the items past
+// it with CreditProblemTooManyItems and never linked them to the meter.
 const MaxAPICreditItems = 16
 
 // Failure messages an anthropic-api entry's last_error carried when quota-cache
@@ -245,11 +247,13 @@ func APICreditAccount(label string) string {
 // (12345678-1234-5678-1234-567812345678) has neither.
 var organizationIDShape = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
-// NormalizeOrganizationID reads a Console organization id, as configured or as
-// the anthropic-organization-id response header carries it: trimmed, shaped as
-// a UUID (8-4-4-4-12 hex digits, either case) and not all zeros. It returns the
-// id lower-cased, and false for anything else. An organization id is not a
-// secret; it is what links an item of claude-api-credits to the meter.
+// NormalizeOrganizationID reads a Console organization id, as entered on Quota
+// Cache's page or as the anthropic-organization-id response header carries it:
+// trimmed, shaped as a UUID (8-4-4-4-12 hex digits, either case) and not all
+// zeros. It returns the id lower-cased, and false for anything else. An
+// organization id is not a secret; it is what links an organization on Quota
+// Cache's page to the meter, as it linked an item of claude-api-credits in
+// quota-cache 0.1.x.
 func NormalizeOrganizationID(s string) (string, bool) {
 	s = strings.TrimSpace(s)
 	// Past the shape check, nothing but zeros and dashes is the nil UUID.
@@ -264,8 +268,8 @@ func NormalizeOrganizationID(s string) (string, bool) {
 // NormalizeOrganizationID returns it. It depends on nothing but the
 // organization, so a label rename or a changed credit or date keeps the
 // account, and the values saved on Quota Cache's page for it; naming a
-// different organization starts a new one. quota-cache names an item it
-// cannot link "item-<position+1>" instead.
+// different organization starts a new one. quota-cache 0.1.x named an item it
+// could not link "item-<position+1>" instead.
 func APICreditOrgAccount(organizationID string) string {
 	// For a valid id, trimming and lower-casing is exactly what
 	// NormalizeOrganizationID does.

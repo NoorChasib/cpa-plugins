@@ -264,9 +264,8 @@ export function AccountsCard({
   const buckets = Math.max(0, ...held.map((credential) => credential.activity?.buckets.length ?? 0))
   const foot = renewalFoot(held)
   // Renewal dates live in the same saved settings as the API credits, so
-  // when Quota Cache cannot use those, its entered dates do not apply either
-  // and the rows show estimates: said in the card's own words, as renewal
-  // dates have no configured value to fall back on.
+  // when Quota Cache cannot read those, its entered dates do not apply either
+  // and the rows show estimates, which the foot says in the card's own words.
   const trouble = editing ? renewalTrouble(editing) : null
 
   return (

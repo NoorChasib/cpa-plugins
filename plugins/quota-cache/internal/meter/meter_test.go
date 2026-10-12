@@ -1059,11 +1059,11 @@ func TestGapsAreCappedBriefOnesFirst(t *testing.T) {
 	}
 }
 
-func TestLinkingKeepsHistoryThroughTypoAndFix(t *testing.T) {
+func TestLinkingKeepsHistoryThroughRemoveAndAdd(t *testing.T) {
 	m, _ := testMeter(t, []string{orgA}, base)
 	feed(m, apiKeyRecord(orgA, base).bytes(), base)
 	since := org(t, m, orgA).Since
-	// A typo: orgA is no longer listed. Its traffic is still bucketed, it is
+	// orgA is removed from the page. Its traffic is still bucketed, it is
 	// listed as unlinked, and it is not counted.
 	m.SetLinked([]string{orgB}, base.Add(time.Minute))
 	a := org(t, m, orgA)
@@ -1075,7 +1075,8 @@ func TestLinkingKeepsHistoryThroughTypoAndFix(t *testing.T) {
 	if m.data.Counted != 1 || a.Days[0].Usage[0].Requests != 2 || len(m.data.Unlinked) != 1 || m.data.Unlinked[0].OrganizationID != orgA || m.data.Unlinked[0].Requests != 1 || a.LastSeenAt == nil || !a.LastSeenAt.Equal(base.Add(2*time.Minute)) {
 		t.Fatalf("counted=%d org=%+v unlinked=%+v", m.data.Counted, a, m.data.Unlinked)
 	}
-	// The fix: relinked with its Since and buckets, and off the unlinked list.
+	// orgA is added again: relinked with its Since and buckets, and off the
+	// unlinked list.
 	m.SetLinked([]string{orgA, orgB}, base.Add(3*time.Minute))
 	a = org(t, m, orgA)
 	if a.UnlinkedAt != nil || !a.Since.Equal(since) || a.Days[0].Usage[0].Requests != 2 || len(m.data.Unlinked) != 0 {
@@ -1158,6 +1159,32 @@ func TestEveryStopBecomesAGapAtRestore(t *testing.T) {
 	again := newMeter(m.path, &fakeLog{})
 	again.restore([]string{orgA}, base.Add(10*time.Minute))
 	if gaps := again.data.Gaps; len(gaps) != 1 || !gaps[0].From.Equal(base.Add(time.Minute)) || !gaps[0].To.Equal(base.Add(10*time.Minute)) || gaps[0].Reason != client.MeterGapUncleanStop {
+		t.Fatalf("gaps=%+v", gaps)
+	}
+}
+
+// Across an update from 0.1.14, the meter file knows every organization the
+// old configuration listed, and the page adds them one per save. The first
+// add opens the meter, with the one gap since the old run stopped. Every
+// other organization in the file is dormant from then on and still bucketed,
+// so one added later counts its traffic since the first add, not only since
+// its own.
+func TestOrganizationsAddedAfterTheFirstKeepTheirTrafficSinceIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.meter.json")
+	old := Open(path, []string{orgA, orgB}, base, &fakeLog{})
+	old.Stop(client.MeterStopQuiesce, base.Add(time.Minute))
+	m := newMeter(path, &fakeLog{})
+	m.restore([]string{orgA}, base.Add(time.Hour))
+	if b := org(t, m, orgB); b.UnlinkedAt == nil || !b.UnlinkedAt.Equal(base.Add(time.Hour)) {
+		t.Fatalf("orgB after the first add %+v", b)
+	}
+	feed(m, apiKeyRecord(orgB, base.Add(70*time.Minute)).bytes(), base.Add(70*time.Minute))
+	m.SetLinked([]string{orgA, orgB}, base.Add(80*time.Minute))
+	b := org(t, m, orgB)
+	if usage := b.UsageFromDay(client.MeterDayStart(base)); b.UnlinkedAt != nil || !b.Since.Equal(base) || len(usage) != 1 || usage[0].Requests != 1 {
+		t.Fatalf("orgB once added %+v", b)
+	}
+	if gaps := m.data.Gaps; len(gaps) != 1 || !gaps[0].From.Equal(base.Add(time.Minute)) || !gaps[0].To.Equal(base.Add(time.Hour)) || gaps[0].Reason != client.MeterStopQuiesce {
 		t.Fatalf("gaps=%+v", gaps)
 	}
 }
