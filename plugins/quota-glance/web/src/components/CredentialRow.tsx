@@ -1,8 +1,11 @@
 import { ROUTING_LABELS } from "../lib/accounts"
+import { useChecks } from "../lib/checking"
+import { isChecking } from "../lib/checks"
 import { useNowSeconds } from "../lib/now"
 import { weeklyNote } from "../lib/pool"
 import { formatReset } from "../lib/time"
 import type { Credential, RowEntry } from "../lib/types"
+import { CheckingPill } from "./CheckingPill"
 
 /**
  * The account's own bar, in the colour of its own level: the accent while it
@@ -76,6 +79,10 @@ const LEVEL_INK: Record<string, string> = {
  * Accounts card rather than on every card the account appears in. The one
  * exception is CPA parking the account: a full bar on an account nothing is
  * routed to reads as room the pool does not have, so the row says so.
+ *
+ * Just after a banked reset, while Quota Cache polls the account for its new
+ * figures, the row says that too: these are the figures the reset changed,
+ * and the ones on screen are from before it.
  */
 export function CredentialRow({
   entry,
@@ -88,6 +95,7 @@ export function CredentialRow({
   name: string
 }) {
   const now = useNowSeconds()
+  const checking = isChecking(useChecks(), credential, now)
   const reset = formatReset(entry.resetDisplayHint, entry.resetAtEpoch, now)
   // An unknown state is still a state: print it in the bar's place rather
   // than drawing a confident bar over a reading the server would not vouch for.
@@ -108,6 +116,9 @@ export function CredentialRow({
         </span>
         {weekly && <span className="qg-chip qg-chip-weekly">{weekly.text}</span>}
         {parked && <span className="qg-chip qg-chip-route">{parked}</span>}
+        {/* Last, and the first to give up width: it is gone within a minute,
+          * and the chips before it explain the figures that stay. */}
+        {checking && <CheckingPill />}
       </span>
 
       {degraded ? (

@@ -203,28 +203,30 @@ Restart/redeploy or use CPA's current plugin-config reload mechanism. Trigger th
 
 ## Manual update
 
-1. Return to `dry-run: true` while validating a new plugin/CPA combination.
-2. Download and verify the new release archive/checksum.
-3. Replace the root library and restart CPA:
+1. If `route-api-credits` is on, set it to `false` first and wait until two consecutive requests leave the status's `router.counters.picks` unchanged. A request that reaches the plugin while CPA replaces it fails. This applies to every update, including one that is only about OAuth priorities. Turn routing back on once the new version's status shows `router.table_reason` as `""`.
+2. Return to `dry-run: true` while validating a new plugin/CPA combination.
+3. Download and verify the new release archive/checksum.
+4. Replace the root library and restart CPA:
 
 ```bash
 docker cp reset-priority.so cli-proxy-api:/CLIProxyAPI/plugins/reset-priority.so
 docker restart cli-proxy-api
 ```
 
-4. Check logs and status, trigger a refresh, and complete the acceptance checklist before restoring `dry-run: false`.
+5. Check logs and status, trigger a refresh, and complete the acceptance checklist before restoring `dry-run: false`.
 
 ## Manual uninstall
 
-1. Disable or remove `plugins.configs.reset-priority` from `config.yaml`.
-2. Remove the manual library and restart:
+1. If `route-api-credits` is on, set it to `false` first and wait until two consecutive requests leave the status's `router.counters.picks` unchanged.
+2. Disable or remove `plugins.configs.reset-priority` from `config.yaml`.
+3. Remove the manual library and restart:
 
 ```bash
 docker exec cli-proxy-api rm -f /CLIProxyAPI/plugins/reset-priority.so
 docker restart cli-proxy-api
 ```
 
-3. Confirm the plugin no longer appears in logs or CPA plugin state.
+4. Confirm the plugin no longer appears in logs or CPA plugin state.
 
 Uninstalling the plugin does not restore previous credential priorities. If the operator wants different static priorities afterward, edit them through the normal CPA auth-management path.
 

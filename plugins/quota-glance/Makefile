@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-VERSION ?= 0.7.2
+VERSION ?= 0.8.0
 
 # The dashboard. Its build output is committed, because `go build` embeds it and
 # must never need Node; web-verify is what stops that committed copy drifting.

@@ -651,7 +651,7 @@
       "renewalEstimated": false,
       "renewalSource": "dashboard",
       "renewalEstimateAtEpoch": 1791026400,
-      "renewalEditable": true,
+      "renewalEditable": false,
       "renewalSetting": {
         "date": "2026-09-10",
         "revision": "3",
@@ -1433,8 +1433,9 @@
       "gaps": []
     },
     "editing": {
-      "available": true,
-      "reason": ""
+      "available": false,
+      "reason": "quotaCache",
+      "migration": ""
     },
     "pool": {
       "hasEstimate": true,
@@ -1513,8 +1514,8 @@
         "dataIssues": [],
         "issue": "",
         "settings": {
-          "editable": true,
-          "notEditableReason": "",
+          "editable": false,
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "200",
@@ -1579,8 +1580,8 @@
         "dataIssues": [],
         "issue": "",
         "settings": {
-          "editable": true,
-          "notEditableReason": "",
+          "editable": false,
+          "notEditableReason": "quotaCache",
           "revision": "2",
           "monthlyUsd": "250",
           "configMonthlyUsd": "100",
@@ -1642,8 +1643,8 @@
         "dataIssues": [],
         "issue": "",
         "settings": {
-          "editable": true,
-          "notEditableReason": "",
+          "editable": false,
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "100",
@@ -1701,8 +1702,8 @@
         "dataIssues": [],
         "issue": "",
         "settings": {
-          "editable": true,
-          "notEditableReason": "",
+          "editable": false,
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "200",
@@ -1760,8 +1761,8 @@
         "dataIssues": [],
         "issue": "",
         "settings": {
-          "editable": true,
-          "notEditableReason": "",
+          "editable": false,
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "500",

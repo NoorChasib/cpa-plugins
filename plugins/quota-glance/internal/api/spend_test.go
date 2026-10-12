@@ -641,8 +641,9 @@ func TestAPressWhoseRedeemerPanickedReplaysAsAnUnknownOutcome(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a copy of the press waited on an answer that was never recorded")
 	}
-	if res.StatusCode != http.StatusBadGateway || string(res.Body) != `{"error":"outcome_unknown","retryUntilEpoch":null}` {
-		t.Fatalf("copy = %d %s, want 502 outcome_unknown with no deadline", res.StatusCode, res.Body)
+	// Nothing was asked of Quota Cache either: the press never got that far.
+	if res.StatusCode != http.StatusBadGateway || string(res.Body) != `{"error":"outcome_unknown","refreshRequested":false,"retryUntilEpoch":null}` {
+		t.Fatalf("copy = %d %s, want 502 outcome_unknown with no deadline and no refresh", res.StatusCode, res.Body)
 	}
 	if res.Headers.Get(replayedHeader) != "1" || res.Headers.Get("Cache-Control") != "no-store" {
 		t.Fatalf("copy headers = %v", res.Headers)

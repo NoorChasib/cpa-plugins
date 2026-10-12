@@ -208,54 +208,58 @@ func TestAnAbsentRingStaysAbsent(t *testing.T) {
 	}
 }
 
-// The meter is read from beside the snapshot on every read. A missing or
-// unreadable one is named, and never makes the snapshot a source failure:
-// only the API credit card depends on it.
-func TestTheMeterIsReadBesideTheSnapshot(t *testing.T) {
-	const snapshot = `{"schema":1,"entries":{},"provider_cooldown":{}}`
+// creditsBody is a minimal credit state, computed at computed.
+func creditsBody(computed string) string {
+	return `{"schema":1,"quota_cache_version":"0.2.0","computed_at":"` + computed + `","valid_until":null,` +
+		`"inputs":{},"settings":{"state":"ok","editable":true,"revision":"","import":null},"api_credits":null,"renewals":{},` +
+		`"organizations":{"state":"missing","revision":"","source":"config","migration":null,"config_items_ignored":0}}`
+}
+
+// The credit state is read from beside the snapshot on every read. A missing
+// or unreadable one is named, and never makes the snapshot a source failure:
+// only the API credit card and the renewal dates depend on it.
+func TestTheCreditStateIsReadBesideTheSnapshot(t *testing.T) {
+	const snapshot = `{"schema":1,"written_at":"2026-10-09T11:55:00Z","entries":{},"provider_cooldown":{}}`
 	path := write(t, snapshot)
-	meterPath := filepath.Join(filepath.Dir(path), "snapshot.meter.json")
+	creditsPath := filepath.Join(filepath.Dir(path), "snapshot.credits.json")
 
 	got := Read(context.Background(), fakeHost{}, path)
-	if got.Reason != "" || got.Meter != nil || got.MeterError != MeterMissing {
-		t.Fatalf("no meter: reason %q meter %v error %q", got.Reason, got.Meter, got.MeterError)
+	if got.Reason != "" || got.Credits != nil || got.CreditsError != aggregate.CreditsMissing {
+		t.Fatalf("no state: reason %q state %v error %q", got.Reason, got.Credits, got.CreditsError)
 	}
 
 	for name, body := range map[string]string{"corrupt": `{"schema":1,`, "schema 2": `{"schema":2}`} {
-		if err := os.WriteFile(meterPath, []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(creditsPath, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got = Read(context.Background(), fakeHost{}, path)
-		if got.Reason != "" || got.Meter != nil || got.MeterError != MeterUnreadable {
-			t.Fatalf("%s meter: reason %q meter %v error %q", name, got.Reason, got.Meter, got.MeterError)
+		if got.Reason != "" || got.Credits != nil || got.CreditsError != aggregate.CreditsUnreadable {
+			t.Fatalf("%s state: reason %q state %v error %q", name, got.Reason, got.Credits, got.CreditsError)
 		}
 	}
 
-	body := `{"schema":1,"since":"2026-10-01T00:00:00Z","started_at":"2026-10-01T00:00:00Z","flushed_at":"2026-10-09T11:59:00Z",` +
-		`"received":3,"counted":2,"organizations":{"00000000-0000-4000-8000-00000000000a":{"since":"2026-10-01T00:00:00Z"}}}`
-	if err := os.WriteFile(meterPath, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(creditsPath, []byte(creditsBody("2026-10-09T11:55:10Z")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got = Read(context.Background(), fakeHost{}, path)
-	if got.MeterError != "" || got.Meter == nil || got.Meter.Counted != 2 || got.Meter.Gaps == nil ||
-		got.Meter.Organizations["00000000-0000-4000-8000-00000000000a"].Days == nil {
-		t.Fatalf("meter = %+v, error %q", got.Meter, got.MeterError)
+	if got.CreditsError != "" || got.Credits == nil || got.Credits.QuotaCacheVersion != "0.2.0" || got.Credits.Renewals == nil {
+		t.Fatalf("state = %+v, error %q", got.Credits, got.CreditsError)
 	}
 
-	// A meter beside a snapshot that cannot be read is still read: the
+	// A state beside a snapshot that cannot be read is still read: the
 	// snapshot's failure is reported on its own.
 	if err := os.WriteFile(path, []byte(`{"schema":1,`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got = Read(context.Background(), fakeHost{}, path); got.Reason != aggregate.ReasonCacheMissing || got.Meter == nil {
-		t.Fatalf("broken snapshot: reason %q meter %v", got.Reason, got.Meter)
+	if got = Read(context.Background(), fakeHost{}, path); got.Reason != aggregate.ReasonCacheMissing || got.Credits == nil || got.CreditsError != "" {
+		t.Fatalf("broken snapshot: reason %q state %v error %q", got.Reason, got.Credits, got.CreditsError)
 	}
 }
 
-// A FIFO where the meter belongs must not block the read either.
-func TestAnUnopenableMeterDoesNotBlock(t *testing.T) {
+// A FIFO where the credit state belongs must not block the read either.
+func TestAnUnopenableCreditStateDoesNotBlock(t *testing.T) {
 	path := write(t, `{"schema":1,"entries":{},"provider_cooldown":{}}`)
-	fifo := filepath.Join(filepath.Dir(path), "snapshot.meter.json")
+	fifo := filepath.Join(filepath.Dir(path), "snapshot.credits.json")
 	if out, err := exec.Command("mkfifo", fifo).CombinedOutput(); err != nil {
 		t.Skipf("mkfifo unavailable: %v %s", err, out)
 	}
@@ -263,10 +267,41 @@ func TestAnUnopenableMeterDoesNotBlock(t *testing.T) {
 	go func() { done <- Read(context.Background(), fakeHost{}, path) }()
 	select {
 	case got := <-done:
-		if got.Reason != "" || got.MeterError != MeterUnreadable {
-			t.Fatalf("reason %q meter error %q", got.Reason, got.MeterError)
+		if got.Reason != "" || got.CreditsError != aggregate.CreditsUnreadable {
+			t.Fatalf("reason %q credits error %q", got.Reason, got.CreditsError)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Read blocked on a FIFO in the meter's place")
+		t.Fatal("Read blocked on a FIFO in the credit state's place")
+	}
+}
+
+// When a credit state counts as abandoned. A snapshot written more than five
+// minutes after the state was computed means no publisher keeps the state up:
+// it is abandoned, and kept only for health. Five minutes exactly is still a
+// running publisher's. A snapshot with no written_at says nothing either way.
+func TestAnAbandonedStateIsToldApart(t *testing.T) {
+	for _, tc := range []struct {
+		name, written string
+		want          string
+	}{
+		{"5m1s after", "2026-10-09T12:05:01Z", aggregate.CreditsAbandoned},
+		{"5m after", "2026-10-09T12:05:00Z", ""},
+		{"written first", "2026-10-09T11:59:00Z", ""},
+		{"no written_at", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			written := ""
+			if tc.written != "" {
+				written = `"written_at":"` + tc.written + `",`
+			}
+			path := write(t, `{"schema":1,`+written+`"entries":{},"provider_cooldown":{}}`)
+			if err := os.WriteFile(filepath.Join(filepath.Dir(path), "snapshot.credits.json"), []byte(creditsBody("2026-10-09T12:00:00Z")), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := Read(context.Background(), fakeHost{}, path)
+			if got.Reason != "" || got.CreditsError != tc.want || got.Credits == nil {
+				t.Fatalf("reason %q error %q state %v; want error %q with the state kept", got.Reason, got.CreditsError, got.Credits, tc.want)
+			}
+		})
 	}
 }

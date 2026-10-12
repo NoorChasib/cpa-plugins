@@ -6,7 +6,7 @@
   // Providers with no weekly window: their observation is dated by the nested
   // quota.observed_at, and the weekly observed_at stays empty.
   const noWeekly = ['openrouter', 'anthropic-api'];
-  const EMPTY = 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add Claude API credits (claude-api-credits) to this plugin’s configuration; the next scheduled scan will discover it.';
+  const EMPTY = 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add a Claude Console organization under Organizations above; the next scheduled scan will discover it.';
 
   // Status is read with the management key the CPA console remembers, and CPA
   // locks an address out of its management API for 30 minutes after five failed
@@ -29,6 +29,33 @@
 
   const text = (value, max) => typeof value === 'string' && value.length <= max;
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+  // CPA HTML-escapes every string value of this plugin's management answers
+  // when it registered a schema below 6, which the status says with
+  // strings_escaped, so an apostrophe arrives as &#39; and textContent would
+  // show the entity. Every string read from a management answer passes
+  // through unescapeHost, which decodes only while the last status said so:
+  // on a raw host a label that really contains &amp; is left alone. &amp; is
+  // decoded last, so &amp;#39; becomes &#39;. Keys are never escaped.
+  let escaped = false;
+  function unescapeHost(value) {
+    if (!escaped || typeof value !== 'string') return value;
+    return value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#34;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  }
+  // Object.fromEntries defines each key as its own property, so a key such as
+  // __proto__ stays data.
+  function unescapeAll(value) {
+    if (typeof value === 'string') return unescapeHost(value);
+    if (Array.isArray(value)) return value.map(unescapeAll);
+    if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, unescapeAll(item)]));
+    return value;
+  }
+  // A status says whether its own strings, and those of every answer until the
+  // next status, are escaped. The flag is a boolean, which CPA never escapes.
+  function decodeStatus(raw) {
+    escaped = object(raw) && raw.strings_escaped === true;
+    return unescapeAll(raw);
+  }
 
   function apiRoot() {
     const path = location.pathname.replace(/\/+$/, '');
@@ -145,7 +172,9 @@
     }
     return found;
   }
-  function forget() { for (const store of stores()) if (recordIn(store) !== undefined) drop(store); }
+  // A refusal forgotten, by Refresh view or by a save's deliberate try, is no
+  // longer the banner's to reword (saveRefusal).
+  function forget() { saveRefusal = null; for (const store of stores()) if (recordIn(store) !== undefined) drop(store); }
   function remember(session, status, error) {
     const at = Math.floor(Date.now() / 1000);
     const reason = classify(status, error);
@@ -172,20 +201,42 @@
     return Math.min(86400, Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0));
   }
   const banned = record => !!record && record.reason === 'banned' && record.until !== null && record.until * 1000 > Date.now();
-  function refusalMessage(record) {
+  // What the view says of a refusal. what names the request refused: the
+  // status request, the default, or "save" for a save from a card being
+  // edited, while Refresh view is disabled and the card's Save is the way to
+  // try again.
+  function refusalMessage(record, what) {
+    const saving = what === 'save';
+    const again = saving ? 'Save again to try once more.' : 'Select Refresh view to try once more.';
     if (record.reason === 'banned') return banned(record)
       ? 'CPA is refusing management requests from this address until about ' + new Date(record.until * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) + ' after repeated failed sign-ins. This page will not ask again before then.'
-      : 'CPA’s lockout of this address after repeated failed sign-ins should be over. Select Refresh view to try once more.' + COUNTED;
+      : 'CPA’s lockout of this address after repeated failed sign-ins should be over. ' + again + COUNTED;
     if (record.reason === 'remote') return 'CPA accepts management sign-ins only on the machine it runs on, so this page stopped asking. Open Quota Cache on that machine instead.';
     if (record.reason === 'off') return 'CPA’s management API is switched off on this server, so this page stopped asking.';
-    if (record.reason === 'refused') return 'CPA refused the console session saved in this browser, so this page stopped asking. Sign in to CPA’s management console again with “Remember password” ticked, then select Refresh view.' + COUNTED;
-    return 'Something in front of CPA refused the status request (HTTP ' + record.status + '), so this page stopped asking. Select Refresh view to try once more.' + COUNTED;
+    if (record.reason === 'refused') return 'CPA refused the console session saved in this browser, so this page stopped asking. Sign in to CPA’s management console again with “Remember password” ticked, then ' + (saving ? 'save again.' : 'select Refresh view.') + COUNTED;
+    return 'Something in front of CPA refused the ' + (what || 'status request') + ' (HTTP ' + record.status + '), so this page stopped asking. ' + again + COUNTED;
   }
 
   let snapshot = null;
   let busy = false;
   let stopped = false; // set after a refusal; only Refresh view resumes
+  // The refused save the banner says, until something replaces the banner.
+  // Its wording follows the cards: while one is open, its Save is the way to
+  // try again; once none is, Refresh view is.
+  let saveRefusal = null;
   let release = 0; // re-enables Refresh view when a lockout ends; sends nothing
+  // The editor (editor.js) attaches itself once. While one of its cards is
+  // being edited the view neither updates on its timer nor on Refresh view,
+  // so nothing replaces the rows being edited.
+  let editor = null;
+  let again = false; // a reload asked for while a status request was under way
+  let viewText = '';
+  const editing = () => editor !== null && editor.editing();
+  // A card being edited holds the view still, but only while the view is
+  // shown. Once a failed status read has hidden it, the card with it, Refresh
+  // view and the timer are the way back, and the card keeps its draft through
+  // the next status.
+  const holding = () => editing() && !$('content').hidden;
   const date = value => { const t = Date.parse(value); return Number.isFinite(t) && t > 0 ? t : 0; };
   function node(tag, text, className) {
     const e = document.createElement(tag);
@@ -392,6 +443,15 @@
       $('cooldowns').append(p);
     }
     $('cooldowns').hidden = !cooldowns.length;
+    // A round of polls Quota Glance asked for after a banked reset: the
+    // credential the reset was spent on first, then every other one. The
+    // line is a live region, so its text is written only when it changes: a
+    // screen reader then announces each count once, not at every view update
+    // while a provider's pause holds the count still.
+    const round = object(s.refresh) && Number.isInteger(s.refresh.remaining) && s.refresh.remaining > 0 ? s.refresh.remaining : 0;
+    const roundLine = round ? 'Refreshing after a banked reset: ' + round + ' left' : '';
+    if ($('refresh-round').textContent !== roundLine) $('refresh-round').textContent = roundLine;
+    $('refresh-round').hidden = !round;
     $('activity-error').textContent = waiting ? 'Waiting for CPA to finish loading credentials. Saved observations are kept, and polling resumes once they are loaded.' : failed ? 'The last scheduled check failed: ' + s.activity.error + '. Check CPA logs and the cache storage path.' : '';
     $('activity-error').className = 'alert' + (waiting ? '' : ' error');
     $('activity-error').hidden = !waiting && !failed;
@@ -456,18 +516,64 @@
     ];
     $('details').replaceChildren();
     for (const [label,value] of details) { const item = node('div'); const dd = node('dd'); dd.append(value instanceof Node ? value : document.createTextNode(value || '—')); item.append(node('dt',label),dd); $('details').append(item); }
+    if (editor) editor.render(s);
   }
   function syncButton(record) {
     clearTimeout(release);
     const wait = banned(record) ? record.until * 1000 - Date.now() : 0;
-    $('refresh').disabled = busy || wait > 0;
+    $('refresh').disabled = busy || wait > 0 || holding();
+    $('auto').disabled = holding();
     if (wait > 0) release = setTimeout(() => syncButton(refusal(readSession())), wait + 1000);
+  }
+  function viewStatus(message) {
+    viewText = message;
+    $('view-status').textContent = holding() ? 'View updates paused while you edit' : message;
   }
   function unavailable(message, health, view) {
     // Hide prior account data on loss of authorization; never leave it looking live.
     $('content').hidden = true;
+    saveRefusal = null;
     $('error').textContent = message;
     $('error').hidden = false; $('health').textContent = health; $('health').className = 'pill warn'; $('view-status').textContent = view;
+  }
+  // A save the editor sent was refused (401 or 403). The editor has already
+  // remembered the refusal against the key, as refresh does, so neither the
+  // timer nor a reload presents it again; only Refresh view, or Save on the
+  // card being edited, does. The view stays, because it holds the operator's
+  // unsaved changes.
+  function refusedSave(record) {
+    stopped = true; syncButton(record);
+    saveRefusal = record; sayRefusedSave();
+    $('health').textContent = 'Session refused'; $('health').className = 'pill warn';
+    viewStatus('Updates paused after CPA refused the session');
+  }
+  function sayRefusedSave() {
+    $('error').textContent = refusalMessage(saveRefusal, editing() ? 'save' : 'request'); $('error').hidden = false;
+  }
+  // A save got no answer at all, so CPA may have refused and counted it
+  // without the page learning so. The timer stops as it does after a status
+  // request that got no answer; Refresh view resumes it.
+  function unansweredSave() {
+    stopped = true; syncButton(null);
+    viewStatus('Updates paused until Refresh view');
+  }
+  // After a save the view is read again so its figures include it. The
+  // plugin answered, so CPA accepted the key: a pause that an earlier save,
+  // one that got no answer or was refused, put on the view ends here. A
+  // reload asked for while a status request is under way runs once that one
+  // ends.
+  function reload() {
+    stopped = false;
+    if (busy) again = true;
+    else refresh(false);
+  }
+  // A card opened or closed: Refresh view and the view's status follow, and
+  // so does the banner of a refused save, which names the way to try again
+  // there is now.
+  function editingChanged() {
+    syncButton(refusal(readSession()));
+    viewStatus(viewText);
+    if (saveRefusal && stopped) sayRefusedSave();
   }
   // manual is true only for Refresh view: the one action that resumes after a
   // refusal and the only way to present a refused key again.
@@ -476,9 +582,9 @@
     if (!root) { unavailable('Open Quota Cache from CPA’s sidebar to load its status.', 'Status unavailable', 'View could not be updated'); return; }
     const session = readSession();
     let refused = refusal(session);
-    if (!session) { syncButton(null); unavailable(SIGN_IN, 'Sign-in needed', 'No remembered console session'); return; }
+    if (!session) { unavailable(SIGN_IN, 'Sign-in needed', 'No remembered console session'); syncButton(null); return; }
     if (refused && manual && !banned(refused)) { forget(); refused = null; }
-    if (refused) { stopped = true; syncButton(refused); unavailable(refusalMessage(refused), 'Session refused', 'Updates paused after CPA refused the session'); return; }
+    if (refused) { stopped = true; unavailable(refusalMessage(refused), 'Session refused', 'Updates paused after CPA refused the session'); syncButton(refused); return; }
     stopped = false;
     busy = true; syncButton(null);
     let answered = false;
@@ -497,10 +603,12 @@
       }
       if (!sameSession(session, readSession())) throw new Error('The console session changed while the view was updating, so its result was discarded. The next update uses the current session.');
       if (!response.ok) throw new Error('Quota Cache status is unavailable (HTTP ' + response.status + '). Check that the plugin is enabled and registered in CPA, and inspect its logs.');
-      const data = await response.json();
-      if (data.schema !== 1 || !data.entries || !data.running) throw new Error('The cache has not supplied a running status. Check the plugin version and CPA logs.');
-      snapshot = data; render(data); $('content').hidden = false; $('error').hidden = true;
-      $('view-status').textContent = 'View updated ' + new Date().toLocaleTimeString();
+      const data = decodeStatus(await response.json());
+      if (!object(data) || data.schema !== 1 || !data.entries || !data.running) throw new Error('The cache has not supplied a running status. Check the plugin version and CPA logs.');
+      // Shown before it is drawn, so a section a link names can be scrolled
+      // to as the editor draws it.
+      snapshot = data; $('content').hidden = false; saveRefusal = null; $('error').hidden = true; render(data);
+      viewStatus('View updated ' + new Date().toLocaleTimeString());
     } catch (error) {
       if (!answered) {
         // No status came back, so CPA may have refused the key and counted it
@@ -513,12 +621,25 @@
         unavailable(error.name === 'TimeoutError' ? 'The status request timed out. Check CPA connectivity, then refresh this view.' : error.message, 'Status unavailable', 'View could not be updated');
       }
     } finally {
-      busy = false; syncButton(refused);
+      busy = false;
       if (refused) unavailable(refusalMessage(refused), 'Session refused', 'Updates paused after CPA refused the session');
+      syncButton(refused);
+      if (again) { again = false; setTimeout(() => refresh(false)); }
     }
   }
   $('refresh').addEventListener('click', () => refresh(true));
   $('provider').addEventListener('change', () => { if (snapshot) render(snapshot); });
-  setInterval(() => { if ($('auto').checked && !document.hidden) refresh(false); }, 30000);
+  setInterval(() => { if ($('auto').checked && !document.hidden && !holding()) refresh(false); }, 30000);
+  // The one namespace the editor reads: the session and refusal rules above,
+  // shared so a save follows them exactly, and the hooks it calls back.
+  window.QuotaCachePage = Object.freeze({
+    root, readSession, sameSession, refusal, remember, forget, banned, refusalMessage, stores, node, time,
+    unescapeHost, unescapeAll, decodeStatus, reload, refusedSave, unansweredSave, editingChanged,
+    attach(hooks) {
+      if (editor !== null) return;
+      editor = hooks;
+      if (snapshot) editor.render(snapshot);
+    },
+  });
   refresh(false);
 })();

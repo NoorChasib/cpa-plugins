@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "revision": 2,
+  "apiCredits": {
+    "org-752c8e5b3c4d": {
+      "monthlyUsd": "300",
+      "reading": {
+        "remainingUsd": "120.00",
+        "at": "2026-10-08T15:40:00Z",
+        "enteredAt": "2026-10-08T15:44:00Z",
+        "organizationId": "00000000-0000-4000-8000-00000000000b",
+        "baseline": {
+          "dayStart": "2026-10-08T00:00:00Z",
+          "until": "2026-10-08T15:00:00Z",
+          "usage": [
+            {
+              "model": "claude-opus-5-5",
+              "requests": 12,
+              "input": 1000000,
+              "output": 100000
+            }
+          ]
+        }
+      },
+      "rev": 2,
+      "updatedAt": "2026-10-08T15:44:00Z"
+    }
+  },
+  "renewals": {}
+}

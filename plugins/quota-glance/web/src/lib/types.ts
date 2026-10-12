@@ -64,21 +64,20 @@ export interface Credential {
    */
   renewalEstimated?: boolean
   /**
-   * Where `renewalAtEpoch` comes from: the provider's own date, one set on
-   * the dashboard, or the estimate; null with no renewal. Optional because an
-   * older plugin sends none.
+   * Where `renewalAtEpoch` comes from: the provider's own date, one entered
+   * on Quota Cache's page ("dashboard"), or the estimate; null with no
+   * renewal. Optional because an older plugin sends none.
    */
   renewalSource?: "reported" | "dashboard" | "estimated" | (string & {}) | null
   /**
    * A Claude credential's estimate, the next billing anniversary of when the
-   * subscription began, whatever `renewalSource` says: what Use estimate
-   * returns to beside a date set on the dashboard. Null for any other
+   * subscription began, whatever `renewalSource` says. Null for any other
    * provider and when no start is known; absent from an older plugin.
    */
   renewalEstimateAtEpoch?: number | null
-  /** The page may set this credential's renewal date: a Claude credential, while editing is available. */
+  /** Always false from 0.8.0: renewal dates are entered on Quota Cache's page, never here. */
   renewalEditable?: boolean
-  /** The renewal date stored on the dashboard, used or not; null when none. */
+  /** The renewal date entered on Quota Cache's page, used or not; null when none. */
   renewalSetting?: RenewalSetting | null
   /**
    * The credit balance the provider reports for this account, or null when it
@@ -89,7 +88,7 @@ export interface Credential {
   credits: Credits | null
 }
 
-/** A renewal date set on the dashboard. `revision` is what a save sends back as `baseRevision`. */
+/** A renewal date entered on Quota Cache's page, as Quota Cache keeps it. */
 export interface RenewalSetting {
   /** YYYY-MM-DD. */
   date: string
@@ -345,10 +344,14 @@ export interface Summary {
   balances?: Balance[]
   /**
    * The pooled monthly Claude API credit. `null` when Quota Cache has no
-   * `claude-api-credits` configured; absent from a proxied older plugin.
+   * Console organization to show; absent from a proxied older plugin.
    */
   apiCredits?: APICredits | null
-  /** Renewal dates stored for credentials no longer listed, oldest first. Absent from an older plugin. */
+  /**
+   * Renewal dates stored for credentials no longer listed, oldest first.
+   * Quota Cache's page clears them; this page does not list them. Absent from
+   * an older plugin.
+   */
   renewalOrphans?: RenewalOrphan[]
 }
 
@@ -356,7 +359,11 @@ export type APICreditState = Open<
   "ok" | "stale" | "out" | "pending" | "needsSettings" | "misconfigured" | "cacheTooOld"
 >
 
-/** Where an account's monthly credit or refill date comes from. */
+/**
+ * Where an account's monthly credit or refill date comes from: "dashboard" is
+ * a value entered on Quota Cache's page (before it imported them, on Quota
+ * Glance's own), "config" Quota Cache's configuration.
+ */
 export type APICreditSource = Open<"dashboard" | "config" | "none">
 
 /** The price table every amount was computed at. */
@@ -395,10 +402,27 @@ export interface APICreditMeter {
   gaps: APICreditGap[]
 }
 
-/** Whether the page may offer the editor, and why not. */
+/**
+ * Why nothing on the card is edited here. From 0.8.0 `available` is always
+ * false: the values are entered on Quota Cache's page.
+ */
 export interface APICreditEditing {
   available: boolean
-  reason: Open<"" | "disabled" | "settingsUnreadable">
+  /**
+   * `quotaCache`: edited on Quota Cache's page. While Quota Cache cannot use
+   * its saved settings, its own reason instead: `settingsUnreadable` (its
+   * saved settings cannot be read) or `legacyUnreadable` (Quota Glance's
+   * settings.json could not be read, so nothing was imported). Either way
+   * only config values apply. `""` and `disabled` come only from a plugin
+   * older than 0.8.0.
+   */
+  reason: Open<"quotaCache" | "settingsUnreadable" | "legacyUnreadable" | "" | "disabled">
+  /**
+   * Whether the values saved in Quota Glance 0.7's own settings.json have
+   * reached Quota Cache: "" when there is nothing to say. Absent from a plugin
+   * older than 0.8.0.
+   */
+  migration?: Open<"" | "notImported" | "changedSinceImport" | "awaitingImport">
 }
 
 /** The soonest refill that restores anything to the pool. */
@@ -469,7 +493,7 @@ export interface APICreditUnpriced {
   tokens: number
 }
 
-/** A Console reading as it was saved, used or not. */
+/** A Console reading as Quota Cache keeps it, used or not. */
 export interface StoredReading {
   /** As saved, "143.20". */
   remainingUsd: string
@@ -478,21 +502,34 @@ export interface StoredReading {
 }
 
 /**
- * What the editor works from: the values set on the dashboard, the config's
- * beside them, and the revision a save sends back as its `baseRevision`.
+ * The values entered on Quota Cache's page, and the config's beside them, so
+ * a mark can say which one a figure comes from.
  */
 export interface APICreditSettings {
+  /** Always false from 0.8.0: nothing is edited here. */
   editable: boolean
+  /**
+   * A reason no page could lift (`noOrganization`, `duplicateOrganization`,
+   * `overLimit`, `cacheTooOld`), else the card's `editing.reason`.
+   */
   notEditableReason: Open<
-    "" | "noOrganization" | "duplicateOrganization" | "overLimit" | "cacheTooOld" | "disabled" | "settingsUnreadable"
+    | "quotaCache"
+    | "settingsUnreadable"
+    | "legacyUnreadable"
+    | "noOrganization"
+    | "duplicateOrganization"
+    | "overLimit"
+    | "cacheTooOld"
+    | ""
+    | "disabled"
   >
   /** "" with nothing stored. */
   revision: string
-  /** The dashboard value, "" when none. */
+  /** The value entered on Quota Cache's page, "" when none. */
   monthlyUsd: string
   configMonthlyUsd: string
   configMonthlyUsdInvalid: boolean
-  /** The dashboard date, YYYY-MM-DD, "" when none. */
+  /** The date entered on Quota Cache's page, YYYY-MM-DD, "" when none. */
   renews: string
   configRenews: string
   configRenewsInvalid: boolean
@@ -565,7 +602,7 @@ export interface APICreditUnlinked {
   reason: Open<"notConfigured" | "overLimit">
 }
 
-/** API credit values stored for an account Quota Cache no longer lists. */
+/** API credit values stored for an account Quota Cache no longer lists. Quota Cache's page clears them. */
 export interface APICreditOrphan {
   id: string
   /** "" when none. */

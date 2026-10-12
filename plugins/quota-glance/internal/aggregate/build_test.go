@@ -13,7 +13,6 @@ import (
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/golden/summary.json")
@@ -28,25 +27,48 @@ func at(t *testing.T, offset int64) time.Time {
 }
 
 // novemberID is the one fixture credential with a CPA auth index as CPA
-// forms one today, 16 hex digits, which is what a dashboard renewal date is
+// forms one today, 16 hex digits, which is what an entered renewal date is
 // keyed by. Its address comes from the roster.
 const novemberID = "5f2b8c41d09e7a36"
 
-// fixtureExtras is what sits beside a snapshot fixture: quota-cache's meter,
-// read from the sibling .meter.json, and the dashboard's settings, from
-// testdata/overrides under the same name.
-func fixtureExtras(t *testing.T, name string) (*qc.APIMeter, overrides.Values) {
+// quotaCacheTestdata is Quota Cache's credit tests' testdata, read from the
+// sibling module by relative path, as reset-priority's tests read this
+// plugin's.
+var quotaCacheTestdata = filepath.Join("..", "..", "..", "quota-cache", "internal", "credits", "testdata")
+
+// fixtureCredits is Quota Cache's published credit state for a snapshot
+// fixture, at the instant the fixture describes: its committed golden output
+// for the same snapshot, meter and settings. It is read where Quota Cache
+// keeps it, so there is one source of truth and no copy to drift.
+func fixtureCredits(t *testing.T, name string) *qc.CreditState {
 	t.Helper()
-	path := filepath.Join("..", "..", "testdata", "snapshots", name+".json")
-	meter, err := qc.LoadMeter(qc.MeterPath(path))
+	state, err := qc.LoadCredits(filepath.Join(quotaCacheTestdata, "golden", name+".credits.json"))
 	if err != nil {
-		t.Fatalf("meter beside %s: %v", name, err)
+		t.Fatalf("Quota Cache's credit state for %s: %v", name, err)
 	}
-	values := overrides.Load(filepath.Join("..", "..", "testdata", "overrides", name+".json"))
-	if values.Unreadable {
-		t.Fatalf("testdata/overrides/%s.json does not load", name)
+	return state
+}
+
+// The credit states above are Quota Cache's output for its copies of these
+// fixtures, so each snapshot and meter here must be byte for byte its copy.
+func TestSnapshotFixturesMatchQuotaCache(t *testing.T) {
+	ours, err := filepath.Glob(filepath.Join("..", "..", "testdata", "snapshots", "*.json"))
+	if err != nil || len(ours) == 0 {
+		t.Fatalf("no snapshot fixtures: %v", err)
 	}
-	return meter, values
+	for _, path := range ours {
+		mine, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		theirs, err := os.ReadFile(filepath.Join(quotaCacheTestdata, "snapshots", filepath.Base(path)))
+		if err != nil {
+			t.Fatalf("Quota Cache has no copy of %s: %v", filepath.Base(path), err)
+		}
+		if !bytes.Equal(mine, theirs) {
+			t.Errorf("%s differs from Quota Cache's copy", filepath.Base(path))
+		}
+	}
 }
 
 func loadSnapshot(t *testing.T, name string) qc.Snapshot {
@@ -112,7 +134,6 @@ func fixtureRoster() []Identity {
 
 func buildFixture(t *testing.T) Document {
 	t.Helper()
-	meter, values := fixtureExtras(t, "seven-credentials")
 	return Build(Input{
 		Snapshot:   loadSnapshot(t, "seven-credentials.json"),
 		Identities: fixtureRoster(),
@@ -123,8 +144,8 @@ func buildFixture(t *testing.T) Document {
 		Redeemable: true,
 		// And with the threshold a default install ships with.
 		BalanceWarnBelow: 5,
-		// And with editing on, as allow-edit defaults.
-		Meter: meter, Overrides: values, AllowEdit: true,
+		// And with the state Quota Cache publishes for the same fixture.
+		Credits: fixtureCredits(t, "seven-credentials"),
 	}, at(t, 0))
 }
 
@@ -1019,7 +1040,6 @@ func degradedSamples(t *testing.T) []Sample {
 
 func buildDegraded(t *testing.T) Document {
 	t.Helper()
-	meter, values := fixtureExtras(t, "degraded-states")
 	return Build(Input{
 		Snapshot:         loadSnapshot(t, "degraded-states.json"),
 		Identities:       degradedRoster(),
@@ -1027,8 +1047,7 @@ func buildDegraded(t *testing.T) Document {
 		StaleAfter:       45 * time.Minute,
 		Redeemable:       true,
 		BalanceWarnBelow: 5,
-		// Editing off: the card says why, and what is stored still applies.
-		Meter: meter, Overrides: values, AllowEdit: false,
+		Credits:          fixtureCredits(t, "degraded-states"),
 	}, at(t, 0))
 }
 
@@ -1162,7 +1181,8 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 	for _, account := range doc.APICredits.Accounts {
 		creditStates[account.State] = true
 	}
-	for _, want := range []string{StateStale, StateOut, StatusPending, StateNeedsSettings, StateMisconfigured, StateCacheTooOld} {
+	for _, want := range []string{qc.CreditStateStale, qc.CreditStateOut, qc.CreditStatePending, qc.CreditStateNeedsSettings,
+		qc.CreditStateMisconfigured, qc.CreditStateCacheTooOld} {
 		if !creditStates[want] {
 			t.Errorf("no API credit account with state %q", want)
 		}

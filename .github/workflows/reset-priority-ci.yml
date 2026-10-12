@@ -61,3 +61,22 @@ jobs:
 
       - name: Check smoke script syntax
         run: bash -n scripts/smoke-test.sh
+
+      # Every router test calls Pick in process. Only this proves that the
+      # plugin-config route declares and withdraws the scheduler, that CPA then
+      # asks the plugin for each attempt at the credits keys, and that no answer
+      # becomes a scheduler error. The keys point at a closed port, so nothing
+      # reaches a provider.
+      - name: API credit router inside real CPA (pinned v8.0.4)
+        run: |
+          docker pull eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+          make smoke
+
+      # CPA calls the router on every request attempt and gives it no deadline,
+      # so its cost is printed here: ns/op for a six-candidate request carrying
+      # 4 KB of headers, against a 50µs/op target. Reported, not gated: no
+      # timing can fail this step, and it runs last so it never holds back a
+      # gate above. It fails only if the benchmark stops compiling or routing,
+      # which `make test` has already failed on.
+      - name: Router Pick benchmark (reported, not gated)
+        run: make bench

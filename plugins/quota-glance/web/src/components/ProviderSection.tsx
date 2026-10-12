@@ -7,7 +7,8 @@ import { WindowCard } from "./WindowCard"
 import { CARD, cardKey, openedKeys, setOpened } from "../lib/collapsed"
 import { accountNames } from "../lib/pool"
 import { accountsCardNeeded } from "../lib/accounts"
-import type { APICredits, Credential, Provider, RenewalOrphan } from "../lib/types"
+import { quotaCacheURL } from "../lib/session"
+import type { APICredits, Credential, Provider } from "../lib/types"
 
 /**
  * A section's heading: the provider's name and a hairline to the edge,
@@ -17,6 +18,9 @@ import type { APICredits, Credential, Provider, RenewalOrphan } from "../lib/typ
  * Shared with the prepaid balances below the providers, so an OpenRouter
  * section reads as the same kind of thing as a Codex one.
  */
+/** The provider whose subscriptions take a renewal date entered on Quota Cache's page. */
+const CLAUDE = "claude"
+
 export function SectionHead({ id, title }: { id: string; title: string }) {
   return (
     <div className="qg-phead">
@@ -37,16 +41,13 @@ export function ProviderSection({
   provider,
   credentials,
   apiCredits = null,
-  renewalOrphans = [],
   onRedeemed,
 }: {
   provider: Provider
   credentials: Map<string, Credential>
   /** The monthly API credit, which belongs in the Claude section; null anywhere else. */
   apiCredits?: APICredits | null
-  /** Renewal dates stored for credentials no longer listed, which Claude's Accounts editor lists; empty anywhere else. */
-  renewalOrphans?: RenewalOrphan[]
-  /** Re-reads the document: after a reset is spent, or settings are saved. */
+  /** Re-reads the document after a reset is spent. */
   onRedeemed: () => void
 }) {
   // Sorted by the server's key, not by anything this app decides. `order` is
@@ -92,17 +93,17 @@ export function ProviderSection({
         ))
       )}
 
-      {apiCredits && <APICreditsCard credits={apiCredits} onSaved={onRedeemed} {...fold(CARD.apiCredits)} />}
+      {apiCredits && <APICreditsCard credits={apiCredits} link={quotaCacheURL("api-credits")} {...fold(CARD.apiCredits)} />}
 
-      {/* Claude keeps its renewal editor even with one account. Other
-        * providers' solo accounts need only the slim read-only line. */}
-      {accountsCardNeeded(provider.id, held.length, renewalOrphans.length) ? (
+      {/* Claude keeps its Accounts card even with one account, for the link
+        * to where its renewal dates are entered. Other providers' solo
+        * accounts need only the slim read-only line. */}
+      {accountsCardNeeded(provider.id, held.length) ? (
         <AccountsCard
           held={held}
           names={names}
-          renewalOrphans={renewalOrphans}
-          editingOffer={apiCredits?.editing ?? null}
-          onSaved={onRedeemed}
+          link={provider.id === CLAUDE ? quotaCacheURL("renewals") : null}
+          editing={provider.id === CLAUDE ? (apiCredits?.editing ?? null) : null}
           {...fold(CARD.accounts)}
         />
       ) : held.length === 1 ? (

@@ -1,7 +1,8 @@
 // Package plugin implements the RPC-facing runtime: lifecycle dispatch
 // (register/reconfigure/quiesce/shutdown), management route registration,
 // the authenticated status (JSON and browser HTML) and refresh handlers,
-// plus the static read-only browser resource shell.
+// the static read-only browser resource shell, and the optional API credit
+// router: its rebuild loop and the scheduler.pick answer.
 package plugin
 
 import (
@@ -17,13 +18,14 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/hostapi"
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/providers"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/route"
 )
 
 // Plugin identity constants.
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.1.8"
+	PluginVersion = "0.2.0"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
@@ -52,6 +54,18 @@ type Runtime struct {
 	runAsync func(func())
 
 	engine *engine.Engine
+	// routing is the effective route-api-credits value of the last
+	// successful configure, under mu, so a change is logged once.
+	routing bool
+
+	// router is the API credit router. It is created here, never replaced,
+	// and lasts as long as the process, so a pick racing a configure always
+	// finds one. loop rebuilds its table.
+	router *route.Router
+	loop   *routerLoop
+	// beforePick is a test-only hook, never set in production. It runs at the
+	// top of SchedulerPick, outside the router's own recover.
+	beforePick func()
 
 	dispatchMu   sync.Mutex
 	dispatchWG   sync.WaitGroup
@@ -72,17 +86,41 @@ func WithRunAsync(run func(func())) Option {
 	return func(r *Runtime) { r.runAsync = run }
 }
 
+// WithBeforeSchedulerPick installs a hook that runs at the top of every
+// SchedulerPick (tests: a panicking hook proves the ABI still answers
+// handled:false).
+func WithBeforeSchedulerPick(hook func()) Option {
+	return func(r *Runtime) { r.beforePick = hook }
+}
+
 // NewRuntime builds a Runtime over a raw host caller.
 func NewRuntime(caller hostapi.Caller, opts ...Option) *Runtime {
 	r := &Runtime{
 		bridge:   hostapi.NewBridge(caller),
 		clk:      clock.Real{},
 		runAsync: func(f func()) { go f() },
+		router:   route.New(),
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
+	r.loop = newRouterLoop(r.clk, r.router, func(level, message string) { r.bridge.Log(level, message) })
 	return r
+}
+
+// SchedulerPick answers one scheduler.pick request through the API credit
+// router. It takes no lock, does no I/O, logs nothing and makes no host
+// callback: CPA gives a scheduler no deadline, so anything that could block
+// would hold the client's request. The router recovers its own panics and
+// declines every doubt, which CPA resolves with its own selector.
+func (r *Runtime) SchedulerPick(raw []byte) route.Decision {
+	if r == nil {
+		return route.Decision{Reason: route.ReasonDisabled}
+	}
+	if r.beforePick != nil {
+		r.beforePick()
+	}
+	return r.router.Pick(raw, r.clk.Now().UTC())
 }
 
 // Dispatch handles one RPC method call from the host and returns envelope
@@ -111,6 +149,12 @@ func (r *Runtime) Dispatch(method string, request []byte) (response []byte) {
 		return okEnvelope(managementRegistration())
 	case hostapi.MethodManagementHandle:
 		return r.handleManagement(request)
+	case hostapi.MethodSchedulerPick:
+		// The native entry point answers picks before they reach Dispatch,
+		// so that no gate here can fail a request. This answers the same,
+		// for a caller that dispatches in process.
+		d := r.SchedulerPick(request)
+		return okEnvelope(hostapi.SchedulerPickResult{Handled: d.AuthID != "", AuthID: d.AuthID})
 	default:
 		return errorEnvelope("unknown_method", "reset-priority does not handle method "+method)
 	}
@@ -129,8 +173,10 @@ func (r *Runtime) beginDispatch() bool {
 	return true
 }
 
-// Quiesce stops engine scheduling while retaining status and allowing a later
-// lifecycle reconfigure to restart it.
+// Quiesce stops engine scheduling and the router loop while retaining status
+// and allowing a later lifecycle reconfigure to restart both. The router's
+// table is withdrawn, so picks decline no_table until a configure builds one;
+// its exploration history is kept for that configure.
 func (r *Runtime) Quiesce() {
 	if r == nil {
 		return
@@ -141,6 +187,23 @@ func (r *Runtime) Quiesce() {
 	if eng != nil {
 		eng.Stop()
 	}
+	r.stopRouter(false)
+}
+
+// stopRouter stops and drains the router loop, then withdraws the table.
+// final also turns routing off, for terminal shutdown. Shutdown runs from the
+// native export with nothing above it to recover a panic, so this carries its
+// own, and withdraws the table even when stopping the loop panicked: picks
+// must not keep routing on a table nobody rebuilds.
+func (r *Runtime) stopRouter(final bool) {
+	defer func() { _ = recover() }()
+	defer func() {
+		if final {
+			r.router.SetEnabled(false)
+		}
+		r.router.Publish(nil, r.clk.Now().UTC())
+	}()
+	r.loop.stop()
 }
 
 // Shutdown performs terminal native shutdown. It gates new dispatches and host
@@ -162,8 +225,12 @@ func (r *Runtime) Shutdown() {
 		r.Quiesce()
 
 		// No lifecycle dispatch can still install or reconfigure an engine after
-		// this wait, so the final engine pointer is stable.
+		// this wait, so the final engine pointer is stable. One that entered
+		// before the gate closed may have restarted the router loop, so it is
+		// stopped again, now for good. The loop logs through the bridge, so it
+		// stops before the drain below.
 		r.dispatchWG.Wait()
+		r.stopRouter(true)
 		r.mu.Lock()
 		eng := r.engine
 		r.mu.Unlock()
@@ -178,7 +245,19 @@ func (r *Runtime) Shutdown() {
 // request's config_yaml field is a []byte on the wire (base64 via standard
 // encoding/json), containing the preserved plugins.configs.reset-priority
 // YAML subtree.
+//
+// The scheduler capability is declared only while the plugin is enabled with
+// route-api-credits on. Both directions fail open: turning routing on, CPA can
+// call Pick before the loop's first build and gets no_table; turning it off,
+// the router is disabled before this returns, so a pick racing CPA's snapshot
+// swap gets disabled. Either way CPA's own selector chooses.
 func (r *Runtime) handleLifecycle(request []byte) []byte {
+	// Cleared first, so any error below leaves the scheduler undeclared. CPA
+	// usually drops the record of a plugin whose configure fails, but can
+	// keep its old capabilities on a failed rollback, so declared is what
+	// this plugin last declared, not what CPA holds.
+	r.setDeclared(false)
+
 	var req hostapi.LifecycleRequest
 	if len(request) > 0 {
 		if err := json.Unmarshal(request, &req); err != nil {
@@ -189,6 +268,7 @@ func (r *Runtime) handleLifecycle(request []byte) []byte {
 	if errCfg != nil {
 		return errorEnvelope("invalid_config", errCfg.Error())
 	}
+	routing := cfg.Routing()
 
 	r.mu.Lock()
 	if r.engine == nil {
@@ -202,6 +282,29 @@ func (r *Runtime) handleLifecycle(request []byte) []byte {
 		r.mu.Unlock()
 		eng.Reconfigure(cfg)
 	}
+
+	if cfg.Enabled {
+		// The loop runs with routing on or off, so the status shows whether
+		// turning it on would route before anyone does.
+		r.router.SetEnabled(routing)
+		r.loop.start(cfg.RouterQuotaCachePath, routing)
+	} else {
+		r.router.SetEnabled(false)
+		r.loop.stop()
+		r.router.Publish(nil, r.clk.Now().UTC())
+	}
+	r.mu.Lock()
+	changed := r.routing != routing
+	r.routing = routing
+	r.mu.Unlock()
+	if changed {
+		if routing {
+			r.bridge.Log("info", logRoutingOn)
+		} else {
+			r.bridge.Log("info", logRoutingOff)
+		}
+	}
+	r.setDeclared(routing)
 
 	// Negotiate the schema: never claim more than the host offered, never
 	// more than we implement. A missing/zero host schema means the original
@@ -221,8 +324,15 @@ func (r *Runtime) handleLifecycle(request []byte) []byte {
 			GitHubRepository: PluginRepo,
 			ConfigFields:     configFields(),
 		},
-		Capabilities: hostapi.Capabilities{ManagementAPI: true},
+		Capabilities: hostapi.Capabilities{ManagementAPI: true, Scheduler: routing},
 	})
+}
+
+// setDeclared records whether the scheduler capability is declared, for the
+// status and for the loop's lasting-inactive warning.
+func (r *Runtime) setDeclared(on bool) {
+	r.router.SetDeclared(on)
+	r.loop.setDeclared(on)
 }
 
 // buildEngineLocked wires the production engine over the host bridge.
@@ -307,16 +417,18 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 	switch {
 	case method == "GET" && strings.HasSuffix(path, managementStatusPagePath) && !isResourcePath(path):
 		// Authenticated browser HTML status view. Renders only the published,
-		// sanitized snapshot through an auto-escaping template; the account
-		// label (which may carry an email) is never rendered.
-		page, errPage := renderManagementStatusPage(eng.Status())
+		// sanitized snapshot and the router's status through an auto-escaping
+		// template; the account label (which may carry an email) is never
+		// rendered.
+		now := r.clk.Now().UTC()
+		page, errPage := renderManagementStatusPage(eng.Status(), r.router.Status(now), now)
 		if errPage != nil {
 			return okEnvelope(jsonResponse(500, map[string]string{"error": "render status page failed"}))
 		}
 		return okEnvelope(htmlResponse(200, page))
 
 	case method == "GET" && strings.HasSuffix(path, managementStatusPath) && !isResourcePath(path):
-		return okEnvelope(jsonResponse(200, eng.Status()))
+		return okEnvelope(jsonResponse(200, statusResponse{Snapshot: eng.Status(), Router: r.router.Status(r.clk.Now().UTC())}))
 
 	case method == "POST" && strings.HasSuffix(path, managementRefreshPath) && !isResourcePath(path):
 		// Authenticated "Refresh now" action (spec section 15). The custom
@@ -352,6 +464,14 @@ func (r *Runtime) handleManagement(request []byte) []byte {
 	default:
 		return okEnvelope(jsonResponse(404, map[string]string{"error": "unknown route"}))
 	}
+}
+
+// statusResponse is the JSON status: the engine's snapshot with the API
+// credit router's status beside it, computed at the request's time. Snapshot
+// has no router key, so the addition breaks no reader.
+type statusResponse struct {
+	engine.Snapshot
+	Router route.Status `json:"router"`
 }
 
 // refreshRequestAllowed gates the mutating refresh route.
@@ -467,12 +587,13 @@ func configFields() []hostapi.ConfigField {
 		{Name: "priority-floor", Type: "integer", Description: "Priority of the latest-resetting healthy account (default 100)."},
 		{Name: "priority-step", Type: "integer", Description: "Priority gap between adjacent ranks (default 100)."},
 		{Name: "quarantine-priority", Type: "integer", Description: "Sentinel priority for disabled/reauth-required accounts (default 0)."},
-		{Name: "manage-claude", Type: "boolean", Description: "Manage Claude OAuth credentials (default true)."},
-		{Name: "manage-codex", Type: "boolean", Description: "Manage Codex OAuth credentials (default true)."},
+		{Name: "manage-claude", Type: "boolean", Description: "Manage Claude OAuth credentials. Default true; this form shows it off until you save it once."},
+		{Name: "manage-codex", Type: "boolean", Description: "Manage Codex OAuth credentials. Default true; this form shows it off until you save it once."},
 		{Name: "dry-run", Type: "boolean", Description: "Compute and report priorities without writing auth files (default false; recommended true for first install)."},
-		{Name: "use-quota-cache", Type: "boolean", Description: "Use shared quota observations instead of direct requests. Optional; off by default. When on, wait for fresh data if the cache is unavailable; unconfirmed accounts are re-read from the local snapshot from +5s to +15m after each reconciliation."},
-		{Name: "quota-cache-path", Type: "string", Description: "Optional shared snapshot path; default plugins/data/quota-cache/snapshot.json when use-quota-cache is on. Legacy path-only config also opts in; explicit false overrides it."},
-		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or \"local\" for the host zone (default UTC). Presentation only."},
+		{Name: "use-quota-cache", Type: "boolean", Description: "Use shared quota observations instead of direct requests. Off by default, but on whenever quota-cache-path is set and this is unset, and this form shows it off then. To keep standalone polling with a custom quota-cache-path, switch this on and off again and save, so false is written. When on, wait for fresh data if the cache is unavailable; unconfirmed accounts are re-read from the local snapshot from +5s to +15m after each reconciliation."},
+		{Name: "quota-cache-path", Type: "string", Description: "Optional shared snapshot path; default plugins/data/quota-cache/snapshot.json when use-quota-cache is on. While use-quota-cache is unset, setting this path turns it on too; use-quota-cache saved as false overrides that. The API credit router reads the files Quota Cache keeps beside this path, or the default, whatever use-quota-cache says."},
+		{Name: "display-timezone", Type: "string", Description: "IANA time zone for timestamps on the HTML status view, e.g. America/Los_Angeles, or local to use the host zone (default UTC). Presentation only."},
+		{Name: "route-api-credits", Type: "boolean", Description: "For each request attempt where CPA offers only Claude API keys from its configuration, use the Console organization whose monthly API credit refills soonest and has credit left; default false. Needs Quota Cache 0.2.0 or newer; check the status page before turning it on. Every other attempt is left to CPA"},
 	}
 }
 

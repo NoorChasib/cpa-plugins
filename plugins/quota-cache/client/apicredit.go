@@ -13,10 +13,11 @@ import (
 // organization's monthly API credit. It is separate from "claude", the
 // subscription poll.
 //
-// Its entries are not CPA credentials. quota-cache creates one per item of its
-// own claude-api-credits configuration and keys it
-// APICreditOrgAccount(organization-id), or "item-<position+1>" for an item that
-// cannot be linked to its organization. Since quota-cache 0.1.14 they are never
+// Its entries are not CPA credentials. quota-cache creates one per Claude
+// Console organization on its page, or, before they move there, per item of
+// its claude-api-credits configuration, and keys it
+// APICreditOrgAccount(organization-id), or "item-<position+1>" for a
+// configured item that cannot be linked to its organization. Since quota-cache 0.1.14 they are never
 // polled: Anthropic is never asked anything. What the organization spent comes
 // from quota-cache's API meter, the file at MeterPath beside the snapshot, and
 // the entry carries only the configuration in APICredit. Like OpenRouter's, an
@@ -26,14 +27,13 @@ const ProviderAnthropicAPI = "anthropic-api"
 
 // APICredit is what the operator configured for one Console organization's
 // monthly API credit, copied onto the entry at every scan. Values are kept as
-// the operator wrote them (trimmed); quota-cache validates them but never
-// converts or computes with them.
+// the operator wrote them (trimmed), validated but never converted.
 //
-// Anthropic reports neither the credit's amount nor its renewal date, so both
-// come from here, unless the operator set them in Quota Glance. A consumer
-// computes the cycle with CreditCycleAt(Renews, t) and the amount from
-// MonthlyUSD, and the spend from the meter's MeterOrganization for
-// OrganizationID.
+// MonthlyUSD and Renews are only the configured defaults. A monthly credit,
+// refill date or Console reading entered on Quota Cache's page is never on the
+// entry: it is in the settings file and wins over these. The figures in force,
+// with the cycle and the spend priced from the meter, are in the credit state
+// (CreditsPath, LoadCredits, CreditsAt), which is what a consumer reads.
 type APICredit struct {
 	// Label is the operator's unique display name for the organization. Empty
 	// when the configured label is missing or invalid; Problem then says so.
@@ -263,9 +263,9 @@ func NormalizeOrganizationID(s string) (string, bool) {
 // organization: "org-" and the first 12 hex digits of the SHA-256 of the id as
 // NormalizeOrganizationID returns it. It depends on nothing but the
 // organization, so a label rename or a changed credit or date keeps the
-// account, and Quota Glance's settings for it; naming a different organization
-// starts a new one. quota-cache names an item it cannot link
-// "item-<position+1>" instead.
+// account, and the values saved on Quota Cache's page for it; naming a
+// different organization starts a new one. quota-cache names an item it
+// cannot link "item-<position+1>" instead.
 func APICreditOrgAccount(organizationID string) string {
 	// For a valid id, trimming and lower-casing is exactly what
 	// NormalizeOrganizationID does.

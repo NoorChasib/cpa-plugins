@@ -21,7 +21,17 @@ case "$plugin" in
     make ci c-shared package-current checksums verify-release
     CPA_SMOKE_REQUIRE_DOCKER=1 make smoke
     ;;
-  reset-priority|auto-baseline)
+  reset-priority)
+    make fmt-check vet lint test race build
+    # The API credit router inside pinned CPA, before packaging, so the
+    # archive holds the library the smoke loaded. The release workflow has
+    # already pulled the image.
+    make smoke
+    make package GLIBC_ENFORCE=0
+    make check-release
+    bash -n scripts/smoke-test.sh
+    ;;
+  auto-baseline)
     make fmt-check vet lint test race build
     make package GLIBC_ENFORCE=0
     make check-release

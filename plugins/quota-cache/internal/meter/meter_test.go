@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -92,6 +95,45 @@ func (w wire) bytes() []byte {
 	return raw
 }
 
+// Placeholder auth IDs in the shape CPA gives a Claude API key from its own
+// configuration. None is a real credential's.
+const (
+	keyA = "claude:apikey:00000000000a"
+	keyB = "claude:apikey:00000000000b"
+	keyC = "claude:apikey:00000000000c"
+	keyD = "claude:apikey:00000000000d"
+	keyE = "claude:apikey:00000000000e"
+)
+
+// configKeyRecord is apiKeyRecord for the configured Claude API key whose
+// auth ID is id and whose auth index is index.
+func configKeyRecord(org, id, index string, at time.Time) wire {
+	w := apiKeyRecord(org, at)
+	w.AuthID, w.AuthIndex = id, index
+	return w
+}
+
+// withRawAuthID is w's bytes with the value of AuthID replaced by raw, any
+// JSON value.
+func withRawAuthID(t *testing.T, w wire, raw string) []byte {
+	t.Helper()
+	w.AuthID = "AUTHID-PLACEHOLDER"
+	marshalled := string(w.bytes())
+	replaced := strings.Replace(marshalled, `"AuthID":"AUTHID-PLACEHOLDER"`, `"AuthID":`+raw, 1)
+	if replaced == marshalled {
+		t.Fatal("the record has no AuthID to replace")
+	}
+	return []byte(replaced)
+}
+
+// authID is what the meter holds for id, and whether it holds anything.
+func authID(m *Meter, id string) (client.MeterAuthID, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.data.AuthIDs[id]
+	return a, ok
+}
+
 // testMeter is a meter restored from a fresh path with no worker, so a test
 // applies events and saves when it chooses.
 func testMeter(t *testing.T, linked []string, now time.Time) (*Meter, *fakeLog) {
@@ -145,7 +187,7 @@ func TestGoldenRecordDecodesAndNamesEveryFieldRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"Provider", "AuthIndex", "AuthType", "Model", "ResponseModel", "SessionID", "RequestedAt", "Latency", "Failed",
+	for _, key := range []string{"Provider", "AuthIndex", "AuthType", "AuthID", "Model", "ResponseModel", "SessionID", "RequestedAt", "Latency", "Failed",
 		"Failure", "StatusCode", "Body", "Detail", "InputTokens", "OutputTokens", "CacheReadTokens", "CacheCreationTokens", "ResponseHeaders", "Anthropic-Organization-Id"} {
 		if !strings.Contains(string(raw), `"`+key+`":`) {
 			t.Errorf("the golden record has no %q key; the field the meter reads has moved", key)
@@ -153,7 +195,9 @@ func TestGoldenRecordDecodesAndNamesEveryFieldRead(t *testing.T) {
 	}
 	received := base.Add(5 * time.Second)
 	e, keep, rejected := decode(raw, received)
-	want := event{at: base.Add(time.Second), authIndex: "0123456789abcdef", org: orgA, model: "claude-sonnet-5-5-20260301",
+	// The record's AuthID is the canary file name, which is not CPA's config
+	// API-key shape, so the event has no auth ID.
+	want := event{at: base.Add(time.Second), authIndex: "0123456789abcdef", authID: "", org: orgA, model: "claude-sonnet-5-5-20260301",
 		failed: true, refusal: true, claudeCode: true, input: 1200, output: 30, cacheRead: 4000, cacheWrite: 500}
 	if !keep || rejected || e != want {
 		t.Fatalf("event=%+v keep=%v rejected=%v\nwant %+v", e, keep, rejected, want)
@@ -556,6 +600,305 @@ func TestUnlinkedAndAuthsAreCapped(t *testing.T) {
 	}
 	if exported.Unlinked[0].OrganizationID != fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x108) {
 		t.Fatalf("exported unlinked=%+v; newest first", exported.Unlinked)
+	}
+}
+
+// AuthID is kept only when it has CPA's config API-key shape. Any other value,
+// whatever its JSON type, is left unread and never rejects the record; and a
+// record that is not a Claude API key's teaches nothing, whatever its AuthID.
+func TestConfigAuthIDIsKeptOnlyInItsShape(t *testing.T) {
+	for _, id := range []string{keyA, keyA + "-1", keyA + "-9999"} {
+		e, keep, rejected := decode(configKeyRecord(orgA, id, "0123456789abcdef", base).bytes(), base)
+		if !keep || rejected || e.authID != id {
+			t.Fatalf("%s: authID=%q keep=%v rejected=%v", id, e.authID, keep, rejected)
+		}
+	}
+	canary := apiKeyRecord(orgA, base)
+	unread, _, _ := decode(canary.bytes(), base)
+	m, _ := testMeter(t, []string{orgA}, base)
+	for name, raw := range map[string]string{
+		"the canary file name":            `"AUTHID-CANARY.json"`,
+		"an e-mail":                       `"user@example.com"`,
+		"a path":                          `"/home/cpa/.cli-proxy-api/claude-user@example.com.json"`,
+		"an empty string":                 `""`,
+		"upper-case hex":                  `"claude:apikey:00000000000A"`,
+		"a count past 9999":               `"claude:apikey:00000000000a-10000"`,
+		"spaces around the shape":         `" claude:apikey:00000000000a "`,
+		"an escape that spells the shape": "\"claude:apikey:00000000000\\u0061\"", // decodes to keyA
+		"an escaped slash":                `"claude:apikey:00000000000a\/"`,
+		"a number":                        `123`,
+		"null":                            `null`,
+		"true":                            `true`,
+		"an object":                       `{}`,
+		"an object holding the shape":     `{"id":"claude:apikey:00000000000a"}`,
+		"an array holding the shape":      `["claude:apikey:00000000000a"]`,
+	} {
+		raw := withRawAuthID(t, canary, raw)
+		e, keep, rejected := decode(raw, base)
+		if !keep || rejected || e != unread {
+			t.Fatalf("%s: event=%+v keep=%v rejected=%v; want the record read without an auth ID", name, e, keep, rejected)
+		}
+		feed(m, raw, base)
+	}
+	if len(m.data.AuthIDs) != 0 || m.rejected.Load() != 0 || m.data.Counted != 15 {
+		t.Fatalf("auth IDs=%v rejected=%d counted=%d", m.data.AuthIDs, m.rejected.Load(), m.data.Counted)
+	}
+
+	// An OAuth record, or another provider's, is dropped before its AuthID
+	// could be learned, even one in the config shape.
+	oauth := configKeyRecord(orgA, keyB, "fedcba9876543210", base)
+	oauth.AuthType = "oauth"
+	other := configKeyRecord(orgA, keyB, "fedcba9876543210", base)
+	other.Provider = "openai"
+	for _, w := range []wire{oauth, other} {
+		if e, keep, rejected := decode(w.bytes(), base); keep || rejected || e != (event{}) {
+			t.Fatalf("event=%+v keep=%v rejected=%v", e, keep, rejected)
+		}
+		feed(m, w.bytes(), base)
+	}
+	feed(m, configKeyRecord(orgA, keyA, "0123456789abcdef", base).bytes(), base)
+	if _, learned := authID(m, keyB); learned || len(m.data.AuthIDs) != 1 {
+		t.Fatalf("auth IDs=%v", m.data.AuthIDs)
+	}
+}
+
+// The auth ID map is learned from every Claude API-key record that carries a
+// config-shaped ID and an index, whatever the record is attributed to; it is
+// capped, aged and saved like the auth map.
+func TestAuthIDsLearnCapAndAge(t *testing.T) {
+	m, _ := testMeter(t, []string{orgA}, base)
+	// A headed success, a foreign success (no header, unknown index) and an
+	// unattributed failure (the same, failed) each teach their ID and index.
+	feed(m, configKeyRecord(orgA, keyA, "000000000000000a", base).bytes(), base)
+	feed(m, configKeyRecord("", keyB, "000000000000000b", base).bytes(), base)
+	unattributed := configKeyRecord("", keyC, "000000000000000c", base)
+	unattributed.Failed, unattributed.Failure.StatusCode = true, 529
+	feed(m, unattributed.bytes(), base)
+	if m.data.Counted != 1 || m.data.Foreign != 1 || m.data.Unattributed != 1 || len(m.data.AuthIDs) != 3 {
+		t.Fatalf("counted=%d foreign=%d unattributed=%d auth IDs=%v", m.data.Counted, m.data.Foreign, m.data.Unattributed, m.data.AuthIDs)
+	}
+	for id, index := range map[string]string{keyA: "000000000000000a", keyB: "000000000000000b", keyC: "000000000000000c"} {
+		if a, _ := authID(m, id); a.AuthIndex != index || !a.SeenAt.Equal(base) {
+			t.Fatalf("%s = %+v", id, a)
+		}
+	}
+	// Without an index, or with one longer than the meter keeps, nothing is
+	// learned.
+	feed(m, configKeyRecord(orgA, keyD, "", base).bytes(), base)
+	feed(m, configKeyRecord(orgA, keyD, strings.Repeat("d", maxAuthIndex+1), base).bytes(), base)
+	if _, learned := authID(m, keyD); learned || len(m.data.AuthIDs) != 3 {
+		t.Fatalf("learned without an index: %v", m.data.AuthIDs)
+	}
+	// SeenAt only moves forward.
+	feed(m, configKeyRecord(orgA, keyA, "000000000000000a", base.Add(10*time.Second)).bytes(), base.Add(10*time.Second))
+	feed(m, configKeyRecord(orgA, keyA, "000000000000000a", base.Add(5*time.Second)).bytes(), base.Add(10*time.Second))
+	if a, _ := authID(m, keyA); !a.SeenAt.Equal(base.Add(10 * time.Second)) {
+		t.Fatalf("seen_at moved back: %+v", a)
+	}
+	// Two IDs can share one index: the same key under another prefix.
+	feed(m, configKeyRecord(orgA, keyE, "000000000000000a", base.Add(11*time.Second)).bytes(), base.Add(11*time.Second))
+	if a, _ := authID(m, keyA); a.AuthIndex != "000000000000000a" {
+		t.Fatalf("%s = %+v", keyA, a)
+	}
+	if e, _ := authID(m, keyE); e.AuthIndex != "000000000000000a" || len(m.data.AuthIDs) != 4 {
+		t.Fatalf("%s = %+v, auth IDs=%v", keyE, e, m.data.AuthIDs)
+	}
+
+	// Saved and restored whole.
+	m.flushIfDue(base.Add(time.Minute))
+	again := newMeter(m.path, &fakeLog{})
+	again.restore([]string{orgA}, base.Add(time.Hour))
+	if !reflect.DeepEqual(again.data.AuthIDs, m.data.AuthIDs) {
+		t.Fatalf("restored %v\nwant %v", again.data.AuthIDs, m.data.AuthIDs)
+	}
+
+	// The 65th ID evicts the one seen longest ago, and the smaller ID of those
+	// seen at once.
+	m, _ = testMeter(t, []string{orgA}, base.Add(-time.Hour))
+	id := func(i int) string { return fmt.Sprintf("claude:apikey:%012x", i) }
+	learn := func(i int, at time.Time) {
+		feed(m, configKeyRecord(orgA, id(i), fmt.Sprintf("%016x", i), at).bytes(), at)
+	}
+	learn(0xfff, base.Add(-time.Second))
+	for i := 1; i < client.MaxMeterAuthIDs; i++ {
+		learn(i, base)
+	}
+	if len(m.data.AuthIDs) != client.MaxMeterAuthIDs {
+		t.Fatalf("%d auth IDs", len(m.data.AuthIDs))
+	}
+	learn(0x100, base.Add(time.Second))
+	if _, oldest := authID(m, id(0xfff)); oldest || len(m.data.AuthIDs) != client.MaxMeterAuthIDs {
+		t.Fatalf("the oldest was kept: %d auth IDs", len(m.data.AuthIDs))
+	}
+	learn(0x101, base.Add(2*time.Second))
+	_, smallest := authID(m, id(1))
+	_, next := authID(m, id(2))
+	if smallest || !next || len(m.data.AuthIDs) != client.MaxMeterAuthIDs {
+		t.Fatalf("of 63 IDs seen at once, kept the smallest=%v the next=%v; %d auth IDs", smallest, next, len(m.data.AuthIDs))
+	}
+	// A file over the cap is held to it at restore, the same way.
+	m.flushIfDue(base.Add(time.Minute))
+	over := load(t, m.path)
+	over.AuthIDs[id(0xffe)] = client.MeterAuthID{AuthIndex: "fffffffffffffffe", SeenAt: base.Add(-2 * time.Second)}
+	over.AuthIDs[id(0xffd)] = client.MeterAuthID{AuthIndex: "fffffffffffffffd", SeenAt: base.Add(-2 * time.Second)}
+	raw, err := json.Marshal(over)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	again = newMeter(m.path, &fakeLog{})
+	again.restore([]string{orgA}, base.Add(time.Hour))
+	if _, kept := again.data.AuthIDs[id(0xffd)]; kept || len(again.data.AuthIDs) != client.MaxMeterAuthIDs || !reflect.DeepEqual(again.data.AuthIDs, m.data.AuthIDs) {
+		t.Fatalf("restored %d auth IDs over the cap", len(again.data.AuthIDs))
+	}
+
+	// An ID not seen for 40 days is forgotten, at an event or at a save.
+	m, _ = testMeter(t, []string{orgA}, base)
+	feed(m, configKeyRecord(orgA, keyA, "000000000000000a", base).bytes(), base)
+	feed(m, configKeyRecord(orgA, keyC, "000000000000000c", base.Add(time.Hour)).bytes(), base.Add(time.Hour))
+	forty := base.Add(client.MeterDays * 24 * time.Hour)
+	feed(m, configKeyRecord(orgA, keyB, "000000000000000b", forty).bytes(), forty)
+	if _, kept := authID(m, keyA); !kept {
+		t.Fatal("forgotten at exactly 40 days")
+	}
+	feed(m, configKeyRecord(orgA, keyB, "000000000000000b", forty.Add(time.Second)).bytes(), forty.Add(time.Second))
+	if _, kept := authID(m, keyA); kept || len(m.data.AuthIDs) != 2 {
+		t.Fatalf("kept past 40 days: %v", m.data.AuthIDs)
+	}
+	var exported client.APIMeter
+	if err := json.Unmarshal(m.exportLimited(forty.Add(time.Hour+time.Second), client.MaxMeterBytes), &exported); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := exported.AuthIDs[keyC]; kept || len(exported.AuthIDs) != 1 {
+		t.Fatalf("saved past 40 days: %v", exported.AuthIDs)
+	}
+}
+
+// The file says from when it records auth IDs: the first start of a meter that
+// records them, kept through every later start.
+func TestAuthIDsSinceIsSetOnceAndKept(t *testing.T) {
+	m, _ := testMeter(t, []string{orgA}, base)
+	if m.data.AuthIDsSince == nil || !m.data.AuthIDsSince.Equal(base) || m.data.AuthIDs == nil {
+		t.Fatalf("a fresh meter: since=%v auth IDs=%v", m.data.AuthIDsSince, m.data.AuthIDs)
+	}
+
+	// A file Quota Cache 0.1.14 wrote records none, so it begins at restore.
+	path := filepath.Join(t.TempDir(), "snapshot.meter.json")
+	older := `{"schema":1,"since":"2026-10-01T00:00:00Z","started_at":"2026-10-09T08:00:00Z","flushed_at":"2026-10-09T11:00:00Z",` +
+		`"received":3,"counted":2,"gaps":[],"organizations":{},"unlinked":[],` +
+		`"auths":{"0123456789abcdef":{"organization_id":"` + orgA + `","seen_at":"2026-10-09T10:30:00Z"}}}`
+	if err := os.WriteFile(path, []byte(older), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored := base.Add(500 * time.Millisecond)
+	m = Open(path, []string{orgA}, restored, &fakeLog{})
+	m.Offer(configKeyRecord(orgA, keyA, "0123456789abcdef", base).bytes(), base.Add(time.Second))
+	m.Stop(client.MeterStopShutdown, base.Add(time.Minute))
+	meter := load(t, path)
+	if meter.AuthIDsSince == nil || !meter.AuthIDsSince.Equal(base) || !meter.Since.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) ||
+		len(meter.Auths) != 1 || meter.AuthIDs[keyA].AuthIndex != "0123456789abcdef" {
+		t.Fatalf("a 0.1.14 file after its first 0.2.0 start: %+v", meter)
+	}
+
+	// Every later start keeps the first.
+	for restarts, at := range []time.Time{base.Add(time.Hour), base.Add(48 * time.Hour)} {
+		again := Open(path, []string{orgA}, at, &fakeLog{})
+		again.Stop(client.MeterStopShutdown, at.Add(time.Minute))
+		if meter := load(t, path); meter.AuthIDsSince == nil || !meter.AuthIDsSince.Equal(base) || meter.Restarts != uint64(restarts+2) {
+			t.Fatalf("restarted at %v: since=%v restarts=%d", at, meter.AuthIDsSince, meter.Restarts)
+		}
+	}
+}
+
+// Each auth ID records its latest success and failure, and the failures since
+// that success. A low-credit refusal is the organization's and a 499 is the
+// client's, so neither counts; nothing of a failure but its time is kept.
+func TestAuthIDOutcomes(t *testing.T) {
+	m, _ := testMeter(t, []string{orgA}, base)
+	const index = "000000000000000a"
+	at := func(s int) time.Time { return base.Add(time.Duration(s) * time.Second) }
+	attempt := func(s int, status int, body, session string) {
+		t.Helper()
+		w := configKeyRecord(orgA, keyA, index, at(s))
+		w.Failed, w.Failure.StatusCode, w.Failure.Body, w.SessionID = status != 200, status, body, session
+		feed(m, w.bytes(), at(s))
+	}
+	check := func(step string, success, failure *time.Time, failures uint16, seen time.Time) {
+		t.Helper()
+		a, _ := authID(m, keyA)
+		same := func(got, want *time.Time) bool {
+			return (got == nil) == (want == nil) && (got == nil || got.Equal(*want))
+		}
+		if !same(a.LastSuccessAt, success) || !same(a.LastFailureAt, failure) || a.Failures != failures || !a.SeenAt.Equal(seen) || a.AuthIndex != index {
+			t.Fatalf("%s: %+v", step, a)
+		}
+	}
+	ptr := func(s int) *time.Time { v := at(s); return &v }
+
+	// A request fault CPA does not fail over, then a rate limit.
+	attempt(1, 400, `{"type":"error","error":{"type":"invalid_request_error","message":"anthropic-workspace-id is required BODY-CANARY"}}`, "")
+	check("a 400", nil, ptr(1), 1, at(1))
+	attempt(2, 429, "rate limited BODY-CANARY", "claude:SESSION-CANARY")
+	check("a 429", nil, ptr(2), 2, at(2))
+	// A refusal, plain or in a Claude Code-based session, and a cancellation
+	// change neither outcome, though the key was seen.
+	attempt(3, 400, `{"error":{"message":"Your credit balance is too low to access the Anthropic API. BODY-CANARY"}}`, "")
+	attempt(4, 400, "Credit balance too low BODY-CANARY", "claude:SESSION-CANARY")
+	attempt(5, 499, "context canceled BODY-CANARY", "")
+	check("a refusal and a cancellation", nil, ptr(2), 2, at(5))
+	if o := org(t, m, orgA); o.Refusals != 1 || o.ClaudeCodeRefusals != 1 {
+		t.Fatalf("the refusals were not the organization's: %+v", o)
+	}
+	// A success resets the count.
+	attempt(6, 200, "", "")
+	check("a success", ptr(6), ptr(2), 0, at(6))
+	// Times only move forward.
+	attempt(4, 200, "", "")
+	check("an earlier success", ptr(6), ptr(2), 0, at(6))
+	attempt(8, 500, "overloaded BODY-CANARY", "")
+	attempt(7, 529, "overloaded BODY-CANARY", "")
+	check("an earlier failure", ptr(6), ptr(8), 2, at(8))
+	// The count saturates.
+	m.mu.Lock()
+	a := m.data.AuthIDs[keyA]
+	a.Failures = math.MaxUint16 - 1
+	m.data.AuthIDs[keyA] = a
+	m.mu.Unlock()
+	attempt(9, 500, "", "")
+	attempt(10, 500, "", "")
+	check("at the limit", ptr(6), ptr(10), math.MaxUint16, at(10))
+
+	// The file keeps all three, and of a failure nothing but its time.
+	m.flushIfDue(base.Add(time.Minute))
+	file, err := os.ReadFile(m.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys struct {
+		AuthIDs map[string]map[string]json.RawMessage `json:"auth_ids"`
+	}
+	if err := json.Unmarshal(file, &keys); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for name := range keys.AuthIDs[keyA] {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	if want := []string{"auth_index", "failures", "last_failure_at", "last_success_at", "seen_at"}; !slices.Equal(names, want) || len(keys.AuthIDs) != 1 {
+		t.Fatalf("auth ID keys = %q, want %q", names, want)
+	}
+	for _, text := range []string{"BODY-CANARY", "SESSION-CANARY", "workspace", "invalid_request_error", "overloaded", "canceled", "status"} {
+		if strings.Contains(string(file), text) {
+			t.Fatalf("the file carries %q", text)
+		}
+	}
+	again := newMeter(m.path, &fakeLog{})
+	again.restore([]string{orgA}, base.Add(time.Hour))
+	if got, want := again.data.AuthIDs[keyA], m.data.AuthIDs[keyA]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored %+v, want %+v", got, want)
 	}
 }
 

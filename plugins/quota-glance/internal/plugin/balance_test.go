@@ -19,6 +19,9 @@ func TestWarnBelowIsANumberInTheConfigurationPanel(t *testing.T) {
 	t.Fatal("openrouter-warn-below is not offered in the configuration panel")
 }
 
+// warnBelowConfig makes a fresh directory, so call it before registering the
+// plugin's Shutdown: cleanups run last first, and the directory must outlive
+// the watcher, whose first rebuild can still be writing history into it.
 func warnBelowConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,9 +52,10 @@ func TestWarnBelowAcceptsWhatThePanelAndAFileSave(t *testing.T) {
 		{"empty string", "openrouter-warn-below: \"\"\n", 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			cfg := warnBelowConfig(t) + tc.line
 			p := New(&fakeHost{})
 			t.Cleanup(p.Shutdown)
-			if _, err := configure(t, p, warnBelowConfig(t)+tc.line); err != nil {
+			if _, err := configure(t, p, cfg); err != nil {
 				t.Fatal(err)
 			}
 			p.configMu.RLock()
@@ -72,9 +76,10 @@ func TestWarnBelowRefusesWhatIsNotAnAmount(t *testing.T) {
 		"openrouter-warn-below: [5]\n",
 		"openrouter-warn-below: {amount: 5}\n",
 	} {
+		cfg := warnBelowConfig(t) + line
 		p := New(&fakeHost{})
 		t.Cleanup(p.Shutdown)
-		_, err := configure(t, p, warnBelowConfig(t)+line)
+		_, err := configure(t, p, cfg)
 		if err == nil || !strings.Contains(err.Error(), "openrouter-warn-below") {
 			t.Errorf("%q: err = %v; want a refusal naming the field", strings.TrimSpace(line), err)
 		}
@@ -84,9 +89,10 @@ func TestWarnBelowRefusesWhatIsNotAnAmount(t *testing.T) {
 // End to end: the fixture's OpenRouter account holds $74.75, which is fine
 // against the default and low against a threshold of $80.
 func TestWarnBelowReachesTheServedDocument(t *testing.T) {
+	cfg := warnBelowConfig(t) + "openrouter-warn-below: 80\n"
 	p := New(&fakeHost{})
 	t.Cleanup(p.Shutdown)
-	if _, err := configure(t, p, warnBelowConfig(t)+"openrouter-warn-below: 80\n"); err != nil {
+	if _, err := configure(t, p, cfg); err != nil {
 		t.Fatal(err)
 	}
 	doc := waitForDocument(t, p, func(doc map[string]any) bool {

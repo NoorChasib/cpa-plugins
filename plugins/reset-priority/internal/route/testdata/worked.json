@@ -1,0 +1,86 @@
+{
+  "now": "2026-10-11T12:00:00Z",
+  "credits": {
+    "schema": 1,
+    "quota_cache_version": "0.2.0",
+    "computed_at": "2026-10-11T11:59:50Z",
+    "valid_until": null,
+    "settings": {"state": "ok", "editable": true, "revision": "", "import": null},
+    "api_credits": {
+      "accounts": [
+        {
+          "id": "org-aaaaaaaaaaaa", "label": "alpha", "order": 0, "organizationId": "00000000-0000-4000-8000-00000000000a",
+          "state": "out", "counted": true, "hasEstimate": true, "basis": "credit",
+          "monthlyCreditText": "$50.00", "left": 0, "leftText": "$0.00", "estimateLeftText": "$0.00",
+          "renewsAtEpoch": 1791849600, "dataIssues": ["refused"],
+          "issue": "Anthropic refused a request for low credit, so this credit is spent."
+        },
+        {
+          "id": "org-bbbbbbbbbbbb", "label": "bravo", "order": 1, "organizationId": "00000000-0000-4000-8000-00000000000b",
+          "state": "ok", "counted": true, "hasEstimate": true, "basis": "credit",
+          "monthlyCreditText": "$100.00", "left": 40, "leftText": "$40.00", "estimateLeftText": "",
+          "renewsAtEpoch": 1792540800, "dataIssues": [], "issue": ""
+        },
+        {
+          "id": "org-cccccccccccc", "label": "charlie", "order": 2, "organizationId": "00000000-0000-4000-8000-00000000000c",
+          "state": "ok", "counted": true, "hasEstimate": true, "basis": "credit",
+          "monthlyCreditText": "$50.00", "left": 0, "leftText": "$0.00", "estimateLeftText": "",
+          "renewsAtEpoch": 1792972800, "dataIssues": ["overCredit"],
+          "issue": "Spend is $3.10 past the monthly credit. Anthropic bills purchased credit after the monthly credit; if there is none, enter a Console reading."
+        },
+        {
+          "id": "org-dddddddddddd", "label": "delta", "order": 3, "organizationId": "00000000-0000-4000-8000-00000000000d",
+          "state": "ok", "counted": true, "hasEstimate": true, "basis": "credit",
+          "monthlyCreditText": "$200.00", "left": 120, "leftText": "$120.00", "estimateLeftText": "",
+          "renewsAtEpoch": 1793491200, "dataIssues": [], "issue": ""
+        },
+        {
+          "id": "org-eeeeeeeeeeee", "label": "echo", "order": 4, "organizationId": "00000000-0000-4000-8000-00000000000e",
+          "state": "ok", "counted": true, "hasEstimate": true, "basis": "credit",
+          "monthlyCreditText": "$500.00", "left": 300, "leftText": "$300.00", "estimateLeftText": "",
+          "renewsAtEpoch": 1794268800, "dataIssues": [], "issue": ""
+        },
+        {
+          "id": "org-ffffffffffff", "label": "foxtrot", "order": 5, "organizationId": "00000000-0000-4000-8000-00000000000f",
+          "state": "ok", "counted": true, "hasEstimate": true, "basis": "reading",
+          "monthlyCreditText": "$50.00", "left": 25, "leftText": "$25.00", "estimateLeftText": "",
+          "renewsAtEpoch": null, "dataIssues": ["needsRefillDate"], "issue": "Set the refill date, or enter a Console reading."
+        }
+      ]
+    },
+    "renewals": {}
+  },
+  "meter": {
+    "schema": 1,
+    "since": "2026-09-01T00:00:00Z",
+    "started_at": "2026-10-11T09:00:00Z",
+    "flushed_at": "2026-10-11T11:59:31Z",
+    "received": 0,
+    "counted": 0,
+    "gaps": [],
+    "organizations": {},
+    "unlinked": [],
+    "auths": {
+      "000000000000000a": {"organization_id": "00000000-0000-4000-8000-00000000000a", "seen_at": "2026-10-11T10:00:00Z"},
+      "000000000000000b": {"organization_id": "00000000-0000-4000-8000-00000000000b", "seen_at": "2026-10-11T11:50:00Z"},
+      "000000000000000c": {"organization_id": "00000000-0000-4000-8000-00000000000c", "seen_at": "2026-10-11T10:00:00Z"},
+      "000000000000000d": {"organization_id": "00000000-0000-4000-8000-00000000000d", "seen_at": "2026-10-11T11:40:00Z"},
+      "000000000000000f": {"organization_id": "00000000-0000-4000-8000-00000000000e", "seen_at": "2026-10-11T11:30:00Z"},
+      "0000000000000010": {"organization_id": "00000000-0000-4000-8000-00000000000e", "seen_at": "2026-10-11T11:20:00Z"},
+      "0000000000000011": {"organization_id": "00000000-0000-4000-8000-00000000000f", "seen_at": "2026-10-11T11:10:00Z"},
+      "0000000000000013": {"organization_id": "", "seen_at": "2026-10-11T11:00:00Z"}
+    },
+    "auth_ids_since": "2026-10-11T09:00:00Z",
+    "auth_ids": {
+      "claude:apikey:00000000000a": {"auth_index": "000000000000000a", "seen_at": "2026-10-11T10:00:00Z", "last_success_at": "2026-10-11T09:30:00Z"},
+      "claude:apikey:00000000000b": {"auth_index": "000000000000000b", "seen_at": "2026-10-11T11:50:00Z", "last_success_at": "2026-10-11T11:50:00Z"},
+      "claude:apikey:00000000000c": {"auth_index": "000000000000000c", "seen_at": "2026-10-11T10:00:00Z", "last_success_at": "2026-10-11T10:00:00Z"},
+      "claude:apikey:00000000000d": {"auth_index": "000000000000000d", "seen_at": "2026-10-11T11:40:00Z", "last_success_at": "2026-10-11T11:40:00Z"},
+      "claude:apikey:00000000000f": {"auth_index": "000000000000000f", "seen_at": "2026-10-11T11:30:00Z", "last_success_at": "2026-10-11T11:30:00Z"},
+      "claude:apikey:000000000010": {"auth_index": "0000000000000010", "seen_at": "2026-10-11T11:20:00Z", "last_success_at": "2026-10-11T11:20:00Z"},
+      "claude:apikey:000000000011": {"auth_index": "0000000000000011", "seen_at": "2026-10-11T11:10:00Z", "last_success_at": "2026-10-11T11:10:00Z"},
+      "claude:apikey:000000000012": {"auth_index": "0000000000000012", "seen_at": "2026-10-11T10:30:00Z", "last_failure_at": "2026-10-11T10:30:00Z", "failures": 1},
+      "claude:apikey:000000000013": {"auth_index": "0000000000000013", "seen_at": "2026-10-11T11:00:00Z", "last_success_at": "2026-10-11T11:00:00Z"}
+    }
+  }
+}

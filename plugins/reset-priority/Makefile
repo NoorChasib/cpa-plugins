@@ -46,7 +46,7 @@ LIB := $(ID)$(LIB_EXT)
 STATICCHECK_VERSION ?= v0.8.1
 STATICCHECK ?= $(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 
-.PHONY: all fmt fmt-check vet lint test race build check-linux-glibc package check-release clean
+.PHONY: all fmt fmt-check vet lint test race bench build smoke check-linux-glibc package check-release clean
 
 all: fmt-check vet test build
 
@@ -78,9 +78,18 @@ test:
 race:
 	CGO_ENABLED=1 $(GO) test -race ./...
 
+## bench: report the API credit router's per-pick cost (reported, never a gate)
+bench:
+	$(GO) test -run '^$$' -bench BenchmarkPick -benchmem ./internal/route
+
 ## build: build the native CPA shared library (reset-priority.so on Linux)
 build:
 	CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(LIB) .
+
+## smoke: load the built library into a disposable CPA container and drive
+## the API credit router through it (needs docker)
+smoke: build
+	python3 ../../scripts/reset-priority-smoke.py
 
 ## check-linux-glibc: verify Linux ELF architecture and GLIBC <= $(GLIBC_MAX)
 check-linux-glibc: build

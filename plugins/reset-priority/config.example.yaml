@@ -61,6 +61,26 @@ plugins:
       #   - claude
       #   - codex
 
+      # Spend the Claude API credit that refills soonest first. Default false.
+      # When true, CPA asks Reset Priority which credential to use for every
+      # request attempt, even while Reset Priority cannot route, so check the
+      # status page's router section first. Reset Priority answers only when
+      # every candidate CPA offers for that attempt is a Claude API key from
+      # CPA's configuration, choosing the Console organization whose monthly
+      # credit refills soonest and still has some left; it leaves every other
+      # attempt, subscriptions included, to CPA, and OAuth priorities work as
+      # before. Independent of dry-run. Needs Quota Cache 0.2.0 or newer,
+      # CPA v8.0.4 or newer, and the credits keys set up as at the end of
+      # this file. Never point interactive Claude Code at these keys. It
+      # reads Quota Cache's files beside quota-cache-path, or Quota Cache's
+      # default path, whatever use-quota-cache says. Turn it off before
+      # updating or removing Reset Priority. Before CPA v8.0.22, also turn
+      # it off before turning Quota Cache off: those versions leave Quota
+      # Cache running but no longer counting, and this keeps routing on its
+      # figures. See REFERENCE.md. Reset Priority 0.1.8 and older ignore
+      # the key.
+      route-api-credits: false
+
 # Optional shared quota observations (off by default):
 # Set plugins.configs.reset-priority.use-quota-cache: true
 # Optional custom snapshot path: quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
@@ -69,4 +89,55 @@ plugins:
 # after a CPA restart) are re-read from the local snapshot at +5s, +30s, +2m, +5m,
 # and +15m. These are file reads, not provider requests. The corrected order is
 # written once, when every account is confirmed or at the +15m step.
+# A quota-cache-path without use-quota-cache turns cache mode on too.
 # Explicit use-quota-cache: false overrides any saved quota-cache-path.
+
+# CPA's own configuration, not a plugin setting. With route-api-credits on,
+# put the Console organizations' keys in their own api-keys.claude group, as
+# below. The models list, which each key inherits, maps every Claude model
+# the keys serve to an alias no other credential serves, so clients that
+# should spend the credit ask for credits-claude-sonnet-5-5 and so on, every
+# attempt for those names is Reset Priority's to route, and plain model names
+# never reach these keys. The group has no prefix. A prefix with
+# routing.force-model-prefix: true is the alternative (see REFERENCE.md);
+# adding or changing one gives each key a new auth ID that Quota Cache learns
+# again from that key's next request.
+#
+# The request-scoped-errors rule makes a request Anthropic refuses for low
+# credit move to the next key, which cools for about a minute for that model,
+# instead of the refusal going back to the client. Each key inherits it. In
+# the console it is set on each key instead: AI Providers > Claude > the key's
+# Edit > Advanced runtime policy > Request error rules.
+#
+# Give these keys no cloak block, or one with mode: never, and no
+# fingerprint-profile: claude-code-cli: a cloak block in any other mode, or
+# that profile, makes CPA send every request on them as Claude Code, which
+# the monthly credit does not cover.
+#
+# api-keys:
+#   claude:
+#     - name: credits
+#       models:
+#         - name: claude-sonnet-5-5
+#           alias: credits-claude-sonnet-5-5
+#       request-scoped-errors:
+#         - status: 400
+#           match: ["credit balance is too low"]
+#           # optional, survives a capitalization change:
+#           # match-regexr: ["(?i)credit balance is too low"]
+#           action: continue-and-cooldown
+#       keys:
+#         - api-key: "<organization 1 key>"
+#         - api-key: "<organization 2 key>"
+#
+# Optional, in the same request-scoped-errors list. CPA returns these 400s to
+# the client on every request instead of moving on: a personal key used
+# without anthropic-workspace-id, and a spend limit set on an organization or
+# workspace. Add them only if one of your keys can hit them.
+#
+#         - status: 400
+#           match: ["anthropic-workspace-id is required"]
+#           action: continue-and-cooldown
+#         - status: 400
+#           match: ["You have reached your specified"]   # org and workspace spend limits
+#           action: continue-and-cooldown
