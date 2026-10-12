@@ -65,6 +65,14 @@ export class RedeemError extends Error {
      * plugin could say what that one came to. See SpendAnswer.kept.
      */
     readonly kept: boolean = false,
+    /**
+     * As RedeemResult.refreshRequested: after `outcome_unknown`, and a
+     * `retry_window_closed` whose repeat was sent, the plugin asks Quota
+     * Cache to poll the account, because the reset may have been spent.
+     */
+    readonly refreshRequested: boolean = false,
+    /** As RedeemResult.refreshRequestedAtEpoch. */
+    readonly refreshRequestedAtEpoch: number | null = null,
   ) {
     super(code)
     this.name = "RedeemError"
@@ -113,11 +121,17 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
   const body = (answer.json && answer.body !== null && typeof answer.body === "object" ? answer.body : {}) as {
     error?: unknown
     retryUntilEpoch?: unknown
-  } & Partial<RedeemResult>
+    refreshRequestedAtEpoch?: unknown
+  } & Omit<Partial<RedeemResult>, "refreshRequestedAtEpoch">
+  // Only a plugin that asked says so; an older one asked nothing. The instant
+  // is read only beside a yes, and a yes without one starts no check.
+  const refreshRequested = body.refreshRequested === true
+  const refreshRequestedAtEpoch =
+    refreshRequested && typeof body.refreshRequestedAtEpoch === "number" ? body.refreshRequestedAtEpoch : null
   if (!answer.ok) {
     if (typeof body.error === "string" && body.error !== "") {
       const until = typeof body.retryUntilEpoch === "number" ? body.retryUntilEpoch : null
-      throw new RedeemError(body.error, status, until, replayed, kept)
+      throw new RedeemError(body.error, status, until, replayed, kept, refreshRequested, refreshRequestedAtEpoch)
     }
     throw new RedeemError("unknown", status, null, replayed, kept)
   }
@@ -130,6 +144,8 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
     windowsReset: typeof body.windowsReset === "number" ? body.windowsReset : 0,
     remainingCount: typeof body.remainingCount === "number" ? body.remainingCount : 0,
     snapshotPending: body.snapshotPending !== false,
+    refreshRequested,
+    refreshRequestedAtEpoch,
     provider: typeof body.provider === "string" ? body.provider : "",
     replayed,
     cooldown: typeof body.cooldown === "string" ? body.cooldown : "",

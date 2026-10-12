@@ -7,15 +7,17 @@
 // the button is answered by a stand-in that returns the ending named, so each
 // one can be looked at without spending anything.
 //
-// The API meter is read from beside the snapshot, as the plugin reads it, and
-// the dashboard's settings from -settings. With -edit, saves go to a copy of
-// that file in a temporary directory and rebuild the document, so the editor
-// can be tried end to end without touching the fixture.
+// Quota Cache's published credit state is read from -credits. By default that
+// is the file beside the snapshot, where the plugin reads it, or, for a
+// fixture with none there, Quota Cache's own committed state for the fixture
+// of the same name. The API credit card is read-only: its values are edited on
+// Quota Cache's page, and the retired settings routes answer 410 here too.
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,7 +31,6 @@ import (
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/api"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/redeem"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
@@ -50,8 +51,8 @@ func main() {
 		"a reset whose CPA cooldown was not cleared (cooldownFailed, cooldownUnsupported, cooldownUnconfirmed) "+
 		"or an error (outcome_unknown, retry_window_closed, provider_rate_limited, provider_refused, provider_unavailable, already_in_flight, credential_unusable). "+
 		"Empty leaves redemption off")
-	settingsPath := flag.String("settings", "", "settings.json fixture for the dashboard's values. Defaults to testdata/overrides/ named after the snapshot, when there is one")
-	edit := flag.Bool("edit", false, "accept saves from the editor, into a temporary copy of -settings")
+	creditsPath := flag.String("credits", "", "Quota Cache's published credit state. Defaults to the file beside the snapshot, "+
+		"else Quota Cache's committed state for the fixture of the same name, when there is one")
 	flag.Parse()
 	stand, err := standInFor(*ending)
 	if err != nil {
@@ -68,31 +69,22 @@ func main() {
 		log.Printf("snapshot could not be read: %s", result.Reason)
 		os.Exit(1)
 	}
-	if result.MeterError != "" {
-		log.Printf("no API meter beside the snapshot: %s", result.MeterError)
-	}
-	settings, err := settingsFor(*snapshot, *settingsPath)
-	if err != nil {
-		log.Fatal(err)
+	credits, creditsError := creditsFor(*snapshot, *creditsPath, result)
+	if creditsError != "" {
+		log.Printf("no usable credit state from Quota Cache (%s); the API credit card lists its organizations without figures", creditsError)
 	}
 	served := api.New("quota-glance", *token)
-	rebuild := func() {
-		served.Publish(aggregate.Build(aggregate.Input{
-			Snapshot:   result.Snapshot,
-			Identities: result.Identities,
-			StaleAfter: 45 * time.Minute,
-			Redeemable: stand != nil,
-			Meter:      result.Meter,
-			Overrides:  settings.Current(),
-			AllowEdit:  *edit,
-		}, now), api.Health{Version: "fixtureserve", CachePath: *snapshot, StaleAfter: "45m"})
-	}
-	rebuild()
+	served.Publish(aggregate.Build(aggregate.Input{
+		Snapshot:     result.Snapshot,
+		Identities:   result.Identities,
+		StaleAfter:   45 * time.Minute,
+		Redeemable:   stand != nil,
+		Credits:      credits,
+		CreditsError: creditsError,
+	}, now), api.Health{Version: "fixtureserve", CachePath: *snapshot, StaleAfter: "45m"})
 	if stand != nil {
 		served.SetRedeemer(stand)
-	}
-	if *edit {
-		served.SetSaver(fixtureSaver{store: settings, meter: result.Meter, rebuild: rebuild})
+		served.SetRefresher(refreshStandIn{})
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -118,59 +110,34 @@ func main() {
 		fmt.Printf("  redeem   POST http://%s/v0/management/plugins/quota-glance/redeem  (answers %q, contacts nothing)\n", *addr, *ending)
 		fmt.Printf("  spend    GET http://%s/v0/resource/plugins/quota-glance/spend  (Bearer %s + X-Quota-Glance-Spend)\n", *addr, *token)
 	}
-	if *edit {
-		fmt.Printf("  settings POST http://%s/v0/management/plugins/quota-glance/settings  (saves to %s)\n", *addr, settings.Path())
-	}
 	fmt.Println("  (CPA authenticates the management tree in production; this stand-in does not)")
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
-// settingsFor opens the dashboard's settings for a fixture: a temporary copy
-// of the settings file, so a save never writes into testdata.
-func settingsFor(snapshotPath, settingsPath string) (*overrides.Store, error) {
-	if settingsPath == "" {
-		name := strings.TrimSuffix(filepath.Base(snapshotPath), ".json") + ".json"
-		candidate := filepath.Join(filepath.Dir(snapshotPath), "..", "overrides", name)
-		if _, err := os.Stat(candidate); err == nil {
-			settingsPath = candidate
+// creditsFor is the credit state to build with: the -credits file when one is
+// named, else what source.Read found beside the snapshot, else Quota Cache's
+// committed state for a fixture of the same name. Its error is the card's
+// CreditsError.
+func creditsFor(snapshotPath, creditsPath string, result source.Result) (*qc.CreditState, string) {
+	if creditsPath == "" {
+		if result.CreditsError != aggregate.CreditsMissing {
+			return result.Credits, result.CreditsError
 		}
-	}
-	dir, err := os.MkdirTemp("", "fixtureserve-settings-")
-	if err != nil {
-		return nil, err
-	}
-	if settingsPath != "" {
-		raw, err := os.ReadFile(settingsPath)
-		if err != nil {
-			return nil, fmt.Errorf("settings fixture: %w", err)
+		name := strings.TrimSuffix(filepath.Base(snapshotPath), ".json") + ".credits.json"
+		candidate := filepath.Join(filepath.Dir(snapshotPath), "..", "..", "..", "quota-cache", "internal", "credits", "testdata", "golden", name)
+		if _, err := os.Stat(candidate); err != nil {
+			return nil, aggregate.CreditsMissing
 		}
-		if err := os.WriteFile(filepath.Join(dir, overrides.FileName), raw, 0o600); err != nil {
-			return nil, err
-		}
+		creditsPath = candidate
 	}
-	store := overrides.Open(dir)
-	if store.Current().Unreadable {
-		log.Printf("settings fixture %s is unreadable; nothing in it applies", settingsPath)
+	state, err := qc.LoadCredits(creditsPath)
+	switch {
+	case errors.Is(err, qc.ErrCreditsMissing):
+		return nil, aggregate.CreditsMissing
+	case err != nil:
+		return nil, aggregate.CreditsUnreadable
 	}
-	return store, nil
-}
-
-// fixtureSaver saves into the temporary settings and rebuilds, as the plugin's
-// saver does.
-type fixtureSaver struct {
-	store   *overrides.Store
-	meter   *qc.APIMeter
-	rebuild func()
-}
-
-func (s fixtureSaver) Current() overrides.Values { return s.store.Current() }
-
-func (s fixtureSaver) Save(batch overrides.Batch, now time.Time) (overrides.Result, error) {
-	result, err := s.store.Apply(batch, s.meter, now)
-	if err == nil && !result.Unchanged {
-		s.rebuild()
-	}
-	return result, err
+	return state, ""
 }
 
 // standIn answers every press with one fixed ending, in place of a redeemer
@@ -185,10 +152,16 @@ func (s standIn) Redeem(context.Context, string, string) (redeem.Result, error) 
 	// repeated. Ten minutes from the press is what a first unknown answer
 	// would say.
 	if s.err == redeem.ErrOutcomeUnknown {
-		return redeem.Result{}, &redeem.OutcomeUnknownError{RetryUntil: time.Now().Add(10 * time.Minute)}
+		return redeem.Result{MayHaveSpent: true}, &redeem.OutcomeUnknownError{RetryUntil: time.Now().Add(10 * time.Minute)}
 	}
 	return s.result, s.err
 }
+
+// refreshStandIn says Quota Cache was asked to refresh, now, and writes
+// nothing: there is no Quota Cache here to read it.
+type refreshStandIn struct{}
+
+func (refreshStandIn) RequestRefresh(string, string) (time.Time, bool) { return time.Now(), true }
 
 // standInFor maps a -redeem value onto the ending the real redeemer would
 // produce: an outcome, or the error the API turns into that code.
@@ -196,10 +169,12 @@ func standInFor(ending string) (*standIn, error) {
 	switch ending {
 	case "":
 		return nil, nil
+	// alreadyUsed as the press after an unknown outcome hears it, which is
+	// the earlier spend confirmed.
 	case redeem.OutcomeReset, redeem.OutcomeAlreadyUsed:
-		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1, Cooldown: redeem.CooldownCleared}}, nil
+		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1, Cooldown: redeem.CooldownCleared, MayHaveSpent: true}}, nil
 	case redeem.OutcomeNothingToReset:
-		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1}}, nil
+		return &standIn{result: redeem.Result{Outcome: ending, WindowsReset: 2, RemainingCount: 1, MayHaveSpent: true}}, nil
 	// A reset the provider confirmed, and CPA's cooldown on the credential
 	// not cleared after it.
 	case "cooldownFailed", "cooldownUnsupported", "cooldownUnconfirmed":
@@ -207,7 +182,7 @@ func standInFor(ending string) (*standIn, error) {
 			"cooldownFailed": redeem.CooldownFailed, "cooldownUnsupported": redeem.CooldownUnsupported,
 			"cooldownUnconfirmed": redeem.CooldownUnconfirmed,
 		}[ending]
-		return &standIn{result: redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 1, Cooldown: cooldown}}, nil
+		return &standIn{result: redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 1, Cooldown: cooldown, MayHaveSpent: true}}, nil
 	case redeem.OutcomeNoCredit, redeem.OutcomeFailed, redeem.OutcomeNotLimited,
 		redeem.OutcomeCooldown, redeem.OutcomePaused, redeem.OutcomeIneligible:
 		return &standIn{result: redeem.Result{Outcome: ending, RemainingCount: 2}}, nil

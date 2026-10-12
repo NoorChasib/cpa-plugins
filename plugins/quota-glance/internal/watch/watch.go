@@ -2,8 +2,9 @@
 //
 // Mostly that means turning quota-cache's writes into reload events: there is
 // no event bus between CPA plugins and no host callback that reports a cache
-// refresh, so the files themselves are the signal. quota-cache writes two, the
-// snapshot and its API meter beside it, and a write to either reloads. The
+// refresh, so the files themselves are the signal. quota-cache writes two that
+// this reads, the snapshot and the credit state it publishes beside it, and a
+// write to either reloads. The
 // heartbeat covers the half of the document the files do not carry — request
 // activity, which the host roster reports and which moves between writes.
 package watch
@@ -49,14 +50,14 @@ const (
 
 type Options struct {
 	Path string
-	// MeterPath is quota-cache's API meter, which it saves beside the snapshot
-	// and on its own schedule: a write to it reloads as a write to Path does.
-	// Optional. Only Path's directory is watched, so a meter anywhere else is
-	// noticed by the backstop alone.
-	MeterPath string
-	Debounce  time.Duration
-	Backstop  time.Duration
-	Heartbeat time.Duration
+	// CreditsPath is quota-cache's published credit state, which it writes
+	// beside the snapshot and on its own schedule: a write to it reloads as a
+	// write to Path does. Optional. Only Path's directory is watched, so a
+	// file anywhere else is noticed by the backstop alone.
+	CreditsPath string
+	Debounce    time.Duration
+	Backstop    time.Duration
+	Heartbeat   time.Duration
 	// OnChange runs off the watch goroutine's event loop, one call per
 	// debounced change. It must not block for long.
 	OnChange func()
@@ -116,9 +117,9 @@ func Start(opts Options) (*Watcher, error) {
 		return nil, errors.New("cache path cannot be resolved")
 	}
 	opts.Path = path
-	if opts.MeterPath != "" {
-		if opts.MeterPath, err = filepath.Abs(opts.MeterPath); err != nil {
-			return nil, errors.New("meter path cannot be resolved")
+	if opts.CreditsPath != "" {
+		if opts.CreditsPath, err = filepath.Abs(opts.CreditsPath); err != nil {
+			return nil, errors.New("credit state path cannot be resolved")
 		}
 	}
 	fs, err := fsnotify.NewWatcher()
@@ -210,16 +211,16 @@ func fingerprintOf(path string) fingerprint {
 
 // fingerprints is every watched file's version at once, so the backstop
 // notices a missed write to either.
-type fingerprints struct{ snapshot, meter fingerprint }
+type fingerprints struct{ snapshot, credits fingerprint }
 
 func (w *Watcher) fingerprints() fingerprints {
-	return fingerprints{snapshot: fingerprintOf(w.opts.Path), meter: fingerprintOf(w.opts.MeterPath)}
+	return fingerprints{snapshot: fingerprintOf(w.opts.Path), credits: fingerprintOf(w.opts.CreditsPath)}
 }
 
 // watched reports whether an event names one of the watched files.
 func (w *Watcher) watched(name string) bool {
 	name = filepath.Clean(name)
-	return name == w.opts.Path || (w.opts.MeterPath != "" && name == w.opts.MeterPath)
+	return name == w.opts.Path || (w.opts.CreditsPath != "" && name == w.opts.CreditsPath)
 }
 
 func (w *Watcher) run() {
@@ -275,8 +276,8 @@ func (w *Watcher) run() {
 			// A rename surfaces as Create on the destination, and can arrive
 			// alongside Chmod and Write. Anything touching either file
 			// collapses into one debounced reload: quota-cache can save the
-			// snapshot and the meter within the same moment, and one rebuild
-			// reads both.
+			// snapshot and the credit state within the same moment, and one
+			// rebuild reads both.
 			if !w.watched(event.Name) {
 				continue
 			}

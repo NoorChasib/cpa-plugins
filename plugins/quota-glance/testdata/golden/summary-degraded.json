@@ -1437,7 +1437,8 @@
     },
     "editing": {
       "available": false,
-      "reason": "disabled"
+      "reason": "quotaCache",
+      "migration": ""
     },
     "pool": {
       "hasEstimate": true,
@@ -1521,7 +1522,7 @@
         "issue": "Anthropic refused a request for low credit, so this credit is spent. The estimate had $159.92 left; enter a Console reading to correct it.",
         "settings": {
           "editable": false,
-          "notEditableReason": "disabled",
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "200",
@@ -1584,7 +1585,7 @@
         "issue": "Quota Cache has not saved its meter recently, so recent spend may be missing.",
         "settings": {
           "editable": false,
-          "notEditableReason": "disabled",
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "100",
@@ -1646,7 +1647,7 @@
         "issue": "Set the refill date, or enter a Console reading.",
         "settings": {
           "editable": false,
-          "notEditableReason": "disabled",
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "100",
@@ -1716,7 +1717,7 @@
         "issue": "Set this organization's monthly credit to count it in the total.",
         "settings": {
           "editable": false,
-          "notEditableReason": "disabled",
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "",
@@ -1777,7 +1778,7 @@
         "issue": "Counting starts at Quota Cache's next save.",
         "settings": {
           "editable": false,
-          "notEditableReason": "disabled",
+          "notEditableReason": "quotaCache",
           "revision": "",
           "monthlyUsd": "",
           "configMonthlyUsd": "50",

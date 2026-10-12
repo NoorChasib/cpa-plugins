@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"sync"
 	"testing"
@@ -291,8 +292,11 @@ func TestRegisterInvalidConfigRejected(t *testing.T) {
 	}
 }
 
+// The plugin answers min(offered, 6). Schema 6 is the first where CPA stops
+// HTML-escaping management JSON, so the status's router labels and issue
+// sentences reach a reader as written; nothing else here depends on it.
 func TestSchemaNegotiation(t *testing.T) {
-	for hostSchema, want := range map[uint32]uint32{4: 4, 3: 3, 0: 1, 9: 4} {
+	for hostSchema, want := range map[uint32]uint32{4: 4, 3: 3, 0: 1, 5: 5, 6: 6, 9: 6} {
 		rt := newTestRuntime(t, newFakeHostCaller())
 		env := decodeEnvelope(t, rt.Dispatch(hostapi.MethodPluginRegister,
 			lifecycleRequest(t, "enabled: false\n", hostSchema)))
@@ -305,6 +309,66 @@ func TestSchemaNegotiation(t *testing.T) {
 		}
 		if reg.SchemaVersion != want {
 			t.Errorf("host schema %d: negotiated %d, want %d", hostSchema, reg.SchemaVersion, want)
+		}
+	}
+}
+
+// CPA's plugin list HTML-escapes the metadata, every config field and every
+// menu entry at any schema, and the console draws them as plain text, so an
+// apostrophe in a field description shows as &#39; in the Configure dialog.
+// Nothing the plugin registers may hold a character html.EscapeString changes.
+func TestRegisteredTextSurvivesPluginListEscaping(t *testing.T) {
+	rt := newTestRuntime(t, newFakeHostCaller())
+	env := decodeEnvelope(t, rt.Dispatch(hostapi.MethodPluginRegister,
+		lifecycleRequest(t, "enabled: false\n", hostapi.SchemaVersion)))
+	if !env.OK {
+		t.Fatalf("register failed: %+v", env.Error)
+	}
+	var reg hostapi.Registration
+	if err := json.Unmarshal(env.Result, &reg); err != nil {
+		t.Fatal(err)
+	}
+	env = decodeEnvelope(t, rt.Dispatch(hostapi.MethodManagementRegister, nil))
+	if !env.OK {
+		t.Fatalf("management.register failed: %+v", env.Error)
+	}
+	var mgmt hostapi.ManagementRegistration
+	if err := json.Unmarshal(env.Result, &mgmt); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := reg.Metadata
+	text := map[string]string{
+		"metadata Name":             meta.Name,
+		"metadata Version":          meta.Version,
+		"metadata Author":           meta.Author,
+		"metadata GitHubRepository": meta.GitHubRepository,
+		"metadata Logo":             meta.Logo,
+	}
+	if len(meta.ConfigFields) == 0 {
+		t.Fatal("registration lists no config fields")
+	}
+	for _, field := range meta.ConfigFields {
+		text["config field "+field.Name+" Name"] = field.Name
+		text["config field "+field.Name+" Type"] = field.Type
+		text["config field "+field.Name+" Description"] = field.Description
+		for i, value := range field.EnumValues {
+			text[fmt.Sprintf("config field %s EnumValues[%d]", field.Name, i)] = value
+		}
+	}
+	for _, managed := range mgmt.Routes {
+		text["route "+managed.Path+" Path"] = managed.Path
+		text["route "+managed.Path+" Menu"] = managed.Menu
+		text["route "+managed.Path+" Description"] = managed.Description
+	}
+	for _, resource := range mgmt.Resources {
+		text["resource "+resource.Path+" Path"] = resource.Path
+		text["resource "+resource.Path+" Menu"] = resource.Menu
+		text["resource "+resource.Path+" Description"] = resource.Description
+	}
+	for where, value := range text {
+		if escaped := html.EscapeString(value); escaped != value {
+			t.Errorf("%s reaches the console as %q", where, escaped)
 		}
 	}
 }

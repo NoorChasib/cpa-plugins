@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -42,19 +44,22 @@ func TestPublicSidebarIsStaticAndDoesNotStartPolling(t *testing.T) {
 // pins the guards that keep it from costing CPA management sign-in failures, so
 // an edit that drops one fails here as well.
 func TestStatusPageNeverPresentsAMissingOrRefusedKey(t *testing.T) {
-	script := sidebarScript
+	script := sidebarApp
 	if strings.Count(script, "fetch(") != 1 || strings.Count(script, "refresh(true)") != 1 {
 		t.Fatal("expected one request site, resumed by Refresh view alone")
 	}
+	// The timer also waits while a card is being edited and shown, so nothing
+	// replaces the rows being edited.
 	if !strings.Contains(script, "addEventListener('click', () => refresh(true))") ||
-		!strings.Contains(script, "if ($('auto').checked && !document.hidden) refresh(false); }, 30000)") {
+		!strings.Contains(script, "if ($('auto').checked && !document.hidden && !holding()) refresh(false); }, 30000)") ||
+		!strings.Contains(script, "const holding = () => editing() && !$('content').hidden;") {
 		t.Fatal("the timer must never resume after a refusal")
 	}
 	refresh := script[strings.Index(script, "async function refresh(manual)"):]
 	request := strings.Index(refresh, "fetch(")
 	for _, guard := range []string{
 		"if (busy || (stopped && !manual)) return;",
-		"if (!session) { syncButton(null); unavailable(SIGN_IN,",
+		"if (!session) { unavailable(SIGN_IN,",
 		"if (refused && manual && !banned(refused)) { forget(); refused = null; }",
 		"if (refused) { stopped = true;",
 	} {
@@ -96,13 +101,19 @@ func TestStatusPageNeverPresentsAMissingOrRefusedKey(t *testing.T) {
 			t.Fatalf("page script lost %q", rule)
 		}
 	}
+	// Refresh view drops the refusal and sends the same key again, so the
+	// page's own words must not promise that a refused key is never sent.
+	footnote := sidebarHTML[strings.Index(sidebarHTML, `<footer class="footnote">`):]
+	if strings.Contains(footnote, "never sent again") || !strings.Contains(footnote, "sends the remembered key again only when you select Refresh view") {
+		t.Fatal("the footnote must say Refresh view sends a refused key again")
+	}
 }
 
 // Claude API credit entries have a name, a filter, a source and a reading of
 // their own: they are metered from CPA's usage records, never polled, and
 // the page prints the meter's counts without adding them up.
 func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
-	script := sidebarScript
+	script := sidebarApp
 	for _, rule := range []string{
 		"'anthropic-api': 'Claude API credits'",
 		"'anthropic-api': 'CPA usage meter (no requests)'",
@@ -122,7 +133,6 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 		"['Records received', String(m.received || 0)], ['Counted', String(m.counted || 0)], ['Foreign (not Anthropic)', String(m.foreign || 0)]",
 		"['Rejected', String(m.rejected || 0)], ['Dropped', String(m.dropped || 0)], ['Unattributed', String(m.unattributed || 0)]",
 		"$('meter-gaps')", "$('meter-unlinked')",
-		"claude-api-credits",
 	} {
 		if !strings.Contains(script, rule) {
 			t.Fatalf("page script lost %q", rule)
@@ -142,6 +152,195 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, "claude-api-credits", `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
 		if !strings.Contains(sidebarHTML, rule) {
 			t.Fatalf("the page lost %q", rule)
+		}
+	}
+}
+
+// While a refresh round after a banked reset has credentials left to poll,
+// the page says how many, as text, from the status's refresh block only when
+// it is a positive whole number; otherwise the line is hidden. The line is a
+// live region, so it is written only when its text changes.
+func TestStatusPageShowsARefreshRound(t *testing.T) {
+	for _, rule := range []string{
+		"object(s.refresh) && Number.isInteger(s.refresh.remaining) && s.refresh.remaining > 0 ? s.refresh.remaining : 0",
+		"const roundLine = round ? 'Refreshing after a banked reset: ' + round + ' left' : '';",
+		"if ($('refresh-round').textContent !== roundLine) $('refresh-round').textContent = roundLine;",
+		"$('refresh-round').hidden = !round;",
+	} {
+		if !strings.Contains(sidebarApp, rule) {
+			t.Fatalf("page script lost %q", rule)
+		}
+	}
+	if !strings.Contains(sidebarHTML, `<div id="refresh-round" class="alert" role="status" hidden></div>`) {
+		t.Fatal("the page lost the refresh line")
+	}
+}
+
+// The page is one document with one script element, app.js then editor.js,
+// under one CSP hash worked out from exactly those bytes; nothing in it
+// depends on a request or on the plugin's state.
+func TestSidebarIsOneScriptUnderOneHash(t *testing.T) {
+	if strings.Count(sidebarDocument, "<script") != 1 || strings.Count(sidebarDocument, "</script>") != 1 {
+		t.Fatal("the page must have exactly one script element")
+	}
+	if sidebarScript != sidebarApp+"\n"+sidebarEditor || !strings.Contains(sidebarDocument, "<script>"+sidebarApp+"\n"+sidebarEditor+"</script>") {
+		t.Fatal("the script element must be app.js then editor.js")
+	}
+	csp := sidebarResponse().Headers.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "script-src "+sidebarHash(sidebarApp+"\n"+sidebarEditor)+";") || strings.Contains(csp, sidebarHash(sidebarApp)+";") {
+		t.Fatalf("the script hash must cover app.js and editor.js together: %s", csp)
+	}
+	if !strings.Contains(csp, "connect-src 'self'") || strings.Contains(csp, "unsafe") {
+		t.Fatalf("the policy must stay strict: %s", csp)
+	}
+	// No other script source can run: no inline handler attribute in the
+	// markup, and no string turned into markup or code by the scripts.
+	if regexp.MustCompile(`(?i)<[^>]+\son[a-z]+\s*=`).MatchString(sidebarHTML) {
+		t.Fatal("the markup has an inline event handler")
+	}
+	for _, name := range []string{"app.js", "editor.js"} {
+		script := map[string]string{"app.js": sidebarApp, "editor.js": sidebarEditor}[name]
+		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute('on", `setAttribute("on`, "javascript:"} {
+			if strings.Contains(script, banned) {
+				t.Fatalf("%s uses %q", name, banned)
+			}
+		}
+	}
+	// The document is built once, from the embeds alone: a stopped plugin and
+	// a running one serve the same bytes.
+	running := New(&testHost{})
+	config, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("enabled: true\ncache-path: " + filepath.Join(t.TempDir(), "cache", "snapshot.json") + "\n")})
+	if _, err := running.Handle(protocol.MethodPluginRegister, config); err != nil {
+		t.Fatal(err)
+	}
+	defer running.Shutdown()
+	for _, p := range []*Plugin{New(&testHost{}), running} {
+		raw, _ := json.Marshal(protocol.ManagementRequest{Method: "GET", Path: "/v0/resource/plugins/quota-cache/status"})
+		result, err := p.Handle(protocol.MethodManagementHandle, raw)
+		if err != nil || string(result.(protocol.ManagementResponse).Body) != sidebarDocument {
+			t.Fatal("the page depends on the plugin's state")
+		}
+	}
+	for _, id := range []string{`<section id="organizations"`, `<section id="api-credits"`, `<section id="renewals"`, `aria-labelledby="accounts-heading"`} {
+		if !strings.Contains(sidebarHTML, id) {
+			t.Fatalf("the page lost %q", id)
+		}
+	}
+	// The organizations card sits above the API credits card, whose rows it
+	// decides, and the editor's cards come after the overview, before Accounts.
+	order := []int{strings.Index(sidebarHTML, `class="stats"`), strings.Index(sidebarHTML, `id="organizations"`), strings.Index(sidebarHTML, `id="api-credits"`), strings.Index(sidebarHTML, `id="renewals"`), strings.Index(sidebarHTML, `id="accounts-heading"`)}
+	for i := 1; i < len(order); i++ {
+		if order[i] <= order[i-1] {
+			t.Fatalf("the cards are out of order: %v", order)
+		}
+	}
+}
+
+// The editor saves through one request site that follows the status read's
+// rules: never without the console's remembered session for this CPA, never
+// with a key CPA refused, the refusal remembered before its answer is read,
+// and nothing sent again after a request that got no answer. A save goes
+// only from a button press: nothing on a timer calls it.
+func TestEditorSavesOnlyFromAPressWithTheConsoleKey(t *testing.T) {
+	script := sidebarEditor
+	if strings.Count(script, "fetch(") != 1 || strings.Count(script, "await send(") != 4 {
+		t.Fatal("expected one request site, used by the three cards' Save and the import")
+	}
+	if strings.Contains(script, "setInterval") || strings.Count(script, "window.QuotaCachePage") != 1 {
+		t.Fatal("the editor must not poll or read any global but the page's namespace")
+	}
+	send := script[strings.Index(script, "async function send(body)"):]
+	send = send[:strings.Index(send, "\n  }\n")]
+	request := strings.Index(send, "fetch(")
+	for _, guard := range []string{
+		"const session = page.readSession();",
+		"if (!page.root || !session) return {kind: 'blocked', reason: 'session'};",
+		"const held = page.refusal(session);",
+		"const hold = refusalHold(held, page.banned);",
+		"if (hold && hold.block) return {kind: 'blocked', reason: 'refused', record: held};",
+		// Only a refusal that was not about the key is cleared, by this press.
+		"if (held) page.forget();",
+	} {
+		if at := strings.Index(send, guard); at < 0 || at > request {
+			t.Fatalf("send lost %q before its request", guard)
+		}
+	}
+	// A key CPA refused, and a lockout still running, hold Save off.
+	hold := script[strings.Index(script, "function refusalHold(record, active)"):]
+	hold = hold[:strings.Index(hold, "\n  }\n")]
+	for _, rule := range []string{
+		"if (record.reason === 'refused') return {block:",
+		"if (record.reason === 'banned' && active(record)) return {block:",
+	} {
+		if !strings.Contains(hold, rule) {
+			t.Fatalf("refusalHold lost %q", rule)
+		}
+	}
+	for _, rule := range []string{
+		"method: 'POST'", "'Content-Type': 'application/json'", "Authorization: ['Bearer', session.key].join(' ')",
+		"mode: 'same-origin'", "credentials: 'same-origin'", "cache: 'no-store'", "redirect: 'error'", "page.root + SETTINGS_PATH",
+		"} catch {\n      page.unansweredSave();\n      return {kind: 'lost'};",
+		"page.unescapeAll(await response.json())",
+	} {
+		if !strings.Contains(send, rule) {
+			t.Fatalf("send lost %q", rule)
+		}
+	}
+	refusal := send[strings.Index(send, "response.status === 401 || response.status === 403"):]
+	latch, body, stop := strings.Index(refusal, "page.remember(session, response.status, null)"), strings.Index(refusal, "response.json()"), strings.Index(refusal, "page.refusedSave(record)")
+	if latch < 0 || body < latch || stop < body {
+		t.Fatal("a refused save must be remembered before its body is read, then stop the page")
+	}
+	if !strings.Contains(script, "const SETTINGS_PATH = '/v0/management/plugins/quota-cache/settings';") {
+		t.Fatal("the editor must save through the management route")
+	}
+	// Save, the import and Remove are buttons; the forms submit only to Save.
+	for _, rule := range []string{
+		"on: {submit: event => { event.preventDefault(); saveOrganizations(); }}",
+		"on: {submit: event => { event.preventDefault(); saveCredits(); }}",
+		"on: {submit: event => { event.preventDefault(); saveRenewals(); }}",
+		"on: {click: runImport}",
+		// A save while the page follows Quota Glance's file asks, and Save
+		// anyway answers for that one save only: the forms never send one
+		// confirmed.
+		"if (!confirmed && following()) { askFollowing(credits, saveCredits); return; }",
+		"if (!confirmed && following()) { askFollowing(renewals, saveRenewals); return; }",
+		"label: 'Save anyway', go: () => { target.confirm = null; go(true); }};",
+		// Save is off without a session or with a refused key.
+		"if (!page.root || !session) return {block: SIGN_IN_FOOT};",
+		"const blocked = session.block ||",
+		// Leaving with unsaved edits asks, those still to fix included.
+		"window.addEventListener('beforeunload'",
+		"(credits.editing && creditsPlanNow().unsaved > 0)",
+		"(renewals.editing && renewalsPlanNow().unsaved > 0)",
+	} {
+		if !strings.Contains(script, rule) {
+			t.Fatalf("the editor lost %q", rule)
+		}
+	}
+	// The page judges every field itself, so the browser's own checks never
+	// stop a Save it offers: every form is novalidate, and no field has a
+	// maxlength, which counts UTF-16 units where a label's rule counts
+	// characters.
+	if forms := strings.Count(script, "h('form', {"); forms != 3 || strings.Count(script, "h('form', {novalidate: true, ") != forms {
+		t.Fatalf("every one of the editor's %d forms must be novalidate", forms)
+	}
+	if strings.Contains(script, "maxlength") {
+		t.Fatal("an editor field has a maxlength")
+	}
+	app := sidebarApp
+	for _, rule := range []string{
+		// One decoding, of every management string, only on the host's word.
+		"if (!escaped || typeof value !== 'string') return value;",
+		".replace(/&#39;/g, \"'\").replace(/&amp;/g, '&');",
+		"escaped = object(raw) && raw.strings_escaped === true;",
+		"const data = decodeStatus(await response.json());",
+		// The namespace is frozen and takes one editor.
+		"window.QuotaCachePage = Object.freeze({",
+		"if (editor !== null) return;",
+	} {
+		if !strings.Contains(app, rule) {
+			t.Fatalf("app.js lost %q", rule)
 		}
 	}
 }

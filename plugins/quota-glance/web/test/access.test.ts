@@ -44,9 +44,6 @@ import {
   type RequestLike,
   type ResponseLike,
   retryBlocked,
-  saveThrough,
-  SETTINGS_HEADER,
-  type SettingsBatch,
   SPEND_HEADER,
   spendThrough,
   type StorageLike,
@@ -218,7 +215,7 @@ const latchOf = (env: TestEnv) => {
 }
 
 // ---------------------------------------------------------------------------
-// §2.2 The strict console reader
+// The strict console reader
 
 describe("strict console reader", () => {
   test("reads a remembered, obfuscated session for this CPA", () => {
@@ -394,7 +391,7 @@ describe("strict console reader", () => {
 })
 
 // ---------------------------------------------------------------------------
-// §2.3 Latches
+// Latches
 
 describe("console latch", () => {
   test("FNV-1a 64 matches its published vectors", () => {
@@ -506,7 +503,7 @@ describe("token latch", () => {
 })
 
 // ---------------------------------------------------------------------------
-// §2.6 The classifier
+// The classifier
 
 describe("classifyRefusal", () => {
   const cases: [string, Parameters<typeof classifyRefusal>, string | null, string | null][] = [
@@ -552,7 +549,7 @@ describe("classifyRefusal", () => {
 })
 
 // ---------------------------------------------------------------------------
-// §2.1 Doors
+// Doors
 
 describe("doors", () => {
   test("the token before the console", () => {
@@ -605,7 +602,7 @@ describe("doors", () => {
 const pick = (error: NoSessionError) => ({ hadCredential: error.hadCredential, reason: error.reason })
 
 // ---------------------------------------------------------------------------
-// §2.4 Reads, and the invariants they carry
+// Reads, and the invariants they carry
 
 describe("reads", () => {
   test("I7: with no door, no request of any kind, however often it is asked", async () => {
@@ -968,7 +965,7 @@ describe("no answer", () => {
 })
 
 // ---------------------------------------------------------------------------
-// §2.5 Writes
+// Writes
 
 describe("spends", () => {
   const decodeSpend = (value: string | undefined) =>
@@ -1231,7 +1228,16 @@ describe("spends", () => {
     const source = readFileSync(new URL("../../internal/api/api.go", import.meta.url), "utf8")
     const codes = new Set([...source.matchAll(/"error":\s*"([a-z_]+)"/g)].map((match) => match[1]!))
     assert.ok(codes.size >= 10, `found ${[...codes].join(", ")}`)
+    // The retired settings routes' answer, settings_moved, is among them.
+    assert.ok(codes.has("settings_moved"))
     for (const code of codes) assert.equal(PLUGIN_ERRORS.has(code), true, code)
+  })
+
+  test("the settings codes went with the saves; only the retired routes' answer is left", () => {
+    for (const code of ["settings_unavailable", "settings_unwritable", "settings_full", "conflict", "not_editable", "invalid_monthly_usd"]) {
+      assert.equal(PLUGIN_ERRORS.has(code), false, code)
+    }
+    assert.equal(PLUGIN_ERRORS.has("settings_moved"), true)
   })
 
   test("a press id is not reused once ten minutes have passed", async () => {
@@ -1261,180 +1267,6 @@ describe("spends", () => {
 })
 
 // ---------------------------------------------------------------------------
-// §2.5 Writes, continued: saving settings (E.9)
-
-describe("saves", () => {
-  const SAVE = {
-    tokenURL: "/v0/resource/plugins/quota-glance/save-settings",
-    consoleURL: "/v0/management/plugins/quota-glance/settings",
-  }
-  const batch: SettingsBatch = {
-    kind: "apiCredits",
-    items: [{ id: "org-3f2a9c1d0b7e", baseRevision: "7", monthlyUsd: "260.50", renews: null, reading: null }],
-  }
-  const save = (access: Access) => saveThrough(access, batch, SAVE)
-  const saved = () => json(200, { ok: true, unchanged: false, revision: "8", settings: {} })
-  const decodeSave = (value: string | undefined) => JSON.parse(Buffer.from(value ?? "", "base64url").toString("utf8")) as unknown
-
-  test("the token door: one GET, the batch in a header, nothing in the URL", async () => {
-    const env = makeEnv()
-    const net = makeFetch(saved)
-    const answer = await save(makeAccess(env, net.fetch, new TokenSlot("tok")))
-    assert.equal(net.calls.length, 1)
-    const call = net.calls[0]!
-    assert.equal(call.url, SAVE.tokenURL)
-    assert.equal(call.init.method, "GET")
-    assert.equal(call.init.body, undefined)
-    assert.equal(call.init.headers.Authorization, "Bearer tok")
-    assert.deepEqual(
-      { mode: call.init.mode, credentials: call.init.credentials, cache: call.init.cache, redirect: call.init.redirect },
-      { mode: "same-origin", credentials: "same-origin", cache: "no-store", redirect: "error" },
-    )
-    assert.deepEqual(decodeSave(call.init.headers[SETTINGS_HEADER]), batch)
-    assert.doesNotMatch(call.init.headers[SETTINGS_HEADER]!, /[=+/]/)
-    assert.equal(answer.sent && answer.answered && answer.ok && answer.plugin, true)
-  })
-
-  test("the console door: one POST, the same batch as the body", async () => {
-    const env = makeEnv()
-    remember(env)
-    const net = makeFetch(saved)
-    await save(makeAccess(env, net.fetch))
-    assert.equal(net.calls.length, 1)
-    const call = net.calls[0]!
-    assert.equal(call.url, SAVE.consoleURL)
-    assert.equal(call.init.method, "POST")
-    assert.equal(call.init.headers["Content-Type"], "application/json")
-    assert.equal(call.init.headers.Authorization, "Bearer mgmt-key-1")
-    assert.equal(call.init.redirect, "error")
-    assert.deepEqual(JSON.parse(call.init.body ?? "{}"), batch)
-  })
-
-  test("I3: with the token open, a save never touches the management API", async () => {
-    const env = makeEnv()
-    remember(env)
-    const net = makeFetch(saved)
-    const access = makeAccess(env, net.fetch, new TokenSlot("tok"))
-    for (let i = 0; i < 10; i++) await save(access)
-    assert.equal(net.management(), 0)
-  })
-
-  test("I6: a refused or failed save is one request, never retried and never passed to the other door", async () => {
-    for (const response of [
-      () => new Response(null, { status: 401 }),
-      () => new Response(null, { status: 429 }),
-      () => json(403, { error: "cross_site" }),
-      () => json(425, { error: "too_early" }),
-      () => new Response(null, { status: 404 }),
-      () => json(409, { error: "conflict", revision: "9", conflicts: [], current: {} }),
-      () => json(503, { error: "settings_unwritable" }),
-      () => text(502, "<html>bad gateway</html>"),
-      () => {
-        throw new TypeError("network")
-      },
-    ]) {
-      const env = makeEnv()
-      remember(env)
-      const net = makeFetch(response)
-      await save(makeAccess(env, net.fetch, new TokenSlot("tok")))
-      assert.equal(net.calls.length, 1)
-      assert.equal(net.management(), 0, "the console key behind it was not tried")
-    }
-  })
-
-  test("I6: a failed fetch is reported as unanswered", async () => {
-    const env = makeEnv()
-    const net = makeFetch(() => {
-      throw new TypeError("network")
-    })
-    assert.deepEqual(await save(makeAccess(env, net.fetch, new TokenSlot("tok"))), { sent: true, door: "token", answered: false })
-  })
-
-  test("I9: the token door's refusals latch the token, except the plugin's own gate and a 404", async () => {
-    const cases: [() => ResponseLike, string, boolean][] = [
-      [() => new Response(null, { status: 401 }), "token_refused", true],
-      [() => new Response(null, { status: 429 }), "token_refused", true],
-      [() => text(403, "proxy says no"), "refused_other", true],
-      [() => json(403, { error: "cross_site" }), "cross_site", false],
-      [() => json(425, { error: "too_early" }), "too_early", false],
-      [() => json(404, { error: "not_found" }), "not_found", false],
-      [() => new Response(null, { status: 404 }), "route_missing", false],
-    ]
-    for (const [response, code, latched] of cases) {
-      const env = makeEnv()
-      const token = new TokenSlot("tok")
-      const answer = await save(makeAccess(env, makeFetch(response).fetch, token))
-      assert.equal(answer.sent && answer.answered ? answer.refusal?.code : "none", code)
-      assert.equal(token.refused() === "tok", latched, code)
-      assert.equal(env.storage.getItem(LATCH_KEY), null, "a token refusal never touches the console latch")
-    }
-  })
-
-  test("I4: a console refusal latches, and the next save sends nothing", async () => {
-    const env = makeEnv()
-    remember(env)
-    const net = makeFetch(() => json(401, { error: "invalid management key" }))
-    const access = makeAccess(env, net.fetch)
-    const first = await save(access)
-    assert.equal(first.sent && first.answered ? first.refusal?.code : "none", "console_refused")
-    assert.deepEqual(await save(access), { sent: false, code: "console_refused", status: 401 })
-    assert.equal(net.management(), 1)
-    assert.equal(latchOf(env)?.reason, "refused")
-  })
-
-  test("I5: saves and reads share the console queue, so a refusal stops what waits behind it", async () => {
-    const env = makeEnv()
-    remember(env)
-    const net = makeFetch(() => json(401, { error: "invalid management key" }))
-    const access = makeAccess(env, net.fetch)
-    await Promise.all([save(access), read(access).catch(() => undefined), save(access)])
-    assert.equal(net.management(), 1)
-  })
-
-  test("I7: a save with no door sends nothing", async () => {
-    const net = makeFetch(saved)
-    assert.deepEqual(await save(makeAccess(makeEnv(), net.fetch)), { sent: false, code: "no_session", status: 0 })
-    assert.equal(net.calls.length, 0)
-  })
-
-  test("a console save that gets no answer holds reads back, as a press does", async () => {
-    const env = makeEnv()
-    remember(env)
-    const net = makeFetch(() => {
-      throw new TypeError("dropped")
-    })
-    const access = makeAccess(env, net.fetch)
-    assert.deepEqual(await save(access), { sent: true, door: "console", answered: false })
-    await assert.rejects(read(access), ConsoleUnansweredError)
-    assert.equal(net.calls.length, 1)
-  })
-
-  test("an answer is the plugin's only when it is its JSON or one of its codes", async () => {
-    const plugin = async (response: () => ResponseLike) => {
-      const answer = await save(makeAccess(makeEnv(), makeFetch(response).fetch, new TokenSlot("tok")))
-      return answer.sent && answer.answered ? answer.plugin : null
-    }
-    assert.equal(await plugin(saved), true)
-    assert.equal(await plugin(() => json(409, { error: "conflict" })), true)
-    assert.equal(await plugin(() => json(400, { error: "invalid_monthly_usd", id: "a", field: "monthlyUsd" })), true)
-    assert.equal(await plugin(() => json(502, { error: "upstream timed out" })), false)
-    assert.equal(await plugin(() => text(200, "<html>ok</html>")), false)
-  })
-
-  test("every code the settings doors answer with is one the page reads as the plugin's", () => {
-    const sources = ["../../internal/api/settings.go", "../../internal/overrides/batch.go", "../../internal/overrides/store.go"]
-    const codes = new Set<string>()
-    for (const path of sources) {
-      const source = readFileSync(new URL(path, import.meta.url), "utf8")
-      for (const match of source.matchAll(/"error":\s*"([a-z_]+)"/g)) codes.add(match[1]!)
-      for (const match of source.matchAll(/Code[A-Za-z]+\s*=\s*"([a-z_]+)"/g)) codes.add(match[1]!)
-    }
-    for (const code of ["conflict", "not_editable", "invalid_reading_time", "reading_before_refill"]) assert.ok(codes.has(code), code)
-    for (const code of codes) assert.equal(PLUGIN_ERRORS.has(code), true, code)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // I10, across everything above
 
 describe("storage the page writes", () => {
@@ -1454,9 +1286,6 @@ describe("storage the page writes", () => {
       const access = makeAccess(env, net.fetch, new TokenSlot(null))
       await read(access).catch(() => undefined)
       await spend(access).catch(() => undefined)
-      await saveThrough(access, { kind: "renewals", items: [] }, { tokenURL: "/t", consoleURL: "/v0/management/x" }).catch(
-        () => undefined,
-      )
       env.clock.now += 3600
       forgiveConsole(env)
       remember(env, { managementKey: `mgmt-key-${env.clock.now}` })

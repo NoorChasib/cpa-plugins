@@ -1,4 +1,7 @@
-# Merge these fields into existing plugin configuration; preserve all other options.
+# On CPA's Plugins page, open quota-glance's Edit config: the form saves its
+# options to CPA's configuration for you, and quota-cache's are on its own
+# entry there. If you edit config.yaml instead, merge these fields into your
+# existing plugin configuration and keep all other options.
 plugins:
   enabled: true
   configs:
@@ -34,12 +37,7 @@ plugins:
       # Set false to keep the count and the expiry on the card and remove the
       # button. The plugin then has no code path to a provider at all.
       allow-redeem: true
-      # Setting API credit amounts, refill dates, Console readings and Claude
-      # renewal dates from the dashboard. Default true. What you set is kept
-      # in data-dir/settings.json, wins over quota-cache's configuration, and
-      # contacts nothing. It governs both ways in, like allow-redeem. Set false
-      # to remove the editor; values already saved still apply.
-      allow-edit: true
+      # allow-edit is ignored since 0.8.0: edit on Quota Cache's page.
       # The OpenRouter balance, in dollars, below which its card turns amber.
       # Default 5; the card turns red once nothing is left whatever this says,
       # and 0 keeps it green until then. The card appears only when
@@ -66,7 +64,8 @@ plugins:
       # allowances into a structured limits[] array and nulled the flat keys,
       # and 0.1.6 is the release that reads both. Against an older snapshot it
       # shows a single weekly row and fills in the rest once quota-cache
-      # supplies canonical windows.
+      # supplies canonical windows. The Monthly API Credit card, and renewal
+      # dates entered on quota-cache's page, need quota-cache 0.2.0 or newer.
       enabled: true
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       # Optional: an OpenRouter management key for the balance card. See

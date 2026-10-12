@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
@@ -108,6 +109,19 @@ type Cache struct {
 	closed     bool
 	activityMu sync.RWMutex
 	activity   Activity
+	// round is the entries the latest refresh round made due, or found due,
+	// that have not been polled since; roundLeft is how many there are, for
+	// a status read that must not wait on mu. Each entry maps to its place at
+	// the front: a target holds the number of the request that named it, from
+	// the requests count, and every other entry holds zero. All three are kept
+	// in memory only.
+	round     map[string]uint64
+	roundLeft atomic.Int64
+	requests  uint64
+	// unsaved is set when RequestRound changed the schedule outside Step, so
+	// the next Step saves it even if it polls nothing, and cleared by the
+	// save.
+	unsaved bool
 }
 
 type Activity struct {
@@ -148,7 +162,7 @@ func Open(opts Options, fetcher Fetcher) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Cache{opts: opts, schedule: opts, fetcher: fetcher, lock: lock, data: client.Snapshot{
+	c := &Cache{opts: opts, schedule: opts, fetcher: fetcher, lock: lock, round: map[string]uint64{}, data: client.Snapshot{
 		Schema: 1, Entries: map[string]client.Entry{}, ProviderCooldown: map[string]time.Time{},
 	}}
 	if _, err = os.Lstat(path); err == nil {
@@ -184,7 +198,7 @@ func (c *Cache) SetSchedule(interval, spacing time.Duration) {
 // new interval; failed/pending attempts retain their existing backoff floor.
 // Provider cooldowns and already-admitted global spacing are never shortened.
 // An anthropic-api entry is never polled, so it has no last attempt and is
-// left alone.
+// left alone, and an entry a refresh round made due stays due.
 func (c *Cache) applySchedule(now time.Time) error {
 	c.scheduleMu.Lock()
 	opts := c.schedule
@@ -197,7 +211,7 @@ func (c *Cache) applySchedule(now time.Time) error {
 		if entry.LastAttempt.After(lastAttempt) {
 			lastAttempt = entry.LastAttempt
 		}
-		if entry.LastAttempt.IsZero() {
+		if _, waiting := c.round[key]; waiting || entry.LastAttempt.IsZero() {
 			continue
 		}
 		next := entry.LastAttempt.Add(opts.Interval)
@@ -279,7 +293,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 			active[client.Key(a.Provider, a.AuthIndex)] = a
 		}
 	}
-	dirty := c.data.WrittenAt.IsZero()
+	dirty := c.data.WrittenAt.IsZero() || c.unsaved
 	c.activityMu.Lock()
 	c.activity.LastScan, c.activity.Accounts = now, len(active)
 	c.activityMu.Unlock()
@@ -302,6 +316,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	for key := range c.data.Entries {
 		if _, ok := active[key]; !ok {
 			delete(c.data.Entries, key)
+			c.leaveRound(key)
 			dirty = true
 		}
 	}
@@ -309,7 +324,12 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	for key := range active {
 		keys = append(keys, key)
 	}
+	// A refresh round's targets go first, the latest request's first, however
+	// overdue the rest are; then every entry by its next attempt.
 	sort.Slice(keys, func(i, j int) bool {
+		if a, b := c.round[keys[i]], c.round[keys[j]]; a != b {
+			return a > b
+		}
 		a, b := c.data.Entries[keys[i]].NextAttempt, c.data.Entries[keys[j]].NextAttempt
 		if a.Equal(b) {
 			return keys[i] < keys[j]
@@ -332,6 +352,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		entry.LastAttempt, entry.NextAttempt = now, now.Add(c.opts.Interval)
 		entry.LastError = "refresh pending"
 		c.data.Entries[key] = entry
+		c.leaveRound(key)
 		// The next slot follows this one's, not the moment it was taken, so
 		// a request admitted a little early does not bring the next one
 		// forward too and requests never come faster than the spacing.
@@ -490,5 +511,108 @@ func (c *Cache) save(now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("cache directory sync failed")
 	}
+	c.unsaved = false
 	return nil
+}
+
+// RequestRound starts a round of polls after a banked reset was spent on the
+// credential key names, and reports whether it did. That credential is polled
+// first, at the next free slot, then every other one that is not backing off
+// after a failure, in the usual order. It runs under mu, so between polls, and
+// what it changes is saved with the next save.
+//
+// The target's NextAttempt becomes one interval ago, if it was later, so it is
+// due whatever its failure backoff: the reset was just spent on it, so it
+// answered moments ago. Step polls it ahead of every other due entry, however
+// overdue, as after CPA was down, and ahead of the target of any earlier
+// request still waiting. Every other polled entry due later than now with no
+// LastError becomes due now; one backing off after a failure keeps its
+// backoff, and is in the round only if it is due already. Neither the spacing
+// nor a provider's 429 pause is touched, so the round goes no faster than one
+// request per spacing and a paused provider waits out its pause. An
+// anthropic-api entry is never polled and is left alone.
+//
+// While a round still has an entry Step could poll now, another request only
+// brings its own target forward: everything else is due already, and what
+// the round polled earlier is not polled again. A round whose entries are
+// all waiting out a provider's pause is not under way: the rest were polled
+// before the pause held it open, so a request then starts a new round, which
+// the waiting entries stay in. A target that is not a polled entry of the
+// latest scan changes nothing.
+func (c *Cache) RequestRound(key string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	target, ok := c.data.Entries[key]
+	if c.closed || !ok || !polled(target) {
+		return false
+	}
+	if first := now.Add(-c.opts.Interval); target.NextAttempt.After(first) {
+		target.NextAttempt = first
+		c.data.Entries[key] = target
+	}
+	if !c.roundUnderWay(now) {
+		for other, entry := range c.data.Entries {
+			if other == key || !polled(entry) {
+				continue
+			}
+			if entry.NextAttempt.After(now) {
+				if entry.LastError != "" {
+					continue
+				}
+				entry.NextAttempt = now
+				c.data.Entries[other] = entry
+			}
+			// The target of an earlier request, still waiting out a pause,
+			// keeps its place.
+			if _, in := c.round[other]; !in {
+				c.round[other] = 0
+			}
+		}
+	}
+	c.requests++
+	c.round[key] = c.requests
+	c.roundLeft.Store(int64(len(c.round)))
+	c.unsaved = true
+	return true
+}
+
+// roundUnderWay reports whether the round has an entry Step could poll at
+// now. Every entry in it is due, so the only thing that can hold one back is
+// its provider's 429 pause. The caller holds mu.
+func (c *Cache) roundUnderWay(now time.Time) bool {
+	for key := range c.round {
+		if !now.Before(c.data.ProviderCooldown[c.data.Entries[key].Provider]) {
+			return true
+		}
+	}
+	return false
+}
+
+// RoundRemaining is how many entries the latest refresh round has still to
+// poll: those it made due, or found due, that Step has not admitted since. It
+// does not wait on a poll in progress.
+func (c *Cache) RoundRemaining() int { return int(c.roundLeft.Load()) }
+
+// NextRequest is the slot the spacing gives the next poll: one spacing after
+// the last poll's slot, and in the past while a poll could be admitted now.
+// It waits on a poll in progress.
+func (c *Cache) NextRequest() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.data.NextRequest
+}
+
+// leaveRound takes key out of the round, once Step has admitted its poll or
+// the roster no longer lists it. The caller holds mu.
+func (c *Cache) leaveRound(key string) {
+	if _, ok := c.round[key]; ok {
+		delete(c.round, key)
+		c.roundLeft.Store(int64(len(c.round)))
+	}
+}
+
+// polled reports whether Step ever polls entry: every provider but
+// anthropic-api, whose usage is metered rather than asked for.
+func polled(entry client.Entry) bool {
+	return entry.Provider != client.ProviderAnthropicAPI && entry.APICredit == nil
 }

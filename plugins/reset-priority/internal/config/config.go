@@ -9,9 +9,11 @@ package config
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"gopkg.in/yaml.v3"
 )
 
@@ -65,9 +67,24 @@ type Config struct {
 	// DisplayTimezone is the validated IANA zone name (or "Local") used only
 	// for human-readable timestamps on the management HTML view.
 	DisplayTimezone string
+	// RouteAPICredits is route-api-credits: declare CPA's scheduler
+	// capability and pick which Claude API key from CPA's configuration
+	// serves an attempt. It takes effect only while Enabled; see Routing.
+	RouteAPICredits bool
+	// RouterQuotaCachePath is the Quota Cache snapshot path the API credit
+	// router reads the credit state and the meter beside. It is
+	// quota-cache-path, else Quota Cache's default, whatever use-quota-cache
+	// says: QuotaCachePath cannot serve, because use-quota-cache: false clears
+	// it and a bare quota-cache-path switches the OAuth engine to cache mode.
+	RouterQuotaCachePath string
 	// Warnings carries sanitized, non-fatal parse notes for status display.
 	Warnings []string
 }
+
+// Routing reports whether the API credit router is on: the plugin enabled
+// and route-api-credits true. It is independent of dry-run, manage-claude and
+// manage-codex.
+func (c Config) Routing() bool { return c.Enabled && c.RouteAPICredits }
 
 // Manages reports whether a provider group is enabled.
 func (c Config) Manages(provider string) bool {
@@ -107,6 +124,23 @@ type rawConfig struct {
 	// (it can consume quota); a true value is accepted but ignored with a
 	// warning so operators are not surprised.
 	CodexActivation *bool `yaml:"codex-reset-window-activation"`
+	// route-api-credits is a plain boolean. Absent or null is off; anything
+	// that is not a boolean fails the decode like any other bad value.
+	RouteAPICredits *bool `yaml:"route-api-credits"`
+}
+
+// Keys lists every configuration key Parse decodes, as YAML spells it, in
+// declaration order. Aliases and keys that are accepted and ignored are
+// included.
+func Keys() []string {
+	t := reflect.TypeOf(rawConfig{})
+	keys := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
 }
 
 // duration accepts Go duration strings ("1h", "10s") and bare YAML integers
@@ -180,6 +214,8 @@ func Parse(configYAML []byte) (Config, error) {
 		ManageCodex:        true,
 		DryRun:             false,
 		DisplayTimezone:    DefaultDisplayTimezone,
+		// The router's path never depends on use-quota-cache.
+		RouterQuotaCachePath: qc.DefaultPath,
 	}
 	trimmed := strings.TrimSpace(string(configYAML))
 	if trimmed == "" {
@@ -192,6 +228,9 @@ func Parse(configYAML []byte) (Config, error) {
 	}
 
 	cfg.QuotaCachePath = strings.TrimSpace(raw.QuotaCachePath)
+	if cfg.QuotaCachePath != "" {
+		cfg.RouterQuotaCachePath = cfg.QuotaCachePath
+	}
 	// An omitted toggle preserves preview-1's path-based opt-in. Explicit false
 	// restores standalone behavior even when a custom path remains configured.
 	if raw.UseQuotaCache != nil {
@@ -244,6 +283,9 @@ func Parse(configYAML []byte) (Config, error) {
 	}
 	if raw.DryRun != nil {
 		cfg.DryRun = *raw.DryRun
+	}
+	if raw.RouteAPICredits != nil {
+		cfg.RouteAPICredits = *raw.RouteAPICredits
 	}
 	if raw.DisplayTimezone != nil {
 		name, warning := resolveDisplayTimezone(*raw.DisplayTimezone)

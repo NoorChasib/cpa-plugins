@@ -29,6 +29,7 @@ func TestMeterConstants(t *testing.T) {
 		{"MaxMeterUsageEntries", MaxMeterUsageEntries, 6000},
 		{"MaxMeterUnlinked", MaxMeterUnlinked, 8},
 		{"MaxMeterAuths", MaxMeterAuths, 64},
+		{"MaxMeterAuthIDs", MaxMeterAuthIDs, 64},
 		{"MaxMeterGaps", MaxMeterGaps, 8},
 		{"MaxMeterBytes", MaxMeterBytes, 2097152},
 	} {
@@ -128,7 +129,7 @@ func TestLoadMeterFillsNilMapsAndSlices(t *testing.T) {
 	dir := t.TempDir()
 	for name, content := range map[string]string{
 		"absent": `{"schema":1,"organizations":{"00000000-0000-4000-8000-00000000000a":{"since":"2026-10-09T00:00:00Z","hours":[{"start":"2026-10-09T11:00:00Z"}]}}}`,
-		"null": `{"schema":1,"gaps":null,"unlinked":null,"auths":null,"organizations":{"00000000-0000-4000-8000-00000000000a":` +
+		"null": `{"schema":1,"gaps":null,"unlinked":null,"auths":null,"auth_ids":null,"organizations":{"00000000-0000-4000-8000-00000000000a":` +
 			`{"since":"2026-10-09T00:00:00Z","days":null,"hours":[{"start":"2026-10-09T11:00:00Z","usage":null}]}}}`,
 	} {
 		path := filepath.Join(dir, name+".meter.json")
@@ -139,7 +140,7 @@ func TestLoadMeterFillsNilMapsAndSlices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if meter.Gaps == nil || meter.Unlinked == nil || meter.Auths == nil || meter.Organizations == nil {
+		if meter.Gaps == nil || meter.Unlinked == nil || meter.Auths == nil || meter.AuthIDs == nil || meter.Organizations == nil {
 			t.Fatalf("%s: nil collection in %+v", name, meter)
 		}
 		org := meter.Organizations["00000000-0000-4000-8000-00000000000a"]
@@ -155,8 +156,85 @@ func TestLoadMeterFillsNilMapsAndSlices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meter.Organizations == nil || len(meter.Organizations) != 0 || meter.Gaps == nil || meter.Unlinked == nil || meter.Auths == nil {
+	if meter.Organizations == nil || len(meter.Organizations) != 0 || meter.Gaps == nil || meter.Unlinked == nil || meter.Auths == nil ||
+		meter.AuthIDs == nil || len(meter.AuthIDs) != 0 {
 		t.Fatalf("empty meter = %+v", meter)
+	}
+
+	// A file Quota Cache 0.1.14 wrote has no auth IDs: it loads with none,
+	// and with no time it began recording them.
+	path = filepath.Join(dir, "v0.1.14.meter.json")
+	older := `{"schema":1,"since":"2026-10-01T00:00:00Z","started_at":"2026-10-09T08:00:00Z","flushed_at":"2026-10-09T11:59:00Z",` +
+		`"received":3,"counted":2,"gaps":[],"organizations":{},"unlinked":[],` +
+		`"auths":{"0123456789abcdef":{"organization_id":"00000000-0000-4000-8000-00000000000a","seen_at":"2026-10-09T11:30:00Z"}}}`
+	if err := os.WriteFile(path, []byte(older), 0600); err != nil {
+		t.Fatal(err)
+	}
+	meter, err = LoadMeter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meter.AuthIDsSince != nil || meter.AuthIDs == nil || len(meter.AuthIDs) != 0 || len(meter.Auths) != 1 || meter.Counted != 2 {
+		t.Fatalf("a 0.1.14 meter = %+v", meter)
+	}
+}
+
+// Only CPA's auth ID for a Claude API key from its own configuration has this
+// shape: a 48-bit hash, with a count for an exact duplicate. A credential's
+// file name, an e-mail address or anything a client could choose never does.
+func TestConfigAPIKeyAuthID(t *testing.T) {
+	for _, id := range []string{
+		"claude:apikey:0123456789ab",
+		"claude:apikey:000000000000",
+		"claude:apikey:ffffffffffff",
+		"claude:apikey:0123456789ab-1",
+		"claude:apikey:0123456789ab-10",
+		"claude:apikey:0123456789ab-907",
+		"claude:apikey:0123456789ab-9999",
+	} {
+		if !ConfigAPIKeyAuthID(id) {
+			t.Errorf("ConfigAPIKeyAuthID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{
+		"",
+		"claude:apikey:",
+		"claude:apikey:0123456789AB",
+		"claude:apikey:0123456789aB",
+		"claude:apikey:0123456789a",
+		"claude:apikey:0123456789abc",
+		"claude:apikey:0123456789ag",
+		"claude:apikey:0123456789ab-",
+		"claude:apikey:0123456789ab-0",
+		"claude:apikey:0123456789ab-01",
+		"claude:apikey:0123456789ab-0001",
+		"claude:apikey:0123456789ab-10000",
+		"claude:apikey:0123456789ab-1a",
+		"claude:apikey:0123456789ab_1",
+		"claude:apikey:0123456789ab--1",
+		"claude:apikey:0123456789ab-+1",
+		"Claude:apikey:0123456789ab",
+		"claude:APIKEY:0123456789ab",
+		"claude:oauth:0123456789ab",
+		"codex:apikey:0123456789ab",
+		"claude:apikey-0123456789ab",
+		"claude:apikey:0123456789ab:1",
+		"AUTHID-CANARY.json",
+		"claude-user@example.com.json",
+		"user@example.com",
+		"/home/cpa/.cli-proxy-api/claude-user@example.com.json",
+		"auths/claude:apikey:0123456789ab",
+		" claude:apikey:0123456789ab",
+		"claude:apikey:0123456789ab ",
+		"claude:apikey:0123456789ab\n",
+		"claude:apikey:0123456789ab\x00",
+		"claude:apikey:0123456789aé",
+		"claude:apikey:0123456789ab-١",
+		"claude:apikey:０123456789ab",
+	} {
+		if ConfigAPIKeyAuthID(id) {
+			t.Errorf("ConfigAPIKeyAuthID(%q) = true, want false", id)
+		}
 	}
 }
 
@@ -399,8 +477,11 @@ func TestAPIMeterWireNames(t *testing.T) {
 			Days:  []MeterBucket{{Start: utc(2026, 10, 9, 0, 0), Usage: usage}},
 			Hours: []MeterBucket{{Start: utc(2026, 10, 9, 11, 0), Usage: usage}},
 		}},
-		Unlinked: []MeterUnlinked{{OrganizationID: "00000000-0000-4000-8000-00000000000b", FirstSeenAt: utc(2026, 10, 8, 10, 0), LastSeenAt: seen, Requests: 37}},
-		Auths:    map[string]MeterAuth{"0123456789abcdef": {OrganizationID: "00000000-0000-4000-8000-00000000000a", SeenAt: seen}},
+		Unlinked:     []MeterUnlinked{{OrganizationID: "00000000-0000-4000-8000-00000000000b", FirstSeenAt: utc(2026, 10, 8, 10, 0), LastSeenAt: seen, Requests: 37}},
+		Auths:        map[string]MeterAuth{"0123456789abcdef": {OrganizationID: "00000000-0000-4000-8000-00000000000a", SeenAt: seen}},
+		AuthIDsSince: at(utc(2026, 10, 9, 9, 0)),
+		AuthIDs: map[string]MeterAuthID{"claude:apikey:00000000000a": {AuthIndex: "0123456789abcdef", SeenAt: seen,
+			LastSuccessAt: at(utc(2026, 10, 9, 11, 0)), LastFailureAt: at(seen), Failures: 2}},
 	}
 	raw, err := json.Marshal(meter)
 	if err != nil {
@@ -417,7 +498,9 @@ func TestAPIMeterWireNames(t *testing.T) {
 		`"claude_code_refusals":2,"last_claude_code_refusal_at":"2026-10-09T11:30:00Z","last_overflow_at":"2026-10-09T11:30:00Z",` +
 		`"days":[{"start":"2026-10-09T00:00:00Z","usage":` + entry + `}],"hours":[{"start":"2026-10-09T11:00:00Z","usage":` + entry + `}]}},` +
 		`"unlinked":[{"organization_id":"00000000-0000-4000-8000-00000000000b","first_seen_at":"2026-10-08T10:00:00Z","last_seen_at":"2026-10-09T11:30:00Z","requests":37}],` +
-		`"auths":{"0123456789abcdef":{"organization_id":"00000000-0000-4000-8000-00000000000a","seen_at":"2026-10-09T11:30:00Z"}}}`
+		`"auths":{"0123456789abcdef":{"organization_id":"00000000-0000-4000-8000-00000000000a","seen_at":"2026-10-09T11:30:00Z"}},` +
+		`"auth_ids_since":"2026-10-09T09:00:00Z","auth_ids":{"claude:apikey:00000000000a":{"auth_index":"0123456789abcdef","seen_at":"2026-10-09T11:30:00Z",` +
+		`"last_success_at":"2026-10-09T11:00:00Z","last_failure_at":"2026-10-09T11:30:00Z","failures":2}}}`
 	if string(raw) != want {
 		t.Fatalf("meter =\n%s\nwant\n%s", raw, want)
 	}
@@ -434,13 +517,15 @@ func TestAPIMeterWireNames(t *testing.T) {
 		Schema: MeterSchema, Since: start, StartedAt: start, FlushedAt: start, Gaps: []MeterGap{}, Unlinked: []MeterUnlinked{},
 		Organizations: map[string]MeterOrganization{"00000000-0000-4000-8000-00000000000a": {Since: start, Days: []MeterBucket{}, Hours: []MeterBucket{}}},
 		Auths:         map[string]MeterAuth{"0123456789abcdef": {SeenAt: start}},
+		AuthIDs:       map[string]MeterAuthID{"claude:apikey:00000000000a": {AuthIndex: "0123456789abcdef", SeenAt: start}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `{"schema":1,"since":"2026-10-09T08:00:00Z","started_at":"2026-10-09T08:00:00Z","flushed_at":"2026-10-09T08:00:00Z",` +
 		`"received":0,"counted":0,"gaps":[],"organizations":{"00000000-0000-4000-8000-00000000000a":{"since":"2026-10-09T08:00:00Z","days":[],"hours":[]}},` +
-		`"unlinked":[],"auths":{"0123456789abcdef":{"organization_id":"","seen_at":"2026-10-09T08:00:00Z"}}}`; string(bare) != want {
+		`"unlinked":[],"auths":{"0123456789abcdef":{"organization_id":"","seen_at":"2026-10-09T08:00:00Z"}},` +
+		`"auth_ids":{"claude:apikey:00000000000a":{"auth_index":"0123456789abcdef","seen_at":"2026-10-09T08:00:00Z"}}}`; string(bare) != want {
 		t.Fatalf("bare meter =\n%s\nwant\n%s", bare, want)
 	}
 	if other, _ := json.Marshal(MeterUsage{Model: MeterOtherModel}); string(other) != `{"model":"(other)"}` {
@@ -463,6 +548,7 @@ func TestMaximalMeterFitsMaxMeterBytes(t *testing.T) {
 		Rejected: most, LastRejectedAt: stamp(), Dropped: most, LastDroppedAt: stamp(),
 		Unattributed: most, LastUnattributedAt: stamp(),
 		Gaps: []MeterGap{}, Organizations: map[string]MeterOrganization{}, Unlinked: []MeterUnlinked{}, Auths: map[string]MeterAuth{},
+		AuthIDsSince: stamp(), AuthIDs: map[string]MeterAuthID{},
 	}
 	for range MaxMeterGaps {
 		meter.Gaps = append(meter.Gaps, MeterGap{From: at, To: at, Reason: MeterGapUncleanStop})
@@ -473,6 +559,16 @@ func TestMaximalMeterFitsMaxMeterBytes(t *testing.T) {
 	for i := range MaxMeterAuths {
 		// The meter keeps auth indexes of up to 64 bytes.
 		meter.Auths[fmt.Sprintf("%064x", i)] = MeterAuth{OrganizationID: orgID(i + 1), SeenAt: at}
+	}
+	for i := range MaxMeterAuthIDs {
+		// The longest auth ID the meter keeps is 31 bytes: a hash and a
+		// four-digit duplicate count.
+		id := fmt.Sprintf("claude:apikey:%012x-%d", i, 1000+i)
+		if len(id) != 31 || !ConfigAPIKeyAuthID(id) {
+			t.Fatalf("%q is not a longest auth ID the meter keeps", id)
+		}
+		meter.AuthIDs[id] = MeterAuthID{AuthIndex: fmt.Sprintf("%064x", i), SeenAt: at,
+			LastSuccessAt: stamp(), LastFailureAt: stamp(), Failures: math.MaxUint16}
 	}
 
 	// A bucket exists only with an entry, so every bucket of every
@@ -505,8 +601,9 @@ func TestMaximalMeterFitsMaxMeterBytes(t *testing.T) {
 		}
 		meter.Organizations[orgID(i+1)] = org
 	}
-	if entries != MaxMeterUsageEntries || spare != 0 || len(meter.Organizations) != MaxMeterOrganizations || len(meter.Auths) != MaxMeterAuths {
-		t.Fatalf("not a maximal meter: %d entries, %d spare, %d organizations, %d auths", entries, spare, len(meter.Organizations), len(meter.Auths))
+	if entries != MaxMeterUsageEntries || spare != 0 || len(meter.Organizations) != MaxMeterOrganizations || len(meter.Auths) != MaxMeterAuths || len(meter.AuthIDs) != MaxMeterAuthIDs {
+		t.Fatalf("not a maximal meter: %d entries, %d spare, %d organizations, %d auths, %d auth IDs",
+			entries, spare, len(meter.Organizations), len(meter.Auths), len(meter.AuthIDs))
 	}
 	if model := meter.Organizations[orgID(1)].Days[0].Usage[0].Model; len(model) != 64 || NormalizeMeterModel(model, "") != model {
 		t.Fatalf("model %q is not a 64-character name the meter keeps", model)

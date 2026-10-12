@@ -18,7 +18,7 @@ The outer snapshot stays at schema 1. The nested `quota.schema` is 1 and has its
 | `unified_billing` | Grok's shared billing flag, if supplied |
 | `reset_credits` | Codex's or Claude's banked rate-limit resets, when the account holds at least one |
 | `billing_period` | Claude only: `monthly` or `annual`, how often the subscription is billed, when the usage response states one |
-| `cost_report` | Written only by Quota Cache 0.1.13 for Claude API credits; 0.1.14 never writes it and never polls those entries. See [Claude API credits](#claude-api-credits) |
+| `cost_report` | Written only by Quota Cache 0.1.13 for Claude API credits; 0.1.14 and later never write it and never poll those entries. See [Claude API credits](#claude-api-credits) |
 | `truncated` | True if a provider response exceeded the bounded entry count |
 
 Every window can contain `used_percent`, `duration_seconds`, `starts_at`, `resets_at`, and `period`. Unavailable values are omitted. Unlike the compatibility percentage, extended percentages preserve reported values above 100. Absolute timestamps use UTC; relative reset times are anchored to the observation, never recalculated on reads.
@@ -118,7 +118,7 @@ The rules:
 
 ## Requests per credential
 
-At the default 15-minute `poll-interval`, one credential costs at most:
+At the default 15-minute `poll-interval`, one credential's scheduled polls cost at most:
 
 | Provider | Usage polls per day | Other per-poll requests | Account details per day | Total per day |
 | --- | --- | --- | --- | --- |
@@ -128,16 +128,18 @@ At the default 15-minute `poll-interval`, one credential costs at most:
 | OpenRouter | 96 | none | none | 96 |
 | Claude API credits, per organization | 0 | none: the organization's traffic is counted from CPA's usage records | none | 0 |
 
+Each [refresh after a banked reset](#refresh-after-a-banked-reset) adds one usage poll per credential on top of these figures, with Codex's inventory read for a Codex credential holding banked resets.
+
 Reading Claude's subscription start and billing period added no requests. The start comes from the profile response already read for the plan, and the billing period from the usage response already read every poll, so the figures above are unchanged.
 
 Before account details were read, the same credentials cost 96 (Claude), 96 to 192 (Codex), and 96 (Grok) per day. The first poll after upgrading reads each credential's account details once; after that, restarts add nothing. A longer `poll-interval` lowers the usage figures; account details stay at no more than four reads a day, and fall below that once the interval exceeds six hours, since they are only read after a poll.
 
 ## Polling schedule and failures
 
-`request-spacing` (default 10 seconds) is the gap between one poll and the next, across every credential. `poll-interval` (default 15 minutes) is the least time between two polls of the same credential. The follow-up requests a poll can make, Codex's reset inventory and the account details, run straight after it and are not spaced.
+`request-spacing` (default 10 seconds) is the gap between one poll and the next, across every credential. `poll-interval` (default 15 minutes) is the least time between two scheduled polls of the same credential; a [refresh after a banked reset](#refresh-after-a-banked-reset) polls each credential once more, however recently it was polled. The follow-up requests a poll can make, Codex's reset inventory and the account details, run straight after it and are not spaced.
 
 - Polls are sent on a timer that ticks once per spacing. Ticks wake a few milliseconds earlier or later than one another, so a tick is admitted up to a tenth of the spacing, and at most one second, before the spacing is over. Before 0.1.12 a tick that woke a moment early was skipped, and many gaps were twice the spacing. The next slot is counted from the previous slot rather than from an early tick, so two polls are never closer than the spacing less that tolerance, and never more frequent than the spacing on average.
-- A credential falls due one interval after its last poll and is polled at the first free tick after that, so its gaps run a little over the interval.
+- A credential falls due one interval after its last poll and is polled at the first free tick after that, so its gaps run a little over the interval. A refresh after a banked reset makes it due sooner.
 - Every credential has to fit into an interval. With N credentials, N times `request-spacing` should be well below `poll-interval`, which leaves room to catch up after a pause. For example, twelve credentials at a 30-second spacing need six minutes per round and cannot all be read every five minutes; at a 10-second spacing they need two.
 
 When a poll fails:
@@ -162,16 +164,57 @@ Each failed poll also writes one line to CPA's log through the plugin host, so f
 
 Times are RFC 3339 in UTC. No line names an email, token, auth file name, URL, or response body. A successful poll logs nothing, so there is at most one line per poll.
 
+## Refresh after a banked reset
+
+Spending a banked reset in Quota Glance changes the account's limits at once, but Quota Cache would otherwise read them only at the account's next poll, up to `poll-interval` away. So after a redeem that spent a reset, or may have, Quota Glance 0.8.0 leaves a refresh request beside the snapshot. Quota Cache 0.2.0 then polls that account at its next free slot, and every other account after it. CPA gives plugins no way to call one another, so the request is a file: the one file in Quota Cache's directory that another plugin writes. Quota Cache never writes, renames or deletes it.
+
+### The refresh request file
+
+For `cache-path` P, the file is P with a final `.json` replaced by `.refresh.json` (`client.RefreshRequestPath`), so `plugins/data/quota-cache/snapshot.refresh.json` by default. Schema 1, at most 4 KiB:
+
+```json
+{"schema":1,"requests":[{"id":"<16 lower-case hex, random>","provider":"codex","auth_index":"<16 hex>","reason":"reset","at":"2026-10-12T09:00:00Z"}]}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `id` | Random, 16 lower-case hex digits. Quota Cache acts on each id once |
+| `provider` | `codex` or `claude`, the providers with banked resets |
+| `auth_index` | The CPA auth index of the credential the reset was spent on, 16 lower-case hex digits |
+| `reason` | `reset` |
+| `at` | When the request was made, RFC 3339 in UTC, whole seconds |
+
+**Writing** (Quota Glance, through `client.AppendRefreshRequest`): the file as it is is read, a missing or unreadable one counting as empty. Requests dated more than 10 minutes (`client.RefreshRequestMaxAge`) from now, either way, are dropped. Of the rest the newest 7 are kept and the new request is added, so the file holds at most 8 and stays a few hundred bytes. It is written as Quota Cache writes its own files: a temporary file `.<name>-*` at 0600, fsync, rename, a directory fsync. The directory is never created; without it the write fails, and Quota Glance logs that it could not ask.
+
+**Reading** (Quota Cache, through `client.LoadRefreshRequests`): a regular file (Lstat), at most 4 KiB, schema 1. A request is skipped on its own unless its `id` and `auth_index` are 16 lower-case hex digits, its `provider` is `codex` or `claude`, its `reason` is `reset` and its `at` is an RFC 3339 time; a repeated id counts once. A file that fails a rule holds no requests, and so does one that is there but cannot be opened or read, whose error also wraps `client.ErrRefreshNotRead`.
+
+### What Quota Cache does with it
+
+- Every two seconds, and before each tick's poll, the poller compares the file's size, modification time and inode with what it last read, and reads it again only when one changed. A request found between ticks is polled at once if `request-spacing` allows, rather than at the next tick, so even an hour's spacing never lets a request grow too old to act on. The ticks then keep time from that poll, so the round's next poll comes one spacing after it rather than at the first tick past the spacing, which could be up to two spacings away. A file that fails a rule is ignored, with one warning in CPA's log per change: `quota-cache cannot read the refresh request file Quota Glance writes; it is ignored until it changes`. One that cannot be opened or read at all, as when CPA is out of file descriptors or the file's mode shuts Quota Cache out, says nothing of what it holds: it is read again at every check, changed or not, until it can be opened and read, with one warning per change: `quota-cache cannot open the refresh request file Quota Glance writes; it tries again every two seconds`. When the poller starts, the startup rule below applies to the first read that gets that far.
+- It acts on each request it has not acted on yet, oldest first, and never on one dated more than 10 minutes from its clock. The ids it has acted on are held in memory. When the poller starts, every request at least 60 seconds old counts as acted on. A restart therefore repeats a round only for a request made in the minute before it, while a reset spent just before the restart is still honoured.
+- A request starts a round. The credential it names goes first: its `next_attempt` becomes one interval ago, whatever its failure backoff, since the reset was just spent on it, and it is polled ahead of every other due credential, however overdue, as after CPA was down. Every other polled credential due later than now, with no `last_error`, becomes due now. A credential backing off after a failure keeps its backoff, and a provider paused after a 429 stays paused. `request-spacing` is untouched, so the round takes one poll per spacing: the named credential first, then the rest in their usual order. Claude API credit entries are never polled and are left alone.
+- A request that arrives while a round still has a credential it can poll only brings its own credential to the front, ahead of one an earlier request named; the rest are due already, and what the round polled is not polled again. A round whose remaining credentials all belong to a provider paused after a 429 is not under way: a request then starts a new round, and the paused credentials stay in it until the pause ends, one an earlier request named still ahead of the rest. A request naming a credential the latest scan did not find, or one that is not polled, changes nothing.
+- The new schedule is saved with the snapshot's next save. A `poll-interval` or `request-spacing` change during a round leaves its credentials due.
+- Each request acted on logs one `info` line, `quota-cache refreshing every account after a banked reset`, with `provider` and `accounts`, how many credentials the round has to poll. It never names the auth index.
+
+Quota Glance writes a request after every press that sent a spend which may have landed: one that spent a reset, one whose outcome was unknown, and a repeat press that settles it. So one reset can start more than one round, and a press whose outcome was unknown starts one even if nothing was spent. A request that starts a round costs at most one more usage poll per credential, plus Codex's reset-inventory read for each Codex credential holding banked resets. One that joins a round costs at most one more poll, of its own credential. Account details keep their own six-hour schedule, so a round adds none of those.
+
+The status route carries the latest round as `refresh`: `requested_at`, the `at` of the newest request that started a round or joined one, `null` before any since the cache started, and `remaining`, how many credentials that round has still to poll, counting any that wait out a provider's pause. The page shows **Refreshing after a banked reset: N left** while `remaining` is above zero.
+
+A Quota Cache older than 0.2.0 never reads the file, and Quota Glance keeps it to 8 requests, so it stays small. Removing it is always safe.
+
 
 ## Claude API credits
 
-Quota Cache 0.1.13 added `anthropic-api` entries and the `claude-api-credits` setting, and read each organization's spend from Anthropic's cost report with an Admin API key. Quota Cache 0.1.14 asks Anthropic nothing: it registers with CPA as a usage plugin, counts the Claude API-key traffic CPA serves per Console organization, and saves the count to a file of its own beside the snapshot. The snapshot stays on schema 1, and consumers that look entries up by CPA credential, such as Account Health, Reset Priority and Quota Glance before 0.7.0, never see these entries.
+Quota Cache 0.1.13 added `anthropic-api` entries and the `claude-api-credits` setting, and read each organization's spend from Anthropic's cost report with an Admin API key. Quota Cache 0.1.14 asks Anthropic nothing: it registers with CPA as a usage plugin, counts the Claude API-key traffic CPA serves per Console organization, and saves the count to a file of its own beside the snapshot. Quota Cache 0.2.0 also records in that file which CPA auth ID each Claude API key from CPA's configuration uses, and how its latest attempts ended ([auth IDs](#auth-ids)). It keeps the organizations in a file of its own, edited on its page ([organizations file](#organizations-file)), keeps what the operator enters there in the [settings file](#settings-file), prices the meter's tokens itself, and publishes each organization's credit in the [credit state file](#credit-state-file). The snapshot stays on schema 1, and consumers that look entries up by CPA credential, such as Account Health, Reset Priority and Quota Glance before 0.7.0, never see these entries.
 
 It needs **CPA v8.0.4 or newer (verified on v8.0.22)**. CPA gives each upstream attempt its own response headers from v7.2.142; on an older build a retry on another key can carry the earlier attempt's `anthropic-organization-id`, which would attribute spend to the wrong organization and teach the auth map a wrong link. Quota Cache 0.1.13 marks an item that has `organization-id` as `unknown_field` and does not read it; 0.1.12 and older reject `claude-api-credits` altogether and stop polling.
 
 ### Configuration
 
-Each item has these keys. The list is read from YAML only: CPA's plugin panel has no way to describe a list of objects or check one item, so it is not offered there, and a panel save keeps it, rewritten through JSON.
+From Quota Cache 0.2.0 the organizations are added, renamed and removed on Quota Cache's page and kept in the [organizations file](#organizations-file). `claude-api-credits` is still decoded exactly as before, so a configuration an older Quota Cache wrote loads, and a value that is not a list still rejects the configure. It is the item list only until the move to the organizations file, while there is nothing to move, and while that file cannot be read. While the organizations file can be read, the configuration's items are ignored, and each load logs once at `info`: `quota-cache keeps Claude Console organizations on its page; claude-api-credits in its configuration is ignored`. CPA's Plugins page does not offer the list: Quota Cache's **Edit config** (the **Configure quota-cache** dialog) has only `cache-path`, `poll-interval`, `request-spacing` and `openrouter-management-key` under **Config fields**, and organizations are edited on Quota Cache's page.
+
+Each item has these keys:
 
 | Key | Required | Rule |
 | --- | --- | --- |
@@ -197,21 +240,21 @@ Each item is judged on its own, so one bad item never stops the others. Every it
 
 The 0.1.13 problems (`admin_key_missing`, `admin_key_invalid`, `admin_key_repeated`, `monthly_usd_missing`, `monthly_usd_invalid`, `renews_missing`, `renews_invalid`) are never written by 0.1.14. Instead `api_credit` carries three flags, none of them a problem: `monthly_usd_invalid`, `renews_invalid` and `admin_key_ignored`. `organization_id` is set whenever the configured value has a valid shape, whatever the problem, so a consumer can name a duplicate or an over-limit organization.
 
-The meter counts an organization whose `organization-id` is valid, first-occurring and in the first 16 items, whatever else is wrong with the item, so fixing a label loses no history. While any item carries `admin-key`, each load logs once at `warn`: `quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration`, with the field `items`, how many do.
+While they are the item list, the meter counts an organization whose `organization-id` is valid, first-occurring and in the first 16 items, whatever else is wrong with the item, so fixing a label loses no history. While any item carries `admin-key`, each load logs once at `warn`: `quota-cache no longer uses admin-key in claude-api-credits; delete it from the configuration`, with the field `items`, how many do.
 
 ### Entry
 
-The entry is keyed `anthropic-api:org-<12 hex>`, where the hex is the first 12 digits of the SHA-256 of the lower-cased organization id (`client.APICreditOrgAccount`), for an item whose organization is valid, the first with that id, and among the first 16. Any other item is keyed `anthropic-api:item-<position+1>`. Renaming the label, changing the credit or the date, or dropping `admin-key` keeps the entry, and with it the settings Quota Glance stores against it; naming a different organization starts a new one. 0.1.13's `label-…` entries are retired at the first 0.1.14 scan, and anything a 0.1.13 poll left on an entry is cleared then.
+The entry is keyed `anthropic-api:org-<12 hex>`, where the hex is the first 12 digits of the SHA-256 of the lower-cased organization id (`client.APICreditOrgAccount`), for an item whose organization is valid, the first with that id, and among the first 16. Any other item is keyed `anthropic-api:item-<position+1>`. Renaming the label, changing the credit or the date, or dropping `admin-key` keeps the entry, and with it the values saved on Quota Cache's page against it; naming a different organization starts a new one. An organization from the organizations file is always keyed `anthropic-api:org-<12 hex>`, and never has a problem. 0.1.13's `label-…` entries are retired at the first 0.1.14 scan, and anything a 0.1.13 poll left on an entry is cleared then.
 
-The entry is never polled: `used_percent`, `reset_at`, `observed_at`, `last_attempt`, `next_attempt`, `failures`, `last_error` and `quota` stay empty, and it contributes no canonical `windows`. `api_credit` is the configuration, rewritten at every scan:
+The entry is never polled: `used_percent`, `reset_at`, `observed_at`, `last_attempt`, `next_attempt`, `failures`, `last_error` and `quota` stay empty, and it contributes no canonical `windows`. `api_credit` is the organization as listed, from the organizations file or the configuration, rewritten at every scan:
 
 | Field | Meaning |
 | --- | --- |
 | `label` | The configured label; empty when it is missing, invalid, or a duplicate |
 | `position` | The item's zero-based place in the list |
 | `organization_id` | The organization id, lower-cased; absent when missing or invalid |
-| `monthly_usd` | The monthly credit in **dollars**, exactly as configured; absent when unset or invalid |
-| `renews` | The configured renewal date, exactly as written; absent when unset or invalid |
+| `monthly_usd` | The monthly credit in **dollars**, exactly as configured, or the default the organizations file carried over from the configuration; absent when unset or invalid. A value saved on Quota Cache's page is not here: it is in the settings file and wins over this one |
+| `renews` | The configured renewal date, exactly as written, or the organizations file's default; absent when unset or invalid |
 | `monthly_usd_invalid` / `renews_invalid` | True when the value was present but invalid, and so ignored |
 | `admin_key_ignored` | True while the item still has `admin-key` |
 | `problem` | The first configuration problem, or absent |
@@ -223,7 +266,7 @@ The credit cycle is `client.CreditCycleAt(renews, t)`: it starts at 00:00 UTC on
 
 ### The meter file
 
-The count is saved to `client.MeterPath(cache-path)`: the snapshot path with a final `.json` replaced by `.meter.json`, else with `.meter.json` appended, so `plugins/data/quota-cache/snapshot.meter.json` by default. It is written with mode 0600 in the cache's 0700 directory, by a temporary file, fsync, rename and a directory fsync, as the snapshot is, and only while Quota Cache holds the cache's writer lock. It is read by Quota Glance and by the sidebar's status route, which adds it as `api_meter` when it can be read. The snapshot, its 4 MiB limit and its write cadence are unchanged: the meter never goes into it, and a meter can never stop provider persistence.
+The count is saved to `client.MeterPath(cache-path)`: the snapshot path with a final `.json` replaced by `.meter.json`, else with `.meter.json` appended, so `plugins/data/quota-cache/snapshot.meter.json` by default. It is written with mode 0600 in the cache's 0700 directory, by a temporary file, fsync, rename and a directory fsync, as the snapshot is, and only while Quota Cache holds the cache's writer lock. It is read by Quota Cache's publisher, which prices it into the [credit state file](#credit-state-file), by Reset Priority 0.2.0 for the auth IDs, and by the sidebar's status route, which adds it as `api_meter` when it can be read. Quota Glance 0.8.0 reads the credit state file instead. The snapshot, its 4 MiB limit and its write cadence are unchanged: the meter never goes into it, and a meter can never stop provider persistence.
 
 `client.LoadMeter` reads it: a regular file of at most `MaxMeterBytes` (2 MiB), valid JSON, `schema` 1; nil maps and slices come back empty. Every time in it is UTC, truncated to the second.
 
@@ -245,24 +288,42 @@ The count is saved to `client.MeterPath(cache-path)`: the snapshot path with a f
 | `organizations` | Keyed by lower-cased organization id, at most 32 |
 | `unlinked` | Organizations that sent traffic no linked item names, newest `last_seen_at` first, at most 8: `{organization_id, first_seen_at, last_seen_at, requests}` |
 | `auths` | CPA auth index to the organization last seen on it, at most 64: `{organization_id, seen_at}`, with `organization_id` empty for an auth that is not Anthropic's |
+| `auth_ids_since` | When this file began recording `auth_ids`: the first start of the meter of Quota Cache 0.2.0 or newer on it, kept through every later start. Absent while only an older Quota Cache has written the file, which records none. Quota Cache starts its meter only while it is enabled and an organization is linked, so a file an older version left stopped stays without it until then |
+| `auth_ids` | The auth ID of each Claude API key from CPA's configuration to what the meter learned about it, at most 64: `{auth_index, seen_at, last_success_at, last_failure_at, failures}` ([auth IDs](#auth-ids)) |
 
 Each organization holds `since` (when counting began for it), `unlinked_at` (set while dormant, below), `last_seen_at`, `last_success_at`, `refusals` and `last_refusal_at` (low-credit refusals of requests with no Claude Code session), `claude_code_refusals` and `last_claude_code_refusal_at` (refusals of requests from a Claude Code-based client, which includes the Agent SDK), `last_overflow_at` (the last time usage could not be kept under its own model, below), and two lists of buckets, `days` and `hours`, oldest first.
 
 **Buckets.** A bucket is `{start, usage}`: the start of a UTC day (`days`, today and the 40 before) or a UTC hour (`hours`, this hour and the 72 before), and one `usage` entry per `(model, prompt)` pair, sorted by model then prompt. An entry carries `requests` (successful attempts), `failed` (failed attempts, refusals included), and the tokens Anthropic bills: `input` (excluding cache reads and writes), `output` (thinking included), `cache_read`, and `cache_write` (5-minute and 1-hour writes together, which CPA does not tell apart). The tokens of a failed attempt count, because Anthropic bills them. Every count saturates at 2^64 − 1. Zero fields are omitted.
 
-A request lands in the day bucket and the hour bucket that contain its completion (the request time plus the latency, never after the time CPA delivered it), under the same key in both or in neither, so the hours of a day always sum to a subset of the day. That is what lets Quota Glance take a token baseline at the start of the hour of a Console reading (`MeterOrganization.UsageInHours`) and set it against the daily sums ever after (`UsageFromDay`); every credit cycle starts at 00:00 UTC, so daily sums from the cycle start are exact, and 40 days of them cover a reading entered late in a long cycle.
+A request lands in the day bucket and the hour bucket that contain its completion (the request time plus the latency, never after the time CPA delivered it), under the same key in both or in neither, so the hours of a day always sum to a subset of the day. That is what lets Quota Cache take a token baseline at the start of the hour of a Console reading (`MeterOrganization.UsageInHours`) and set it against the daily sums ever after (`UsageFromDay`); every credit cycle starts at 00:00 UTC, so daily sums from the cycle start are exact, and 40 days of them cover a reading entered late in a long cycle.
 
 `model` is the model Anthropic's response named, else the one requested, lower-cased, and kept only when it matches `^[a-z0-9][a-z0-9._:@/-]{0,63}$` (`client.NormalizeMeterModel`); anything else is `(other)`. `prompt` is `over_100k` for a Claude Haiku 5.5 request whose prompt (input, cache read and cache write together) is over 100,000 tokens, which Anthropic prices higher, and absent otherwise (`client.MeterPromptClass`); no other model has a prompt-size tier on Anthropic's price list of 2026-10-09, and a new one needs a Quota Cache release.
 
 **Size.** A bucket holds at most 16 named pairs; a 17th distinct pair in a day or hour bucket goes to `(other)` in both, and the organization's `last_overflow_at` is set. Across every bucket of every organization there are at most 6,000 usage entries; a request whose pair would need a new entry past that is counted but bucketed in neither bucket, with `last_overflow_at` set. With those caps and the ones in the table, the file stays under 2 MiB whatever CPA carries. Should it ever not, the oldest hour buckets are dropped across every organization one hour at a time, then day buckets older than 31 days one day at a time, re-encoding after each, and every organization that lost a bucket is marked overflowed. A meter is never refused for size.
 
-**Retention.** At each event and at each save: day buckets older than 40 days and hour buckets older than 72 hours are dropped; dormant organizations, unlinked entries, auths and gaps older than 40 days are forgotten; auths over 64 lose the one seen longest ago; and gaps over 8 lose the oldest brief gap first (`client.MeterGap.Brief`: shorter than `client.MeterBriefGap`, 5 minutes), and only when every gap is long are the two oldest merged into one, so a gap is never lost, only coarsened, and two brief gaps never become one long span.
+**Retention.** At each event and at each save: day buckets older than 40 days and hour buckets older than 72 hours are dropped; dormant organizations, unlinked entries, auths, auth IDs and gaps older than 40 days are forgotten; auths over 64 lose the one seen longest ago; auth IDs over 64 lose the one seen longest ago, the smaller ID first among those seen at once; and gaps over 8 lose the oldest brief gap first (`client.MeterGap.Brief`: shorter than `client.MeterBriefGap`, 5 minutes), and only when every gap is long are the two oldest merged into one, so a gap is never lost, only coarsened, and two brief gaps never become one long span.
+
+#### Auth IDs
+
+From Quota Cache 0.2.0, a Claude API-key record whose `AuthID` has the shape CPA gives a key from its own configuration also teaches `auth_ids`. That shape is `claude:apikey:` followed by 12 lower-case hex digits, optionally followed by `-` and a count from 1 to 9999, which CPA adds for an exact duplicate (`client.ConfigAPIKeyAuthID`). Any other `AuthID` is left unread and never rejects the record. Every record that carries such an ID and an auth index teaches it, whatever the record is attributed to: a success with the organization header, a foreign success, or an unattributed failure. Each entry holds:
+
+| Field | Meaning |
+| --- | --- |
+| `auth_index` | The auth index CPA reported with the ID, the last time it did |
+| `seen_at` | The latest attempt on the ID |
+| `last_success_at` | The latest successful attempt; absent before the first |
+| `last_failure_at` | The latest failed attempt that counts as a failure (below); absent before the first |
+| `failures` | The failures since the latest success, saturating at 65,535; absent at 0 |
+
+A success sets `failures` to 0. Any other failure moves `last_failure_at` and adds 1 to `failures`, except two that change neither: a low-credit refusal, which is the organization's and is already recorded in its refusal fields, and a client cancellation (status 499), which says nothing about the key. Times only move forward. Two IDs can share one index, because the same key under another prefix, proxy or header set gets another ID. At most 64 IDs are kept, and they age out after 40 days, as under Retention above. A consumer that finds no `auth_ids_since` is reading a file whose writer records no auth IDs, which is not the same as a key the meter has not seen yet. Reset Priority 0.2.0 reads them to route requests by organization.
+
+The kept ID is CPA's own identifier for the credential: `claude:apikey:` and 48 bits of SHA-256 over the key and its routing settings. It is the same kind of value as the auth index the meter already keeps, a 64-bit SHA-256 fingerprint of the same key. OAuth auth IDs, which can be file names or e-mail addresses, never have the shape: the raw JSON is tested before any string is made, so a value that is not a plain string of 26 to 31 characters starting with `claude:apikey:`, or one with an escape in it, is never turned into a string. The outcome fields are times and a count about CPA's own credential; no failure body or status is kept beyond deciding whether to count it.
 
 ### What is counted, and how
 
 CPA calls Quota Cache's `usage.handle` once per upstream attempt, synchronously, on the one goroutine every usage plugin shares; delivery is never replayed, so records published while Quota Cache is unloaded, quiesced, disabled or not declaring the capability are lost to it. The handler decodes the record and hands it to a worker without blocking: it never waits, never does I/O, and when its intake is full it counts a drop. The worker counts, prunes and saves. Every goroutine the meter starts recovers its own panics, because a panic in a native plugin aborts CPA itself: after one, the meter stops with `stop_reason` `failed`, writes the stop, logs once at `error`, and is replaced from its file at the next configure.
 
-Only the record's `Provider`, `AuthIndex`, `AuthType`, `Model`, `ResponseModel`, `SessionID`, `RequestedAt`, `Latency`, `Failed`, `Failure.StatusCode`, `Failure.Body`, the four token counts and the `Anthropic-Organization-Id` response header are decoded. `Source` (the raw upstream API key), `APIKey` (the client's key), `AuthID`, `BaseURL`, `Alias`, `TraceID`, `RequestID` and `ParentSessionID` have no field to land in and are never materialized. The failure body is looked at only to tell a low-credit refusal (it says both "credit balance" and "too low", at any status), the session id only for its `claude:` prefix, and neither is kept. A record that does not decode, or carries a negative count, is `rejected`; a timestamp that does not parse is not a rejection, the delivery time stands in.
+Only the record's `Provider`, `AuthIndex`, `AuthType`, `Model`, `ResponseModel`, `SessionID`, `RequestedAt`, `Latency`, `Failed`, `Failure.StatusCode`, `Failure.Body`, the four token counts and the `Anthropic-Organization-Id` response header are decoded, and `AuthID` only in the shape of CPA's ID for a key from its configuration ([auth IDs](#auth-ids)). `Source` (the raw upstream API key), `APIKey` (the client's key), `BaseURL`, `Alias`, `TraceID`, `RequestID` and `ParentSessionID` have no field to land in and are never materialized, and neither is an `AuthID` of any other shape, such as an OAuth credential's file name or e-mail address. The failure body is looked at only to tell a low-credit refusal (it says both "credit balance" and "too low", at any status), the failure status only to tell a client cancellation (499), the session id only for its `claude:` prefix, and none of them is kept. A record that does not decode, or carries a negative count, is `rejected`; a timestamp that does not parse is not a rejection, the delivery time stands in.
 
 A record is counted only when `Provider` is `claude` and `AuthType` is `apikey`, ignoring case: a `claude-api-key` entry's traffic. Claude subscription traffic is `oauth` and is dropped before its headers are read, so the claude.ai organization it carries is never counted, listed or learned. Attribution then goes:
 
@@ -271,9 +332,9 @@ A record is counted only when `Provider` is `claude` and `AuthType` is `apikey`,
 3. Without one, a success on an unknown auth: `foreign`, and the auth is remembered as foreign. A `claude-api-key` entry pointed at another Anthropic-compatible service looks like this; its responses never carry the header.
 4. Without one, a failure on an unknown auth: `unattributed`, dated when it carried tokens, since it may be a linked organization's spend.
 
-An organization is **linked** while an item keys it. A linked organization's records are `counted`, bucketed, and move its last-seen, last-success and refusal fields. An organization no longer listed, after a typo or a removed item, becomes **dormant** (`unlinked_at` set): it keeps its buckets and keeps being bucketed for 40 days, is not `counted`, and appears under `unlinked` while it sends traffic, so fixing the typo re-links it with its history whole. An organization never listed appears under `unlinked` only. With no item configured at all the meter stops with `no_items` and the file stays; the next configure with items carries on from it with a gap.
+An organization is **linked** while it is listed: on Quota Cache's page, or, before the move to the organizations file, as an item that keys it. A linked organization's records are `counted`, bucketed, and move its last-seen, last-success and refusal fields. An organization no longer listed, after a typo or a removed item, becomes **dormant** (`unlinked_at` set): it keeps its buckets and keeps being bucketed for 40 days, is not `counted`, and appears under `unlinked` while it sends traffic, so fixing the typo re-links it with its history whole. An organization never listed appears under `unlinked` only. With no organization linked the meter stops with `no_items` and the file stays; the next start, at a configure or as soon as an organization is added on the page, carries on from it with a gap. Quota Cache 0.2.0 declares the usage capability whenever its cache runs, so an organization added on the page is counted from its first request; a record that arrives while no meter runs is dropped.
 
-**Stops and gaps.** Every stop is recorded (`stopped_at`, `stop_reason`) and becomes a gap at the next start, a clean `shutdown` included, because CPA stops a plugin while it keeps serving: traffic may have passed unseen. A configuration Quota Cache rejects (a schedule without a unit, a mistyped key, a changed cache path) stops the meter with `disabled` as well: CPA delivers no usage records to a plugin whose reconfigure failed until one succeeds, and the accepted configure that follows carries on from the file with that window as a gap. A meter whose file has `flushed_at` but no `stopped_at` ended without saying so, and its next start records an `unclean_stop` gap from the last save, which loses at most a minute of counts. A CPA restart therefore leaves a brief gap of a few seconds; Quota Glance ignores a gap under 5 minutes and shows the estimate as incomplete after a longer one until a Console reading anchors it again.
+**Stops and gaps.** Every stop is recorded (`stopped_at`, `stop_reason`) and becomes a gap at the next start, a clean `shutdown` included, because CPA stops a plugin while it keeps serving: traffic may have passed unseen. A configuration Quota Cache rejects (a schedule without a unit, a mistyped key, a changed cache path) stops the meter with `disabled` as well: CPA delivers no usage records to a plugin whose reconfigure failed until one succeeds, and the accepted configure that follows carries on from the file with that window as a gap. A meter whose file has `flushed_at` but no `stopped_at` ended without saying so, and its next start records an `unclean_stop` gap from the last save, which loses at most a minute of counts. A CPA restart therefore leaves a brief gap of a few seconds; the credit state ignores a gap under 5 minutes and marks the estimate as incomplete after a longer one until a Console reading anchors it again.
 
 **Logging.** The meter writes these lines and no others: `info` `quota-cache API meter counting Claude API-key traffic` with `organizations` when it starts; `warn` `quota-cache could not read its API meter file and starts counting again` when the file is unreadable, over 2 MiB, bad JSON or another schema (it is replaced at the first save); `warn` `quota-cache API meter is dropping usage records; Claude API credit estimates will be low` with `dropped`, at most once per 10 minutes; `warn` `quota-cache cannot save its API meter; Claude API credit estimates may lose recent spend`, at most once per 10 minutes; and the `error` line above after a panic. No line names a key, a header, a body, a session id, a model or an organization id.
 
@@ -286,9 +347,114 @@ meter, err := client.LoadMeter(client.MeterPath(path))
 org := meter.Organizations[organizationID]            // lower-cased id
 cycle := org.UsageFromDay(cycleStart)                  // the cycle's usage, by (model, prompt)
 baseline, covered := org.UsageInHours(dayStart, hourStart, meter.FlushedAt)
+key, known := meter.AuthIDs[authID]                    // a config key's auth ID (client.ConfigAPIKeyAuthID)
+auth, mapped := meter.Auths[key.AuthIndex]             // auth.OrganizationID: "" when not Anthropic's
 ```
 
-Price the tokens with your own table; the meter never does. Treat a gap that is not `Brief()`, a `stopped_at` older than `client.MeterBriefGap`, and movements of `dropped`, `unattributed`, `rejected` and `last_overflow_at` after your anchor as reasons the figure is a lower bound.
+`meter.AuthIDsSince` is nil when the Quota Cache writing the file predates 0.2.0 and records no auth IDs.
+
+The meter never prices its tokens. Do not price them yourself: read the organization's credit from the [credit state file](#reading-the-credit-state-from-another-plugin), which Quota Cache prices with the one table, so every consumer shows the same figure. Read the meter itself only for what the credit state does not carry, such as the auth IDs. A consumer that does use the counts should treat a gap that is not `Brief()`, a `stopped_at` older than `client.MeterBriefGap`, and movements of `dropped`, `unattributed`, `rejected` and `last_overflow_at` after its anchor as reasons a figure is a lower bound.
+
+### Operator data beside the snapshot
+
+Quota Cache 0.2.0 keeps three files of operator data in the snapshot's directory, beside the meter. They are written only while Quota Cache holds the cache's writer lock, the way the snapshot is (a temporary file `.<name>-*` at 0600, fsync, rename, a directory fsync), and only after the bytes about to be written pass the file's own load rules. An organizations or settings file that fails its rules is never written over; an import record that fails them is replaced by the next record written (see [Import record](#import-record)). For `cache-path` P, with a final `.json` removed:
+
+| File | Path | Written |
+| --- | --- | --- |
+| Organizations | P + `.organizations.json` (`client.OrganizationsPath`) | at the move from the configuration, and on each organizations save on the page |
+| Settings | P + `.settings.json` | on each save on the page, and at each import of Quota Glance's settings |
+| Import record | P + `.settings-import.json` | after each import's settings write |
+| Drop-in | `quota-glance-settings.json` in the snapshot's directory (`client.LegacySettingsDropIn`) | never by Quota Cache: you place it |
+
+These are operator data, not cache: **they must move with `cache-path`**. A new location without the organizations file moves the configuration's list again, or starts with none. One without the settings file and the import record imports Quota Glance's `settings.json` again, whose values date from before the move; the page's import note shows how old they are. One with the record but not the settings file starts empty, and the page offers **Import Quota Glance's settings**. [Credit settings](credit-settings.md) gives the rules in full.
+
+Each tick of the publisher (every 10 seconds) compares each file's size, modification time, mode and inode with what it last read, and reads one that changed or is gone again, so moving a file aside takes effect within seconds, with no configure. A file that could not be opened or read last time, such as one owned by another user, is read again at every tick whatever the comparison says, so fixing its owner or permissions is enough. A save or an import makes the same comparison first, so it is judged against the file as it is then, never written over one replaced since the tick.
+
+#### Organizations file
+
+Schema 1, at most 64 KiB, read all or nothing:
+
+```json
+{"schema":1,"revision":"1791795602",
+ "organizations":[{"label":"personal-1","organization_id":"00000000-0000-4000-8000-000000000001",
+                   "default_monthly_usd":"200","default_renews":"2026-10-29","rev":"1791795600","updated_at":"2026-10-12T09:00:00Z"}],
+ "migration":{"at":"2026-10-12T09:00:00Z","moved":5,"skipped":0}}
+```
+
+- `revision` goes up with each save on the page. A file written where there was none, by the move or the first organization added on the page, starts at the time of the write in Unix seconds, or one past the highest revision Quota Cache has seen for this file if that is higher, and a save after an older copy was put back goes past the highest seen. A page that read a file since deleted or replaced then meets the new one as a conflict.
+- `organizations` is in display order, at most 16. A label follows the configuration's rules (1 to 64 printable characters, no surrounding space) and is unique ignoring case. `organization_id` is as `client.NormalizeOrganizationID` returns it, and unique. Each `rev` is the revision that last wrote the entry, from 1 to `revision`; `updated_at` is RFC 3339 in UTC, whole seconds.
+- `default_monthly_usd` and `default_renews` exist only on an organization moved from the configuration, and carry that item's valid `monthly-usd` and `renews`. They play the configuration's role: a value saved on the page wins over them, and **Use config** goes back to them. The page cannot set them; they go only with their organization, and adding it back after a remove does not restore them.
+- `migration` is the move that made the file, `null` when the page made it: `moved` organizations, and `skipped` items that had a configuration problem and could not be moved.
+- The file is missing until the move or the first organization added on the page. One that fails a rule (not a regular file, too large, an unknown key, another schema, a bad label or ID, a duplicate) is **unreadable**: the configuration's list applies, and the page cannot change organizations until it is moved aside.
+- **The move.** While there is no file, the configuration lists at least one item and the cache runs, at each configure and each tick, every item with no problem is written, in the configured order. With nothing to move nothing is written. Deleting the file brings the configuration's list back at the next tick, which is the way to start over from the configuration and discards every change made on the page since the move; there is no other automatic move.
+
+#### Settings file
+
+The values entered on the page: monthly credits, refill dates and Console readings per organization (keyed by its `org-<12 hex>` account id), and Claude renewal dates per CPA auth index. It is exactly Quota Glance 0.7's `settings.json`, schema 1, with the same rules and the same encoding, so the two files can be copied over each other: `{"schema":1,"revision":N,"apiCredits":{…},"renewals":{…}}`. The rules, for a file of at most 1 MiB, are those of Quota Glance's: at most 64 credits and 256 renewal dates, each `rev` from 1 to `revision`, dollar amounts and dates in the configuration's forms, and a reading's token baseline from the hours before it. A file that fails any rule is **unreadable**: nothing in it applies, only configured values do, and nothing is saved until it is moved aside.
+
+`revision` goes up with each save on the page. Each save, and **Import Quota Glance's settings**, writes at the time of the write in Unix seconds, or one past the highest revision Quota Cache has seen for this file if that is higher, so a page that read a file since moved aside or replaced, even while CPA was stopped or Quota Cache disabled, meets the new one as a conflict. The automatic import keeps Quota Glance's revisions as they are, and so does a follow while the import record says the settings file is a byte copy of Quota Glance's file, Quota Cache has given out no later revision, and Quota Glance's newer file goes on from that copy: each of its rows at or below the copy's revision is the copy's row as it was. A follow otherwise, as after **Import Quota Glance's settings**, after the imported file was put back over saves made on the page, or after an older copy of Quota Glance's file was put back and saved past the copy's revision, gives every row a revision past both files' revisions, as that import does. Nothing is written that needs a revision past 18446744073709551615, the highest there is, which only a file edited by hand holds: a save or an import that would is refused with `settings_full`. The first save over an imported file writes at least the time of the import, where the import record's `lineage` starts (below). Quota Glance 0.7 reads and continues any of these revisions.
+
+Values of an organization that is no longer listed stay in the file and are published as `api_credits.orphans`, which the page can clear. While no organization is listed `api_credits` is `null`, and the status route's `editor.api_credit_orphans` lists them for the page instead. Adding the same Organization ID back brings them back. While the organizations file cannot be read, the configuration's list stands in for it, and values for an organization that list lacks may belong to one in the file: none of them is an orphan, so `api_credits.orphans` is empty, nothing clears them, and the status route's `editor.held_api_credits` lists them so the page can show they are kept.
+
+#### Import record
+
+What the last import of Quota Glance's `settings.json` read and wrote, at most 4 KiB, written after the settings file it describes:
+
+```json
+{"schema":1,"kind":"automatic","source_path":"/CLIProxyAPI/plugins/data/quota-glance/settings.json",
+ "sha256":"<64 hex>","settings_sha256":"<64 hex>","legacy_revision":"12","legacy_updated_at":"2026-10-10T18:20:00Z",
+ "counts":{"monthly_credits":2,"refill_dates":2,"readings":2,"renewal_dates":3},"imported_at":"2026-10-12T09:00:00Z",
+ "lineage":["1791795600"]}
+```
+
+`kind` is `automatic`, `matched`, `follow` or `manual` ([credit settings](credit-settings.md#importing-quota-glances-settings)). A `matched` or `follow` record written while nothing has been saved on the page since an `automatic` or `manual` import continues it and keeps that kind, so the page's note goes on saying what may need entering again; the log still names the follow. `sha256` is the hash of the legacy bytes read and `settings_sha256` that of the settings file written; they differ when the import raised the revisions past Quota Glance's: after **Import Quota Glance's settings**, and after a follow that raised them. `legacy_updated_at` is the newest change in the legacy file, `null` when it holds none. `counts` count what was imported.
+
+When an import (`automatic`, a follow, or **Import Quota Glance's settings**) writes the settings file but cannot write the record, Quota Cache writes the record at the next tick, or first thing in the next save on the page, which is refused with `settings_unwritable` while the record cannot be written, as long as neither the settings file nor the record has changed since. After a restart in between, a copy that left the two files equal is recorded at the next tick, as after a crash. So is one that gave every row a newer revision, which left the settings file holding exactly Quota Glance's rows, each at the settings file's revision, while the record names Quota Glance's file: the files cannot tell **Import Quota Glance's settings** from a follow, so it is recorded as `manual`, or as `automatic` when the record it replaces is, and either note says what may need entering again. A save on the page before that tick gives only the rows it changes a newer revision, so the copy is no longer recorded, as a save ends follow.
+
+`lineage` says which settings files hold what was imported. It lists 1 to 16 revisions, oldest first, at which the settings file switches between files that hold it and files that do not: from the first, saves over the file the import wrote; from the second, a file a save on the page started after that one went missing, which holds none of it; from the third, saves over a file that holds the import, put back; and so on, alternately. Each import writes one, the time of the import in Unix seconds or past the highest revision Quota Cache has seen, so every settings file from before the import is below it. A save whose next revision would fall on the other side from the file it saves over, or from no file, which holds nothing, writes past the last revision listed instead, and where that is on the other side too, first writes the record again with its revision added, the oldest two dropped past 16. A save that cannot write the record is refused, and nothing is saved. The record describes the settings file the import wrote (`settings_sha256`) and any file whose revision is on a side that holds the import; any other counts as having no record (see [import states](credit-settings.md#import-states)), such as a copy from before the import or a file started after the imported one went missing, whatever was put back in between. A tick never writes the record for this. While the record is there but cannot be opened or read, as one restored as another user, nothing is saved or imported on the page, and no tick replaces it, until it can be: a save could not tell which side its file is on. The status route's `editor` then has `available` false and `reason` `importRecordUnreadable`, while the saved values still apply and `settings.state` stays `ok`.
+
+A record that fails a rule (not a regular file, over 4 KiB, an unknown key, another schema) still stops the automatic import, since it is there, and ends follow mode. Otherwise it counts as no record, and the next record written replaces it: a `matched` one at the next tick while the settings file is still a byte copy of Quota Glance's, or a `manual` one from the next import. To keep a broken record for inspection, copy it elsewhere.
+
+### Credit state file
+
+The organizations' credit as Quota Cache works it out: `client.CreditsPath(cache-path)`, P + `.credits.json`, so `plugins/data/quota-cache/snapshot.credits.json` by default. It is written with the snapshot's rules, by a publisher that runs while the cache does. Every 10 seconds it looks at the snapshot, the meter, the three files above and Quota Glance's candidates, and computes when one changed, when the last state reached its `valid_until`, at least every 60 seconds, and at once after a save on the page. It writes when the state changed, ignoring `computed_at` and the countdowns, and at least every 60 seconds, so a running Quota Cache never leaves `computed_at` more than about 70 seconds old. A save on the page is written before the save is answered. When the cache stops (disabled, quiesced or shut down), the meter stops first and the publisher writes once more over the stopped meter's file, so the last state written carries `api_credits.meter.stoppedAtEpoch`.
+
+**Schema 1.** Keys outside `api_credits` and `renewals` are snake_case, like the snapshot and the meter. Keys inside those two are the camelCase names of Quota Glance's [summary contract](../../quota-glance/docs/summary-contract.md), because Quota Glance passes them through to its document:
+
+| Key | Meaning |
+| --- | --- |
+| `schema` | 1 |
+| `quota_cache_version` | The Quota Cache that wrote it |
+| `computed_at` | When it was computed, UTC, whole seconds |
+| `valid_until` | The soonest instant a figure changes with nothing else changing: an organization's next refill; for an organization with no refill date, a used reading's time plus 31 days; a reading dated ahead, at its time. `null` when none applies |
+| `inputs` | Diagnostic: `snapshot_written_at` (the snapshot's `written_at`, or `null`), `meter_flushed_at` (`null` without a meter), `meter_error` (`""`, `missing` or `unreadable`) and `settings_revision` |
+| `settings` | `state` (`ok`, `unreadable`, or `legacyUnreadable` while an unreadable Quota Glance `settings.json` blocks the first import), `editable` (`state` is `ok`), `revision` (the settings file's, `""` without one) and `import` (below) |
+| `api_credits` | Quota Glance's `apiCredits` block, field for field, computed at `computed_at`. `null` when no organization is listed. `editing.migration` is filled by Quota Glance; it is always empty in this file |
+| `renewals` | Every saved Claude renewal date, keyed by auth index: `{date, revision, updatedAtEpoch}`. Always an object |
+| `organizations` | Where the organizations came from: `state` (`ok`, `missing` or `unreadable`, the organizations file's), `revision`, `source` (`page` or `config`), `migration` (the file's, or `null`) and `config_items_ignored` (configured items ignored because the page's list is used) |
+
+`settings.import` is `null` while there is no Quota Glance `settings.json` and no readable import record, or none that describes the settings file (its `lineage`, above). Otherwise it carries `state`, `following`, `importable` and the record's fields (`kind`, `source_path`, `sha256`, `settings_sha256`, `legacy_revision`, `legacy_updated_at`, `counts`, `imported_at`), each `null` without a readable record that describes the settings file. While the record is there but cannot be opened or read, `settings.import` stays as Quota Cache last published it, `null` when it has published none since it started. The states are listed in [credit settings](credit-settings.md#import-states).
+
+The `*InSeconds` fields hold their values as of `computed_at`. Nothing in the file is stale-adjusted: stale belongs to the reader, below. Fields are only ever added, never repurposed; a breaking change needs schema 2, and readers refuse any schema but 1. An encoding over `client.MaxCreditsBytes` (1 MiB, which needs well over 200 organizations) is not written: the previous file stays, readers age it out, and CPA's log says so at most every 10 minutes.
+
+The file holds what Quota Glance's document already held: labels, organization IDs and amounts. It holds no auth ID, key, email or credential name. `source_path` is a local path.
+
+### Reading the credit state from another plugin
+
+```go
+state, err := client.LoadCredits(client.CreditsPath(path))
+// errors.Is(err, client.ErrCreditsMissing): no Quota Cache 0.2.0 or newer writes
+// beside this snapshot yet; client.ErrUnavailable: unreadable, or another schema.
+seen := client.CreditsAt(state, now, client.DefaultCreditStaleAfter)
+for _, account := range seen.APICredits.Accounts { // APICredits is nil with no organization
+	_ = account.LeftText
+}
+fresh := state.Current(now, 3*time.Minute) // computed recently, and before valid_until
+```
+
+`client.CreditsAt` is the state as a reader sees it at `now`. It never changes the state it is given. It recomputes the countdowns, and re-applies the only rules that move with the clock alone: the state is stale when it, or its meter's last save, is older than the reader's `staleAfter`, or when `now` is past `valid_until` plus 2 minutes; and the estimate is a lower bound, with the `meterGap` issue, from 5 minutes after a meter stop. Stale changes labels and lower-bound flags, never an amount. Every other figure is Quota Cache's: do not price the meter yourself, so that every consumer shows the same numbers.
+
+Readers judge freshness to their own needs. Quota Glance uses its `stale-after` (`client.DefaultCreditStaleAfter`, 45 minutes, by default), as Quota Cache's own page does. A reader that acts on the figures, as Reset Priority's router does, should also require `state.Current` with a short limit. A snapshot written more than `client.CreditPublishLagLimit` (5 minutes) after the state's `computed_at` means the snapshot's writer runs but no publisher does, for example after a rollback below 0.2.0: treat the file as abandoned.
 
 ## Reading from a new plugin
 

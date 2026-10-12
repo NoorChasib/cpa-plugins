@@ -9,13 +9,14 @@ import (
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/overrides"
 )
 
 // Level thresholds, in the whole percent the page prints: 41% and up is ok,
 // 40% down to 11% is low, and 10% and under is critical. Bars are blue, amber
 // and red in turn, and the big number green, amber and red. The rule lives
-// here so every client agrees and none of them recomputes it in CSS.
+// here so every client agrees and none of them recomputes it in CSS. Quota
+// Cache judges the API credit card's levels by the same two numbers
+// (qc.CreditLevelCriticalAtOrBelow and qc.CreditLevelLowAtOrBelow).
 const (
 	criticalAtOrBelow = 10
 	lowAtOrBelow      = 40
@@ -68,17 +69,17 @@ type Input struct {
 	// BalanceWarnBelow is the amount below which a prepaid balance is reported
 	// low. Zero turns the warning off; an empty balance is critical regardless.
 	BalanceWarnBelow float64
-	// Meter is quota-cache's API meter, read beside the snapshot, and nil when
-	// its file is missing or cannot be read. The API credit estimates are
-	// priced from it.
-	Meter *qc.APIMeter
-	// Overrides is what the operator set from the dashboard: API credit
-	// amounts, refill dates and Console readings, and Claude renewal dates.
-	// They win over quota-cache's configuration, field by field.
-	Overrides overrides.Values
-	// AllowEdit reports whether the page may change those values (allow-edit).
-	// Stored values apply either way.
-	AllowEdit bool
+	// Credits is Quota Cache's published credit state, read beside the
+	// snapshot: the API credit card, and the Claude renewal dates the operator
+	// entered on Quota Cache's page. It is used only while CreditsError is "".
+	Credits *qc.CreditState
+	// CreditsError says why there is no usable state: CreditsMissing,
+	// CreditsUnreadable or CreditsAbandoned. The card then lists the
+	// snapshot's organizations without figures.
+	CreditsError string
+	// Migration is the card's editing.migration: "" or a Migration value,
+	// worked out by the caller from quota-glance's own settings.json.
+	Migration string
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on
@@ -442,7 +443,7 @@ func Build(in Input, now time.Time) Document {
 		APICredits:       apiCreditsOf(in, now),
 		RenewalOrphans:   renewalOrphansOf(in),
 	}
-	renewalsEditable := editingOf(in).Available
+	renewals := renewalsOf(in)
 
 	records := make([]record, 0, len(in.Identities))
 	var newestObservation, soonestAttempt, soonestOverdue time.Time
@@ -543,9 +544,8 @@ func Build(in Input, now time.Time) Document {
 		default:
 			doc.Counters.ObservedOK++
 		}
-		stored, hasStored := in.Overrides.Renewals[r.identity.AuthIndex]
-		var setting *overrides.Renewal
-		if hasStored {
+		var setting *RenewalSetting
+		if stored, ok := renewals[r.identity.AuthIndex]; ok {
 			setting = &stored
 		}
 		renewal, source := renewalFor(r, setting, now)
@@ -559,11 +559,10 @@ func Build(in Input, now time.Time) Document {
 			Activity:               activityOf(r.identity.Recent, peaks[r.identity.Provider], now),
 			ResetCredits:           resetCreditsOf(r, in.Redeemable, now),
 			RenewalAtEpoch:         renewal,
-			RenewalEstimated:       source != nil && *source == renewalEstimated,
+			RenewalEstimated:       source != nil && *source == qc.RenewalEstimated,
 			RenewalSource:          source,
 			RenewalEstimateAtEpoch: renewalEstimateOf(r, now),
-			RenewalEditable:        renewalsEditable && renewalEditable(r.identity),
-			RenewalSetting:         renewalSettingOf(setting),
+			RenewalSetting:         setting,
 			Credits:                accountCreditsOf(r),
 		})
 	}
@@ -581,13 +580,13 @@ func Build(in Input, now time.Time) Document {
 	return doc
 }
 
-// WithSettings is doc with every part the dashboard's settings decide taken
-// from fresh: the API credit card, the renewal orphans, and each credential's
-// renewal. doc is a document served again while its source is failing, and
-// fresh is built from the same snapshot and roster with the settings as they
-// are now, so a value saved meanwhile shows at once and the page's next save
-// starts from its revision. doc itself is not modified.
-func WithSettings(doc, fresh Document) Document {
+// WithCredits is doc with every part Quota Cache's published state decides
+// taken from fresh: the API credit card, the renewal orphans, and each
+// credential's renewal. doc is a document served again while its source is
+// failing, and fresh is built from the same snapshot and roster with the
+// credit state as it is now, so a value entered on Quota Cache's page
+// meanwhile shows at once. doc itself is not modified.
+func WithCredits(doc, fresh Document) Document {
 	doc.APICredits = fresh.APICredits
 	doc.RenewalOrphans = fresh.RenewalOrphans
 	now := make(map[string]Credential, len(fresh.Credentials))

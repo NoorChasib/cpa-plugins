@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -328,10 +330,10 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 	}
 	registration := result.(protocol.ManagementRegistration)
 	// Five authenticated routes, and five public ones: the page, which carries
-	// no data, then the document's fallback path, the redeem action, the
-	// spend action that carries the same press as a GET, and the settings
-	// save as a GET. Those four carry this plugin's own token check because
-	// CPA carries none.
+	// no data, then the document's fallback path, the redeem action and the
+	// spend action that carries the same press as a GET, which carry this
+	// plugin's own token check because CPA carries none, and the retired
+	// settings save, which answers 410 settings_moved to anyone.
 	if len(registration.Routes) != 5 || len(registration.Resources) != 5 {
 		t.Fatalf("registration = %+v", registration)
 	}
@@ -341,7 +343,8 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		}
 	}
 	// Exactly two management routes may be anything other than GET: the one
-	// that spends a credit and the one that saves settings. (Resource routes
+	// that spends a credit, and the retired settings save, which keeps its
+	// method so CPA keeps dispatching it and changes nothing. (Resource routes
 	// are GET by construction; /spend and /save-settings are the resource
 	// tree's.) A third write route appearing here without a deliberate change
 	// to this list is the thing worth catching.
@@ -357,12 +360,70 @@ func TestManagementRoutesCarryNoMenu(t *testing.T) {
 		if route.Method != want {
 			t.Fatalf("route %s is %s, want %s", route.Path, route.Method, want)
 		}
+		if route.Path == "/plugins/"+ID+"/settings" && route.Description != retiredSettingsDescription {
+			t.Fatalf("route %s is described %q", route.Path, route.Description)
+		}
+	}
+	if registration.Resources[4].Description != retiredSettingsDescription {
+		t.Fatalf("resource /save-settings is described %q", registration.Resources[4].Description)
 	}
 	// Every registered resource path has at least one segment after the plugin
 	// id; a bare "/" is rejected by CPA.
 	for _, resource := range registration.Resources {
 		if len(resource.Path) < 2 || !strings.HasPrefix(resource.Path, "/") {
 			t.Fatalf("resource path %q needs a segment after the plugin id", resource.Path)
+		}
+	}
+}
+
+// CPA's plugin list HTML-escapes the metadata, every config field and every
+// menu entry, which is a resource route carrying a Menu, and the console draws
+// them as plain text, so an apostrophe in a field description shows as &#39;
+// in the plugin's Edit config form. None of that text may hold a character
+// html.EscapeString changes. Descriptions of routes without a menu are not
+// listed.
+func TestRegisteredTextSurvivesPluginListEscaping(t *testing.T) {
+	p := New(&fakeHost{})
+	t.Cleanup(p.Shutdown)
+	result, err := p.Handle(protocol.MethodManagementRegister, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := registration().Metadata
+	text := map[string]string{
+		"metadata Name":             meta.Name,
+		"metadata Version":          meta.Version,
+		"metadata Author":           meta.Author,
+		"metadata GitHubRepository": meta.GitHubRepository,
+		"metadata Logo":             meta.Logo,
+	}
+	if len(meta.ConfigFields) == 0 {
+		t.Fatal("registration lists no config fields")
+	}
+	for _, field := range meta.ConfigFields {
+		text["config field "+field.Name+" Name"] = field.Name
+		text["config field "+field.Name+" Type"] = field.Type
+		text["config field "+field.Name+" Description"] = field.Description
+		for i, value := range field.EnumValues {
+			text[fmt.Sprintf("config field %s EnumValues[%d]", field.Name, i)] = value
+		}
+	}
+	menus := 0
+	for _, resource := range result.(protocol.ManagementRegistration).Resources {
+		if resource.Menu == "" {
+			continue
+		}
+		menus++
+		text["menu "+resource.Path+" Path"] = resource.Path
+		text["menu "+resource.Path+" Menu"] = resource.Menu
+		text["menu "+resource.Path+" Description"] = resource.Description
+	}
+	if menus == 0 {
+		t.Fatal("registration lists no menu entry")
+	}
+	for where, value := range text {
+		if escaped := html.EscapeString(value); escaped != value {
+			t.Errorf("%s reaches the console as %q", where, escaped)
 		}
 	}
 }

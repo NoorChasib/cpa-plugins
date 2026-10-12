@@ -7,13 +7,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/settings"
 	"gopkg.in/yaml.v3"
 )
 
-// creditItem is one entry of claude-api-credits: a Claude Console
-// organization whose monthly API credit is tracked. It holds nothing but what
-// reaches the snapshot; the organization id links it to the meter, and no key
-// is read from it.
+// creditItem is one Claude Console organization whose monthly API credit is
+// tracked: an entry of the organizations file, or of claude-api-credits before
+// the move to it. It holds nothing but what reaches the snapshot; the
+// organization id links it to the meter, and no key is read from it.
 type creditItem struct {
 	id     string
 	credit client.APICredit
@@ -163,6 +164,43 @@ func linkedOrganizations(items []creditItem) []string {
 		}
 	}
 	return linked
+}
+
+// itemsOf is the item list quota-cache counts and lists, and where it came
+// from, published as the credit state's organizations block. While the
+// organizations file can be read, its organizations are the items, each with
+// no problem, since the file holds only what its rules accept, and with the
+// defaults it carried over from claude-api-credits as the configured values;
+// config is then ignored. Otherwise, before the move, with nothing to move, or
+// while the file cannot be read, config is the list, as in 0.1.x.
+func itemsOf(orgs settings.Organizations, config []creditItem) ([]creditItem, client.CreditOrganizations) {
+	block := client.CreditOrganizations{
+		State: orgs.State, Revision: settings.RevisionText(orgs.Revision), Source: client.OrganizationsSourceConfig,
+		Migration: orgs.Migration,
+	}
+	if block.State == "" {
+		block.State = client.OrganizationsStateMissing
+	}
+	if orgs.State != client.OrganizationsStateOK {
+		return config, block
+	}
+	block.Source, block.ConfigItemsIgnored = client.OrganizationsSourcePage, len(config)
+	items := make([]creditItem, 0, len(orgs.Items))
+	for _, credit := range orgs.APICredits() {
+		items = append(items, creditItem{id: client.APICreditOrgAccount(credit.OrganizationID), credit: credit})
+	}
+	return items, block
+}
+
+// creditsOfItems is what the move to the organizations file reads: every
+// configured item's credit, in the configured order, problems included, so
+// the store can count what it skips.
+func creditsOfItems(items []creditItem) []client.APICredit {
+	credits := make([]client.APICredit, 0, len(items))
+	for _, item := range items {
+		credits = append(credits, item.credit)
+	}
+	return credits
 }
 
 // adminKeysIgnored counts the items that still carry admin-key.

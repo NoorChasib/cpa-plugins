@@ -131,16 +131,17 @@ func TestBurstOfWritesCollapses(t *testing.T) {
 	}
 }
 
-// quota-cache saves its API meter beside the snapshot, on its own schedule.
-// A write to it alone must reload, or the card's spend would wait for the next
-// snapshot write.
-func TestAMeterWriteReloads(t *testing.T) {
+// quota-cache publishes its credit state beside the snapshot, on its own
+// schedule. A write to it alone must reload, or the card would wait for the
+// next snapshot write. Its meter is no longer read here, so a meter write is
+// ignored like any other file.
+func TestACreditStateWriteReloads(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snapshot.json")
-	meter := filepath.Join(dir, "snapshot.meter.json")
+	credits := filepath.Join(dir, "snapshot.credits.json")
 	commit(t, path, `{"schema":1}`)
 	var calls atomic.Int64
-	w, err := Start(Options{Path: path, MeterPath: meter, Debounce: 40 * time.Millisecond, Backstop: time.Hour, OnChange: func() { calls.Add(1) }})
+	w, err := Start(Options{Path: path, CreditsPath: credits, Debounce: 40 * time.Millisecond, Backstop: time.Hour, OnChange: func() { calls.Add(1) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,25 +149,26 @@ func TestAMeterWriteReloads(t *testing.T) {
 	w.Begin()
 	waitFor(t, &calls, 1)
 
-	commit(t, meter, `{"schema":1}`)
+	commit(t, credits, `{"schema":1}`)
 	waitFor(t, &calls, 2)
 	// Any other file in the directory is still ignored.
 	commit(t, filepath.Join(dir, "unrelated.json"), `{}`)
+	commit(t, filepath.Join(dir, "snapshot.meter.json"), `{"schema":1}`)
 	time.Sleep(200 * time.Millisecond)
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("reloads = %d; an unrelated file reloaded", got)
 	}
 }
 
-// The backstop fingerprints the meter too, so a missed meter write is still
-// noticed.
-func TestBackstopNoticesAMissedMeterWrite(t *testing.T) {
+// The backstop fingerprints the credit state too, so a missed write to it is
+// still noticed.
+func TestBackstopNoticesAMissedCreditStateWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snapshot.json")
-	meter := filepath.Join(dir, "snapshot.meter.json")
+	credits := filepath.Join(dir, "snapshot.credits.json")
 	commit(t, path, `{"schema":1}`)
 	var calls atomic.Int64
-	w, err := Start(Options{Path: path, MeterPath: meter, Debounce: time.Hour, Backstop: 50 * time.Millisecond, Heartbeat: time.Hour,
+	w, err := Start(Options{Path: path, CreditsPath: credits, Debounce: time.Hour, Backstop: 50 * time.Millisecond, Heartbeat: time.Hour,
 		OnChange: func() { calls.Add(1) }})
 	if err != nil {
 		t.Fatal(err)
@@ -175,10 +177,10 @@ func TestBackstopNoticesAMissedMeterWrite(t *testing.T) {
 	w.Begin()
 	waitFor(t, &calls, 1)
 
-	commit(t, meter, `{"schema":1,"padding":"aaaaaaaa"}`)
+	commit(t, credits, `{"schema":1,"padding":"aaaaaaaa"}`)
 	waitFor(t, &calls, 2)
 	if w.State().Backstops == 0 {
-		t.Fatal("the meter write was not picked up by the backstop")
+		t.Fatal("the credit state write was not picked up by the backstop")
 	}
 }
 

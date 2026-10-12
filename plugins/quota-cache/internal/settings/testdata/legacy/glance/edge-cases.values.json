@@ -1,0 +1,43 @@
+{
+  "Revision": 4,
+  "APICredits": {
+    "org-47efb20b6d10": {
+      "MonthlyUSD": "9999999.99",
+      "Renews": "",
+      "Reading": {
+        "RemainingUSD": "0",
+        "At": "2026-10-03T06:59:59Z",
+        "EnteredAt": "2026-10-03T07:08:09Z",
+        "OrganizationID": "00000000-0000-4000-8000-0000000000d1",
+        "Baseline": {
+          "DayStart": "2026-10-03T00:00:00Z",
+          "Until": "2026-10-03T06:00:00Z",
+          "Usage": [
+            {
+              "model": "(other)",
+              "requests": 2,
+              "failed": 1,
+              "input": 5
+            },
+            {
+              "model": "claude-haiku-5-5",
+              "prompt": "over_100k",
+              "requests": 1,
+              "input": 200007
+            }
+          ]
+        }
+      },
+      "Rev": 3,
+      "UpdatedAt": "2026-10-03T07:08:09Z"
+    }
+  },
+  "Renewals": {
+    "00000000000000bb": {
+      "Date": "2028-02-29",
+      "Rev": 4,
+      "UpdatedAt": "2026-10-04T00:00:00Z"
+    }
+  },
+  "Unreadable": false
+}

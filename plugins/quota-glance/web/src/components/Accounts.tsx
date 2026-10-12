@@ -1,40 +1,13 @@
-import { useEffect, useId, useState } from "react"
+import { useId } from "react"
 
-import { Box, Dot, EditButton, EditFoot, EditLink, type FootStatus, RestFoot, SetHereDot } from "./Edit"
+import { QuotaCacheLink, SetHereDot } from "./Edit"
 import { Flags, FoldButton } from "./Fold"
-import {
-  accountFlags,
-  renewalFoot,
-  renewalEstimateAt,
-  renewalMark,
-  renewalOrphanText,
-  ROUTING_LABELS,
-  yearlyEstimate,
-} from "../lib/accounts"
-import { editingOffText } from "../lib/apicredits"
+import { accountFlags, RENEWAL_ENTERED_TITLE, renewalFoot, renewalMark, renewalTrouble, ROUTING_LABELS } from "../lib/accounts"
+import { ENTERED_HERE } from "../lib/apicredits"
 import { useNowSeconds } from "../lib/now"
 import { type AccountName, nameText, shortName } from "../lib/pool"
-import { canSaveHere, saveSettings } from "../lib/save"
-import {
-  CONFLICT_FIELD,
-  dateEpoch,
-  dropConflicts,
-  EMPTY_RENEWAL_DRAFT,
-  editRenewal,
-  FIELD_FOOT,
-  type FieldEdit,
-  type FieldState,
-  newerRevision,
-  reconcileRenewals,
-  removeRenewalOrphan,
-  type RenewalDraft,
-  renewalField,
-  renewalPlan,
-  SIGN_IN_FOOT,
-  utcDay,
-} from "../lib/settings"
-import { calendarDaysUntil, formatAgo, formatDate, formatDuration } from "../lib/time"
-import type { Activity, APICreditEditing, Credential, Credits, RenewalOrphan, RenewalSetting } from "../lib/types"
+import { calendarDaysUntil, formatAgo, formatDate, formatDuration, formatUTCDate } from "../lib/time"
+import type { Activity, APICreditEditing, Credential, Credits } from "../lib/types"
 
 /**
  * What each of a provider's accounts is, said once for the provider: its plan,
@@ -167,18 +140,18 @@ const utcDaysUntil = (epoch: number, now: number) => Math.floor(epoch / DAY_SECO
  * When the subscription renews: the date, so it can be checked against a
  * receipt, and the distance, ticking like every other countdown here.
  *
- * An estimate carries "~" on its date, and a date set on the dashboard a dot
- * after it; the card's foot explains both once, and a hover in full. Either
- * one's distance is calendar days, so it agrees with the date beside it — a
- * date set here on the UTC calendar it was set on. One that comes round while
- * the page is open is due rather than passed, since the next document will
- * already carry the anniversary after it.
+ * An estimate carries "~" on its date, and a date entered on Quota Cache's
+ * page a dot after it; the card's foot explains both once, and a hover in
+ * full. Either one's distance is calendar days, so it agrees with the date
+ * beside it — an entered date on the UTC calendar it was entered on. One that
+ * comes round while the page is open is due rather than passed, since the
+ * next document will already carry the anniversary after it.
  */
 function Renewal({ credential, now }: { credential: Credential; now: number }) {
   const mark = renewalMark(credential)
   if (mark === null) return null
   const remaining = mark.atEpoch - now
-  const date = `${mark.estimated ? "~" : ""}${mark.utc ? utcDay(mark.atEpoch) : formatDate(mark.atEpoch)}`
+  const date = `${mark.estimated ? "~" : ""}${mark.utc ? formatUTCDate(mark.atEpoch) : formatDate(mark.atEpoch)}`
   if (remaining <= 0) return <span>{mark.estimated || mark.setHere ? "renewal due" : "renewal date passed"}</span>
   const distance =
     mark.setHere && remaining >= DAY_SECONDS
@@ -189,7 +162,7 @@ function Renewal({ credential, now }: { credential: Credential; now: number }) {
   return (
     <span title={mark.estimated ? ESTIMATED_RENEWAL_TITLE : undefined}>
       renews <b>{date}</b>
-      {mark.setHere && <SetHereDot title="Set here. Replaces the estimate." />}
+      {mark.setHere && <SetHereDot title={RENEWAL_ENTERED_TITLE} />}
       <span className="qg-long"> · in {distance}</span>
     </span>
   )
@@ -248,170 +221,14 @@ function AccountRow({ credential, now }: { credential: Credential; now: number }
   )
 }
 
-/** Under a renewal date field: where the date comes from, or what is about to happen to it (F.3). */
-function RenewalCap({
-  credential,
-  state,
-  now,
-  mark,
-  busy,
-  onEdit,
-}: {
-  credential: Credential
-  state: FieldState
-  now: number
-  mark: string | null
-  busy: boolean
-  onEdit: (edit: FieldEdit | undefined) => void
-}) {
-  const estimateAt = renewalEstimateAt(credential)
-  const estimate = estimateAt === null ? null : `~${formatDate(estimateAt)}`
-  const undo = (
-    <EditLink disabled={busy} onClick={() => onEdit(undefined)}>
-      Undo
-    </EditLink>
-  )
-  if (state.error !== null) return <span className="qg-ecap is-bad">{state.error}<Dot />{undo}</span>
-  return (
-    <>
-      {mark && <span className="qg-ecap is-warn">{mark}</span>}
-      {state.edit?.kind === "drop" ? (
-        <span className="qg-ecap">
-          <span className="qg-esrc is-dirty">back to the estimate</span>
-          <Dot />
-          {undo}
-        </span>
-      ) : state.changed ? (
-        <span className="qg-ecap">
-          <span className="qg-esrc is-dirty">changed</span>
-          <Dot />
-          <span>
-            {state.stored ? (
-              <>
-                was <b>{utcDay(dateEpoch(state.stored))}</b>
-              </>
-            ) : estimate ? (
-              <>
-                was <b>{estimate}</b>, estimated
-              </>
-            ) : (
-              "was not known"
-            )}
-          </span>
-          <Dot />
-          {undo}
-        </span>
-      ) : state.source === "dashboard" ? (
-        <span className="qg-ecap">
-          <span className="qg-esrc">
-            <SetHereDot lead />
-            set here
-          </span>
-          {estimate && (
-            <>
-              <Dot />
-              <span>
-                estimate <b>{estimate}</b>
-              </span>
-            </>
-          )}
-          <Dot />
-          <EditLink disabled={busy} onClick={() => onEdit({ kind: "drop" })}>
-            Use estimate
-          </EditLink>
-        </span>
-      ) : estimate ? (
-        <span className="qg-ecap">
-          <span className="qg-esrc">
-            estimate <b>{estimate}</b>
-          </span>
-          {yearlyEstimate(credential, now) && (
-            <>
-              <Dot />
-              <span>yearly plan</span>
-            </>
-          )}
-        </span>
-      ) : (
-        <span className="qg-ecap">
-          <span className="qg-esrc">not known yet</span>
-        </span>
-      )}
-    </>
-  )
-}
-
-/** One account in the renewal editor: a date field when it can take one, its date as text when not. */
-function RenewalEditRow({
-  credential,
-  name,
-  setting,
-  edit,
-  now,
-  mark,
-  busy,
-  onEdit,
-}: {
-  credential: Credential
-  name: string
-  setting: RenewalSetting | null | undefined
-  edit: FieldEdit | undefined
-  now: number
-  mark: string | null
-  busy: boolean
-  onEdit: (edit: FieldEdit | undefined) => void
-}) {
-  const who = <Who credential={credential} short />
-  if (credential.renewalEditable !== true) {
-    // Codex reports its own date, and a credential this page cannot key a
-    // date by shows the one it has.
-    return (
-      <div className="qg-arow qg-earow is-locked">
-        {who}
-        <span className="qg-asub">
-          {typeof credential.renewalAtEpoch === "number" ? (
-            <Renewal credential={credential} now={now} />
-          ) : (
-            <span className="text-ink-4">no renewal date</span>
-          )}
-        </span>
-      </div>
-    )
-  }
-  const state = renewalField(setting, edit)
-  return (
-    <div className="qg-arow qg-earow">
-      {who}
-      <div className="qg-efield is-date">
-        <Box state={{ changed: state.changed, dropped: state.edit?.kind === "drop", bad: state.error !== null, busy }}>
-          <input
-            type="date"
-            value={state.text}
-            min="2000-01-01"
-            max="2099-12-31"
-            disabled={busy}
-            aria-invalid={state.error !== null}
-            aria-label={`${name}: subscription renews on, UTC`}
-            onChange={(event) =>
-              onEdit({ kind: "set", text: event.target.value, incomplete: event.target.validity.badInput || undefined })
-            }
-          />
-        </Box>
-        <RenewalCap credential={credential} state={state} now={now} mark={mark} busy={busy} onEdit={onEdit} />
-      </div>
-    </div>
-  )
-}
-
 /**
  * A provider's accounts, once: a card shut by default whose fold line names
  * any account whose requests are failing or that CPA has parked. Open, a
  * line per account.
  *
- * On Claude, Set renewal dates turns the renewal column into one date field
- * per subscription, in place, as the API credit card does (F.3). The draft
- * lives here, outside the fold's body, so folding keeps it; one Save sends
- * every changed date as one batch.
+ * On Claude the foot links to Quota Cache's page (`link`), where renewal
+ * dates are entered, while this browser may follow one. The dates themselves
+ * are read-only here.
  *
  * The fold sits in the card's heading, so the card is found by heading like
  * every other; the button inside it is what opens it.
@@ -421,66 +238,21 @@ export function AccountsCard({
   names,
   open,
   onToggle,
-  renewalOrphans = [],
-  editingOffer = null,
-  onSaved = () => undefined,
+  link = null,
+  editing = null,
 }: {
   held: Credential[]
   names: Map<string, AccountName>
   open: boolean
   onToggle: () => void
-  /** Renewal dates stored for credentials CPA no longer lists; shown in the editor's last line. */
-  renewalOrphans?: RenewalOrphan[]
-  /** Card-level editing availability, when API credits expose it. */
-  editingOffer?: APICreditEditing | null
-  /** Re-reads the document after a save. */
-  onSaved?: () => void
+  /** Quota Cache's page at its renewal section, or null for no link. */
+  link?: string | null
+  /** The API credit card's editing state, which says whether Quota Cache can use its saved renewal dates. */
+  editing?: APICreditEditing | null
 }) {
   const now = useNowSeconds()
   const bodyID = useId()
   const lineID = useId()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<RenewalDraft>(EMPTY_RENEWAL_DRAFT)
-  const [overlay, setOverlay] = useState<Record<string, RenewalSetting | null>>({})
-  const [marks, setMarks] = useState<Record<string, string>>({})
-  const [status, setStatus] = useState<FootStatus | null>(null)
-  const [saved, setSaved] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
-
-  // A refreshed roster: a credential CPA no longer lists takes its edit with
-  // it, said so; a conflict's dates give way once the document has them.
-  // Keyed on what the roster says rather than on the arrays, which the
-  // section builds afresh on every render.
-  const roster = [
-    ...held.map((credential) => `${credential.id}@${credential.renewalSetting?.revision ?? ""}`),
-    ...renewalOrphans.map((orphan) => `-${orphan.id}`),
-  ].join(" ")
-  useEffect(() => {
-    setDraft((kept) => {
-      const { draft: next, dropped } = reconcileRenewals(kept, held, renewalOrphans)
-      if (dropped.length > 0) setStatus({ tone: "warn", text: dropped.join(" ") })
-      return next
-    })
-    setOverlay((kept) => {
-      const next = { ...kept }
-      let changed = false
-      for (const credential of held) {
-        const latest = next[credential.id]
-        if (latest !== undefined && !newerRevision(latest?.revision ?? "", credential.renewalSetting?.revision ?? "")) {
-          delete next[credential.id]
-          changed = true
-        }
-      }
-      return changed ? next : kept
-    })
-  }, [roster])
-
-  useEffect(() => {
-    if (saved === null) return
-    const timer = window.setTimeout(() => setSaved(null), 20_000)
-    return () => window.clearTimeout(timer)
-  }, [saved])
 
   const ring = held.find((credential) => credential.activity)?.activity
   const nameOf = (credential: Credential) =>
@@ -491,96 +263,11 @@ export function AccountsCard({
   // grid of its own, and an `auto` track would be as wide as its own strip.
   const buckets = Math.max(0, ...held.map((credential) => credential.activity?.buckets.length ?? 0))
   const foot = renewalFoot(held)
-  const settingOf = (credential: Credential) =>
-    credential.id in overlay ? overlay[credential.id] : credential.renewalSetting
-  const plan = renewalPlan(held, draft, settingOf)
-  const doorOpen = canSaveHere()
-  const editingOff = editingOffer ? editingOffText(editingOffer) : null
-  const offered = editingOff === null && (foot.editable || renewalOrphans.length > 0)
-  const canEdit = offered && doorOpen
-
-  const startEditing = () => {
-    setSaved(null)
-    setStatus(null)
-    setFailed(false)
-    setEditing(true)
-  }
-  const cancel = () => {
-    setDraft(EMPTY_RENEWAL_DRAFT)
-    setMarks({})
-    setStatus(null)
-    setFailed(false)
-    setEditing(false)
-  }
-  const edit = (credential: Credential, next: FieldEdit | undefined) => {
-    setDraft((kept) => editRenewal(kept, { id: credential.id, renewalSetting: settingOf(credential) }, nameOf(credential), next))
-    setMarks((kept) => {
-      if (!(credential.id in kept)) return kept
-      const rest = { ...kept }
-      delete rest[credential.id]
-      return rest
-    })
-  }
-
-  const save = async () => {
-    if (plan.batch === null || saving) return
-    setSaving(true)
-    setStatus(null)
-    setMarks({})
-    const outcome = await saveSettings(plan.batch)
-    setSaving(false)
-    switch (outcome.kind) {
-      case "saved":
-        setDraft(EMPTY_RENEWAL_DRAFT)
-        setFailed(false)
-        setEditing(false)
-        setSaved(
-          outcome.unchanged
-            ? "Already saved. Nothing needed changing."
-            : `Saved ${plan.changes} renewal ${plan.changes === 1 ? "date" : "dates"}.`,
-        )
-        onSaved()
-        return
-      case "conflict": {
-        const nextOverlay = { ...overlay }
-        const nextMarks: Record<string, string> = {}
-        for (const id of outcome.ids) {
-          const current = outcome.current[id]
-          nextOverlay[id] = current && typeof current === "object" ? (current as RenewalSetting) : null
-          nextMarks[id] = CONFLICT_FIELD
-        }
-        const next = dropConflicts(draft, outcome.ids)
-        setDraft(next.draft)
-        setOverlay(nextOverlay)
-        setMarks(nextMarks)
-        setStatus({ tone: "bad", text: outcome.text })
-        // Try again only while a kept row is left to send.
-        setFailed(next.retry)
-        onSaved()
-        return
-      }
-      case "field":
-        setMarks({ [outcome.id]: outcome.text })
-        setStatus({ tone: "bad", text: FIELD_FOOT })
-        setFailed(true)
-        return
-      case "failed":
-        setStatus({ tone: "bad", text: outcome.text })
-        setFailed(true)
-        return
-      case "lost":
-        setStatus({ tone: "unknown", text: outcome.text })
-        setFailed(true)
-        onSaved()
-        return
-    }
-  }
-
-  const blocked = editingOff ?? (!offered
-    ? "Renewal dates cannot be set here right now. Your changes are kept until you reload."
-    : !doorOpen
-      ? SIGN_IN_FOOT
-      : plan.tooLarge ? "Too many changes for one save; undo some, save, then make the rest." : null)
+  // Renewal dates live in the same saved settings as the API credits, so
+  // when Quota Cache cannot use those, its entered dates do not apply either
+  // and the rows show estimates: said in the card's own words, as renewal
+  // dates have no configured value to fall back on.
+  const trouble = editing ? renewalTrouble(editing) : null
 
   return (
     <article
@@ -595,106 +282,44 @@ export function AccountsCard({
             <span className="qg-rnote qg-long">
               {ring ? `plan, renewal and requests · last ${formatDuration(ring.windowSeconds)}` : "plan and renewal"}
             </span>
-            {editing && (
-              <span className="qg-fold-note">
-                {" · "}
-                <span className={`qg-estate ${failed ? "is-bad" : ""}`}>{failed ? "not saved" : "editing renewals"}</span>
-                {plan.changes > 0 && ` · ${plan.changes} unsaved`}
-              </span>
-            )}
             <Flags flags={flags} />
           </span>
         </FoldButton>
       </h3>
       <div id={bodyID} hidden={!open} className="qg-rows">
-        {open &&
-          (editing ? (
-            <>
-              <form
-                className="qg-eform"
-                aria-label="Subscription renewal dates"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  void save()
-                }}
-              >
-                <div className="qg-eahead" aria-hidden="true">
-                  <span>Account</span>
-                  <span>Renews on, UTC</span>
-                </div>
-                {held.map((credential) => (
-                  <RenewalEditRow
-                    key={credential.id}
-                    credential={credential}
-                    name={credential.email || credential.id}
-                    setting={settingOf(credential)}
-                    edit={draft.rows[credential.id]?.date}
-                    now={now}
-                    mark={marks[credential.id] ?? null}
-                    busy={saving}
-                    onEdit={(next) => edit(credential, next)}
-                  />
-                ))}
-                {renewalOrphans.map((orphan) => (
-                  <p key={orphan.id} className="qg-eorphan">
-                    {renewalOrphanText(orphan)}
-                    <Dot />
-                    {orphan.id in draft.remove ? (
-                      <>
-                        <span className="qg-esrc is-dirty">removing</span>
-                        <Dot />
-                        <EditLink disabled={saving} onClick={() => setDraft((kept) => removeRenewalOrphan(kept, orphan, false))}>
-                          Undo
-                        </EditLink>
-                      </>
-                    ) : (
-                      <EditLink disabled={saving} onClick={() => setDraft((kept) => removeRenewalOrphan(kept, orphan, true))}>
-                        Remove
-                      </EditLink>
-                    )}
-                  </p>
-                ))}
-              </form>
-              <EditFoot
-                help="The date on claude.ai under Settings, Billing. It repeats monthly, or yearly on an annual plan, and replaces the estimate."
-                changes={plan.changes}
-                errors={plan.errors}
-                saving={saving}
-                blocked={blocked}
-                status={status}
-                failed={failed}
-                onCancel={cancel}
-                onSave={() => void save()}
-              />
-            </>
-          ) : (
-            <>
-              {/* The catalog's order, which every window card above repeats. */}
-              {held.map((credential) => (
-                <AccountRow key={credential.id} credential={credential} now={now} />
-              ))}
-              {(foot.estimated || foot.setHere || canEdit || saved || editingOff) && (
-                <RestFoot
-                  saved={saved}
-                  action={canEdit ? <EditButton onClick={startEditing}>Set renewal dates</EditButton> : null}
-                >
+        {open && (
+          <>
+            {/* The catalog's order, which every window card above repeats. */}
+            {held.map((credential) => (
+              <AccountRow key={credential.id} credential={credential} now={now} />
+            ))}
+            {(foot.estimated || foot.setHere || link !== null || trouble) && (
+              <div className="qg-afoot">
+                <span>
                   {foot.estimated && (
                     <>
                       <b>~</b> estimated from when the subscription started
                     </>
                   )}
-                  {foot.estimated && (foot.setHere || canEdit) && " · "}
-                  {(foot.setHere || canEdit) && (
+                  {foot.estimated && foot.setHere && " · "}
+                  {foot.setHere && (
                     <>
                       <SetHereDot lead />
-                      <b>set here</b>
+                      <b>{ENTERED_HERE}</b>
                     </>
                   )}
-                  {editingOff && <><br />{editingOff}</>}
-                </RestFoot>
-              )}
-            </>
-          ))}
+                  {trouble && (
+                    <>
+                      {(foot.estimated || foot.setHere) && <br />}
+                      {trouble}
+                    </>
+                  )}
+                </span>
+                <QuotaCacheLink url={link}>Edit in Quota Cache</QuotaCacheLink>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </article>
   )

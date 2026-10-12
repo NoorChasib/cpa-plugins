@@ -287,8 +287,9 @@ func TestCreditListShapeAndOtherSettings(t *testing.T) {
 	}
 }
 
-// The panel cannot describe a list of objects or check one item, so the
-// list is YAML only and the panel's fields are unchanged.
+// Organizations are edited on the page, and the panel could not describe a
+// list of objects or check one item anyway, so the panel's fields are
+// unchanged.
 func TestCreditsAreNotAPanelField(t *testing.T) {
 	p := New(&testHost{})
 	defer p.Shutdown()
@@ -448,40 +449,47 @@ func goldenRecord(t *testing.T) []byte {
 
 const oneCredit = "claude-api-credits:\n  - label: siphorchannel\n    organization-id: " + fakeOrgA + "\n    monthly-usd: \"200\"\n    renews: \"2026-10-29\"\n"
 
-// The capability follows the items: usage records are declared wanted only
-// while the cache runs and at least one item is configured, on register
-// and on every reconfigure. With no items the meter stops with no_items and
+// Usage records are declared wanted whenever the cache runs, on register and
+// on every reconfigure, so an organization added on the page is counted from
+// its first record with no configure; disabled declares none. The meter runs
+// only while an organization is linked: with none it stops with no_items and
 // its file stays; disabled stops it with disabled. Routes are unchanged.
-func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
+func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 	p := newMeterPlugin(t)
-	if reg := p.configure(protocol.MethodPluginRegister, ""); reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
+	if reg := p.configure(protocol.MethodPluginRegister, ""); !reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
 		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
 	}
 	if _, err := os.Lstat(client.MeterPath(p.path)); !os.IsNotExist(err) {
-		t.Fatal("a meter file exists with no items")
+		t.Fatal("a meter file exists with no organization")
 	}
+	// The configuration's item moves to the page, and the meter starts.
 	reg := p.configure(protocol.MethodPluginReconfigure, oneCredit)
 	m := p.meter.Load()
 	if !reg.Capabilities.UsagePlugin || m == nil {
 		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, m)
 	}
 	p.usage(goldenRecord(t))
-	// The same items again keep the meter; so does a schedule change.
+	// The same items again keep the meter; so does a schedule change, and so
+	// does a configuration that no longer lists the item, which the page's
+	// list replaced.
 	p.configure(protocol.MethodPluginReconfigure, oneCredit)
 	p.configure(protocol.MethodPluginReconfigure, "poll-interval: 30m\n"+oneCredit)
-	if p.meter.Load() != m {
-		t.Fatal("a reconfigure replaced the meter")
+	if reg := p.configure(protocol.MethodPluginReconfigure, ""); !reg.Capabilities.UsagePlugin || p.meter.Load() != m {
+		t.Fatalf("registration=%+v; a reconfigure replaced the meter", reg.Capabilities)
 	}
-	if reg := p.configure(protocol.MethodPluginReconfigure, ""); reg.Capabilities.UsagePlugin || p.meter.Load() != nil {
-		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	// Removing the last organization on the page stops it, with no configure.
+	p.removeAll()
+	if p.meter.Load() != nil {
+		t.Fatal("the meter outlived the last organization")
 	}
 	file := p.meterFile()
 	if file.StopReason != client.MeterStopNoItems || file.StoppedAt == nil || file.Counted != 1 || file.Received != 1 {
 		t.Fatalf("file after no_items: %+v", file)
 	}
-	// Items again: the meter carries on from the file, with a gap.
-	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.meter.Load() == nil {
-		t.Fatalf("registration=%+v", reg.Capabilities)
+	// An organization again: the meter carries on from the file, with a gap.
+	p.organizationOps(addOp("siphorchannel", fakeOrgA))
+	if p.meter.Load() == nil {
+		t.Fatal("adding an organization did not start the meter")
 	}
 	if reg := p.configure(protocol.MethodPluginReconfigure, "enabled: false\n"+oneCredit); reg.Capabilities.UsagePlugin || p.meter.Load() != nil || p.cache != nil {
 		t.Fatalf("registration=%+v meter=%v cache=%v", reg.Capabilities, p.meter.Load(), p.cache)
@@ -496,7 +504,8 @@ func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	if len(registration.Routes) != 1 || registration.Routes[0].Path != "/plugins/quota-cache/status" || len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
+	if len(registration.Routes) != 2 || registration.Routes[0].Path != "/plugins/quota-cache/status" || registration.Routes[1].Path != "/plugins/quota-cache/settings" ||
+		len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
 		t.Fatalf("routes=%+v", registration)
 	}
 }
@@ -508,6 +517,9 @@ func TestUsagePluginIsDeclaredWhileItemsAreConfigured(t *testing.T) {
 // warned about once per configure, and never read.
 func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 	p := newMeterPlugin(t)
+	// The configuration's items stay the list, problems and admin-key flags
+	// included, as they do until they move to the page.
+	p.keepConfigItems()
 	p.configure(protocol.MethodPluginRegister, oneCredit+"    admin-key: "+fakeAdminKey+"\n"+item("-", "nope", `"5"`, `"2026-10-01"`)+"    admin-key: "+fakeAdminKey+"\n")
 	good := client.Key(client.ProviderAnthropicAPI, client.APICreditOrgAccount(fakeOrgA))
 	broken := client.Key(client.ProviderAnthropicAPI, "item-2")
@@ -550,10 +562,15 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 		t.Fatalf("status %d: %s", code, status)
 	}
 	rawMeter, _ := os.ReadFile(client.MeterPath(p.path))
+	p.publisher.PublishNow()
+	rawCredits, err := os.ReadFile(client.CreditsPath(p.path))
+	if err != nil {
+		t.Fatal(err)
+	}
 	lines := p.host.logged()
 	items := *p.apiCredits.Load()
 	for name, text := range map[string]string{
-		"snapshot": string(before), "meter": string(rawMeter), "status": status,
+		"snapshot": string(before), "meter": string(rawMeter), "credits": string(rawCredits), "status": status,
 		"logs": fmt.Sprintf("%v %+v %#v", lines, lines, lines), "items": fmt.Sprintf("%v %+v %#v", items, items, items),
 	} {
 		for _, secret := range []string{fakeAdminKey, "FAKEFAKE", "sk-ant", "key_fingerprint", "SOURCE-CANARY", "APIKEY-CANARY", "AUTHID-CANARY", "BASEURL-CANARY",
@@ -598,7 +615,7 @@ func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
 		t.Fatalf("status %d carries a meter with no file: %s", code, status)
 	}
 	p.configure(protocol.MethodPluginReconfigure, oneCredit)
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.removeAll()
 	rawMeter, err := os.ReadFile(client.MeterPath(p.path))
 	if err != nil {
 		t.Fatal(err)
@@ -606,11 +623,12 @@ func TestStatusCarriesTheMeterOnlyWhenTheFileExists(t *testing.T) {
 	if code, status := p.status(); code != 200 || !strings.Contains(status, `"api_meter":{"schema":1,`) || !strings.Contains(status, `"stop_reason":"no_items"`) {
 		t.Fatalf("status %d: %s", code, status)
 	}
-	// A configuration change makes the writer save the snapshot, while the
-	// meter it restarts has not saved yet; the meter file is as it was.
-	p.configure(protocol.MethodPluginReconfigure, oneCredit+item("-", "nope", `"5"`, `"2026-10-01"`))
+	// An organization added on the page makes the writer save the snapshot,
+	// while the meter it restarts has not saved yet; the meter file is as it
+	// was.
+	p.organizationOps(addOp("after", fakeOrgC))
 	waitFor(t, p.path, func(s client.Snapshot) bool {
-		_, ok := s.Entries[client.Key(client.ProviderAnthropicAPI, "item-2")]
+		_, ok := s.Entries[client.Key(client.ProviderAnthropicAPI, client.APICreditOrgAccount(fakeOrgC))]
 		return ok
 	})
 	if again, _ := os.ReadFile(client.MeterPath(p.path)); string(again) != string(rawMeter) {
@@ -659,13 +677,19 @@ func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
 	if !failed.Failed() {
 		t.Fatal("not failed")
 	}
+	// A change on the page leaves it stopped: only a configure replaces it.
+	p.organizationOps(addOp("after", fakeOrgC))
+	if p.meter.Load() != failed {
+		t.Fatal("a change on the page replaced a failed meter")
+	}
+	p.organizationOps(removeOp(fakeOrgC))
 	p.configure(protocol.MethodPluginReconfigure, oneCredit)
 	replaced := p.meter.Load()
 	if replaced == nil || replaced == failed || replaced.Failed() {
 		t.Fatalf("meter=%v", replaced)
 	}
 	p.usage(goldenRecord(t))
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.removeAll()
 	if file := p.meterFile(); len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopFailed || file.Counted != 1 || file.StopReason != client.MeterStopNoItems {
 		t.Fatalf("file: %+v", file)
 	}
@@ -714,8 +738,16 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 			t.Fatalf("%s: file after the rejection: %+v", bad.name, file)
 		}
 		// CPA delivers nothing now; a record that arrived anyway is not
-		// counted as if the meter had been running.
+		// counted as if the meter had been running, and a change on the page
+		// does not start it again.
 		p.usage(goldenRecord(t))
+		if i == 0 {
+			p.organizationOps(addOp("after", fakeOrgC))
+			p.organizationOps(removeOp(fakeOrgC))
+			if p.meter.Load() != nil {
+				t.Fatalf("%s: a change on the page restarted the meter", bad.name)
+			}
+		}
 		if err := attempt(6, good); err != nil {
 			t.Fatalf("%s: the fix was rejected: %v", bad.name, err)
 		}
@@ -723,7 +755,7 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 			t.Fatalf("%s: meter after the fix: %v", bad.name, m)
 		}
 	}
-	p.configure(protocol.MethodPluginReconfigure, "")
+	p.removeAll()
 	file := p.meterFile()
 	if n := uint64(len(rejections)); len(file.Gaps) != len(rejections) || file.Restarts != n || file.Counted != n || file.Received != n || file.StopReason != client.MeterStopNoItems {
 		t.Fatalf("file after the fixes: %+v", file)

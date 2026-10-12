@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/config"
 	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/engine"
+	"github.com/NoorChasib/cpa-plugins/plugins/reset-priority/internal/route"
 )
 
 // This file renders the AUTHENTICATED management HTML status view. It is
@@ -23,6 +25,10 @@ import (
 //   - Account rows are identified by the physical auth file name, or by a
 //     redacted stable auth-index when no file name exists. The snapshot Label
 //     (which may carry an account email) is deliberately never rendered.
+//   - The API credit routing section renders route.Status, which never
+//     carries an auth ID, an auth index, an organization UUID or an email:
+//     organizations show by label, and explored keys by their position in
+//     CPA's configuration.
 //   - All dynamic values are emitted through html/template's contextual
 //     auto-escaping.
 //   - Timestamps are shown in the operator's configured display-timezone in
@@ -50,6 +56,47 @@ type statusPageData struct {
 	NextDeadlineAt  statusPageTime
 	AccountCount    int
 	Providers       []statusPageProvider
+	Router          statusPageRouter
+}
+
+// statusPageRouter is the API credit routing section, from route.Status at
+// the request's time.
+type statusPageRouter struct {
+	Enabled, Declared, Active bool
+	Reason, TableReason       string
+	BuiltAt, MeterFlushedAt   statusPageTime
+	Orgs                      []statusPageOrg
+	MappedKeys, FailingKeys   int
+	UnmappedKeys, ForeignKeys int
+	UnlinkedKeys, StaleKeys   int
+	Exploring                 []statusPageExplore
+	LastPickAt, LastRoutedAt  statusPageTime
+	LastDecision              string
+	LastRoutedTo              string // the label of the organization of the last key chosen
+	Counters                  route.Counters
+	Declined                  []statusPageCount // the nonzero declines, by reason
+}
+
+type statusPageOrg struct {
+	Label                      string
+	Rank                       int
+	Eligible, Demoted, Recheck bool
+	Reason                     string
+	RenewsAt                   statusPageTime
+	LeftText, EstimateLeftText string
+	Refusal, Issue             string
+	Keys, FailingKeys          int
+}
+
+type statusPageExplore struct {
+	ConfigIndex, Kind string
+	Step              int
+	NextAt            statusPageTime
+}
+
+type statusPageCount struct {
+	Reason string
+	Count  uint64
 }
 
 // statusPageTime carries one instant in the forms the template needs.
@@ -146,6 +193,7 @@ button:disabled{opacity:.55;cursor:default}
 .section{margin-top:28px}
 .section-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
 h2{font-size:16px;font-weight:650;margin:0;text-transform:capitalize}
+h2.keep-case{text-transform:none}
 .count{color:var(--muted);font-size:13px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
 .table-wrap{overflow-x:auto}
@@ -169,6 +217,10 @@ time .d,time .t{white-space:nowrap}
 .error-text{color:var(--err-fg)}
 .err-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-right:4px}
 .empty{padding:18px 14px;color:var(--muted);font-style:italic}
+.section .pills{margin:0 0 12px}
+.section .stats{margin-bottom:12px}
+.issue{display:block;font-size:12px;color:var(--muted);max-width:360px}
+.declines{display:flex;flex-wrap:wrap;gap:6px 14px;padding:12px 14px;font-size:13px}
 .footnote{margin-top:28px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.55}
 .footnote code{font-size:11px}
 </style>
@@ -255,6 +307,119 @@ time .d,time .t{white-space:nowrap}
 </div>
 {{end}}
 
+{{with .Router}}
+<div class="section" id="api-credit-routing">
+  <div class="section-head">
+    <h2 class="keep-case">Claude API credit routing</h2>
+    <span class="count">route-api-credits</span>
+  </div>
+  <div class="pills">
+    {{if .Enabled}}<span class="pill ok">routing on</span>{{else}}<span class="pill">routing off</span>{{end}}
+    {{if .Declared}}<span class="pill info">scheduler declared</span>{{else}}<span class="pill">scheduler not declared</span>{{end}}
+    {{if .Active}}<span class="pill ok">active</span>{{else if .Enabled}}<span class="pill warn">inactive</span>{{else}}<span class="pill">inactive</span>{{end}}
+  </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Reason</div>
+      <div class="value">{{if .Reason}}<code>{{.Reason}}</code>{{else}}<span class="dash">—</span>{{end}}</div>
+      <div class="hint">Table: {{if .TableReason}}<code>{{.TableReason}}</code>{{else}}would route{{end}}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Table built</div>
+      <div class="value">{{template "when" .BuiltAt}}</div>
+      <div class="hint">Meter saved {{if .MeterFlushedAt.Set}}{{.MeterFlushedAt.Relative}}{{else}}—{{end}}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Keys</div>
+      <div class="value">{{.MappedKeys}} mapped, {{.FailingKeys}} failing, {{.UnmappedKeys}} unmapped</div>
+      <div class="hint">{{.ForeignKeys}} foreign, {{.UnlinkedKeys}} unlinked, {{.StaleKeys}} stale</div>
+    </div>
+    <div class="stat">
+      <div class="label">Picks</div>
+      <div class="value">{{.Counters.Picks}}</div>
+      <div class="hint">{{.Counters.Routed}} routed, {{.Counters.Explored}} explored, {{.Counters.Rechecked}} re-checked, {{.Counters.Demoted}} demoted, {{.Counters.BuildPanics}} build panics</div>
+    </div>
+    <div class="stat">
+      <div class="label">Last pick</div>
+      <div class="value">{{template "when" .LastPickAt}}</div>
+      {{if .LastDecision}}<div class="hint">Answer <code>{{.LastDecision}}</code></div>{{end}}
+      {{if .LastRoutedAt.Set}}<div class="hint">Last key chosen {{.LastRoutedAt.Relative}}{{if .LastRoutedTo}} ({{.LastRoutedTo}}){{end}}</div>{{end}}
+    </div>
+  </div>
+  <div class="card">
+  {{if .Orgs}}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Organization</th>
+        <th>Rank</th>
+        <th>Eligible</th>
+        <th>Reason</th>
+        <th>Refills</th>
+        <th>Left</th>
+        <th>Estimate left</th>
+        <th>Refusal</th>
+        <th>Keys</th>
+        <th>Failing keys</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Orgs}}
+      <tr>
+        <td class="account">{{.Label}}{{if .Issue}}<span class="issue">{{.Issue}}</span>{{end}}</td>
+        <td class="num">{{if .Rank}}{{.Rank}}{{else}}<span class="dash">—</span>{{end}}</td>
+        <td>{{if .Eligible}}<span class="pill ok">yes</span>{{else}}<span class="pill">no</span>{{end}}{{if .Demoted}}<span class="reason">demoted</span>{{end}}{{if .Recheck}}<span class="reason">re-checked</span>{{end}}</td>
+        <td>{{if .Reason}}<code>{{.Reason}}</code>{{else}}<span class="dash">—</span>{{end}}</td>
+        <td>{{template "when" .RenewsAt}}</td>
+        <td class="num">{{if .LeftText}}{{.LeftText}}{{else}}<span class="dash">—</span>{{end}}</td>
+        <td class="num">{{if .EstimateLeftText}}{{.EstimateLeftText}}{{else}}<span class="dash">—</span>{{end}}</td>
+        <td>{{if .Refusal}}<code>{{.Refusal}}</code>{{else}}<span class="dash">—</span>{{end}}</td>
+        <td class="num">{{.Keys}}</td>
+        <td class="num">{{.FailingKeys}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="empty">No linked Console organization in the last table.</p>
+  {{end}}
+  </div>
+  {{if .Exploring}}
+  <div class="section-head" style="margin-top:16px"><h2 class="keep-case">Exploring</h2><span class="count">{{len .Exploring}} key{{if ne (len .Exploring) 1}}s{{end}}</span></div>
+  <div class="card">
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Config index</th>
+        <th>Kind</th>
+        <th>Step</th>
+        <th>Next</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Exploring}}
+      <tr>
+        <td class="num">{{if .ConfigIndex}}{{.ConfigIndex}}{{else}}<span class="dash">—</span>{{end}}</td>
+        <td><code>{{.Kind}}</code></td>
+        <td class="num">{{.Step}}</td>
+        <td>{{template "when" .NextAt}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  </div>
+  {{end}}
+  <div class="section-head" style="margin-top:16px"><h2 class="keep-case">Declined picks</h2></div>
+  <div class="card">
+  {{if .Declined}}<div class="declines">{{range .Declined}}<span><code>{{.Reason}}</code> {{.Count}}</span>{{end}}</div>{{else}}<p class="empty">No declined picks since CPA loaded this plugin.</p>{{end}}
+  </div>
+</div>
+{{end}}
+
 <p class="footnote">Refresh now issues <code>POST /v0/management/plugins/reset-priority/refresh</code> on the same origin with the required plugin CSRF header, preserves the query string, and then reloads. CPA must receive the management authentication header through the browser, a same-origin management-console session, or the reverse-proxy setup; query parameters are not management credentials. Hover any timestamp for the exact UTC instant.</p>
 </div>
 <script>` + browserAuthScript + `
@@ -305,8 +470,9 @@ time .d,time .t{white-space:nowrap}
 `))
 
 // renderManagementStatusPage renders the authenticated HTML status view from
-// the published, already-sanitized snapshot.
-func renderManagementStatusPage(snap engine.Snapshot) ([]byte, error) {
+// the published, already-sanitized snapshot and the API credit router's
+// status computed at at, the request's time.
+func renderManagementStatusPage(snap engine.Snapshot, router route.Status, at time.Time) ([]byte, error) {
 	loc := config.LoadDisplayLocation(snap.DisplayTimezone)
 	now := snap.GeneratedAt
 	fmtTime := func(t time.Time) statusPageTime { return newStatusPageTime(t, now, loc) }
@@ -359,12 +525,55 @@ func renderManagementStatusPage(snap engine.Snapshot) ([]byte, error) {
 		data.AccountCount += len(provider.Accounts)
 		data.Providers = append(data.Providers, provider)
 	}
+	data.Router = newStatusPageRouter(router, at, loc)
 
 	var buf bytes.Buffer
 	if err := managementStatusTemplate.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// newStatusPageRouter builds the routing section. Its relative hints are
+// measured from at, the request's time, because the router's status is
+// computed then, while the engine's snapshot can be an hour old.
+func newStatusPageRouter(s route.Status, at time.Time, loc *time.Location) statusPageRouter {
+	when := func(t *time.Time) statusPageTime {
+		if t == nil {
+			return statusPageTime{}
+		}
+		return newStatusPageTime(*t, at, loc)
+	}
+	view := statusPageRouter{
+		Enabled: s.Enabled, Declared: s.Declared, Active: s.Active,
+		Reason: s.Reason, TableReason: s.TableReason,
+		BuiltAt: when(s.BuiltAt), MeterFlushedAt: when(s.MeterFlushedAt),
+		MappedKeys: s.MappedKeys, FailingKeys: s.FailingKeys, UnmappedKeys: s.UnmappedKeys,
+		ForeignKeys: s.ForeignKeys, UnlinkedKeys: s.UnlinkedKeys, StaleKeys: s.StaleKeys,
+		LastPickAt: when(s.LastPickAt), LastRoutedAt: when(s.LastRoutedAt), LastDecision: s.LastDecision, Counters: s.Counters,
+	}
+	for _, o := range s.Orgs {
+		view.Orgs = append(view.Orgs, statusPageOrg{
+			Label: o.Label, Rank: o.Rank, Eligible: o.Eligible, Demoted: o.Demoted, Recheck: o.Recheck,
+			Reason: o.Reason, RenewsAt: when(o.RenewsAt), LeftText: o.LeftText, EstimateLeftText: o.EstimateLeftText,
+			Refusal: o.Refusal, Issue: o.Issue, Keys: o.Keys, FailingKeys: o.FailingKeys,
+		})
+		if s.LastRoutedOrg != "" && o.ID == s.LastRoutedOrg {
+			view.LastRoutedTo = o.Label
+		}
+	}
+	for _, e := range s.Exploring {
+		view.Exploring = append(view.Exploring, statusPageExplore{
+			ConfigIndex: e.ConfigIndex, Kind: e.Kind, Step: e.Step, NextAt: when(e.NextAt),
+		})
+	}
+	for reason, count := range s.Counters.Declined {
+		if count > 0 {
+			view.Declined = append(view.Declined, statusPageCount{Reason: reason, Count: count})
+		}
+	}
+	sort.Slice(view.Declined, func(a, b int) bool { return view.Declined[a].Reason < view.Declined[b].Reason })
+	return view
 }
 
 // newStatusPageTime builds the display forms for one instant.

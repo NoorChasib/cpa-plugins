@@ -48,7 +48,11 @@ timer, costs the whole address its management access in about five minutes.
   the sign-in screen, or, with figures already on screen, keeps them under a
   banner saying the sign-in was refused, and the reset buttons go.
 - **The document is polled every 60 seconds while a door is open** and the page
-  is visible, and not at all while none is.
+  is visible, and not at all while none is. After a press the plugin answers
+  with `refreshRequested: true`, it is every 5 seconds until the document
+  carries an observation of that account from the instant the plugin asked
+  Quota Cache to poll it, or for three minutes. Those reads go through the
+  same door, so a refusal still shuts it at once and stops them.
 
 ## What the page keeps, and where
 
@@ -261,21 +265,34 @@ The ledger, the claim journal behind it, and every status a press can come back
 with are in
 [summary-contract.md](summary-contract.md#one-press-one-spend).
 
-## Saving settings
+## Editing API credits and renewal dates
 
-The editor's **Save** goes the same way: through the first open door, fixed
-before anything is sent, one request per press, never retried and never passed
-to the other door. On the password door it is a `GET` to `/save-settings`
-carrying the batch in the `X-Quota-Glance-Settings` header; on the console door
-it is a `POST` to the management `/settings` with the same batch as its body.
-Refusals are read and latched as for a press, and with no door open the edit
-buttons are hidden behind the same check as **Use one**.
+Since 0.8.0 the only thing the page changes is a banked reset, by spending it.
+API credit amounts, refill dates, Console readings and Claude renewal dates are
+entered on Quota Cache's page in the CPA sidebar, which signs in only with the
+console's management key. Neither door edits them here, and a browser with
+only the dashboard password, such as a phone or a bookmark, cannot edit them at
+all: it cannot sign in to Quota Cache's page.
 
-A save needs no press id. Each row carries the revision it was opened with, so
-a resent save is answered "unchanged" when it already applied and "conflict"
-when another save overtook it: it can never change anything twice. Both doors
-are behind `allow-edit`, and every status a save can come back with is in
-[summary-contract.md](summary-contract.md#saving-settings--post-settings-and-get-save-settings).
+Wherever this browser holds a console session the page may present (one the
+console remembered for this CPA, and that no latch holds back), the API credit
+card and the **Accounts** card link to Quota Cache's page, **Edit in Quota
+Cache**, opening it in a new tab: in CPA's sidebar this page sits in a frame,
+and a link in the same frame would replace it. The link keeps a reverse
+proxy's path prefix, as Quota Cache's page does. Which door reads the document
+does not matter: with a dashboard password saved as well, the page reads
+through the password and still draws the link, because Quota Cache's page
+signs in with the console session. Without a usable console session, and
+anywhere inside the menu bar app, there is no link, only the sentence saying
+where the values are set: Quota Cache's page needs a console session, and
+inside the app a link would carry the popover away from the dashboard its
+readout watches.
+
+quota-glance 0.7's two save routes, `POST .../management/.../settings` and
+`GET .../resource/.../save-settings`, stay registered and answer
+`410 settings_moved` before reading anything
+([summary-contract.md](summary-contract.md#retired-settings-routes--post-settings-and-get-save-settings)).
+Neither looks at a token, and the page no longer sends to either.
 
 ## Why a GET spends
 
@@ -304,26 +321,12 @@ fenced off from everything that treats a GET as safe:
 - **No caching.** The request carries `Authorization`, which shared caches do
   not store by default (RFC 9111 §3.5), and the answer is `no-store`.
 
-## Why a GET saves
-
-For the same reason, the password door's save is a GET: `/save-settings`. It is
-fenced exactly as `/spend` is — nothing in the URL, the batch and the password
-in headers, fetch metadata and early data refused before the password is looked
-at, `no-store` answers — with one difference. In place of a press id, every row
-carries the revision it was opened with, and the store applies a batch all or
-nothing under its lock: a copy of a save that already applied finds every row
-holding what it asks for and is answered unchanged, and a copy that another
-save overtook is a conflict. So a transport that resends the GET gets an answer
-and never a second change. A save writes `settings.json` in `data-dir` and
-contacts nothing.
-
-**Retiring them.** The plugin also registers `POST /v0/resource/.../redeem`, which
+**Retiring it.** The plugin also registers `POST /v0/resource/.../redeem`, which
 already carries the password check. If CPA starts dispatching POST to resource
 routes, that route works with no plugin change — `make smoke` reports which
 behaviour the running CPA has — and the page can send its press there instead
-and `/spend` can go; `/save-settings` would follow the same way, with a POST
-beside it on the resource tree. A CPA issue asking `ServeResourceHTTP` to
-dispatch POST is the way to get there.
+and `/spend` can go. A CPA issue asking `ServeResourceHTTP` to dispatch POST is
+the way to get there.
 
 **Why not a management key in the page's settings**, which would have spent
 through the existing POST:
@@ -338,17 +341,17 @@ through the existing POST:
 
 ## By surface
 
-| Where | Reads with | Spends with | Saves with | Failed CPA sign-ins it can cause |
+| Where | Reads with | Spends with | Link to Quota Cache's page | Failed CPA sign-ins it can cause |
 | --- | --- | --- | --- | --- |
-| CPA sidebar, no password saved | the console key, every 60 s while visible | `POST .../management/.../redeem` | `POST .../management/.../settings` | at most 1 per refused key |
-| CPA sidebar or any tab, password saved | the password | `GET .../resource/.../spend` | `GET .../resource/.../save-settings` | none |
-| A browser tab or a phone | the password | `GET .../spend` | `GET .../save-settings` | none, and no `allow-remote` needed |
-| A tab with no password but a remembered console session on the same address | the console key | `POST .../redeem` | `POST .../settings` | as the sidebar |
-| Menu bar app | the password; the app's readout repeats the page's last successful summary request every 60 s or so | `GET .../spend`, which the readout leaves alone | `GET .../save-settings`, which the readout leaves alone | none — unless signed in to the console inside the app with no password, then at most 2 per refused key |
+| CPA sidebar, no password saved | the console key, every 60 s while visible (5 s for up to three minutes after a reset is spent) | `POST .../management/.../redeem` | yes, in a new tab | at most 1 per refused key |
+| CPA sidebar or any tab, password saved | the password | `GET .../resource/.../spend` | only if a console session is also remembered, in a new tab | none |
+| A browser tab or a phone | the password | `GET .../spend` | only if a console session is also remembered there | none, and no `allow-remote` needed |
+| A tab with no password but a remembered console session on the same address | the console key | `POST .../redeem` | yes, in a new tab | as the sidebar |
+| Menu bar app | the password; the app's readout repeats the page's last successful summary request every 60 s or so | `GET .../spend`, which the readout leaves alone | no, even signed in to the console inside the app | none — unless signed in to the console inside the app with no password, then at most 2 per refused key |
 
 The menu bar readout watches only `GET` requests to the two summary paths. It
-passes everything else through untouched, `/spend` and `/save-settings`
-included, and drops its copy of the request on `401`, `403` or `429`. Credentials never cross into the
+passes everything else through untouched, `/spend` included, and drops its
+copy of the request on `401`, `403` or `429`. Credentials never cross into the
 native app. **Sign out** reloads the page, which discards that copy as well.
 
 ## Worst case
@@ -389,8 +392,8 @@ Each of these is held by a test, named after its number where it can be.
    document on the origin, where the browser offers Web Locks. A console
    request that gets no answer holds its key back from every later read in the
    document until the reader asks again.
-6. A confirmed press, and a save, is one request, through a door fixed before
-   it is sent, never retried and never passed to the other door.
+6. A confirmed press is one request, through a door fixed before it is sent,
+   never retried and never passed to the other door.
 7. With no door open there is no poll, and a read throws before touching the
    network.
 8. A latch is lifted only when the console's key is gone or changed, or by
@@ -402,16 +405,14 @@ Each of these is held by a test, named after its number where it can be.
 10. The page never writes `cli-proxy-auth`, `managementKey`, `apiBase`,
     `apiUrl` or `isLoggedIn`.
 11. The menu bar readout is unchanged: it repeats only summary GETs, so it
-    never repeats a press or a save, and drops its copy on `401`, `403` or
-    `429`.
-12. On the plugin: `/spend` and `/save-settings` never pass CPA's management
-    middleware. `/spend` spends only with a valid token, a confirmation, a
-    press id and a credential the document offers, and a press id spends at
-    most once per plugin process within its ten minutes. `/save-settings`, like
-    `POST .../settings`, saves only with a valid token, `allow-edit` on, a
-    well-formed batch and rows the document offers, all or nothing, and a
-    resent copy changes nothing. On both, the fetch-metadata, early-data and
-    validation refusals change nothing and cost no CPA budget.
+    never repeats a press, and drops its copy on `401`, `403` or `429`.
+12. On the plugin: `/spend` never passes CPA's management middleware. It
+    spends only with a valid token, a confirmation, a press id and a
+    credential the document offers, and a press id spends at most once per
+    plugin process within its ten minutes. Its fetch-metadata, early-data and
+    validation refusals change nothing and cost no CPA budget. The retired
+    `/save-settings` and `POST .../settings` answer `410 settings_moved` before
+    reading anything, a token included.
 13. On the dev server, every spend, redeem and settings path is answered by the
     stand-in, whatever the method, so none is forwarded to
     `QUOTA_GLANCE_PROXY`.
@@ -420,7 +421,7 @@ Each of these is held by a test, named after its number where it can be.
 in the file. 11 is the menu bar app's
 `plugins/quota-glance-menubar/scripts/tests/readout.test.mjs`. 12 is
 `internal/api/spend_test.go`, `ledger_test.go`, `redeem_test.go` and
-`settings_test.go`, and `make smoke` against a real CPA. 13 is
+`retired_test.go`, and `make smoke` against a real CPA. 13 is
 `web/test/fixture-route.test.ts`.
 
 ## Threats, and what bounds them
