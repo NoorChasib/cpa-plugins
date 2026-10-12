@@ -1,10 +1,9 @@
 (function (page) {
   'use strict';
   // The editor: the Organizations, Claude API credits and Claude renewal dates
-  // cards, and the note on the import from Quota Glance. It is embedded after
-  // app.js in the page's one script element and reads the session, refusal
-  // and decoding rules from app.js's namespace, so a save follows exactly the
-  // rules a status read does:
+  // cards. It is embedded after app.js in the page's one script element and
+  // reads the session, refusal and decoding rules from app.js's namespace, so
+  // a save follows exactly the rules a status read does:
   //
   // - nothing is sent without a remembered console session on this exact
   //   origin and API base, and a save goes only from a button press;
@@ -172,35 +171,34 @@
   const READING_TIME_REFUSED = 'Enter a time from 48 hours ago to 5 minutes ahead by CPA’s clock, which this device’s clock may not match.';
   const ambiguousMessage = choice => 'A comma is ambiguous. Did you mean ' + choice.decimal + ' or ' + choice.thousands + '?';
 
-  // One money or date field from what is stored, what the config says and
-  // the reader's edit: {kind: 'set', text, incomplete?} for a value typed, or
-  // {kind: 'drop'} for Use config or Use estimate. desired is what the batch
-  // sends: a value, or null for none.
-  function field(stored, config, configInvalid, edit, read, same, emptyMessage) {
-    const base = stored || config;
-    const current = stored === '' ? null : stored;
-    const state = {text: base, source: stored ? 'dashboard' : config ? 'config' : 'none', stored, config, configInvalid, edit, changed: false, error: null, ambiguous: null, desired: current};
+  // One money or date field from what is stored and the reader's edit:
+  // {kind: 'set', text, incomplete?} for a value typed, or {kind: 'drop'} for
+  // Clear or Use estimate. desired is what the batch sends: a value, or null
+  // for none.
+  function field(stored, edit, read, same, emptyMessage) {
+    const saved = typeof stored === 'string' ? stored : '';
+    const current = saved === '' ? null : saved;
+    const state = {text: saved, source: saved ? 'dashboard' : 'none', stored: saved, edit, changed: false, error: null, ambiguous: null, desired: current};
     if (edit === undefined) return state;
-    if (edit.kind === 'drop') return Object.assign(state, {text: config, desired: null, changed: current !== null});
+    if (edit.kind === 'drop') return Object.assign(state, {text: '', desired: null, changed: current !== null});
     state.text = edit.text;
     const value = read(edit);
     switch (value.kind) {
-      case 'empty': if (base !== '') state.error = emptyMessage; return state;
+      case 'empty': if (saved !== '') state.error = emptyMessage; return state;
       case 'invalid': state.error = value.message; return state;
       case 'ambiguous': state.error = ambiguousMessage(value); state.ambiguous = {decimal: value.decimal, thousands: value.thousands}; return state;
       default:
-        // Typed back to what it opened with: no change, and a value that came
-        // from the config keeps coming from it.
-        if (base !== '' && same(value.value, base)) return state;
+        // Typed back to what it opened with: no change.
+        if (saved !== '' && same(value.value, saved)) return state;
         return Object.assign(state, {desired: value.value, changed: value.value !== current});
     }
   }
   const moneyReader = message => edit => { const value = readMoney(edit.text); return value.kind === 'invalid' ? {kind: 'invalid', message} : value; };
   const dateReader = edit => readDate(edit.text, edit.incomplete === true);
-  const creditField = (settings, edit) => field(settings.monthlyUsd, settings.configMonthlyUsdInvalid ? '' : settings.configMonthlyUsd, settings.configMonthlyUsdInvalid, edit, moneyReader(AMOUNT_MESSAGE), sameAmount, 'Enter a dollar amount.');
-  const refillField = (settings, edit) => field(settings.renews, settings.configRenewsInvalid ? '' : settings.configRenews, settings.configRenewsInvalid, edit, dateReader, (a, b) => a === b, 'Enter a full date.');
+  const creditField = (settings, edit) => field(settings.monthlyUsd, edit, moneyReader(AMOUNT_MESSAGE), sameAmount, 'Enter a dollar amount.');
+  const refillField = (settings, edit) => field(settings.renews, edit, dateReader, (a, b) => a === b, 'Enter a full date.');
   // A Claude renewal date. Its fallback is the estimate, which has no value to show.
-  const renewalField = (setting, edit) => field(setting ? setting.date : '', '', false, edit, dateReader, (a, b) => a === b, 'Enter a full date.');
+  const renewalField = (setting, edit) => field(setting ? setting.date : '', edit, dateReader, (a, b) => a === b, 'Enter a full date.');
 
   const beforeRefillMessage = start => 'The credit refilled on ' + utcDay(start) + ', after this time. Enter a reading taken since.';
   // A Console reading: cleared ({kind: 'clear'}), or a new one typed
@@ -245,9 +243,9 @@
   function creditRow(settings, edit, now) {
     const monthlyUsd = creditField(settings, edit && edit.monthlyUsd);
     const renews = refillField(settings, edit && edit.renews);
-    // The refill date the plugin checks a new reading against: this batch's
-    // own, else the config's.
-    const effective = renews.error === null ? (renews.desired || (settings.configRenewsInvalid ? null : settings.configRenews || null)) : null;
+    // The refill date the plugin checks a new reading against: the one this
+    // row keeps, if any.
+    const effective = renews.error === null ? renews.desired : null;
     const reading = readingField(settings, edit && edit.reading, {now, renews: effective});
     const fields = [monthlyUsd, renews];
     return {
@@ -538,27 +536,18 @@
     return 'Not saved. Another device changed the organizations first. The list now shows theirs, so your ' + (one ? 'change to ' : 'changes to ') + andList(labels) + (one ? ' was' : ' were') +
       ' dropped; check it, then make ' + (one ? 'it' : 'them') + ' again.';
   }
-  // The question Remove asks. A moved organization's monthly credit and refill
-  // date from the configuration are its entry's and go with it, so adding the
-  // same Organization ID again does not bring them back; what was entered
-  // here stays in the settings file and does.
-  function removeQuestion(label, item) {
-    const both = item.has_default_monthly_usd === true && item.has_default_renews === true;
-    const configured = both ? 'monthly credit and refill date' : item.has_default_monthly_usd === true ? 'monthly credit' : item.has_default_renews === true ? 'refill date' : '';
-    if (!configured) return 'Remove ' + label + '? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.';
-    return 'Remove ' + label + '? Its ' + configured + ' from Quota Cache’s configuration ' + (both ? 'go' : 'goes') + ' with it, and adding the same Organization ID again does not bring ' + (both ? 'them' : 'it') + ' back. ' +
-      'Amounts and readings entered here stay as an orphan you can clear below, and come back with it.';
-  }
-  // The rows the Organizations card shows at rest: the file's list, editable
-  // there; or, while the file cannot be read, the configuration's, which then
-  // applies and is what the API credit card lists, shown read-only.
-  function organizationRows(info, doc) {
-    if (isObject(info) && info.reason === 'organizationsUnreadable') {
-      const accounts = isObject(doc) && Array.isArray(doc.accounts) ? doc.accounts : [];
-      return {fromConfig: true, items: accounts.map(account => ({id: account.id, label: account.label || account.id, organization_id: account.organizationId || ''}))};
-    }
-    return {fromConfig: false, items: isObject(info) && Array.isArray(info.items) ? info.items : []};
-  }
+  // The question Remove asks. What was entered here for the organization
+  // stays in the settings file, and comes back with it.
+  const removeQuestion = label => 'Remove ' + label + '? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.';
+  // The note while Quota Cache's configuration still lists count organizations
+  // under claude-api-credits, which this version does not read.
+  const configIgnoredText = count => 'Quota Cache’s configuration still lists ' + plural(count, 'organization', 'organizations') + ' under claude-api-credits. This version doesn’t read ' +
+    (count === 1 ? 'it' : 'them') + ': add each one here with its label and Organization ID. You can leave the configuration as it is; only an older Quota Cache reads it.';
+  // The note while the organizations file, named file, cannot be read. Moved
+  // aside, the file is gone at the next view update and the list starts
+  // empty.
+  const organizationsUnreadableText = file => 'Quota Cache cannot read its organizations file, so no organization is counted and editing them here is unavailable. Fix the file’s owner or permissions, or move ' +
+    file + ' aside and add the organizations again. The page picks that up within a few seconds.';
   // An Organization ID cut to its first 8 and last 4 characters.
   const shortOrganizationID = id => (id.length > 12 ? id.slice(0, 8) + '…' + id.slice(-4) : id);
   // A CPA auth index as an orphan line names it: "0123…cdef".
@@ -568,13 +557,12 @@
   // and none is counted or has a monthly credit, else Edit credits and dates.
   const SET_CREDITS = 'Set credits and dates';
   function creditsEditLabel(accounts, counted) {
-    const unset = accounts.length > 0 && counted === 0 && !accounts.some(account => account.settings && (account.settings.monthlyUsd || account.settings.configMonthlyUsd));
+    const unset = accounts.length > 0 && counted === 0 && !accounts.some(account => account.settings && account.settings.monthlyUsd);
     return unset ? SET_CREDITS : 'Edit credits and dates';
   }
   // The API credit card's head while no organization is counted. It says to
   // set credits and dates only when every organization lacks one of them: one
-  // waiting on the meter, misconfigured or with no Organization ID yet may
-  // have both, and its row says what it waits for.
+  // waiting on the meter may have both, and its row says what it waits for.
   function noneCountedText(accounts) {
     const lacks = account => {
       const issues = Array.isArray(account.dataIssues) ? account.dataIssues : [];
@@ -596,15 +584,9 @@
   const CONFLICT_FOOT = 'Not saved. Another device saved first. Your other changes are kept.';
   const CONFLICT_FIELD = 'Changed from another device. Showing the latest; check and save again.';
   const ORGANIZATIONS_CONFLICT_FOOT = 'Not saved. Another device changed the organizations first. The list now shows theirs; check it, then save again.';
-  // The words a sentence about a request uses: a card's Save, which keeps
-  // the reader's changes, or Import Quota Glance's settings, which has none.
-  const ACTIONS = {
-    save: {noun: 'save', done: 'saved', again: 'save again', writes: 'saves', kept: ' Your changes are kept until you reload.'},
-    import: {noun: 'import', done: 'imported', again: 'import again', writes: 'saves and imports', kept: ''},
-  };
-  const actionOf = action => ACTIONS[action] || ACTIONS.save;
-  const signInText = act => 'Sign in to CPA’s management console on this address with “Remember password” ticked, then ' + act.again + '.' + act.kept;
-  const SIGN_IN_FOOT = signInText(ACTIONS.save);
+  // A card's Save keeps the reader's changes after a refusal.
+  const KEPT = ' Your changes are kept until you reload.';
+  const SIGN_IN_FOOT = 'Sign in to CPA’s management console on this address with “Remember password” ticked, then save again.' + KEPT;
   const LOST = 'No answer came back, so this may or may not have saved. Saving again is safe: a save that already landed is not applied twice.';
   const COUNTED = ' Each refused try counts toward CPA’s limit of five failed sign-ins, after which it locks this address out of management for 30 minutes.';
 
@@ -630,43 +612,40 @@
     const seconds = /^\d{1,6}$/.test(String(header || '').trim()) ? Number(header) : 60;
     return seconds <= 60 ? 'in a minute' : 'in ' + Math.ceil(seconds / 60) + ' minutes';
   }
-  // The foot's sentence for a save that did not save, or the import note's
-  // for an import (action 'import'). Each is proof nothing was written: the
-  // plugin answers a code only before it commits, or after a commit that
-  // failed and changed nothing.
-  function saveErrorText(code, status, retryAfter, action) {
-    const act = actionOf(action);
+  // The foot's sentence for a save that did not save. Each is proof nothing
+  // was written: the plugin answers a code only before it commits, or after a
+  // commit that failed and changed nothing.
+  function saveErrorText(code, status, retryAfter) {
     switch (code) {
-      case 'cache_stopped': return 'Quota Cache is stopped, so nothing was ' + act.done + '. Turn it back on in CPA, then ' + act.again + '.';
-      case 'cross_site': return 'Quota Cache refused this request because it did not come from this page. Nothing was ' + act.done + '.';
+      case 'cache_stopped': return 'Quota Cache is stopped, so nothing was saved. Turn it back on in CPA, then save again.';
+      case 'cross_site': return 'Quota Cache refused this request because it did not come from this page. Nothing was saved.';
       case 'unsupported_media_type':
-      case 'invalid_request': return 'Quota Cache could not read this ' + act.noun + ', so nothing was ' + act.done + '. Reload the page and try again.';
-      case 'settings_unavailable': return 'Quota Cache cannot read its saved settings, so nothing was ' + act.done + '.';
-      case 'organizations_unavailable': return 'Quota Cache cannot read its organizations file, so nothing was ' + act.done + '.';
-      case 'settings_unwritable': return 'Quota Cache could not write its file. Nothing was ' + act.done + '; try again.';
-      case 'settings_full': return 'Quota Cache’s saved settings are full. Remove saved values for organizations and accounts no longer in use, then ' + act.again + '.';
-      case 'too_many_writes': return 'Too many ' + act.writes + ' in the last minute, so nothing was ' + act.done + '. Try again ' + retryText(retryAfter) + '.';
+      case 'invalid_request': return 'Quota Cache could not read this save, so nothing was saved. Reload the page and try again.';
+      case 'settings_unavailable': return 'Quota Cache cannot read its saved settings, so nothing was saved.';
+      case 'organizations_unavailable': return 'Quota Cache cannot read its organizations file, so nothing was saved.';
+      case 'settings_unwritable': return 'Quota Cache could not write its file. Nothing was saved; try again.';
+      case 'settings_full': return 'Quota Cache’s saved settings are full. Remove saved values for organizations and accounts no longer in use, then save again.';
+      case 'too_many_writes': return 'Too many saves in the last minute, so nothing was saved. Try again ' + retryText(retryAfter) + '.';
       case 'not_editable': return 'Some of these can no longer be edited here. Nothing was saved.';
       case 'conflict': return CONFLICT_FOOT;
-      case 'route_missing': return 'This server did not offer the save route, so nothing was ' + act.done + '. Reload the page; if this persists, check that Quota Cache 0.2.0 or newer is loaded.';
-      case 'no_session': return signInText(act);
+      case 'route_missing': return 'This server did not offer the save route, so nothing was saved. Reload the page; if this persists, check that Quota Cache 0.2.0 or newer is loaded.';
+      case 'no_session': return SIGN_IN_FOOT;
       default:
         if (FIELD_CODES.has(code) || OPERATION_CODES.has(code)) return FIELD_FOOT;
-        return status >= 400 && status < 500 ? 'Something between this page and CPA refused the ' + act.noun + ' (HTTP ' + status + '). Nothing was ' + act.done + '.' : LOST;
+        return status >= 400 && status < 500 ? 'Something between this page and CPA refused the save (HTTP ' + status + '). Nothing was saved.' : LOST;
     }
   }
-  // Why a save, or an import (action 'import'), was refused before or by
-  // CPA, from the remembered refusal. over says a lockout has run out.
-  function refusedText(record, over, action) {
-    const act = actionOf(action);
+  // Why a save was refused before or by CPA, from the remembered refusal.
+  // over says a lockout has run out.
+  function refusedText(record, over) {
     switch (record && record.reason) {
       case 'banned':
-        if (over) return 'CPA’s lockout of this address after repeated failed sign-ins should be over.' + act.kept + COUNTED;
-        return 'CPA is refusing management requests from this address until about ' + new Date(record.until * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) + ' after repeated failed sign-ins, so nothing was ' + act.done + '.' + act.kept;
-      case 'remote': return 'CPA accepts management sign-ins only on the machine it runs on, so nothing was ' + act.done + '. Open Quota Cache on that machine instead.';
-      case 'off': return 'CPA’s management API is switched off on this server, so nothing was ' + act.done + '.';
-      case 'refused': return 'CPA refused the remembered management key, so nothing was ' + act.done + '.' + act.kept + ' Sign in to CPA’s management console again on this address with “Remember password” ticked, then ' + act.again + '.' + COUNTED;
-      default: return 'Something in front of CPA refused the ' + act.noun + (record && record.status ? ' (HTTP ' + record.status + ')' : '') + ', so nothing was ' + act.done + '.' + act.kept + COUNTED;
+        if (over) return 'CPA’s lockout of this address after repeated failed sign-ins should be over.' + KEPT + COUNTED;
+        return 'CPA is refusing management requests from this address until about ' + new Date(record.until * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) + ' after repeated failed sign-ins, so nothing was saved.' + KEPT;
+      case 'remote': return 'CPA accepts management sign-ins only on the machine it runs on, so nothing was saved. Open Quota Cache on that machine instead.';
+      case 'off': return 'CPA’s management API is switched off on this server, so nothing was saved.';
+      case 'refused': return 'CPA refused the remembered management key, so nothing was saved.' + KEPT + ' Sign in to CPA’s management console again on this address with “Remember password” ticked, then save again.' + COUNTED;
+      default: return 'Something in front of CPA refused the save' + (record && record.status ? ' (HTTP ' + record.status + ')' : '') + ', so nothing was saved.' + KEPT + COUNTED;
     }
   }
   // What a remembered refusal does to Save: {block} keeps it off whatever the
@@ -685,16 +664,16 @@
   }
   const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const strings = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : []);
-  // What a save, or an import (action 'import'), came to, from what send()
-  // got back: {kind: 'blocked', reason: 'session'} or {kind: 'blocked',
-  // reason: 'refused', record} when nothing was sent; {kind: 'lost'} when no
-  // answer came; {kind: 'refused', record} for a 401 or 403; else {kind:
-  // 'answer', status, body, retryAfter}.
-  function outcomeOf(answer, action) {
-    const failed = (code, status, extra) => Object.assign({kind: 'failed', code, text: saveErrorText(code, status, answer.retryAfter, action), signIn: false}, extra || {});
-    if (answer.kind === 'blocked') return answer.reason === 'session' ? Object.assign(failed('no_session', 0), {signIn: true}) : {kind: 'failed', code: 'refused', text: refusedText(answer.record, false, action), signIn: true};
+  // What a save came to, from what send() got back: {kind: 'blocked',
+  // reason: 'session'} or {kind: 'blocked', reason: 'refused', record} when
+  // nothing was sent; {kind: 'lost'} when no answer came; {kind: 'refused',
+  // record} for a 401 or 403; else {kind: 'answer', status, body,
+  // retryAfter}.
+  function outcomeOf(answer) {
+    const failed = (code, status, extra) => Object.assign({kind: 'failed', code, text: saveErrorText(code, status, answer.retryAfter), signIn: false}, extra || {});
+    if (answer.kind === 'blocked') return answer.reason === 'session' ? Object.assign(failed('no_session', 0), {signIn: true}) : {kind: 'failed', code: 'refused', text: refusedText(answer.record, false), signIn: true};
     if (answer.kind === 'lost') return {kind: 'lost', text: LOST};
-    if (answer.kind === 'refused') return {kind: 'failed', code: 'refused', text: refusedText(answer.record, false, action), signIn: true};
+    if (answer.kind === 'refused') return {kind: 'failed', code: 'refused', text: refusedText(answer.record, false), signIn: true};
     const body = isObject(answer.body) ? answer.body : null;
     if (answer.status === 200) {
       // The plugin answers 200 only with a body; an unreadable one is that
@@ -702,7 +681,7 @@
       if (body === null || body.ok !== true) return {kind: 'lost', text: LOST};
       return {
         kind: 'saved', unchanged: body.unchanged === true, revision: typeof body.revision === 'string' ? body.revision : '',
-        settings: isObject(body.settings) ? body.settings : {}, organizations: Array.isArray(body.organizations) ? body.organizations : null, counts: isObject(body.counts) ? body.counts : null,
+        settings: isObject(body.settings) ? body.settings : {}, organizations: Array.isArray(body.organizations) ? body.organizations : null,
       };
     }
     const code = body !== null && typeof body.error === 'string' ? body.error : '';
@@ -721,86 +700,9 @@
   }
 
   // ---------------------------------------------------------------------------
-  // The import from Quota Glance
+  // Saved values
 
   const plural = (count, one, many) => count + ' ' + (count === 1 ? one : many);
-  // "2 monthly credits, 2 refill dates, 2 Console readings and 3 renewal
-  // dates", zero items left out; "" when every count is zero.
-  function countsText(counts) {
-    if (!isObject(counts)) return '';
-    const parts = [
-      [counts.monthly_credits, 'monthly credit', 'monthly credits'], [counts.refill_dates, 'refill date', 'refill dates'],
-      [counts.readings, 'Console reading', 'Console readings'], [counts.renewal_dates, 'renewal date', 'renewal dates'],
-    ].filter(([count]) => Number.isInteger(count) && count > 0).map(([count, one, many]) => plural(count, one, many));
-    if (parts.length <= 1) return parts.join('');
-    return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
-  }
-  const IMPORT_NOTE_DAYS = 30;
-  const epochOf = value => { const t = Date.parse(value); return Number.isFinite(t) ? Math.floor(t / 1000) : null; };
-  // An import from the drop-in, the copy of Quota Glance's settings.json
-  // placed beside the snapshot (client.LegacySettingsDropIn). Quota Glance
-  // never saves to it, so its later saves are never picked up from it.
-  const LEGACY_DROP_IN = 'quota-glance-settings.json';
-  const fromDropIn = legacy => isObject(legacy) && typeof legacy.source_path === 'string' && legacy.source_path.split(/[\\/]/).pop() === LEGACY_DROP_IN;
-  // Whether this page still picks up what Quota Glance saves in its own file.
-  // The plugin never says so of a drop-in, and the page holds to that too.
-  const followsQuotaGlance = legacy => isObject(legacy) && legacy.following === true && !fromDropIn(legacy);
-  // The import note: {tone, pill, lines, button, dismiss} for the legacy
-  // block, or null when nothing is to be said. dismissed(key) says whether
-  // the reader dismissed a note; available is whether the settings can be
-  // edited, without which nothing can be imported, and reason the editor's
-  // reason when they cannot. An import brought only what Quota Glance's file
-  // held, which Quota Glance 0.8.0 no longer writes. So the note says nothing
-  // needs entering again only when the settings file holds that file's
-  // values with nothing saved here since (matched or follow). One pressed on
-  // the page replaced what was saved here. An automatic import is a first
-  // start, but it is also how a store is filled again after its settings file
-  // and import record were both lost, which the store cannot tell apart. A
-  // follow or matched record that continues either keeps its kind, so its
-  // line stays.
-  function importNote(legacy, available, reason, now, dismissed) {
-    if (!isObject(legacy)) return null;
-    const following = 'Quota Glance older than 0.8.0 still saves these values in its own file, and this page picks up its changes until you save here. Update Quota Glance first.';
-    const copied = 'These values came from a copy of Quota Glance’s settings.json beside Quota Cache’s snapshot, so changes saved later in Quota Glance older than 0.8.0 are not picked up. Update Quota Glance, or copy the file again.';
-    const onlyHere = 'A value saved only on this page is not among these, since Quota Glance’s settings.json never had it: enter it again.';
-    const savedBefore = 'A value saved on this page before this import, if any, is not among these: enter it again.';
-    const button = label => (available && legacy.importable === true ? label : null);
-    switch (legacy.state) {
-      case 'imported': {
-        const at = epochOf(legacy.imported_at);
-        const key = 'import:' + (legacy.imported_at || '');
-        if (at === null || now - at > IMPORT_NOTE_DAYS * 86400 || dismissed(key)) return null;
-        const counts = countsText(legacy.counts);
-        const changed = epochOf(legacy.legacy_updated_at);
-        const complete = legacy.kind === 'matched' || legacy.kind === 'follow';
-        const lines = ['Imported from Quota Glance on ' + localDay(at) + (counts ? ': ' + counts : '') + (changed !== null ? ', last changed there ' + localDay(changed) : '') + '.' + (complete ? ' Nothing needs entering again.' : '')];
-        if (legacy.kind === 'manual') lines.push(onlyHere);
-        else if (legacy.kind === 'automatic') lines.push(savedBefore);
-        if (fromDropIn(legacy)) lines.push(copied);
-        else if (followsQuotaGlance(legacy)) lines.push(following);
-        return {tone: 'ok', pill: 'Imported', lines, button: null, dismiss: key};
-      }
-      case 'changedSinceImport':
-        if (fromDropIn(legacy)) return {tone: 'warn', pill: 'Copy changed', lines: ['The copy of Quota Glance’s settings.json beside Quota Cache’s snapshot changed after your last save here.'], button: button('Import Quota Glance’s settings again'), dismiss: null};
-        return {tone: 'warn', pill: 'Changed in Quota Glance', lines: ['Quota Glance’s settings.json changed after your last save here. Quota Glance older than 0.8.0 still edits it; update Quota Glance.'], button: button('Import Quota Glance’s settings again'), dismiss: null};
-      case 'notImported':
-        return {tone: 'warn', pill: 'Not imported', lines: ['Quota Glance’s settings.json has values that were not imported here.'], button: button('Import Quota Glance’s settings'), dismiss: null};
-      case 'settingsMissing':
-        // The store says so whether or not Quota Glance's file is there, and
-        // only one that can be read can be imported.
-        if (legacy.importable !== true) return {tone: 'warn', pill: 'Saved settings gone', lines: ['This page’s saved settings are gone, so only config values apply until you enter values again. There is no Quota Glance settings.json to import.'], button: null, dismiss: null};
-        return {tone: 'warn', pill: 'Saved settings gone', lines: ['This page’s saved settings are gone, so only config values apply until you enter values or import.'], button: button('Import Quota Glance’s settings again'), dismiss: null};
-      case 'legacyUnreadable':
-        // While this file is what blocks editing, with nothing stored, the
-        // cards say this themselves, as the reason they cannot be edited.
-        // While the settings file is what cannot be read, the cards offer
-        // the import once it is moved aside, which this file rules out.
-        if (!available && reason === 'legacyUnreadable') return null;
-        return {tone: 'warn', pill: 'Cannot read Quota Glance’s file', lines: ['Quota Glance’s settings.json could not be read, so it cannot be imported again. Fix it or move it aside.'], button: null, dismiss: null};
-      default:
-        return null;
-    }
-  }
   // The saved values of organizations no longer listed: api_credits' orphans,
   // or, while no organization is listed and api_credits is null, the
   // editor's.
@@ -808,73 +710,17 @@
     if (isObject(doc)) return Array.isArray(doc.orphans) ? doc.orphans : [];
     return isObject(editor) && Array.isArray(editor.api_credit_orphans) ? editor.api_credit_orphans : [];
   }
-  // The saved values of organizations the configuration does not list while
-  // the organizations file cannot be read: no orphans, since they may belong
-  // to organizations in the file, so they are shown and never offered to
-  // clear.
+  // The saved values while the organizations file cannot be read: no
+  // orphans, since they may belong to organizations in the file, so they are
+  // shown and never offered to clear.
   const heldCreditsOf = editor => (isObject(editor) && Array.isArray(editor.held_api_credits) ? editor.held_api_credits : []);
-  // What an import would replace: the counts of what is saved here now.
-  function storedCounts(state, editor) {
-    const counts = {monthly_credits: 0, refill_dates: 0, readings: 0, renewal_dates: 0};
-    const credits = isObject(state) && isObject(state.api_credits) ? state.api_credits : null;
-    for (const account of credits && Array.isArray(credits.accounts) ? credits.accounts : []) {
-      const s = account.settings || {};
-      if (s.monthlyUsd) counts.monthly_credits++;
-      if (s.renews) counts.refill_dates++;
-      if (s.reading) counts.readings++;
-    }
-    for (const orphan of [...creditOrphansOf(credits, editor), ...heldCreditsOf(editor)]) {
-      if (orphan.monthlyUsd) counts.monthly_credits++;
-      if (orphan.renews) counts.refill_dates++;
-      if (orphan.hasReading) counts.readings++;
-    }
-    if (isObject(state) && isObject(state.renewals)) counts.renewal_dates = Object.keys(state.renewals).length;
-    else if (isObject(editor)) counts.renewal_dates = (editor.credentials || []).filter(c => c.renewal).length + (editor.renewal_orphans || []).length;
-    return counts;
-  }
-  // The import's confirmation: what is saved here now, which the import
-  // replaces, and what Quota Glance's file holds now, which it brings
-  // (editor.legacy.file_counts; left unsaid when the status does not give it),
-  // with when it last changed there (editor.legacy.file_updated_at): nothing
-  // saved on this page since is in it, which matters most when the import
-  // refills a store whose saved settings were lost.
-  function importQuestion(stored, fromFile, fileUpdatedAt) {
-    const saved = countsText(stored);
-    const lines = [saved ? 'This replaces what is saved here: ' + saved + '. Values entered here since the last import are lost.' : 'Nothing is saved here now, so nothing is replaced.'];
-    if (isObject(fromFile)) {
-      const brought = countsText(fromFile);
-      lines.push(brought ? 'It brings what Quota Glance’s settings.json holds now: ' + brought + '.' : 'Quota Glance’s settings.json holds no values' + (saved ? ', so nothing stays saved here.' : ' either.'));
-      const changed = typeof fileUpdatedAt === 'string' ? epochOf(fileUpdatedAt) : null;
-      if (brought && changed !== null) lines.push('It was last changed there ' + localDay(changed) + ', so nothing saved on this page since is in it.');
-    }
-    lines.push('Import Quota Glance’s settings.json now?');
-    return lines.join(' ');
-  }
-  // What to do about a settings file Quota Cache cannot read, named file,
-  // given the import block (editor.legacy). A good copy put back keeps what
-  // was saved here, so it comes first. Moved aside, the file starts empty
-  // only once an import is on record (its kind), and importing again brings
-  // back only what Quota Glance's file holds; before that the next tick is a
-  // first start, which imports Quota Glance's file or, when that cannot be
-  // read, keeps editing off. A record that cannot be read is published with
-  // no kind but still counts, so that text allows for one.
-  function settingsUnreadableText(file, legacy) {
-    const lead = 'Quota Cache cannot read its saved settings, so only config values apply. ';
-    if (isObject(legacy) && typeof legacy.kind === 'string') {
-      return lead + 'To keep the values saved here, put back a good copy of ' + file + '. Otherwise move it aside: Quota Cache then starts empty, and importing Quota Glance’s settings again brings back only what Quota Glance’s settings.json holds, without the values saved only on this page.';
-    }
-    return lead + 'To keep the values saved here, put back a good copy of ' + file + '. Moving it aside instead starts Quota Cache empty once an import from Quota Glance is on record, and otherwise counts as a first start: ' +
-      'Quota Glance’s settings.json is imported if there is one, and one that cannot be read keeps editing off until it is fixed.';
-  }
-  // The editor's reason while the import record, named file, is there but
-  // cannot be opened or read, as one restored as another user. Nothing may be
-  // saved or imported until it can, since a save could not tell whether the
-  // file it writes holds the import, but the saved values still apply. A
-  // later read is enough, so the remedy is the file's owner or permissions.
-  const IMPORT_RECORD_UNREADABLE = 'importRecordUnreadable';
-  function importRecordUnreadableText(file) {
-    return 'Quota Cache cannot open or read its import record, ' + file + ', so nothing can be saved or imported here until it can. The values saved here still apply. ' +
-      'Fix the file’s owner or permissions; the page picks that up within a few seconds.';
+  // What to do about a settings file Quota Cache cannot read, named file. A
+  // good copy put back keeps what was saved here, so it comes first. Moved
+  // aside, the file is gone at the next view update, and Quota Cache starts
+  // empty and editable.
+  function settingsUnreadableText(file) {
+    return 'Quota Cache cannot read its saved settings, so no value saved here applies. To keep the values saved here, put back a good copy of ' + file + '. ' +
+      'Moving it aside instead starts Quota Cache empty, and every value saved here has to be entered again.';
   }
 
   // The rules above, for scripts/tests/editor.test.mjs.
@@ -884,9 +730,8 @@
     creditRow, emptyDraft, editCredit, markRemoved, creditPlan, reconcileCredits, reconcileRenewals, editRenewal, renewalPlan, dropConflicts, dropRefused, refusedRowsText,
     liveOrphans, orphanAfterConflict, newerRevision,
     overlaid, conflictFields, normalizeOrganizationID, validOrganizationLabel, emptyOrganizationsDraft, organizationsPlan, organizationsAfterConflict, organizationsHeld, organizationsConflictText, removeQuestion,
-    organizationRows, shortOrganizationID, shortCredentialID, creditsEditLabel, noneCountedText, FIELD_CODES, OPERATION_CODES, PLUGIN_CODES, FIELD_FOOT, CONFLICT_FOOT, CONFLICT_FIELD, SIGN_IN_FOOT, LOST,
-    fieldMessage, saveErrorText, refusedText, refusalHold, retryText, outcomeOf, countsText, fromDropIn, followsQuotaGlance, importNote, creditOrphansOf, heldCreditsOf, storedCounts, importQuestion,
-    settingsUnreadableText, IMPORT_RECORD_UNREADABLE, importRecordUnreadableText,
+    configIgnoredText, organizationsUnreadableText, shortOrganizationID, shortCredentialID, creditsEditLabel, noneCountedText, FIELD_CODES, OPERATION_CODES, PLUGIN_CODES, FIELD_FOOT, CONFLICT_FOOT, CONFLICT_FIELD, SIGN_IN_FOOT, LOST,
+    fieldMessage, saveErrorText, refusedText, refusalHold, retryText, outcomeOf, creditOrphansOf, heldCreditsOf, settingsUnreadableText,
   });
 
   // ---------------------------------------------------------------------------
@@ -992,13 +837,12 @@
   // Edit button, else the first other control it has then.
   let status = null;
   let scrolled = false;
-  const card = (section, key, rest) => ({section, key, rest, editing: false, saving: false, failed: false, status: null, saved: null, savedTimer: 0, marks: {}, confirm: null});
+  const card = (section, key, rest) => ({section, key, rest, editing: false, saving: false, failed: false, status: null, saved: null, savedTimer: 0, marks: {}});
   const orgs = Object.assign(card('organizations', 'qc-orgs', ['qc-orgs-edit', 'qc-orgs-add', 'qc-orgs-table']), {draft: emptyOrganizationsDraft(), base: null, confirmRemove: null});
   // gone and revised are what saves learned of the orphans and rows while the
   // card is open (liveOrphans).
   const credits = Object.assign(card('api-credits', 'qc-credits', ['qc-credits-edit', 'qc-credits-table']), {draft: emptyDraft(), overlay: {}, focused: null, gone: new Set(), revised: {}});
   const renewals = Object.assign(card('renewals', 'qc-renewals', ['qc-renewals-edit', 'qc-renewals-table']), {draft: emptyDraft(), overlay: {}, gone: new Set(), revised: {}});
-  const importer = {confirming: false, busy: false, status: null, timer: 0};
   const cards = [orgs, credits, renewals];
   const editing = () => cards.some(one => one.editing);
 
@@ -1029,19 +873,10 @@
     const base = path.split(/[\\/]/).pop() || 'snapshot.json';
     return base.replace(/\.json$/, '') + suffix;
   }
-  const LEGACY_UNREADABLE = 'Quota Glance’s settings.json could not be read, so nothing was imported and only config values apply. Fix it or move it aside.';
-  // Moving the organizations file aside starts the list over: from the
-  // configuration when it lists organizations, else empty. Either drops what
-  // was changed here, so fixing the file comes first.
-  const organizationsUnreadableText = listed => 'Quota Cache cannot read its organizations file, so the list from its configuration applies and editing it here is unavailable. Fix ' +
-    besideSnapshot('.organizations.json') + ' in place, or put back a good copy; the page picks that up within a few seconds. ' + (listed
-    ? 'Moving it aside instead moves the configuration’s list in again and drops the organization changes made here: organizations added here leave the list, renames go back to the configuration’s labels, and removed organizations return.'
-    : 'Moving it aside instead starts an empty list, and every organization in the file has to be added again.');
   const organizationsUnreadable = () => organizationsInfo().reason === 'organizationsUnreadable';
   function unavailableText(editor) {
     if (!editor || editor.available) return null;
-    if (editor.reason === IMPORT_RECORD_UNREADABLE) return importRecordUnreadableText(besideSnapshot('.settings-import.json'));
-    return editor.reason === 'legacyUnreadable' ? LEGACY_UNREADABLE : settingsUnreadableText(besideSnapshot('.settings.json'), editor.legacy);
+    return settingsUnreadableText(besideSnapshot('.settings.json'));
   }
   // What the console's session means for Save (refusalHold): {block},
   // {note}, or null. A lockout that ends while a card is open turns Save back
@@ -1101,7 +936,6 @@
     target.status = null;
     target.failed = false;
     target.marks = {};
-    target.confirm = null;
     target.gone = new Set();
     target.revised = {};
     if (on) { target.saved = null; clearTimeout(target.savedTimer); }
@@ -1128,11 +962,6 @@
   // UTF-16 units, never stop a Save the page offers.
   function editFoot(target, help, plan, blocked, onCancel, note) {
     const foot = h('div', {class: 'edit-foot'},
-      target.confirm ? h('div', {class: 'alert warn confirm', role: 'group', 'aria-labelledby': target.key + '-confirm-question'},
-        h('p', {id: target.key + '-confirm-question'}, target.confirm.text),
-        h('div', {class: 'edit-acts'},
-          h('button', {id: target.key + '-keep-editing', type: 'button', class: 'secondary', on: {click: () => { target.confirm = null; renderAll(); focusFirst(target.key + '-save'); }}}, 'Keep editing'),
-          h('button', {id: target.key + '-confirm', type: 'button', on: {click: target.confirm.go}}, target.confirm.label))) : null,
       h('p', {class: 'edit-help'}, help),
       h('div', {class: 'edit-acts'},
         h('span', {class: 'count', 'aria-live': 'polite'}),
@@ -1262,8 +1091,8 @@
       try { if (selection) next.setSelectionRange(selection[0], selection[1]); } catch {}
     }
   }
-  // Brings a card at rest, the import note, or a caption under a field of a
-  // card being edited up to date from nodes built afresh, keeping each child
+  // Brings a card at rest, or a caption under a field of a card being edited,
+  // up to date from nodes built afresh, keeping each child
   // that is unchanged: a live region keeps its node, so a screen reader
   // announces an alert once and not at every view update, and a control the
   // reader is on, or is pressing, stays where it was. A changed child is
@@ -1345,108 +1174,20 @@
   }
 
   // ---------------------------------------------------------------------------
-  // The import note
-
-  function renderImport() {
-    const target = $('import-note');
-    if (!target) return;
-    const editor = editorInfo();
-    const note = editor ? importNote(editor.legacy, editor.available === true, editor.reason, nowSeconds(), dismissed) : null;
-    const hidden = note === null && importer.status === null;
-    const nodes = [];
-    if (note) {
-      nodes.push(h('span', {class: 'pill' + (note.tone === 'ok' ? ' ok' : ' warn')}, note.pill));
-      for (const line of note.lines) nodes.push(h('p', null, line));
-      if (note.button && !importer.confirming) nodes.push(h('button', {id: 'qc-import-open', type: 'button', class: 'secondary', disabled: importer.busy || editing(), on: {click: () => { importer.confirming = true; importer.status = null; renderAll(); focusFirst('qc-import-keep'); }}}, note.button));
-      if (note.dismiss) nodes.push(dismissLink(note.dismiss, 'qc-import-dismiss'));
-      if (note.button && importer.confirming) {
-        nodes.push(h('div', {class: 'confirm', role: 'group', 'aria-label': 'Confirm import'},
-          h('p', null, importQuestion(storedCounts(creditState(), editor), editor.legacy.file_counts, editor.legacy.file_updated_at)),
-          h('div', {class: 'edit-acts'},
-            h('button', {id: 'qc-import-keep', type: 'button', class: 'secondary', disabled: importer.busy, on: {click: () => { importer.confirming = false; renderAtRest(); focusFirst('qc-import-open'); }}}, 'Keep what is here'),
-            h('button', {id: 'qc-import-go', type: 'button', disabled: importer.busy || editing(), on: {click: runImport}}, importer.busy ? [h('span', {class: 'spin', 'aria-hidden': 'true'}), 'Importing…'] : 'Import'))));
-      }
-    }
-    if (importer.status) nodes.push(h('p', {id: 'qc-import-status', class: importer.status.tone === 'ok' ? 'saved' : 'bad', role: 'status', tabindex: '-1'}, importer.status.text));
-    // The note is a live region: it changes only where what it says does.
-    settle(target, nodes);
-    const className = 'alert moved' + (note && note.tone === 'warn' ? ' warn' : '');
-    if (!hidden && target.className !== className) target.className = className;
-    if (target.hidden !== hidden) target.hidden = hidden;
-  }
-  async function runImport() {
-    const editor = editorInfo();
-    if (!editor || importer.busy || editing()) return;
-    importer.busy = true;
-    renderAll();
-    const outcome = outcomeOf(await send({kind: 'importLegacy', baseRevision: typeof editor.revision === 'string' ? editor.revision : ''}), 'import');
-    importer.busy = false;
-    importer.confirming = false;
-    // What came of it stays as long as a saved line does.
-    clearTimeout(importer.timer);
-    importer.timer = setTimeout(endImportStatus, SAVED_FOR);
-    switch (outcome.kind) {
-      case 'saved':
-        importer.status = {tone: 'ok', text: 'Imported ' + (countsText(outcome.counts) || 'Quota Glance’s settings') + ' from Quota Glance.'};
-        page.reload();
-        break;
-      case 'conflict':
-        importer.status = {tone: 'bad', text: 'Not imported. The settings saved here changed meanwhile; check them, then import again.'};
-        page.reload();
-        break;
-      case 'failed':
-        importer.status = {tone: 'bad', text: outcome.code === 'not_editable' ? 'Quota Glance’s settings.json can no longer be read, so nothing was imported.' : outcome.text};
-        break;
-      default:
-        importer.status = {tone: 'bad', text: 'No answer came back, so the import may or may not have happened. Select Refresh view to see which.'};
-    }
-    // The confirmation is gone, and Import with it: focus goes to what the
-    // note offers next, unless the reader moved on meanwhile. After an
-    // import that is the result line: the note still offers the import
-    // until the status read asked for above arrives, which takes the button
-    // away and brings Dismiss, but keeps the line.
-    const lost = document.activeElement === null || document.activeElement === document.body;
-    renderAll();
-    if (lost && outcome.kind === 'saved') focusFirst('qc-import-status', 'qc-import-dismiss');
-    else if (lost) focusFirst('qc-import-open', 'qc-import-dismiss');
-  }
-  // The result line goes once it has stayed as long as a saved line does. A
-  // reader still on it moves on to what the note offers then, else to what
-  // followed the note.
-  function endImportStatus() {
-    const note = $('import-note');
-    const on = document.activeElement !== null && document.activeElement.id === 'qc-import-status';
-    const after = on && note ? controlsAfter(note) : [];
-    importer.status = null;
-    renderAtRest();
-    if (on) focusOnward([$('qc-import-dismiss'), $('qc-import-open'), ...after].filter(Boolean));
-  }
-
-  // ---------------------------------------------------------------------------
   // Organizations: the Claude Console organizations, above the API credit
   // card, whose rows they decide
 
-  function organizationNotes(listed) {
+  function organizationNotes() {
     const state = creditState();
     const info = organizationsInfo();
     const notes = [];
-    if (info.reason === 'organizationsUnreadable') notes.push(h('div', {class: 'alert error', role: 'alert'}, organizationsUnreadableText(listed)));
+    if (info.reason === 'organizationsUnreadable') notes.push(h('div', {class: 'alert error', role: 'alert'}, organizationsUnreadableText(besideSnapshot('.organizations.json'))));
     const block = state && isObject(state.organizations) ? state.organizations : null;
-    const migration = block && isObject(block.migration) ? block.migration : null;
-    const movedAt = migration ? epochOf(migration.at) : null;
-    if (movedAt !== null && nowSeconds() - movedAt <= IMPORT_NOTE_DAYS * 86400 && !dismissed('organizations-moved:' + migration.at)) {
-      const moved = Number.isInteger(migration.moved) ? migration.moved : 0;
-      const skipped = Number.isInteger(migration.skipped) ? migration.skipped : 0;
-      notes.push(h('div', {class: 'alert moved', role: 'status'},
-        h('span', {class: 'pill ok'}, 'Moved'),
-        h('p', null, 'Moved ' + plural(moved, 'organization', 'organizations') + ' here from Quota Cache’s configuration on ' + localDay(movedAt) + (skipped > 0 ? ', ' + skipped + ' skipped because of a problem in the configuration' : '') + '. Edit them here from now on.'),
-        dismissLink('organizations-moved:' + migration.at, 'qc-orgs-moved-dismiss')));
-    }
     const ignored = block && Number.isInteger(block.config_items_ignored) ? block.config_items_ignored : 0;
     if (ignored > 0 && !dismissed('organizations-config:' + ignored)) {
-      notes.push(h('div', {class: 'alert moved', role: 'status'},
+      notes.push(h('div', {class: 'alert dismissible', role: 'status'},
         h('span', {class: 'pill'}, 'Config not used'),
-        h('p', null, 'Quota Cache’s configuration still lists organizations under claude-api-credits. This page’s list is used instead, so an organization listed only there is not counted until you add it here. You can leave them; only an older Quota Cache reads them.'),
+        h('p', null, configIgnoredText(ignored)),
         dismissLink('organizations-config:' + ignored, 'qc-orgs-config-dismiss')));
     }
     return notes;
@@ -1475,11 +1216,9 @@
     if (!editor) return;
     if (orgs.editing) { keepFocus(() => replaceEdit(section, organizationsEdit())); return; }
     const info = organizationsInfo();
-    // While the file cannot be read the configuration's list applies, and the
-    // card shows that list read-only rather than an empty one.
-    const {items, fromConfig} = organizationRows(info, creditDocument());
+    const items = Array.isArray(info.items) ? info.items : [];
     const canEdit = info.available === true && !editing();
-    const counted = plural(items.length, 'Claude Console organization', 'Claude Console organizations') + (fromConfig ? ' from Quota Cache’s configuration' : '');
+    const counted = plural(items.length, 'Claude Console organization', 'Claude Console organizations');
     const head = h('div', {class: 'section-head'},
       h('h2', {id: 'organizations-heading', tabindex: '-1'}, 'Organizations'),
       orgs.saved ? savedLine(orgs.saved) : h('span', {class: 'hint'}, items.length ? counted + ' · their API credit is counted below' : 'Claude Console organizations whose API credit Quota Cache counts'),
@@ -1491,17 +1230,15 @@
           h('thead', null, h('tr', null, h('th', {scope: 'col'}, 'Label'), h('th', {scope: 'col'}, 'Organization ID'))),
           h('tbody', null, items.map(item => h('tr', null,
             h('td', {class: 'account'}, item.label),
-            h('td', null, item.organization_id ? h('span', {class: 'org-id', title: item.organization_id}, shortOrganizationID(item.organization_id)) : muted('no Organization ID'))))))),
-        h('div', {class: 'card-foot'}, h('p', null, fromConfig
-          ? 'These come from claude-api-credits in Quota Cache’s configuration while its organizations file cannot be read, and cannot be changed here.'
-          : 'Set each organization’s monthly credit, refill date and Console reading in Claude API credits below. Renaming an organization keeps its values. Removing one keeps them as an orphan you can clear there.')));
-    } else if (!fromConfig) {
+            h('td', null, h('span', {class: 'org-id', title: item.organization_id}, shortOrganizationID(item.organization_id)))))))),
+        h('div', {class: 'card-foot'}, h('p', null,
+          'Set each organization’s monthly credit, refill date and Console reading in Claude API credits below. Renaming an organization keeps its values. Removing one keeps them as an orphan you can clear there.')));
+    } else if (info.available === true) {
       body = h('div', {class: 'card'}, h('div', {class: 'empty-cta'},
         h('p', null, 'No Console organizations yet. Add one to start counting its API credit.'),
-        info.available === true ? h('button', {id: 'qc-orgs-add', type: 'button', disabled: !canEdit, on: {click: () => startOrganizations(true)}}, 'Add organization') : null));
+        h('button', {id: 'qc-orgs-add', type: 'button', disabled: !canEdit, on: {click: () => startOrganizations(true)}}, 'Add organization')));
     }
-    // Only configured items with an Organization ID move in again.
-    settle(section, [head, ...organizationNotes(fromConfig && items.some(item => item.organization_id)), ...(body ? [body] : [])]);
+    settle(section, [head, ...organizationNotes(), ...(body ? [body] : [])]);
   }
   function organizationsPlanNow() {
     const info = organizationsInfo();
@@ -1513,10 +1250,6 @@
     const items = Array.isArray(info.items) ? info.items : [];
     const result = organizationsPlanNow();
     const busy = orgs.saving;
-    const capOf = key => {
-      const error = result.errors[key] || (orgs.marks[key] && orgs.marks[key].text);
-      return error ? h('span', {class: 'cap bad'}, error) : null;
-    };
     const rows = items.map((item, index) => {
       const removing = orgs.draft.remove[item.id] === true;
       const typed = orgs.draft.rename[item.id];
@@ -1536,7 +1269,7 @@
       if (orgs.confirmRemove === item.id && !removing) {
         const label = typed !== undefined && typed.trim() ? typed.trim() : item.label;
         row.append(h('div', {class: 'alert warn confirm', role: 'group', 'aria-labelledby': 'qc-org-remove-question'},
-          h('p', {id: 'qc-org-remove-question'}, removeQuestion(label, item)),
+          h('p', {id: 'qc-org-remove-question'}, removeQuestion(label)),
           h('div', {class: 'edit-acts'},
             h('button', {id: 'qc-org-keep', type: 'button', class: 'secondary', on: {click: () => { orgs.confirmRemove = null; renderAll(); focusFirst('qc-org-' + index + '-remove'); }}}, 'Keep'),
             h('button', {id: 'qc-org-remove', type: 'button', class: 'danger', on: {click: () => {
@@ -1701,20 +1434,10 @@
   // credit, refill date and Console reading, and the orphans to clear
 
   const settingsOf = account => overlaid(account.settings, credits.overlay[account.id]);
-  const creditName = account => account.label || account.id;
-  // Why a row is locked. While the organizations file cannot be read
-  // (unreadable), organizations cannot be added above either.
-  function notEditableText(reason, unreadable) {
-    switch (reason) {
-      case 'noOrganization': return 'This item in Quota Cache’s configuration has no usable organization-id. ' + (unreadable
-        ? 'Organizations can be added above again once Quota Cache can read its organizations file.'
-        : 'Add the organization under Organizations above to edit it here.');
-      case 'duplicateOrganization': return 'Another item in Quota Cache’s configuration has the same organization-id; edit that one.';
-      case 'overLimit': return 'Only the first 16 items in claude-api-credits can be edited here.';
-      case 'cacheTooOld': return 'Quota Cache has no Organization ID for this row yet, so it cannot be edited here.';
-      default: return 'This organization cannot be edited here.';
-    }
-  }
+  const creditName = account => account.label;
+  // Why a row is locked: every organization is editable while the saved
+  // settings can be read.
+  const NOT_EDITABLE = 'This organization cannot be edited here.';
   // Whether a Console reading would settle what the row says: it is out, it
   // is counted but incomplete for want of one, or it lacks only a refill
   // date, which a reading stands in for.
@@ -1738,8 +1461,6 @@
       case 'stale': return ['Stale', 'warn'];
       case 'out': return ['Out', 'error'];
       case 'needsSettings': return [issues.includes('needsCredit') && issues.includes('needsRefillDate') ? 'Needs credit and date' : issues.includes('needsCredit') ? 'Needs credit' : 'Needs refill date', 'warn'];
-      case 'misconfigured': return ['Misconfigured', 'error'];
-      case 'cacheTooOld': return ['No figures', ''];
       case 'pending': return ['Pending', ''];
       default: return [account.state || 'Unknown', ''];
     }
@@ -1756,20 +1477,13 @@
   }
   function creditCells(account, now) {
     const s = account.settings || {};
-    const credit = account.monthlyCreditSource === 'dashboard' || account.monthlyCreditSource === 'config'
-      ? [h('span', {class: 'num'}, account.monthlyCreditText), account.monthlyCreditSource === 'dashboard'
-        ? secondary(setMark(), 'entered here · ', s.configMonthlyUsd ? 'config ' + moneyText(s.configMonthlyUsd) : 'not in config')
-        : secondary('from config')]
-      : [muted('Not set'), s.configMonthlyUsdInvalid ? secondary('the config’s is not a dollar amount') : null];
-    let refill;
-    if (typeof account.renewsAtEpoch === 'number') {
-      const renews = s.renews || s.configRenews || '';
-      const startDay = typeof account.cycleStartEpoch === 'number' ? Math.floor(now / 86400) - Math.floor(account.cycleStartEpoch / 86400) : -1;
-      // A date entered here carries its mark; one from the config says the
-      // day it repeats on, unless the credit refilled today or yesterday.
-      const source = account.renewsSource === 'dashboard' ? [setMark(), 'entered here'] : startDay === 0 ? 'refilled today' : startDay === 1 ? 'refilled yesterday' : renews ? 'every ' + ordinal(Number(renews.slice(8, 10))) : null;
-      refill = [utcDay(account.renewsAtEpoch), secondary(source, source ? ' · ' : null, untilText(account.renewsAtEpoch, now))];
-    } else refill = [muted('Not set'), s.configRenewsInvalid ? secondary('the config’s is not a date') : null];
+    // A value entered here carries its mark; it is the only kind there is.
+    const credit = account.monthlyCreditSource === 'dashboard'
+      ? [h('span', {class: 'num'}, account.monthlyCreditText), secondary(setMark(), 'entered here')]
+      : [muted('Not set')];
+    const refill = typeof account.renewsAtEpoch === 'number'
+      ? [utcDay(account.renewsAtEpoch), secondary(setMark(), 'entered here · ', untilText(account.renewsAtEpoch, now))]
+      : [muted('Not set')];
     const reading = s.reading
       ? [h('span', {class: 'num'}, moneyText(s.reading.remainingUsd)), secondary(unusedText(s.readingUnusedReason || '', s.reading.atEpoch))]
       : [muted('None this cycle')];
@@ -1843,7 +1557,7 @@
     const editLabel = creditsEditLabel(accounts, counted);
     const head = h('div', {class: 'section-head'},
       h('h2', {id: 'api-credits-heading', tabindex: '-1'}, 'Claude API credits'),
-      credits.saved ? savedLine(credits.saved) : h('span', {class: 'hint'}, off && editor.reason !== IMPORT_RECORD_UNREADABLE ? 'Showing values from this plugin’s configuration' : doc ? creditsHint(doc) : state ? 'No organizations yet' : 'Waiting for Quota Cache’s first figures'),
+      credits.saved ? savedLine(credits.saved) : h('span', {class: 'hint'}, off ? 'Saved values cannot be read' : doc ? creditsHint(doc) : state ? 'No organizations yet' : 'Waiting for Quota Cache’s first figures'),
       canEdit ? h('div', {class: 'head-actions'}, editButton(editLabel, startCredits, editLabel === SET_CREDITS, editing(), 'qc-credits-edit')) : null);
     const alerts = off ? [h('div', {class: 'alert error', role: 'alert'}, off)] : [];
     const orphanLines = orphans.map(orphan => h('p', {class: 'orphan'}, 'Saved values for an organization no longer listed under Organizations: ', h('span', {class: 'num'}, orphan.id), canEdit ? ' · clear them under ' + editLabel : ''));
@@ -1853,7 +1567,7 @@
       settle(section, [head, ...alerts, h('div', {class: 'card'}, h('p', {class: 'empty'}, !state
         ? 'Quota Cache has not worked out its credit figures yet. They appear here shortly after it starts.'
         : unreadable
-          ? 'No Claude Console organizations are listed: Quota Cache cannot read its organizations file, and its configuration lists none. Organizations can be added above once it can read that file again.'
+          ? 'No Claude Console organizations are listed: Quota Cache cannot read its organizations file. Organizations can be added above once it can read that file again.'
           : 'No Claude Console organizations yet. Add one under Organizations above, then set its monthly credit and refill date here.'), orphanLines, heldLines)]);
       return;
     }
@@ -1870,22 +1584,21 @@
       h('tbody', null, accounts.map(account => {
         const cells = creditCells(account, now);
         return h('tr', null,
-          h('td', {class: 'account', title: account.organizationId || null}, creditName(account), secondary(account.organizationId ? shortOrganizationID(account.organizationId) : 'no Organization ID')),
+          h('td', {class: 'account', title: account.organizationId}, creditName(account), secondary(shortOrganizationID(account.organizationId))),
           cells.map(content => h('td', null, content)));
       })),
       total);
     const pricedOn = doc.pricing && /^\d{4}-\d{2}-\d{2}$/.test(doc.pricing.asOf) ? utcDay(dateEpoch(doc.pricing.asOf)) : doc.pricing ? doc.pricing.asOf : '';
     settle(section, [head, ...alerts, h('div', {class: 'card'}, h('div', {id: 'qc-credits-table', class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': 'Claude API credits by organization'}, table), orphanLines, heldLines,
-      h('div', {class: 'card-foot'}, h('p', null, (unreadable
-        ? 'You set monthly credits, refill dates and Console readings here. The organizations come from Quota Cache’s configuration until it can read its organizations file again. '
-        : 'You set monthly credits, refill dates and Console readings here, and organizations above. ') + (accounts.some(account => account.monthlyCreditSource === 'dashboard' || account.renewsSource === 'dashboard') ? '● marks a value entered here or imported from Quota Glance. ' : '') +
-        'Spend is metered from CPA traffic and priced at Anthropic’s list prices' + (pricedOn ? ' of ' + pricedOn : '') + '. Quota Glance shows these figures, and Reset Priority routes by them when its API-credit routing is on.')))]);
+      h('div', {class: 'card-foot'}, h('p', null, 'You set monthly credits, refill dates and Console readings here, and organizations above. ' +
+        (accounts.some(account => account.monthlyCreditSource === 'dashboard' || account.renewsSource === 'dashboard') ? '● marks a value entered here. ' : '') +
+        'Spend is metered from CPA traffic and priced at Anthropic’s list prices' + (pricedOn ? ' of ' + pricedOn : '') + '. Quota Glance 0.8.0 or newer shows these figures, and Reset Priority routes by them when its API-credit routing is on.')))]);
   }
   // One line per held value, with nothing to press: clearing one could delete
   // values an organization in the unreadable file still uses.
   function heldLinesOf(editor) {
-    return heldCreditsOf(editor).map(row => h('p', {class: 'orphan'}, 'Saved values for an organization Quota Cache’s configuration does not list: ', h('span', {class: 'num'}, row.id),
-      ' · kept, and used again once Quota Cache’s organizations file is fixed or a good copy put back'));
+    return heldCreditsOf(editor).map(row => h('p', {class: 'orphan'}, 'Saved values kept while Quota Cache cannot read its organizations file: ', h('span', {class: 'num'}, row.id),
+      ' · used again once the file is fixed or a good copy put back'));
   }
   function creditsPlanNow() {
     return creditPlan(accountsOf(creditDocument()), credits.draft, nowSeconds(), settingsOf, {maxItems: limits(editorInfo()).maxApiCreditItems, maxBytes: limits(editorInfo()).maxBytes});
@@ -1909,9 +1622,9 @@
       // Every row's fields share their visible labels, so each input is
       // named by its organization first, then its label.
       const named = part => idOf('name') + ' ' + idOf(part);
-      const head = h('div', {class: 'org-head'}, h('b', {id: idOf('name')}, name), secondary(account.organizationId || 'no Organization ID'));
+      const head = h('div', {class: 'org-head'}, h('b', {id: idOf('name')}, name), secondary(account.organizationId));
       if (credits.gone.has(account.id)) return h('div', {class: 'org-edit'}, head, h('p', {class: 'locked'}, 'Quota Cache no longer offers this organization for editing, so your change to it was dropped. Cancel, then select Refresh view to see why.'));
-      if (!settings.editable) return h('div', {class: 'org-edit'}, head, h('p', {class: 'locked'}, notEditableText(settings.notEditableReason, organizationsUnreadable())));
+      if (!settings.editable) return h('div', {class: 'org-edit'}, head, h('p', {class: 'locked'}, NOT_EDITABLE));
       const row = creditRow(settings, credits.draft.rows[account.id], now);
       const monthly = h('input', {id: idOf('monthly'), type: 'text', inputmode: 'decimal', value: row.monthlyUsd.text, placeholder: 'not set', disabled: busy, spellcheck: 'false', autocomplete: 'off', 'aria-labelledby': named('monthly-label'), 'aria-describedby': idOf('monthly-caps'),
         on: {input: event => { editCreditField(account, 'monthlyUsd', {kind: 'set', text: event.target.value}); updateCredits(); }}});
@@ -1986,10 +1699,9 @@
     const input = 'qc-credit-' + index + '-' + (key === 'monthlyUsd' ? 'monthly' : 'refill');
     const edit = next => { editCreditField(account, key, next); renderAll(); focusLater(input); };
     const undo = () => link('Undo', () => edit(undefined), {disabled: busy});
-    const useConfig = () => link('Use config', () => edit({kind: 'drop'}), {disabled: busy, 'aria-label': 'Use config: ' + (kind === 'money' ? 'monthly credit' : 'refill date') + ' for ' + creditName(account)});
+    const clear = () => link('Clear', () => edit({kind: 'drop'}), {disabled: busy, 'aria-label': 'Clear the ' + (kind === 'money' ? 'monthly credit' : 'refill date') + ' for ' + creditName(account)});
     const mark = markOf(account.id, key);
     const out = [];
-    const base = state.stored || state.config;
     if (state.error !== null) {
       out.push(h('span', {class: 'cap bad'}, state.ambiguous
         ? ['A comma is ambiguous. Did you mean ', link(state.ambiguous.decimal, () => edit({kind: 'set', text: state.ambiguous.decimal}), {class: 'link num', 'aria-label': 'Use ' + state.ambiguous.decimal}), ' or ',
@@ -1999,18 +1711,15 @@
     }
     if (mark) out.push(h('span', {class: 'cap ' + mark.tone}, mark.text));
     if (state.edit && state.edit.kind === 'drop') {
-      out.push(h('span', {class: 'cap'}, h('span', {class: 'dirty'}, state.config ? 'back to config' : 'cleared'), state.config ? [' ', h('b', {class: 'num'}, shown(state.config))] : null, sep(), undo()));
+      out.push(h('span', {class: 'cap'}, h('span', {class: 'dirty'}, 'cleared'), sep(), undo()));
     } else if (state.changed) {
-      out.push(h('span', {class: 'cap'}, h('span', {class: 'dirty'}, 'changed'), sep(), base ? ['was ', h('b', {class: 'num'}, shown(base))] : 'was not set', sep(), undo()));
-      // A value set here keeps its config note while it is being changed:
-      // the reader may want the config's back instead.
-      if (state.source === 'dashboard') out.push(h('span', {class: 'cap'}, state.config ? ['config ', h('b', {class: 'num'}, shown(state.config))] : 'not in config', sep(), useConfig()));
+      out.push(h('span', {class: 'cap'}, h('span', {class: 'dirty'}, 'changed'), sep(), state.stored ? ['was ', h('b', {class: 'num'}, shown(state.stored))] : 'was not set', sep(), undo()));
+      // A value set here can still be cleared while it is being changed.
+      if (state.source === 'dashboard') out.push(h('span', {class: 'cap'}, clear()));
     } else if (state.source === 'dashboard') {
-      out.push(h('span', {class: 'cap'}, setMark(), 'entered here', sep(), state.config ? ['config ', h('b', {class: 'num'}, shown(state.config))] : 'not in config', sep(), useConfig()));
-    } else if (state.source === 'config') {
-      out.push(h('span', {class: 'cap'}, 'from config', state.edit !== undefined ? [sep(), undo()] : null));
+      out.push(h('span', {class: 'cap'}, setMark(), 'entered here', sep(), clear()));
     } else {
-      out.push(h('span', {class: 'cap'}, 'not set', state.configInvalid ? [sep(), kind === 'money' ? 'the config’s is not a dollar amount' : 'the config’s is not a date'] : null));
+      out.push(h('span', {class: 'cap'}, 'not set'));
     }
     if (hint) out.push(hint);
     return out;
@@ -2047,7 +1756,7 @@
       const holder = root.querySelector('[data-account="' + CSS.escape(account.id) + '"]');
       if (!holder) return;
       const row = creditRow(settings, credits.draft.rows[account.id], now);
-      const refillValue = row.renews.error === null ? (row.renews.edit && row.renews.edit.kind === 'drop' ? row.renews.config : row.renews.desired || row.renews.text) : '';
+      const refillValue = row.renews.error === null ? row.renews.desired || row.renews.text : '';
       const cycle = refillValue ? cycleOn(refillValue, now) : null;
       const rule = refillValue ? refillRule(refillValue) : null;
       const hint = (credits.focused === account.id || row.renews.changed) && (cycle || rule)
@@ -2078,10 +1787,7 @@
     const foot = root.querySelector('.edit-foot');
     if (foot) { fillFoot(foot, credits, plan, blocked, session.note || null); return; }
     const slot = root.querySelector('.foot-slot');
-    const where = organizationsUnreadable()
-      ? 'Labels and Organization IDs come from Quota Cache’s configuration until it can read its organizations file again.'
-      : 'Labels and Organization IDs are edited under Organizations.';
-    if (slot) slot.replaceWith(editFoot(credits, 'A refill date repeats on that day every month, at 00:00 UTC. ' + where, plan, blocked, cancelCredits, session.note || null));
+    if (slot) slot.replaceWith(editFoot(credits, 'A refill date repeats on that day every month, at 00:00 UTC. Labels and Organization IDs are edited under Organizations.', plan, blocked, cancelCredits, session.note || null));
   }
   function updateCredits() {
     const section = $('api-credits');
@@ -2094,25 +1800,9 @@
     else if (hint) hint.textContent = plan.unsaved + ' unsaved';
     else if (head && plan.unsaved > 0) head.append(h('span', {class: 'hint'}, plan.unsaved + ' unsaved'));
   }
-  // A save while the page still follows Quota Glance's file asks first:
-  // saving here ends that. Save anyway answers for that one save, which
-  // runs again confirmed, so follow mode that comes back on this page, as
-  // after an import, asks again.
-  function following() {
-    const editor = editorInfo();
-    return editor !== null && followsQuotaGlance(editor.legacy);
-  }
-  // Focus moves to the question's first button, and the question names the
-  // group it is in, so a screen reader reads it out.
-  function askFollowing(target, go) {
-    target.confirm = {text: 'Saving here stops picking up changes made in Quota Glance older than 0.8.0. Save anyway?', label: 'Save anyway', go: () => { target.confirm = null; go(true); }};
-    renderAll();
-    focusFirst(target.key + '-keep-editing');
-  }
-  async function saveCredits(confirmed = false) {
+  async function saveCredits() {
     const plan = creditsPlanNow();
     if (plan.batch === null || credits.saving) return;
-    if (!confirmed && following()) { askFollowing(credits, saveCredits); return; }
     credits.saving = true;
     credits.status = null;
     credits.marks = {};
@@ -2125,7 +1815,7 @@
         setEditing(credits, false);
         credits.draft = emptyDraft();
         credits.overlay = {};
-        showSaved(credits, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(plan.changes, 'change', 'changes') + '. Quota Glance shows them from its next read of the cache.');
+        showSaved(credits, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(plan.changes, 'change', 'changes') + '. Quota Glance 0.8.0 or newer shows them from its next read of the cache.');
         page.reload();
         break;
       case 'conflict': {
@@ -2346,10 +2036,9 @@
     else if (hint) hint.textContent = plan.unsaved + ' unsaved';
     else if (head && plan.unsaved > 0) head.append(h('span', {class: 'hint'}, plan.unsaved + ' unsaved'));
   }
-  async function saveRenewals(confirmed = false) {
+  async function saveRenewals() {
     const plan = renewalsPlanNow();
     if (plan.batch === null || renewals.saving) return;
-    if (!confirmed && following()) { askFollowing(renewals, saveRenewals); return; }
     renewals.saving = true;
     renewals.status = null;
     renewals.marks = {};
@@ -2411,17 +2100,15 @@
   // Rendering and the page's hooks
 
   function renderAll() {
-    renderImport();
     renderOrganizations();
     renderCredits();
     renderRenewals();
   }
-  // The import note and every card at rest, for a timer, a dismissal or the
-  // same status drawn again, which change only what those show. A card being
+  // Every card at rest, for a timer, a dismissal or the same status drawn
+  // again, which change only what those show. A card being
   // edited is not rebuilt: its draft cannot hold a date typed halfway, which
   // a rebuild would clear, and the control the reader is on would lose focus.
   function renderAtRest() {
-    renderImport();
     if (!orgs.editing) renderOrganizations();
     if (!credits.editing) renderCredits();
     if (!renewals.editing) renderRenewals();

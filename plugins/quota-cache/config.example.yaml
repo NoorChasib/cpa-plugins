@@ -18,28 +18,21 @@ plugins:
       # Claude API credits: since 0.2.0, the Claude Console organizations are
       # added on Quota Cache's own page in CPA's sidebar, with their monthly
       # credits, refill dates and Console readings; Edit config does not
-      # offer them. A list here, as Quota Cache 0.1.13 and 0.1.14 read it,
-      # moves to that page once, the first time 0.2.0 starts, and is ignored
-      # after that. Only an older Quota Cache reads it, so before rolling
-      # back to one, make it match the page's Organizations list. Quota
-      # Cache counts each organization's Claude API-key traffic as CPA
-      # serves it (CPA v8.0.4 or newer) and asks Anthropic nothing; no key
-      # goes here.
+      # offer them. Quota Cache counts each organization's Claude API-key
+      # traffic as CPA serves it (CPA v8.0.4 or newer) and asks Anthropic
+      # nothing; no key goes here or there.
+      #
+      # claude-api-credits is where Quota Cache 0.1.13 and 0.1.14 listed the
+      # organizations. 0.2.0 accepts it and ignores it: nothing moves from it
+      # to the page, and CPA's log says once per load that it is ignored.
+      # Leaving it keeps a rollback simple, since 0.1.14 reads it; before
+      # rolling back, make it list the page's organizations:
       # claude-api-credits:
-      #   - label: sierra            # your name for it; unique
+      #   - label: personal-1               # your name for it; unique
       #     # The Organization ID from Console under Settings > Organization.
       #     organization-id: "12345678-1234-5678-1234-567812345678"
-      #     monthly-usd: "200"              # optional: the monthly credit, in dollars
-      #     # Optional: the day the next credit arrives, the date your claude.ai
-      #     # plan renews (Settings > Billing), as a UTC date. Console's expiry
-      #     # date for the current credit may be the day before; if so, use the
-      #     # claude.ai date. Only the day of the month is used. Both optional
-      #     # values move to the page as the organization's config values; a
-      #     # value set on Quota Cache's page overrides them, and Use config
-      #     # goes back to them.
-      #     renews: "2026-10-29"
-      #   - label: agency-team
-      #     organization-id: "00000000-0000-4000-8000-000000000002"
+      #     monthly-usd: "200"              # optional, read only by 0.1.14
+      #     renews: "2026-10-29"            # optional, read only by 0.1.14
     account-health-pushover:
       # Requires the updated consumer binary; old published releases do not use this option.
       quota-cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json

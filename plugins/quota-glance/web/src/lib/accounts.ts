@@ -147,18 +147,15 @@ export function renewalFoot(held: Pick<Credential, "renewalAtEpoch" | "renewalEs
 /**
  * Why the renewal dates entered on Quota Cache's page are not the ones shown,
  * in words, for the Accounts card's foot; null while they are. They live in
- * the same saved settings as the API credits, but unlike those have no
- * configured value to fall back on: while Quota Cache cannot use its saved
- * settings, each account shows its estimate instead. The API credit card says
- * the same in its own words (editingTrouble).
+ * the same saved settings as the API credits: while Quota Cache cannot read
+ * its saved settings, each account shows its estimate instead. The API credit
+ * card says the same in its own words (editingTrouble).
  */
 export function renewalTrouble(editing: Pick<APICreditEditing, "available" | "reason">): string | null {
   if (editing.available) return null
   switch (editing.reason) {
     case "settingsUnreadable":
       return "Quota Cache cannot read its saved settings, so renewal dates entered there do not apply and estimates are shown. See Quota Cache's page."
-    case "legacyUnreadable":
-      return "Quota Glance's settings.json could not be read, so Quota Cache imported no renewal dates and estimates are shown. Fix it or move it aside."
     default:
       return null
   }

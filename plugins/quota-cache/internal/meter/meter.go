@@ -153,9 +153,10 @@ type Meter struct {
 }
 
 // Open starts counting into the meter file at path, carrying on from the
-// file when there is one. linked names the organizations the configuration
-// links; now is the start time. It never fails: a file that cannot be read
-// is replaced at the first save, and one warning says so.
+// file when there is one. linked names the organizations listed on
+// quota-cache's page, from its organizations file; now is the start time. It
+// never fails: a file that cannot be read is replaced at the first save, and
+// one warning says so.
 func Open(path string, linked []string, now time.Time, log Logger) *Meter {
 	m := newMeter(path, log)
 	m.restore(linked, now)
@@ -392,12 +393,12 @@ func (m *Meter) Failed() bool {
 	return m.data.StopReason == client.MeterStopFailed
 }
 
-// SetLinked tells the meter which organizations the configuration links: the
-// distinct valid organization ids of the first MaxAPICreditItems items. A
-// listed organization not yet known starts counting now; one no longer
-// listed becomes dormant, keeping its buckets and still bucketed, so that
-// fixing a typo or moving an item loses nothing; a dormant one listed again
-// is linked with its history whole.
+// SetLinked tells the meter which organizations are listed on quota-cache's
+// page: the Organization IDs of its organizations file, each distinct and at
+// most MaxAPICreditItems. A listed organization not yet known starts counting
+// now; one no longer listed becomes dormant, keeping its buckets and still
+// bucketed, so that removing an organization and adding it again loses
+// nothing; a dormant one listed again is linked with its history whole.
 func (m *Meter) SetLinked(orgIDs []string, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

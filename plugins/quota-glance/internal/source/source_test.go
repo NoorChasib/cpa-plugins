@@ -211,8 +211,8 @@ func TestAnAbsentRingStaysAbsent(t *testing.T) {
 // creditsBody is a minimal credit state, computed at computed.
 func creditsBody(computed string) string {
 	return `{"schema":1,"quota_cache_version":"0.2.0","computed_at":"` + computed + `","valid_until":null,` +
-		`"inputs":{},"settings":{"state":"ok","editable":true,"revision":"","import":null},"api_credits":null,"renewals":{},` +
-		`"organizations":{"state":"missing","revision":"","source":"config","migration":null,"config_items_ignored":0}}`
+		`"inputs":{},"settings":{"state":"ok","editable":true,"revision":""},"api_credits":null,"renewals":{},` +
+		`"organizations":{"state":"missing","revision":"","config_items_ignored":0}}`
 }
 
 // The credit state is read from beside the snapshot on every read. A missing

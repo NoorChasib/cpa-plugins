@@ -77,9 +77,6 @@ type Input struct {
 	// CreditsUnreadable or CreditsAbandoned. The card then lists the
 	// snapshot's organizations without figures.
 	CreditsError string
-	// Migration is the card's editing.migration: "" or a Migration value,
-	// worked out by the caller from quota-glance's own settings.json.
-	Migration string
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on

@@ -60,8 +60,13 @@ const (
 	MeterStopShutdown = "shutdown" // CPA shut quota-cache down
 	MeterStopQuiesce  = "quiesce"  // CPA quiesced quota-cache, to replace or unload it
 	MeterStopDisabled = "disabled" // quota-cache was configured with enabled: false
-	MeterStopNoItems  = "no_items" // claude-api-credits was left with no items
-	MeterStopFailed   = "failed"   // the meter stopped itself after an internal error
+	// MeterStopNoItems is the stop of a running meter whose last organization
+	// was removed from quota-cache's page, or whose organizations file became
+	// unreadable. quota-cache 0.1.x wrote it when claude-api-credits was left
+	// with no items. A quota-cache that starts with no organization opens no
+	// meter, so the file keeps the reason its last run wrote.
+	MeterStopNoItems = "no_items"
+	MeterStopFailed  = "failed" // the meter stopped itself after an internal error
 	// MeterGapUncleanStop is the reason of a gap whose meter never said it
 	// stopped: the process ended without a final save. The gap runs from the
 	// last save.

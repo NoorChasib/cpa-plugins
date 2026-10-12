@@ -361,8 +361,8 @@ export type APICreditState = Open<
 
 /**
  * Where an account's monthly credit or refill date comes from: "dashboard" is
- * a value entered on Quota Cache's page (before it imported them, on Quota
- * Glance's own), "config" Quota Cache's configuration.
+ * a value entered on Quota Cache's page. "config" was Quota Cache's
+ * configuration; Quota Cache 0.2.0 never publishes it.
  */
 export type APICreditSource = Open<"dashboard" | "config" | "none">
 
@@ -409,20 +409,12 @@ export interface APICreditMeter {
 export interface APICreditEditing {
   available: boolean
   /**
-   * `quotaCache`: edited on Quota Cache's page. While Quota Cache cannot use
-   * its saved settings, its own reason instead: `settingsUnreadable` (its
-   * saved settings cannot be read) or `legacyUnreadable` (Quota Glance's
-   * settings.json could not be read, so nothing was imported). Either way
-   * only config values apply. `""` and `disabled` come only from a plugin
-   * older than 0.8.0.
+   * `quotaCache`: edited on Quota Cache's page. While Quota Cache cannot read
+   * its saved settings, its own reason instead, `settingsUnreadable`: nothing
+   * entered there applies. `""` and `disabled` come only from a plugin older
+   * than 0.8.0.
    */
-  reason: Open<"quotaCache" | "settingsUnreadable" | "legacyUnreadable" | "" | "disabled">
-  /**
-   * Whether the values saved in Quota Glance 0.7's own settings.json have
-   * reached Quota Cache: "" when there is nothing to say. Absent from a plugin
-   * older than 0.8.0.
-   */
-  migration?: Open<"" | "notImported" | "changedSinceImport" | "awaitingImport">
+  reason: Open<"quotaCache" | "settingsUnreadable" | "" | "disabled">
 }
 
 /** The soonest refill that restores anything to the pool. */
@@ -502,8 +494,8 @@ export interface StoredReading {
 }
 
 /**
- * The values entered on Quota Cache's page, and the config's beside them, so
- * a mark can say which one a figure comes from.
+ * The values entered on Quota Cache's page, and the configured ones beside
+ * them, which Quota Cache 0.2.0 leaves empty.
  */
 export interface APICreditSettings {
   /** Always false from 0.8.0: nothing is edited here. */
@@ -515,7 +507,6 @@ export interface APICreditSettings {
   notEditableReason: Open<
     | "quotaCache"
     | "settingsUnreadable"
-    | "legacyUnreadable"
     | "noOrganization"
     | "duplicateOrganization"
     | "overLimit"
@@ -614,7 +605,7 @@ export interface APICreditOrphan {
   updatedAtEpoch: number
 }
 
-/** The monthly Claude API credit across every configured Console organization. */
+/** The monthly Claude API credit across every Console organization Quota Cache lists. */
 export interface APICredits {
   title: string
   currency: string
@@ -623,7 +614,7 @@ export interface APICredits {
   meter: APICreditMeter | null
   editing: APICreditEditing
   pool: APICreditPool
-  /** Pre-sorted by configured order; do not re-sort. */
+  /** Pre-sorted in Quota Cache's order (order, then label, then id); do not re-sort. */
   accounts: APICreditAccount[]
   unlinked: APICreditUnlinked[]
   orphans: APICreditOrphan[]

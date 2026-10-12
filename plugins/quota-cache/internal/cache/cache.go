@@ -18,9 +18,9 @@ import (
 
 type Account struct {
 	Provider, AuthIndex string
-	// Credit is the configured monthly API credit of an anthropic-api
-	// account, and nil for every other provider. It is copied onto the entry
-	// at every scan, and an account whose Credit has a Problem is never
+	// Credit is the Claude Console organization of an anthropic-api account,
+	// as listed on quota-cache's page, and nil for every other provider. It
+	// is copied onto the entry at every scan, and an account with one is never
 	// fetched.
 	Credit *client.APICredit
 }
@@ -303,8 +303,8 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		if !exists {
 			entry = client.Entry{Provider: a.Provider, AuthIndex: a.AuthIndex}
 		}
-		// Configuration reaches the snapshot at the scan that sees it, so an
-		// item that is never polled still shows what was configured.
+		// The page's list reaches the snapshot at the scan that sees it, so an
+		// organization, which is never polled, still shows as listed.
 		if a.Credit != nil && adoptCredit(&entry, *a.Credit) {
 			changed = true
 		}
@@ -341,7 +341,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 		entry := c.data.Entries[key]
 		// A credit item is never fetched: what its organization spent comes
 		// from the meter, and Anthropic is asked nothing. Its entry carries
-		// the configuration, and says what is wrong with it.
+		// the organization as the page lists it.
 		if a.Credit != nil {
 			continue
 		}
@@ -463,10 +463,10 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	return nil
 }
 
-// adoptCredit stores the configured credit on an anthropic-api entry and
-// reports whether the entry changed. The entry is never polled, so whatever
-// a poll left on it, which only quota-cache 0.1.13 could have, is cleared:
-// its reading, its failures and its schedule.
+// adoptCredit stores the organization the page lists on an anthropic-api
+// entry and reports whether the entry changed. The entry is never polled, so
+// whatever a poll left on it, which only quota-cache 0.1.13 could have, is
+// cleared: its reading, its failures and its schedule.
 func adoptCredit(entry *client.Entry, credit client.APICredit) bool {
 	changed := entry.APICredit == nil || *entry.APICredit != credit
 	if entry.Quota != nil || entry.Failures != 0 || entry.LastError != "" || !entry.LastAttempt.IsZero() || !entry.NextAttempt.IsZero() {

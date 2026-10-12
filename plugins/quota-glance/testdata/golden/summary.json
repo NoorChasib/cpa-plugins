@@ -1434,8 +1434,7 @@
     },
     "editing": {
       "available": false,
-      "reason": "quotaCache",
-      "migration": ""
+      "reason": "quotaCache"
     },
     "pool": {
       "hasEstimate": true,
@@ -1481,7 +1480,7 @@
         "lowerBound": false,
         "monthlyCredit": 200,
         "monthlyCreditText": "$200.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 40,
         "spentText": "$40.00",
         "spentSinceEpoch": 1787961600,
@@ -1498,7 +1497,7 @@
         "cycleStartEpoch": 1787961600,
         "renewsAtEpoch": 1790640000,
         "renewsInSeconds": 1627200,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -1516,16 +1515,16 @@
         "settings": {
           "editable": false,
           "notEditableReason": "quotaCache",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "200",
+          "revision": "3",
+          "monthlyUsd": "200",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-09-29",
+          "renews": "2026-09-29",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -1557,7 +1556,7 @@
         "cycleStartEpoch": 1787184000,
         "renewsAtEpoch": 1789862400,
         "renewsInSeconds": 849600,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": {
           "remaining": 180,
           "remainingText": "$180.00",
@@ -1584,10 +1583,10 @@
           "notEditableReason": "quotaCache",
           "revision": "2",
           "monthlyUsd": "250",
-          "configMonthlyUsd": "100",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-09-20",
+          "renews": "2026-09-20",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": {
             "remainingUsd": "180.00",
@@ -1610,7 +1609,7 @@
         "lowerBound": false,
         "monthlyCredit": 100,
         "monthlyCreditText": "$100.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 68,
         "spentText": "$68.00",
         "spentSinceEpoch": 1786752000,
@@ -1627,7 +1626,7 @@
         "cycleStartEpoch": 1786752000,
         "renewsAtEpoch": 1789430400,
         "renewsInSeconds": 417600,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -1645,16 +1644,16 @@
         "settings": {
           "editable": false,
           "notEditableReason": "quotaCache",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "100",
+          "revision": "3",
+          "monthlyUsd": "100",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-09-15",
+          "renews": "2026-09-15",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -1669,7 +1668,7 @@
         "lowerBound": false,
         "monthlyCredit": 200,
         "monthlyCreditText": "$200.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 30,
         "spentText": "$30.00",
         "spentSinceEpoch": 1787616000,
@@ -1686,7 +1685,7 @@
         "cycleStartEpoch": 1787616000,
         "renewsAtEpoch": 1790294400,
         "renewsInSeconds": 1281600,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 12,
         "cacheWriteExtraText": "$12.00",
@@ -1704,16 +1703,16 @@
         "settings": {
           "editable": false,
           "notEditableReason": "quotaCache",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "200",
+          "revision": "3",
+          "monthlyUsd": "200",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-09-25",
+          "renews": "2026-09-25",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       },
       {
@@ -1728,7 +1727,7 @@
         "lowerBound": false,
         "monthlyCredit": 500,
         "monthlyCreditText": "$500.00",
-        "monthlyCreditSource": "config",
+        "monthlyCreditSource": "dashboard",
         "spent": 22.5,
         "spentText": "$22.50",
         "spentSinceEpoch": 1788998400,
@@ -1745,7 +1744,7 @@
         "cycleStartEpoch": 1788998400,
         "renewsAtEpoch": 1791590400,
         "renewsInSeconds": 2577600,
-        "renewsSource": "config",
+        "renewsSource": "dashboard",
         "reading": null,
         "cacheWriteExtra": 0,
         "cacheWriteExtraText": "",
@@ -1763,16 +1762,16 @@
         "settings": {
           "editable": false,
           "notEditableReason": "quotaCache",
-          "revision": "",
-          "monthlyUsd": "",
-          "configMonthlyUsd": "500",
+          "revision": "3",
+          "monthlyUsd": "500",
+          "configMonthlyUsd": "",
           "configMonthlyUsdInvalid": false,
-          "renews": "",
-          "configRenews": "2026-10-10",
+          "renews": "2026-10-10",
+          "configRenews": "",
           "configRenewsInvalid": false,
           "reading": null,
           "readingUnusedReason": "",
-          "updatedAtEpoch": null
+          "updatedAtEpoch": 1788220800
         }
       }
     ],

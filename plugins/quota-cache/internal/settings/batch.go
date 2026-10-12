@@ -10,12 +10,11 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 )
 
-// The kinds of request the save route takes: one batch per card, the import
-// of Quota Glance's settings, and the organizations card's batch.
+// The kinds of request the save route takes: one batch per card, and the
+// organizations card's batch.
 const (
 	KindAPICredits    = "apiCredits"
 	KindRenewals      = "renewals"
-	KindImportLegacy  = "importLegacy"
 	KindOrganizations = "organizations"
 )
 
@@ -55,21 +54,20 @@ type Batch struct {
 }
 
 // APICreditItem is one API credit row's full desired state. A nil value is
-// JSON null: not set here, Use config, or Clear.
+// JSON null: not set, or Clear.
 type APICreditItem struct {
 	ID           string
 	BaseRevision string
 	MonthlyUSD   *string
-	Renews       *string
-	Reading      *ReadingInput
+	// Renews is the refill date the row keeps, which is also the cycle a new
+	// reading is checked against: with none, nothing says when the credit
+	// last refilled.
+	Renews  *string
+	Reading *ReadingInput
 	// OrganizationID is the organization the published state gives the
-	// account, which a new reading stores. ConfigRenews is the configured
-	// refill date for it, "" when there is none, which decides the cycle a
-	// new reading is checked against when Renews is nil. The caller fills
-	// both from the publisher's last computed state; neither comes from the
-	// request.
+	// account, which a new reading stores. The caller fills it from the
+	// publisher's last computed state; it never comes from the request.
 	OrganizationID string
-	ConfigRenews   string
 }
 
 // ReadingInput is a Console reading as the page sends it.
@@ -305,11 +303,10 @@ func (b Batch) Check(stored Values, now time.Time) *FieldError {
 		if !ok || at.Before(now.Add(-readingMaxAge)) || at.After(now.Add(readingMaxAhead)) {
 			return fail(CodeReadingTime, "reading.at")
 		}
-		renews := item.ConfigRenews
-		if item.Renews != nil {
-			renews = *item.Renews
+		if item.Renews == nil {
+			continue
 		}
-		if cycle, err := client.CreditCycleAt(renews, now); err == nil && at.Before(cycle.Start) {
+		if cycle, err := client.CreditCycleAt(*item.Renews, now); err == nil && at.Before(cycle.Start) {
 			return fail(CodeReadingBeforeRefill, "reading.at")
 		}
 	}

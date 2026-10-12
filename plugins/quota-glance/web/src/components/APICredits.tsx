@@ -387,7 +387,7 @@ export function APICreditsCard({
       )}
 
       <div className="qg-hfig">
-        {/* A dash, never $0.00, when nothing is counted: "configured, nothing
+        {/* A dash, never $0.00, when nothing is counted: "listed, nothing
           * counted yet" and "spent to nothing" are opposite facts. */}
         {pool.hasEstimate ? (
           <span
@@ -465,7 +465,7 @@ export function APICreditsCard({
               <span>Used this cycle (est.)</span>
               <span>Credit refills</span>
             </div>
-            {/* Pre-sorted by configured order; not re-sorted here. */}
+            {/* Pre-sorted in Quota Cache's order; not re-sorted here. */}
             {accounts.map((account) => (
               <CreditRow
                 key={account.id}

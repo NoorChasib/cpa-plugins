@@ -47,7 +47,7 @@ func TestPickDeclinesInOrder(t *testing.T) {
 		{func(in *Input) { in.Meter.StoppedAt = ptr(in.Now) }, ReasonMeterStopped},
 		{func(in *Input) { in.Meter.FlushedAt = in.Now.Add(-time.Hour) }, ReasonMeterStale},
 		{func(in *Input) { in.Credits.APICredits = nil }, ReasonNoAPICredits},
-		{func(in *Input) { in.Credits = credits(in.Now, account("item-1", "", 0, nil)) }, ReasonNoLinkedOrgs},
+		{func(in *Input) { in.Credits = credits(in.Now, account("org-000000000001", "", 0, nil)) }, ReasonNoLinkedOrgs},
 	} {
 		f := worked(t)
 		in := f.input()

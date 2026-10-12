@@ -26,8 +26,8 @@
 // dates, are Quota Cache's: it keeps them, edits them on its own page, works
 // out each organization's credit, and publishes the result beside its
 // snapshot. This plugin shows that read-only and writes none of it. The
-// settings.json that quota-glance 0.7 and older saved them to in data-dir is
-// only read, to say whether Quota Cache has imported it.
+// settings.json that quota-glance 0.7 and older saved them to stays in
+// data-dir, unread.
 package plugin
 
 import (
@@ -455,10 +455,6 @@ func (p *Plugin) Rebuild() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result := source.Read(ctx, hostSource{p.host}, settings.cachePath)
-	// quota-glance's own settings.json, read and never written: whether Quota
-	// Cache has imported it is the card's migration note.
-	legacy := source.ReadLegacySettings(settings.dataDir)
-	migration := source.Migration(legacy, result.Credits, result.CreditsError, settings.cachePath)
 	in := aggregate.Input{
 		Snapshot:     result.Snapshot,
 		SourceReason: result.Reason,
@@ -471,7 +467,6 @@ func (p *Plugin) Rebuild() {
 		BalanceWarnBelow: settings.warnBelow,
 		Credits:          result.Credits,
 		CreditsError:     result.CreditsError,
-		Migration:        migration,
 	}
 
 	p.stateMu.Lock()
@@ -531,7 +526,6 @@ func (p *Plugin) Rebuild() {
 		SnapshotNextRequest: p.nextReq,
 		BuiltAt:             p.builtAt,
 		LastError:           p.lastError,
-		Settings:            legacyHealthOf(legacy, migration),
 		Meter:               meterHealthOf(settings.cachePath, result),
 		CreditState:         creditStateHealthOf(settings.cachePath, result),
 	}
@@ -545,18 +539,6 @@ func (p *Plugin) Rebuild() {
 		}
 	}
 	served.Publish(doc, health)
-}
-
-// legacyHealthOf is quota-glance's own settings.json as /health reports it.
-func legacyHealthOf(legacy source.LegacySettings, migration string) api.LegacySettingsHealth {
-	health := api.LegacySettingsHealth{Path: legacy.Path, Present: legacy.Present, Revision: legacy.Revision, Migration: migration}
-	if len(legacy.SHA256) >= 12 {
-		health.SHA256Prefix = legacy.SHA256[:12]
-	}
-	if legacy.Unreadable {
-		health.LastError = "unreadable"
-	}
-	return health
 }
 
 // meterHealthOf is quota-cache's meter as its published state describes it:
@@ -599,9 +581,6 @@ func creditStateHealthOf(cachePath string, result source.Result) api.CreditState
 		health.ValidUntil = &until
 	}
 	health.SettingsState, health.QuotaCacheVersion = state.Settings.State, state.QuotaCacheVersion
-	if state.Settings.Import != nil {
-		health.ImportState = state.Settings.Import.State
-	}
 	return health
 }
 

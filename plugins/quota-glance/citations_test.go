@@ -19,7 +19,7 @@ import (
 // pattern scripts/tests/test_citations.py checks the whole repository with;
 // keep the two the same, so this module's own gate fails where that one would.
 var uncommittedCitation = regexp.MustCompile(`\x{00A7}|api-credits-[a-z0-9-]*\.md|` +
-	`\b(?:QC-[A-Z]?|RP-?|G-T)[0-9]+\b|\bQC-[a-z]\b|\b[A-N]\.[0-9]+\b|\bboard [A-Z][0-9]+\b|\(L[0-9]+\)`)
+	`\b(?:QC-[A-Z]?|RP-?|G-T)[0-9]+\b|\bQC-[a-z]\b|\b[A-P]\.[0-9]+\b|\bboard [A-Z][0-9]+\b|\(L[0-9]+\)`)
 
 // rfcSection is a section of an RFC, which anyone can look up.
 var rfcSection = regexp.MustCompile(`RFC [0-9]+ \x{00A7}[0-9.]+`)
@@ -27,7 +27,7 @@ var rfcSection = regexp.MustCompile(`RFC [0-9]+ \x{00A7}[0-9.]+`)
 // notesParts are the lettered parts the notes had when the section pattern was
 // last widened. Each amendment to them adds a part, headed by its capital
 // letter and a dot.
-const notesParts = "ABCDEFGHIJKLMN"
+const notesParts = "ABCDEFGHIJKLMNOP"
 
 var partHeading = regexp.MustCompile(`(?m)^#+ ([A-Z])\. `)
 

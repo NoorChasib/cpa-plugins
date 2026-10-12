@@ -283,38 +283,29 @@
     const observed = date(e.quota && e.quota.observed_at);
     return noWeekly.includes(e.provider) && observed > 0 && observed <= now && now - observed <= 30 * 60000 && !e.last_error;
   }
-  // The configuration problem of a Claude API credit item, if any. Such an
-  // item is listed but not counted, and has no next poll: no credit item is
-  // ever polled.
-  const notPolled = e => (e.api_credit && e.api_credit.problem) || '';
   // The meter is alive when it saved within the last 30 minutes; it saves at
   // least every 10 while it counts.
   function meterFresh(s, now) {
     const flushed = date(s.api_meter && s.api_meter.flushed_at);
     return flushed > 0 && flushed <= now && now - flushed <= 30 * 60000;
   }
-  const metered = (e, s, now) => e.provider === 'anthropic-api' && !notPolled(e) && meterFresh(s, now);
+  const metered = (e, s, now) => e.provider === 'anthropic-api' && meterFresh(s, now);
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
   }
   const utcDay = value => date(value) ? new Date(date(value)).toISOString().slice(0, 10) : '';
-  // A Claude API credit entry prints what was configured and what the meter
-  // counted for its organization, verbatim. Tokens are printed as counted;
-  // nothing is priced or added up here, which is Quota Glance's job.
+  // A Claude API credit entry prints its organization and what the meter
+  // counted for it, verbatim. Tokens are printed as counted; nothing is priced
+  // or added up here: the priced figures are the credit state's, shown on the
+  // Claude API credits card with the monthly credit and refill date.
   function creditDetails(entry, now, s) {
     const c = entry.api_credit || {};
     const details = node('details');
     details.className = 'quota-details';
-    details.append(node('summary', 'Configured credit and metered usage'));
+    details.append(node('summary', 'Organization and metered usage'));
     const stamp = (label, value) => { const p = node('p', label); p.append(time(value, now)); return p; };
     details.append(node('p', 'Label: ' + (c.label || 'not set')));
     details.append(node('p', 'Organization: ' + (c.organization_id || 'not set')));
-    details.append(node('p', 'Monthly credit: ' + (c.monthly_usd ? c.monthly_usd + ' USD' : 'not set') + ' (configured)'));
-    details.append(node('p', 'Renews: ' + (c.renews || 'not set') + ' (configured)'));
-    if (c.monthly_usd_invalid) details.append(node('p', 'monthly-usd in the configuration is not a dollar amount, so it is ignored.', 'secondary'));
-    if (c.renews_invalid) details.append(node('p', 'renews in the configuration is not a date, so it is ignored.', 'secondary'));
-    if (c.admin_key_ignored) details.append(node('p', 'admin-key is no longer used; delete it from the configuration.', 'secondary'));
-    if (c.problem) details.append(node('p', 'Configuration problem: ' + c.problem + '. This item is not counted.', 'secondary'));
     const m = s.api_meter;
     const o = m && object(m.organizations) && c.organization_id ? m.organizations[c.organization_id] : null;
     if (!object(o)) { details.append(node('p', m ? 'Not counted by the meter yet; counting starts at its next save.' : 'No meter file yet; it appears once the meter first saves.', 'secondary')); return details; }
@@ -474,16 +465,14 @@
       quotaCell.append(extendedQuota(e, now, s));
       addCell(row, time(e.observed_at, now));
       addCell(row, time(e.last_attempt, now));
-      const problem = notPolled(e);
       const credit = e.provider === 'anthropic-api';
-      addCell(row, problem ? node('span', 'Not polled', 'secondary') : credit ? '—' : time(new Date(next(e,s,now)).toISOString(), now));
+      addCell(row, credit ? '—' : time(new Date(next(e,s,now)).toISOString(), now));
       const cooling = date((s.provider_cooldown || {})[e.provider]) > now;
       // A credit item is metered, not polled: its freshness is the meter's
-      // last save, and a problem item is listed with its problem.
-      const label = problem ? 'Not polled' : credit ? 'Metered' : cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (noWeekly.includes(e.provider) && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
-      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' || (label === 'Metered' && meterFresh(s, now)) ? 'ok' : label === 'Failed' || label === 'Not polled' ? 'error' : 'warn')));
-      if (problem) status.append(node('span', problem, 'secondary'));
-      else if (label === 'Metered' && !meterFresh(s, now)) status.append(node('span', 'meter not saved within 30 minutes', 'secondary'));
+      // last save.
+      const label = credit ? 'Metered' : cooling ? 'Cooldown' : e.last_error === 'refresh pending' ? 'Polling' : e.last_error ? 'Failed' : fresh(e,now) || freshBalance(e,now) ? 'Fresh' : known || (noWeekly.includes(e.provider) && e.quota) ? 'Stale' : e.quota ? 'Extended only' : 'Queued';
+      const status = addCell(row, node('span', label, 'pill ' + (label === 'Fresh' || (label === 'Metered' && meterFresh(s, now)) ? 'ok' : label === 'Failed' ? 'error' : 'warn')));
+      if (label === 'Metered' && !meterFresh(s, now)) status.append(node('span', 'meter not saved within 30 minutes', 'secondary'));
       else if (e.last_error) status.append(node('span', e.last_error, 'secondary'));
       $('accounts').append(row);
     }

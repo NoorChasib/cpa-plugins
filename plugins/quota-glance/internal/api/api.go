@@ -55,33 +55,18 @@ type WatcherState struct {
 
 // Health is what the management health route reports.
 type Health struct {
-	Version             string               `json:"version"`
-	CachePath           string               `json:"cache_path"`
-	StaleAfter          string               `json:"stale_after"`
-	SnapshotWrittenAt   time.Time            `json:"snapshot_written_at"`
-	SnapshotNextRequest time.Time            `json:"snapshot_next_request"`
-	BuiltAt             time.Time            `json:"built_at"`
-	Stale               bool                 `json:"stale"`
-	StaleReason         string               `json:"stale_reason,omitempty"`
-	LastError           string               `json:"last_error,omitempty"`
-	Watcher             WatcherState         `json:"watcher"`
-	Settings            LegacySettingsHealth `json:"settings"`
-	Meter               MeterHealth          `json:"meter"`
-	CreditState         CreditStateHealth    `json:"credit_state"`
-}
-
-// LegacySettingsHealth is quota-glance's own settings.json, from before Quota
-// Cache kept these values, as the last rebuild found it. quota-glance only
-// reads it. LastError is "" or "unreadable"; SHA256Prefix is the first 12 hex
-// digits of its digest, "" when it could not be read; Migration is the API
-// credit card's editing.migration.
-type LegacySettingsHealth struct {
-	Path         string `json:"path"`
-	Present      bool   `json:"present"`
-	Revision     uint64 `json:"revision"`
-	SHA256Prefix string `json:"sha256_prefix"`
-	LastError    string `json:"last_error"`
-	Migration    string `json:"migration"`
+	Version             string            `json:"version"`
+	CachePath           string            `json:"cache_path"`
+	StaleAfter          string            `json:"stale_after"`
+	SnapshotWrittenAt   time.Time         `json:"snapshot_written_at"`
+	SnapshotNextRequest time.Time         `json:"snapshot_next_request"`
+	BuiltAt             time.Time         `json:"built_at"`
+	Stale               bool              `json:"stale"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
+	LastError           string            `json:"last_error,omitempty"`
+	Watcher             WatcherState      `json:"watcher"`
+	Meter               MeterHealth       `json:"meter"`
+	CreditState         CreditStateHealth `json:"credit_state"`
 }
 
 // MeterHealth is quota-cache's API meter as its published credit state
@@ -102,7 +87,6 @@ type CreditStateHealth struct {
 	ComputedAt        *time.Time `json:"computed_at"`
 	ValidUntil        *time.Time `json:"valid_until"`
 	SettingsState     string     `json:"settings_state"`
-	ImportState       string     `json:"import_state"`
 	QuotaCacheVersion string     `json:"quota_cache_version"`
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,14 +20,12 @@ import (
 // The organizations file: the Claude Console organizations quota-cache counts
 // the API credit of, each a label and an Organization ID, edited on its page.
 // It sits beside the snapshot (client.OrganizationsPath), apart from the
-// settings file, which must stay byte-compatible with Quota Glance's.
-//
-// The organizations in claude-api-credits move into it once, automatically
-// (Migrate). From then on the file is the list, and its existence is the
-// marker: deleting it brings the configuration's list back at the next tick.
+// settings file, which must stay byte-compatible with Quota Glance's. It is
+// the only list: quota-cache writes it only for a save on its page, and never
+// reads claude-api-credits into it.
 //
 // Like the settings file, it loads all or nothing. A file that fails a load
-// rule is never overwritten: the configuration's list applies, editing is
+// rule is never overwritten: no organization is listed, editing is
 // unavailable, and the page says why, until the operator moves it aside.
 
 const (
@@ -74,17 +73,14 @@ type Organizations struct {
 	// and nothing may be saved until it is moved aside).
 	State string
 	// Revision goes up with each committed batch. A file written where there
-	// was none, by the move or the first add, starts past every revision an
-	// earlier file could have had (firstRevision), and a batch after an older
-	// copy was put back goes past the highest its store has seen, so a page
-	// that read a file since deleted or replaced conflicts with the new one.
+	// was none, by the first add, starts past every revision an earlier file
+	// could have had (firstRevision), and a batch after an older copy was put
+	// back goes past the highest its store has seen, so a page that read a
+	// file since deleted or replaced conflicts with the new one.
 	// Each entry's Rev is the revision that last wrote it. 0 without a file.
 	Revision uint64
 	// Items are the organizations in display order, never nil.
 	Items []Organization
-	// Migration is the move from claude-api-credits that made the file, nil
-	// when the page made it.
-	Migration *client.OrganizationsMigration
 }
 
 // Organization is one Claude Console organization.
@@ -95,30 +91,19 @@ type Organization struct {
 	// OrganizationID is as client.NormalizeOrganizationID returns it, and
 	// unique. It never changes: a different ID is a different organization.
 	OrganizationID string
-	// DefaultMonthlyUSD and DefaultRenews are the monthly-usd and renews of
-	// the claude-api-credits item it moved from, "" when that had none or an
-	// invalid one. The credit math treats them as the configured values, so a
-	// value saved on the page wins and Use config returns to them. The page
-	// cannot set them; they go only with the organization.
-	DefaultMonthlyUSD string
-	DefaultRenews     string
-	Rev               uint64
-	UpdatedAt         time.Time
+	Rev            uint64
+	UpdatedAt      time.Time
 }
 
 // ID is the organization's account id, client.APICreditOrgAccount.
 func (o Organization) ID() string { return client.APICreditOrgAccount(o.OrganizationID) }
 
-// APICredits are the organizations as claude-api-credits items with no
-// problem: the label, the organization, the defaults as the configured values,
-// and the position in the list.
+// APICredits are the organizations as the snapshot's anthropic-api entries
+// carry them: the label, the organization and the position in the list.
 func (o Organizations) APICredits() []client.APICredit {
 	out := make([]client.APICredit, 0, len(o.Items))
 	for i, item := range o.Items {
-		out = append(out, client.APICredit{
-			Label: item.Label, Position: i, MonthlyUSD: item.DefaultMonthlyUSD, Renews: item.DefaultRenews,
-			OrganizationID: item.OrganizationID,
-		})
+		out = append(out, client.APICredit{Label: item.Label, Position: i, OrganizationID: item.OrganizationID})
 	}
 	return out
 }
@@ -128,7 +113,6 @@ func (o Organizations) clone() Organizations {
 	if o.Items == nil {
 		o.Items = []Organization{}
 	}
-	o.Migration = copyOf(o.Migration)
 	return o
 }
 
@@ -145,34 +129,24 @@ func ValidOrganizationLabel(label string) bool {
 // The file as JSON. Every key is a pointer so that a present key is told from
 // an absent one, which the load rules care about.
 type organizationsDoc struct {
-	Schema        *int                 `json:"schema"`
-	Revision      *string              `json:"revision"`
-	Organizations []organizationDoc    `json:"organizations"`
-	Migration     *organizationMoveDoc `json:"migration"`
+	Schema        *int              `json:"schema"`
+	Revision      *string           `json:"revision"`
+	Organizations []organizationDoc `json:"organizations"`
 }
 
 type organizationDoc struct {
-	Label             *string `json:"label"`
-	OrganizationID    *string `json:"organization_id"`
-	DefaultMonthlyUSD *string `json:"default_monthly_usd,omitempty"`
-	DefaultRenews     *string `json:"default_renews,omitempty"`
-	Rev               *string `json:"rev"`
-	UpdatedAt         *string `json:"updated_at"`
-}
-
-type organizationMoveDoc struct {
-	At      *string `json:"at"`
-	Moved   *int    `json:"moved"`
-	Skipped *int    `json:"skipped"`
+	Label          *string `json:"label"`
+	OrganizationID *string `json:"organization_id"`
+	Rev            *string `json:"rev"`
+	UpdatedAt      *string `json:"updated_at"`
 }
 
 // decodeOrganizations reads the organizations file and applies its load
 // rules, all or nothing: at most MaxOrganizationsBytes, no unknown key, no
 // trailing data, schema 1, a revision and a list, at most MaxOrganizations
 // entries, each with a valid label unique ignoring case, an Organization ID
-// in its normalized form and unique, a rev in [1, revision], an updated_at in
-// the one instant form, and defaults that are valid when present; and a
-// migration that is null or fully set.
+// in its normalized form and unique, a rev in [1, revision], and an
+// updated_at in the one instant form.
 func decodeOrganizations(raw []byte) (Organizations, error) {
 	if len(raw) > MaxOrganizationsBytes {
 		return Organizations{}, errShape
@@ -197,53 +171,23 @@ func decodeOrganizations(raw []byte) (Organizations, error) {
 			return Organizations{}, errShape
 		}
 		item := Organization{Label: *entry.Label, OrganizationID: *entry.OrganizationID, Rev: rev, UpdatedAt: updated}
-		if entry.DefaultMonthlyUSD != nil {
-			if *entry.DefaultMonthlyUSD == "" {
-				return Organizations{}, errShape
-			}
-			item.DefaultMonthlyUSD = *entry.DefaultMonthlyUSD
-		}
-		if entry.DefaultRenews != nil {
-			if *entry.DefaultRenews == "" {
-				return Organizations{}, errShape
-			}
-			item.DefaultRenews = *entry.DefaultRenews
-		}
 		if !fits(item, o.Items) {
 			return Organizations{}, errShape
 		}
 		o.Items = append(o.Items, item)
 	}
-	if m := doc.Migration; m != nil {
-		if m.At == nil || m.Moved == nil || m.Skipped == nil || *m.Moved < 0 || *m.Skipped < 0 {
-			return Organizations{}, errShape
-		}
-		at, ok := parseStamp(*m.At)
-		if !ok {
-			return Organizations{}, errShape
-		}
-		o.Migration = &client.OrganizationsMigration{At: at, Moved: *m.Moved, Skipped: *m.Skipped}
-	}
 	return o, nil
 }
 
 // fits reports whether item may join list: a valid label no entry has,
-// ignoring case; a normalized Organization ID no entry has; valid defaults;
-// and room under MaxOrganizations.
+// ignoring case; a normalized Organization ID no entry has; and room under
+// MaxOrganizations.
 func fits(item Organization, list []Organization) bool {
 	if len(list) >= MaxOrganizations || !ValidOrganizationLabel(item.Label) {
 		return false
 	}
 	if org, ok := client.NormalizeOrganizationID(item.OrganizationID); !ok || org != item.OrganizationID {
 		return false
-	}
-	if item.DefaultMonthlyUSD != "" && !client.ValidMonthlyUSD(item.DefaultMonthlyUSD) {
-		return false
-	}
-	if item.DefaultRenews != "" {
-		if _, err := client.ParseRenewal(item.DefaultRenews); err != nil {
-			return false
-		}
 	}
 	return labelAt(list, item.Label, -1) < 0 && organizationAt(list, item.OrganizationID) < 0
 }
@@ -277,6 +221,10 @@ func idAt(list []Organization, id string) int {
 	return -1
 }
 
+// revisionDigit is a revision as the organizations file writes it: decimal,
+// with no leading zero.
+var revisionDigit = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
+
 func parseRevision(s string) (uint64, bool) {
 	if !revisionDigit.MatchString(s) {
 		return 0, false
@@ -289,22 +237,9 @@ func parseRevision(s string) (uint64, bool) {
 func encodeOrganizations(o Organizations) ([]byte, error) {
 	schema, revision := organizationsSchema, strconv.FormatUint(o.Revision, 10)
 	doc := organizationsDoc{Schema: &schema, Revision: &revision, Organizations: make([]organizationDoc, 0, len(o.Items))}
-	text := func(s string) *string {
-		if s == "" {
-			return nil
-		}
-		return &s
-	}
 	for _, item := range o.Items {
 		label, org, rev, updated := item.Label, item.OrganizationID, strconv.FormatUint(item.Rev, 10), stampOf(item.UpdatedAt)
-		doc.Organizations = append(doc.Organizations, organizationDoc{
-			Label: &label, OrganizationID: &org, DefaultMonthlyUSD: text(item.DefaultMonthlyUSD), DefaultRenews: text(item.DefaultRenews),
-			Rev: &rev, UpdatedAt: &updated,
-		})
-	}
-	if m := o.Migration; m != nil {
-		at, moved, skipped := stampOf(m.At), m.Moved, m.Skipped
-		doc.Migration = &organizationMoveDoc{At: &at, Moved: &moved, Skipped: &skipped}
+		doc.Organizations = append(doc.Organizations, organizationDoc{Label: &label, OrganizationID: &org, Rev: &rev, UpdatedAt: &updated})
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -349,6 +284,10 @@ type OrganizationStore struct {
 	// the file holds, as settingsFile's is: the next Sync or Apply reads the
 	// file again whether or not its stamp changed.
 	retry bool
+	// unreported is set when Apply read the file again and what it gives may
+	// have changed, so the next Sync reports it: the stamp no longer says the
+	// file changed, and the caller's item list has not followed it yet.
+	unreported bool
 	// seen is the highest revision this store has read or written, kept
 	// across a delete and across a file put back with a lower revision, which
 	// nextRevision starts past.
@@ -395,6 +334,14 @@ func (s *OrganizationStore) changed() bool {
 	return s.retry || !stampOfFile(s.path).same(s.stamp)
 }
 
+// reload reads the file again and reports whether what it gives may have
+// changed: the file changed on disk, or a read settled. The caller holds s.mu.
+func (s *OrganizationStore) reload() bool {
+	moved := !stampOfFile(s.path).same(s.stamp)
+	s.load()
+	return moved || !s.retry
+}
+
 // firstRevision is the revision of a file written where there is none, past
 // every revision this store has seen (the package's firstRevision).
 func (s *OrganizationStore) firstRevision(now time.Time) uint64 {
@@ -419,8 +366,8 @@ func (s *OrganizationStore) Path() string { return s.path }
 // Current is the committed organizations, as a copy.
 func (s *OrganizationStore) Current() Organizations { return s.current.Load().clone() }
 
-// Close stops every later write: Apply and Migrate return ErrClosed and Sync
-// does nothing. It waits for a save in flight to finish first.
+// Close stops every later write: Apply returns ErrClosed and Sync does
+// nothing. It waits for a save in flight to finish first.
 func (s *OrganizationStore) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -428,77 +375,25 @@ func (s *OrganizationStore) Close() {
 }
 
 // Sync reads the file again when it changed on disk or is gone, once per
-// publisher tick: moving an unreadable file aside, or deleting the file to
-// start over from the configuration, needs no configure. One that could not
-// be opened or read is read again at every tick until a read settles, so
-// fixing its owner or permissions is enough. It reports whether what the file
-// gives may have changed: a read again of a changed file, or one that settled.
+// publisher tick: moving an unreadable file aside, or putting a good copy
+// back, needs no configure. One that could not be opened or read is read
+// again at every tick until a read settles, so fixing its owner or
+// permissions is enough. It reports whether what the file gives may have
+// changed since the last Sync: a read again of a changed file, one that
+// settled, or a read again Apply made before judging a batch, whatever the
+// batch came to.
 func (s *OrganizationStore) Sync() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || !s.changed() {
+	if s.closed {
 		return false
 	}
-	moved := !stampOfFile(s.path).same(s.stamp)
-	s.load()
-	return moved || !s.retry
-}
-
-// MigrationResult is what Migrate did.
-type MigrationResult struct {
-	// Written is set when the file was written.
-	Written bool
-	// Moved counts the items written, and Skipped those left out because the
-	// configuration had a problem with them.
-	Moved, Skipped int
-}
-
-// Migrate moves claude-api-credits into the file, once: only while there is
-// no file (Lstat finds none) and items, the configured items in their order,
-// holds at least one. Every item with no problem is written, with its valid
-// monthly-usd and renews as its defaults; an item with a problem, which a
-// validated file cannot hold, is skipped and counted. With nothing to move,
-// nothing is written, and the items keep coming from the configuration.
-func (s *OrganizationStore) Migrate(items []client.APICredit, now time.Time) (MigrationResult, error) {
-	now = now.UTC().Truncate(time.Second)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return MigrationResult{}, ErrClosed
+	changed := s.unreported
+	s.unreported = false
+	if s.changed() && s.reload() {
+		changed = true
 	}
-	if len(items) == 0 || stampOfFile(s.path).exists {
-		return MigrationResult{}, nil
-	}
-	list := []Organization{}
-	skipped := 0
-	for _, credit := range items {
-		item := Organization{
-			Label: credit.Label, OrganizationID: credit.OrganizationID,
-			DefaultMonthlyUSD: credit.MonthlyUSD, DefaultRenews: credit.Renews, UpdatedAt: now,
-		}
-		if credit.Problem != "" || !fits(item, list) {
-			skipped++
-			continue
-		}
-		list = append(list, item)
-	}
-	result := MigrationResult{Moved: len(list), Skipped: skipped}
-	if len(list) == 0 {
-		return result, nil
-	}
-	revision := s.firstRevision(now)
-	for i := range list {
-		list[i].Rev = revision
-	}
-	next := Organizations{
-		State: client.OrganizationsStateOK, Revision: revision, Items: list,
-		Migration: &client.OrganizationsMigration{At: now, Moved: len(list), Skipped: skipped},
-	}
-	if err := s.commit(next); err != nil {
-		return MigrationResult{}, err
-	}
-	result.Written = true
-	return result, nil
+	return changed
 }
 
 // commit writes next over the file, after its load rules accept the bytes,
@@ -641,12 +536,14 @@ type OrganizationsResult struct {
 // *OpError for the first op the rules refuse, ErrTooManyWrites, or
 // ErrUnwritable leaves the file and the list exactly as they were. An add
 // appends with rev the new revision; a rename changes the label only; a
-// remove deletes the entry and its defaults. The values saved for a removed
+// remove deletes the entry. The values saved for a removed
 // organization stay in the settings file, and adding the same Organization ID
 // back brings them back.
 //
 // The lock is released when Apply returns. The caller rebuilds its item list
-// and publishes after that, never during.
+// and publishes after that, never during: after a batch it saved, and when
+// the next Sync reports that Apply read the file again, whatever the batch
+// came to.
 func (s *OrganizationStore) Apply(b OrganizationsBatch, now time.Time) (OrganizationsResult, error) {
 	now = now.UTC().Truncate(time.Second)
 	s.mu.Lock()
@@ -656,10 +553,11 @@ func (s *OrganizationStore) Apply(b OrganizationsBatch, now time.Time) (Organiza
 	}
 	// A file changed on disk since the last read or write is read again
 	// first, as Sync would at the next tick, so a batch is judged against
-	// what is there now: one deleted to start over conflicts, and one that
+	// what is there now: one deleted or replaced conflicts, and one that
 	// fails its rules is unavailable, instead of either being written over.
-	if s.changed() {
-		s.load()
+	// The next Sync reports the read, so the caller's item list follows it.
+	if s.changed() && s.reload() {
+		s.unreported = true
 	}
 	current := s.current.Load()
 	if current.State == client.OrganizationsStateUnreadable {
@@ -679,7 +577,7 @@ func (s *OrganizationStore) Apply(b OrganizationsBatch, now time.Time) (Organiza
 	if !s.writes.allows(now) {
 		return OrganizationsResult{}, ErrTooManyWrites
 	}
-	next := Organizations{State: client.OrganizationsStateOK, Revision: revision, Items: list, Migration: copyOf(current.Migration)}
+	next := Organizations{State: client.OrganizationsStateOK, Revision: revision, Items: list}
 	if err := s.commit(next); err != nil {
 		return OrganizationsResult{}, err
 	}
@@ -744,10 +642,9 @@ func (b OrganizationsBatch) apply(list []Organization, revision uint64, now time
 }
 
 // sameOrganizations reports whether a and b list the same organizations, with
-// the same labels and defaults, in the same order.
+// the same labels, in the same order.
 func sameOrganizations(a, b []Organization) bool {
 	return slices.EqualFunc(a, b, func(x, y Organization) bool {
-		return x.Label == y.Label && x.OrganizationID == y.OrganizationID &&
-			x.DefaultMonthlyUSD == y.DefaultMonthlyUSD && x.DefaultRenews == y.DefaultRenews
+		return x.Label == y.Label && x.OrganizationID == y.OrganizationID
 	})
 }

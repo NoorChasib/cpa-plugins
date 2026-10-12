@@ -27,12 +27,15 @@ func (f *creditFetcher) Fetch(_ context.Context, a Account, _ *client.AccountDet
 	return Observation{Quota: &client.Quota{Schema: 1}, RequestSent: true, HTTPStatus: 200}, nil
 }
 
-const fakeOrg = "00000000-0000-4000-8000-00000000000a"
+const (
+	fakeOrg   = "00000000-0000-4000-8000-00000000000a"
+	secondOrg = "00000000-0000-4000-8000-00000000000b"
+)
 
+// creditAccount is the account of an organization listed on quota-cache's
+// page: its label and Organization ID, which is all an entry carries.
 func creditAccount(id, org string) Account {
-	return Account{Provider: client.ProviderAnthropicAPI, AuthIndex: id, Credit: &client.APICredit{
-		Label: id, OrganizationID: org, MonthlyUSD: "200", Renews: "2026-10-29",
-	}}
+	return Account{Provider: client.ProviderAnthropicAPI, AuthIndex: id, Credit: &client.APICredit{Label: id, OrganizationID: org}}
 }
 
 func creditCache(t *testing.T, f *creditFetcher) (*Cache, string) {
@@ -61,20 +64,19 @@ func entryOf(t *testing.T, path, authIndex string) client.Entry {
 
 var creditStart = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
-// Every credit item is in the snapshot from the first scan, carrying its
-// configuration, and is never fetched, valid or not, due or not: what its
-// organization spent comes from the meter. A credential beside it is polled
-// as usual.
+// Every organization the page lists is in the snapshot from the first scan,
+// carrying its label and Organization ID, and is never fetched, due or not:
+// what it spent comes from the meter. A credential beside it is polled as
+// usual.
 func TestCreditAccountsAreWrittenAtScanAndNeverFetched(t *testing.T) {
 	good := creditAccount(client.APICreditOrgAccount(fakeOrg), fakeOrg)
-	broken := creditAccount("item-2", "")
-	broken.Credit.Problem = client.CreditProblemOrganizationIDMissing
-	f := &creditFetcher{accounts: []Account{good, broken}}
+	second := creditAccount(client.APICreditOrgAccount(secondOrg), secondOrg)
+	f := &creditFetcher{accounts: []Account{good, second}}
 	c, path := creditCache(t, f)
 	for i := 0; i < 4; i++ {
 		step(t, c, creditStart.Add(time.Duration(i)*time.Hour))
 	}
-	for _, a := range []Account{good, broken} {
+	for _, a := range []Account{good, second} {
 		entry := entryOf(t, path, a.AuthIndex)
 		if entry.APICredit == nil || *entry.APICredit != *a.Credit || entry.Failures != 0 || entry.LastError != "" ||
 			!entry.LastAttempt.IsZero() || !entry.NextAttempt.IsZero() || entry.Quota != nil {
@@ -91,15 +93,15 @@ func TestCreditAccountsAreWrittenAtScanAndNeverFetched(t *testing.T) {
 	if len(f.fetched) != 1 || f.fetched[0] != "one" {
 		t.Fatalf("fetched=%v", f.fetched)
 	}
-	// A changed configuration reaches the entry at the next scan.
-	changed := *good.Credit
-	changed.MonthlyUSD, changed.Renews = "260.50", "2026-10-31"
-	f.accounts[0].Credit = &changed
+	// An organization renamed on the page reaches the entry at the next scan.
+	renamed := *good.Credit
+	renamed.Label = "Renamed"
+	f.accounts[0].Credit = &renamed
 	step(t, c, creditStart.Add(6*time.Hour))
-	if entry := entryOf(t, path, good.AuthIndex); *entry.APICredit != changed {
+	if entry := entryOf(t, path, good.AuthIndex); *entry.APICredit != renamed {
 		t.Fatalf("entry=%+v", entry.APICredit)
 	}
-	// Removing an item retires its entry.
+	// Removing the organizations retires their entries.
 	f.accounts = f.accounts[2:]
 	step(t, c, creditStart.Add(7*time.Hour))
 	if snapshot, _ := client.Load(path); len(snapshot.Entries) != 1 {
@@ -112,16 +114,17 @@ func TestCreditAccountsAreWrittenAtScanAndNeverFetched(t *testing.T) {
 	}
 }
 
-// An entry quota-cache 0.1.13 polled carries a reading, failures and a
-// schedule. Adopting the configuration clears them all, once, and leaves the
-// entry quiet after that.
+// An entry quota-cache 0.1.13 polled carries its configured monthly credit and
+// refill date, a reading, failures and a schedule. Adopting the organization
+// the page lists clears them all, once, and leaves the entry quiet after
+// that.
 func TestAdoptingACreditClearsWhatAnEarlierPollLeft(t *testing.T) {
 	account := creditAccount(client.APICreditOrgAccount(fakeOrg), fakeOrg)
 	f := &creditFetcher{accounts: []Account{account}}
 	c, path := creditCache(t, f)
 	key := client.Key(client.ProviderAnthropicAPI, account.AuthIndex)
 	old := *account.Credit
-	old.KeyFingerprint, old.OrganizationID = "key-0123456789ab", ""
+	old.MonthlyUSD, old.Renews, old.KeyFingerprint, old.OrganizationID = "200", "2026-10-29", "key-0123456789ab", ""
 	c.data.Entries[key] = client.Entry{Provider: account.Provider, AuthIndex: account.AuthIndex, APICredit: &old,
 		Quota:    &client.Quota{Schema: 1, ObservedAt: creditStart, CostReport: &client.CostReport{OrganizationID: fakeOrg}},
 		Failures: 3, LastError: client.CreditErrorKeyRejected, LastAttempt: creditStart.Add(-time.Hour), NextAttempt: creditStart.Add(time.Hour)}
@@ -135,8 +138,8 @@ func TestAdoptingACreditClearsWhatAnEarlierPollLeft(t *testing.T) {
 	if load(t, path).WrittenAt != written || len(f.fetched) != 0 {
 		t.Fatalf("an unchanged item rewrote the snapshot, or was fetched (%v)", f.fetched)
 	}
-	// The leftovers are cleared even when the configuration itself is the
-	// same as before.
+	// The leftovers are cleared even when the organization the page lists is
+	// the same as before.
 	e := c.data.Entries[key]
 	e.Failures, e.LastError = 2, "quota fetch failed"
 	c.data.Entries[key] = e

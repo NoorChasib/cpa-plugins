@@ -91,10 +91,13 @@ type Entry struct {
 	// RenewalAt above already include it; it is kept separately so the next
 	// poll, or the next process, knows when it was read and does not ask again.
 	AccountDetails *AccountDetails `json:"account_details,omitempty"`
-	// APICredit is the configured monthly API credit of an anthropic-api
-	// entry, and nil on every other provider. It is rewritten at every scan
-	// from configuration, so unlike Quota it is current even when the
-	// organization has never been polled or its last poll failed.
+	// APICredit is the Claude Console organization of an anthropic-api entry
+	// as listed on quota-cache's page: its label, position and Organization
+	// ID. It is nil on every other provider. It is rewritten at every scan
+	// from that list, so unlike Quota it is current although the organization
+	// is never polled. quota-cache 0.1.x also wrote the monthly credit and
+	// refill date of its claude-api-credits configuration here; the figures in
+	// force are in the credit state (CreditsPath). See APICredit.
 	APICredit *APICredit `json:"api_credit,omitempty"`
 }
 

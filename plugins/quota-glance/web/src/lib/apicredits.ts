@@ -68,7 +68,7 @@ export interface CreditNote {
 /** A stop shorter than this is a restart or an update, not a gap: client.MeterBriefGap. */
 export const BRIEF_GAP_SECONDS = 5 * 60
 
-/** What a row calls its account: the configured label, else quota-cache's id for the item. */
+/** What a row calls its account: its label, else quota-cache's id for the item. */
 export function creditName(account: Pick<APICreditAccount, "id" | "label">): string {
   return account.label || account.id
 }
@@ -536,9 +536,10 @@ export function creditBasis(account: APICreditAccount): CreditBasis | null {
 }
 
 /**
- * Which of a row's values were entered on Quota Cache's page rather than read
- * from its config: for each, what the config has instead — "" when it has
- * nothing usable — or null for a value that was not entered there.
+ * Which of a row's values were entered on Quota Cache's page: for each, the
+ * configured value the summary carries beside it — "" when there is none
+ * usable, which is always so from Quota Cache 0.2.0 — or null for a value that
+ * was not entered there.
  */
 export function setHere(
   account: Pick<APICreditAccount, "monthlyCreditSource" | "renewsSource" | "settings">,
@@ -552,9 +553,9 @@ export function setHere(
 }
 
 /**
- * The hover on each value entered on Quota Cache's page, naming the config's
- * value beside it, so the card still tells the two apart; null for a value
- * that was not. `day` prints a UTC calendar day, as the refill dates beside
+ * The hover on each value entered on Quota Cache's page, naming a configured
+ * value beside it when the summary carries one; null for a value that was not
+ * entered there. `day` prints a UTC calendar day, as the refill dates beside
  * it are printed.
  */
 export function setHereTitles(
@@ -563,7 +564,7 @@ export function setHereTitles(
 ): { credit: string | null; refill: string | null } {
   const config = setHere(account)
   const title = (value: string | null, shown: (value: string) => string) =>
-    value === null ? null : value ? `Entered in Quota Cache. Its config says ${shown(value)}.` : "Entered in Quota Cache. Not in its config."
+    value === null ? null : value ? `Entered in Quota Cache. Its config says ${shown(value)}.` : "Entered in Quota Cache."
   return {
     credit: title(config.credit, moneyText),
     refill: title(config.refill, (value) => day(dateEpoch(value))),
@@ -658,17 +659,16 @@ const UNLINKED_LINES = 3
 
 /**
  * The lines under the pool's figure when it is not the whole story, in this
- * order: which accounts it leaves out and why; whether the values saved in
- * Quota Glance have reached Quota Cache (`editing.migration`); each sentence
- * several rows share (`shared`), once, after whom it is about; each Console
- * organization CPA sent traffic from that no counted item names; a stretch
- * the meter was not counting; and records it dropped, could not match, or
- * could not read. The last two only when they fall after the oldest anchor
- * the pool counts from, where they can have touched its figures, and not when
- * a shared sentence already says so. Empty when there is nothing to add.
+ * order: which accounts it leaves out and why; each sentence several rows
+ * share (`shared`), once, after whom it is about; each Console organization
+ * CPA sent traffic from that no counted item names; a stretch the meter was
+ * not counting; and records it dropped, could not match, or could not read.
+ * The last two only when they fall after the oldest anchor the pool counts
+ * from, where they can have touched its figures, and not when a shared
+ * sentence already says so. Empty when there is nothing to add.
  */
 export function poolNotes(
-  credits: Pick<APICredits, "pool" | "accounts" | "unlinked" | "meter"> & Partial<Pick<APICredits, "editing">>,
+  credits: Pick<APICredits, "pool" | "accounts" | "unlinked" | "meter">,
   now: number,
   shared: SharedIssue[] = sharedIssues(credits.accounts),
 ): CreditNote[] {
@@ -683,9 +683,6 @@ export function poolNotes(
     else clauses.push(`${out.length} are left out`)
     notes.push({ text: clauses.join(" · "), tone: "warn" })
   }
-
-  const migration = migrationNote(credits.editing?.migration ?? "")
-  if (migration !== null) notes.push(migration)
 
   for (const group of shared) {
     const note: CreditNote = { text: `${sharedWho(group.ids, accounts)}: ${group.note.text}`, tone: group.note.tone }
@@ -794,16 +791,13 @@ export function notEditableText(reason: string): string | null {
 /**
  * Why nothing on the card is edited here, in words; null while it is, which
  * only a plugin older than 0.8.0 says. `quotaCache` is the ordinary case;
- * the other two say Quota Cache cannot use its saved settings, and which file
- * to look at.
+ * `settingsUnreadable` says Quota Cache cannot read its saved settings.
  */
 export function editingOffText(editing: Pick<APICredits["editing"], "available" | "reason">): string | null {
   if (editing.available) return null
   switch (editing.reason) {
     case "settingsUnreadable":
-      return "Quota Cache cannot read its saved settings, so only config values apply. See Quota Cache's page."
-    case "legacyUnreadable":
-      return "Quota Glance's settings.json could not be read, so Quota Cache imported nothing and only config values apply. Fix it or move it aside."
+      return "Quota Cache cannot read its saved settings, so the values entered there do not apply. See Quota Cache's page."
     default:
       return "Change these on Quota Cache's page in CPA's management console."
   }
@@ -811,34 +805,9 @@ export function editingOffText(editing: Pick<APICredits["editing"], "available" 
 
 /**
  * Whether the card has more to say about editing than where it happens: Quota
- * Cache cannot use its saved settings, so the values entered there do not
+ * Cache cannot read its saved settings, so the values entered there do not
  * apply. The foot then says why under its own line.
  */
 export function editingTrouble(editing: Pick<APICredits["editing"], "available" | "reason">): string | null {
   return editing.available || editing.reason === "quotaCache" ? null : editingOffText(editing)
-}
-
-/** The line for `editing.migration`: whether the values saved in Quota Glance have reached Quota Cache. */
-export function migrationText(migration: string): string | null {
-  switch (migration) {
-    case "notImported":
-      return "Quota Cache has not imported the settings saved in Quota Glance. Import them on Quota Cache's page; its README says what to do if the page does not offer it."
-    case "changedSinceImport":
-      return "Quota Glance's saved settings changed after Quota Cache imported them; open Quota Cache's page."
-    case "awaitingImport":
-      return "Your monthly credits, refill dates, Console readings and renewal dates saved in Quota Glance are kept, and Quota Cache 0.2.0 imports them when it starts."
-    default:
-      return null
-  }
-}
-
-/**
- * The migration line among the pool's: amber while values saved in Quota
- * Glance are not in Quota Cache, quiet while they are kept for its first
- * start.
- */
-function migrationNote(migration: string): CreditNote | null {
-  const text = migrationText(migration)
-  if (text === null) return null
-  return { text, tone: migration === "awaitingImport" ? "quiet" : "warn" }
 }

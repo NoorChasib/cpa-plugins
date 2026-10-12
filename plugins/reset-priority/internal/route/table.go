@@ -154,10 +154,9 @@ func inactive(in Input) Reason {
 		// stopped or wedged.
 		return ReasonCreditsStale
 	case in.Credits.Settings.State != qc.CreditSettingsOK:
-		// Quota Cache cannot apply the operator's saved values: it cannot
-		// read its settings file or, before it has one, Quota Glance's
-		// settings.json. Its figures come from the configuration alone and
-		// could be wrong.
+		// Quota Cache cannot read its settings file, so none of the values
+		// the operator saved on its page apply and its figures could be
+		// wrong.
 		return ReasonSettingsUnavailable
 	case in.MeterError == "unreadable":
 		return ReasonMeterUnreadable
@@ -189,29 +188,19 @@ func inactive(in Input) Reason {
 // orgs fills t.Orgs and t.rechecks from the credit state's accounts, and
 // returns each linked organization ID's index into t.Orgs.
 func (t *Table) orgs(accounts []qc.CreditAccount) map[string]int16 {
-	// One account per organization: the first whose ID is org-<hex>, else
-	// the first. The others are duplicates or over-limit items, which Quota
-	// Cache lists as item-<n> and does not count.
-	first := map[string]int{}
+	// One account per organization, the first. Quota Cache lists each
+	// organization once; a second account naming one would make two Orgs
+	// for one organization.
+	seen := map[string]bool{}
 	kept := []int{}
 	for i := range accounts {
 		org := strings.ToLower(accounts[i].OrganizationID)
-		if org == "" {
+		if org == "" || seen[org] || len(kept) == maxOrgs {
 			continue
 		}
-		j, seen := first[org]
-		switch {
-		case !seen:
-			if len(kept) == maxOrgs {
-				continue
-			}
-			first[org] = len(kept)
-			kept = append(kept, i)
-		case !isOrgAccount(accounts[kept[j]].ID) && isOrgAccount(accounts[i].ID):
-			kept[j] = i
-		}
+		seen[org] = true
+		kept = append(kept, i)
 	}
-	sort.Ints(kept)
 
 	var eligible, rest []linkedOrg
 	for _, i := range kept {
@@ -224,8 +213,8 @@ func (t *Table) orgs(accounts []qc.CreditAccount) map[string]int16 {
 		}
 	}
 	// Demoted organizations after every clean one, then the soonest refill,
-	// with no date after every known one, then the configured order, then
-	// the account ID, which is unique.
+	// with no date after every known one, then the order on Quota Cache's
+	// page, then the account ID, which is unique.
 	sort.SliceStable(eligible, func(a, b int) bool {
 		if eligible[a].Demoted != eligible[b].Demoted {
 			return !eligible[a].Demoted
@@ -256,11 +245,11 @@ func (t *Table) orgs(accounts []qc.CreditAccount) map[string]int16 {
 type linkedOrg struct {
 	Org
 	org   string // the lower-cased organization ID
-	order int    // the account's configured position
+	order int    // the account's position on Quota Cache's page
 }
 
 // refillsBefore orders by refill, with no date after every known one, then by
-// the configured order, then by account ID.
+// the order on Quota Cache's page, then by account ID.
 func (x *linkedOrg) refillsBefore(y *linkedOrg) bool {
 	switch {
 	case x.RenewsAt != nil && y.RenewsAt == nil:
@@ -274,8 +263,6 @@ func (x *linkedOrg) refillsBefore(y *linkedOrg) bool {
 	}
 	return x.ID < y.ID
 }
-
-func isOrgAccount(id string) bool { return strings.HasPrefix(id, "org-") }
 
 // orgOf is one kept account as an Org, with its eligibility.
 func orgOf(a *qc.CreditAccount) Org {

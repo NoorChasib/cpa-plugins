@@ -99,7 +99,10 @@ const (
 // Data issues of an API credit account, in the order dataIssues lists them
 // (CreditIssueOrder). The first is the one issue's sentence describes. A later
 // quota-cache may publish a code this list does not know; a reader must keep
-// it and skip it.
+// it and skip it. The last three, configMonthlyUsdInvalid, configRenewsInvalid
+// and adminKeyIgnored, are about quota-cache 0.1.x's claude-api-credits, which
+// this quota-cache ignores, so it never raises them; they stay in Quota
+// Glance's summary contract.
 const (
 	CreditIssueMisconfigured           = "misconfigured"
 	CreditIssueCacheTooOld             = "cacheTooOld"
@@ -172,7 +175,9 @@ const (
 )
 
 // Where a credit or refill date comes from: MonthlyCreditSource and
-// RenewsSource. "dashboard" is a value the operator entered.
+// RenewsSource. "dashboard" is a value the operator entered on quota-cache's
+// page. "config" was quota-cache 0.1.x's configuration; it stays in Quota
+// Glance's summary contract, and this quota-cache never writes it.
 const (
 	CreditSourceDashboard = "dashboard"
 	CreditSourceConfig    = "config"
@@ -194,15 +199,12 @@ const (
 )
 
 // Why the values cannot be edited at all: CreditEditing.Reason. quota-cache
-// writes "" or one of the first two; CreditEditingQuotaCache is Quota Glance's,
-// which shows the values read-only.
+// writes "" or CreditEditingSettingsUnreadable; CreditEditingQuotaCache is
+// Quota Glance's, which shows the values read-only.
 const (
 	// CreditEditingSettingsUnreadable: quota-cache cannot read its saved
 	// settings; stored values do not apply.
 	CreditEditingSettingsUnreadable = "settingsUnreadable"
-	// CreditEditingLegacyUnreadable: Quota Glance's settings.json could not be
-	// read, so nothing was imported; stored values do not apply.
-	CreditEditingLegacyUnreadable = "legacyUnreadable"
 	// CreditEditingQuotaCache: the values are edited on quota-cache's page.
 	CreditEditingQuotaCache = "quotaCache"
 )
@@ -228,11 +230,6 @@ const (
 	// CreditSettingsUnreadable: the settings file failed a load rule. Nothing
 	// in it applies and nothing is saved over it until it is moved aside.
 	CreditSettingsUnreadable = "unreadable"
-	// CreditSettingsLegacyUnreadable: there is no settings file yet and Quota
-	// Glance's settings.json, which the first start imports, could not be
-	// read. Nothing stored applies, and nothing is saved, until it is fixed or
-	// moved aside.
-	CreditSettingsLegacyUnreadable = "legacyUnreadable"
 )
 
 // Why there is no meter: CreditInputs.MeterError.
@@ -241,40 +238,16 @@ const (
 	CreditMeterErrorUnreadable = "unreadable"
 )
 
-// Where the import from Quota Glance's settings.json stands:
-// CreditImport.State.
+// The states of the organizations file: CreditOrganizations.State.
 const (
-	CreditImportStateImported           = "imported"
-	CreditImportStateChangedSinceImport = "changedSinceImport"
-	CreditImportStateNotImported        = "notImported"
-	CreditImportStateSettingsMissing    = "settingsMissing"
-	CreditImportStateLegacyUnreadable   = "legacyUnreadable"
-)
-
-// How the last import happened: CreditImport.Kind. A matched or follow
-// import written while nothing was saved on quota-cache's page since an
-// automatic or manual one continues it, and keeps that kind. A copy that
-// raised the revisions, recorded from the files after a crash cut it short,
-// is manual, or automatic when the record it replaces is: the files cannot
-// tell Import from a follow.
-const (
-	CreditImportKindAutomatic = "automatic" // the first start, with no settings file and no record
-	CreditImportKindMatched   = "matched"   // the two files were found equal
-	CreditImportKindFollow    = "follow"    // Quota Glance saved again while nothing was saved here
-	CreditImportKindManual    = "manual"    // the operator pressed Import on quota-cache's page
-)
-
-// Where the list of organizations stands: CreditOrganizations.
-const (
-	OrganizationsStateOK         = "ok"
-	OrganizationsStateMissing    = "missing"
+	OrganizationsStateOK = "ok"
+	// OrganizationsStateMissing: there is no file. No organization is listed,
+	// and the first one added on the page creates it.
+	OrganizationsStateMissing = "missing"
+	// OrganizationsStateUnreadable: the file failed a load rule or could not
+	// be read. No organization is listed and none can be edited until it is
+	// moved aside or fixed.
 	OrganizationsStateUnreadable = "unreadable"
-	// OrganizationsSourcePage: the list is the organizations file's, edited
-	// on quota-cache's page.
-	OrganizationsSourcePage = "page"
-	// OrganizationsSourceConfig: the list is claude-api-credits', from the
-	// configuration.
-	OrganizationsSourceConfig = "config"
 )
 
 // CreditState is the credit state file. LoadCredits reads it; CreditsAt judges
@@ -301,7 +274,8 @@ type CreditState struct {
 	// cannot be read. Its precedence over a reported or estimated date is
 	// SubscriptionRenewal's.
 	Renewals map[string]RenewalSetting `json:"renewals"`
-	// Organizations says where the list of organizations comes from.
+	// Organizations is the state of the organizations file, the list of
+	// organizations api_credits counts.
 	Organizations CreditOrganizations `json:"organizations"`
 }
 
@@ -325,76 +299,20 @@ type CreditSettingsState struct {
 	Editable bool `json:"editable"`
 	// Revision is the settings file's revision, "" without one.
 	Revision string `json:"revision"`
-	// Import is where the import from Quota Glance's settings.json stands, and
-	// null when there is no legacy file and no readable import record.
-	Import *CreditImport `json:"import"`
 }
 
-// CreditImport is where the import from Quota Glance's settings.json stands.
-// Every field from Kind to ImportedAt is the import record's, and null when
-// there is no readable record.
-type CreditImport struct {
-	// State is a CreditImportState value.
-	State string `json:"state"`
-	// Kind is a CreditImportKind value.
-	Kind *string `json:"kind"`
-	// SourcePath is the file imported, a path on the host.
-	SourcePath *string `json:"source_path"`
-	// SHA256 is the hex SHA-256 of the bytes imported, and SettingsSHA256 that
-	// of the settings file then written. They differ when the import raised
-	// the revisions past the imported file's: a manual import, and a follow
-	// that raised them.
-	SHA256         *string `json:"sha256"`
-	SettingsSHA256 *string `json:"settings_sha256"`
-	// LegacyRevision is the imported file's revision.
-	LegacyRevision *string `json:"legacy_revision"`
-	// LegacyUpdatedAt is the newest updatedAt in the imported file, null when
-	// it held no row: how old the imported values are.
-	LegacyUpdatedAt *time.Time          `json:"legacy_updated_at"`
-	Counts          *CreditImportCounts `json:"counts"`
-	ImportedAt      *time.Time          `json:"imported_at"`
-	// Following is true while nothing has been saved on quota-cache's page
-	// since an import of Quota Glance's own file, so a later save in Quota
-	// Glance is imported too. It is false after an import of the drop-in
-	// (LegacySettingsDropIn), a copy Quota Glance never saves to.
-	Following bool `json:"following"`
-	// Importable is true while a legacy file exists and can be read.
-	Importable bool `json:"importable"`
-}
-
-// CreditImportCounts count what an import brought: accounts with a monthly
-// credit, with a refill date, and with a Console reading, and renewal dates.
-type CreditImportCounts struct {
-	MonthlyCredits int `json:"monthly_credits"`
-	RefillDates    int `json:"refill_dates"`
-	Readings       int `json:"readings"`
-	RenewalDates   int `json:"renewal_dates"`
-}
-
-// CreditOrganizations says where the list of Claude Console organizations
-// comes from.
+// CreditOrganizations is the state of the organizations file, the Claude
+// Console organizations the operator lists on quota-cache's page. Nothing
+// else lists one.
 type CreditOrganizations struct {
 	// State is the organizations file's: an OrganizationsState value.
 	State string `json:"state"`
 	// Revision is the organizations file's revision, "" without one.
 	Revision string `json:"revision"`
-	// Source is an OrganizationsSource value.
-	Source string `json:"source"`
-	// Migration is the move of the organizations from the configuration to
-	// the file, and null when the file was not made by one.
-	Migration *OrganizationsMigration `json:"migration"`
-	// ConfigItemsIgnored counts the claude-api-credits items the
-	// configuration still lists while the file's list is used instead.
+	// ConfigItemsIgnored counts the items claude-api-credits lists in
+	// quota-cache's configuration. quota-cache 0.1.x read its organizations
+	// from there; this one ignores them.
 	ConfigItemsIgnored int `json:"config_items_ignored"`
-}
-
-// OrganizationsMigration is the one move of the organizations from
-// claude-api-credits to the organizations file: when, how many moved, and how
-// many were left out because the configuration had a problem with them.
-type OrganizationsMigration struct {
-	At      time.Time `json:"at"`
-	Moved   int       `json:"moved"`
-	Skipped int       `json:"skipped"`
 }
 
 // LoadCredits reads and validates a credit state file: a regular file (Lstat),
@@ -568,17 +486,8 @@ func (s *CreditState) clone() *CreditState {
 	out.ValidUntil = clonePointer(s.ValidUntil)
 	out.Inputs.SnapshotWrittenAt = clonePointer(s.Inputs.SnapshotWrittenAt)
 	out.Inputs.MeterFlushedAt = clonePointer(s.Inputs.MeterFlushedAt)
-	if in := s.Settings.Import; in != nil {
-		imported := *in
-		imported.Kind, imported.SourcePath = clonePointer(in.Kind), clonePointer(in.SourcePath)
-		imported.SHA256, imported.SettingsSHA256 = clonePointer(in.SHA256), clonePointer(in.SettingsSHA256)
-		imported.LegacyRevision, imported.LegacyUpdatedAt = clonePointer(in.LegacyRevision), clonePointer(in.LegacyUpdatedAt)
-		imported.Counts, imported.ImportedAt = clonePointer(in.Counts), clonePointer(in.ImportedAt)
-		out.Settings.Import = &imported
-	}
 	out.APICredits = s.APICredits.clone()
 	out.Renewals = maps.Clone(s.Renewals)
-	out.Organizations.Migration = clonePointer(s.Organizations.Migration)
 	return &out
 }
 
@@ -640,7 +549,7 @@ func clonePointer[T any](p *T) *T {
 //
 // Every amount is an estimate. Anthropic reports neither the credit nor what
 // is left of it to anything this plugin can read, so the credit and its refill
-// date are what the operator configured or set here, the spend is the meter's
+// date are what the operator entered on quota-cache's page, the spend is the meter's
 // tokens at the list prices of Pricing.AsOf, and a Console reading the
 // operator types in is the anchor that corrects it. An account whose figures
 // could be missing spend says so with LowerBound.
@@ -654,17 +563,14 @@ type CreditDocument struct {
 	Meter   *CreditMeter  `json:"meter"`
 	Editing CreditEditing `json:"editing"`
 	Pool    CreditPool    `json:"pool"`
-	// Accounts lists every configured organization, counted or not, sorted by
-	// order, then label, then id. Do not re-sort.
+	// Accounts lists every organization quota-cache lists, counted or not,
+	// sorted by order, then label, then id. Do not re-sort.
 	Accounts []CreditAccount `json:"accounts"`
 	// Unlinked lists organizations that sent API traffic through CPA while no
 	// counted item names them, newest lastSeen first. Always an array.
 	Unlinked []CreditUnlinked `json:"unlinked"`
 	// Orphans are stored dashboard values for an account no longer listed,
-	// which the page offers to remove. Empty while the organizations file
-	// cannot be read, when the configuration's list stands in for it and a
-	// stored entry it lacks may still belong to a listed organization. Always
-	// an array.
+	// which the page offers to remove. Always an array.
 	Orphans []CreditOrphan `json:"orphans"`
 }
 
@@ -714,15 +620,11 @@ type CreditGap struct {
 type CreditEditing struct {
 	Available bool `json:"available"`
 	// Reason is "" when available, else one of the CreditEditing constants:
-	// settingsUnreadable or legacyUnreadable from quota-cache, when its saved
-	// settings or Quota Glance's settings.json could not be read (stored
-	// values do not apply), or quotaCache from Quota Glance, which shows the
-	// values read-only because they are edited on quota-cache's page.
+	// settingsUnreadable from quota-cache, when its saved settings could not
+	// be read (stored values do not apply), or quotaCache from Quota Glance,
+	// which shows the values read-only because they are edited on
+	// quota-cache's page.
 	Reason string `json:"reason"`
-	// Migration is filled by Quota Glance, which says here whether the values
-	// saved in its own settings.json have reached quota-cache. Always "" in
-	// quota-cache's credit state.
-	Migration string `json:"migration"`
 }
 
 // CreditPool sums the counted accounts: those in state ok, stale or out.
@@ -779,16 +681,18 @@ type CreditRefill struct {
 
 // CreditAccount is one Console organization's credit this cycle.
 type CreditAccount struct {
-	// ID is quota-cache's name for the item: "org-<12 hex>" from its
-	// organization, or "item-<n>" for an item it could not link to one. The
-	// dashboard's stored values are keyed by it.
+	// ID is quota-cache's name for the organization: "org-<12 hex>" from its
+	// Organization ID (APICreditOrgAccount). The dashboard's stored values
+	// are keyed by it. "item-<n>", an item of quota-cache 0.1.x's
+	// configuration it could not link, stays in Quota Glance's summary
+	// contract; this quota-cache never lists one.
 	ID string `json:"id"`
-	// Label is "" when the item has no usable label.
+	// Label is the organization's label on quota-cache's page.
 	Label string `json:"label"`
-	// Order is the item's configured position.
+	// Order is the organization's position in that list.
 	Order int `json:"order"`
-	// OrganizationID is the item's organization-id as quota-cache read it,
-	// and "" when it is missing or invalid.
+	// OrganizationID is the Organization ID as NormalizeOrganizationID
+	// returns it.
 	OrganizationID string `json:"organizationId"`
 	// State is ok, stale, out, pending, needsSettings, misconfigured or
 	// cacheTooOld. Counted is true for ok, stale and out.
@@ -807,7 +711,7 @@ type CreditAccount struct {
 	MonthlyCredit     float64 `json:"monthlyCredit"`
 	MonthlyCreditText string  `json:"monthlyCreditText"`
 	// MonthlyCreditSource and RenewsSource say where the credit and the
-	// refill date come from: "dashboard", "config" or "none".
+	// refill date come from: "dashboard" or "none". See CreditSourceConfig.
 	MonthlyCreditSource string `json:"monthlyCreditSource"`
 	// Spent is the metered spend since SpentSinceEpoch: the cycle's start,
 	// or without a cycle the reading's time. Null and "" without either.
@@ -882,16 +786,16 @@ type CreditSettings struct {
 	// NotEditableReason is "" when editable, else why: noOrganization,
 	// duplicateOrganization, overLimit or cacheTooOld for this account (the
 	// CreditNotEditable constants), or the editing reason when nothing can be
-	// edited (settingsUnreadable, legacyUnreadable or quotaCache).
+	// edited (settingsUnreadable or quotaCache).
 	NotEditableReason string `json:"notEditableReason"`
 	// Revision is the stored entry's, "" with nothing stored; a save sends it
 	// back as baseRevision.
 	Revision string `json:"revision"`
 	// MonthlyUSD and Renews are the values set here, "" when none.
 	MonthlyUSD string `json:"monthlyUsd"`
-	// ConfigMonthlyUSD and ConfigRenews are quota-cache's configured values,
-	// shown beside an override; "" when unset or invalid, which the Invalid
-	// flags tell apart.
+	// ConfigMonthlyUSD and ConfigRenews, and their Invalid flags, were
+	// quota-cache 0.1.x's configured values. They stay in Quota Glance's
+	// summary contract; this quota-cache leaves them "" and false.
 	ConfigMonthlyUSD        string `json:"configMonthlyUsd"`
 	ConfigMonthlyUSDInvalid bool   `json:"configMonthlyUsdInvalid"`
 	Renews                  string `json:"renews"`

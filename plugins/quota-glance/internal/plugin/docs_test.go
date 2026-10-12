@@ -1,15 +1,15 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
-	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/source"
-	"gopkg.in/yaml.v3"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/aggregate"
 )
 
 // operatorDocs are the files an operator follows to set quota-glance up, keyed
@@ -103,107 +103,131 @@ func TestDocsLeaveAPICreditRoutingToResetPriority(t *testing.T) {
 	}
 }
 
-// readmeMoveFromQuotaGlance is the README's paragraph on moving from Quota
-// Glance 0.7, as prose.
-func readmeMoveFromQuotaGlance(t *testing.T) string {
-	t.Helper()
-	for _, paragraph := range strings.Split(operatorDocs(t)["README.md"], "\n\n") {
-		if strings.HasPrefix(paragraph, "**Moving from Quota Glance 0.7.**") {
-			return prose("README.md", paragraph)
-		}
-	}
-	t.Fatal("README.md has no paragraph on moving from Quota Glance 0.7")
-	return ""
-}
-
-// Quota Cache imports Quota Glance 0.7's settings.json only from where it
-// looks, since it cannot see this plugin's data-dir. The README's move from
-// 0.7 says so: Quota Cache finds the file by itself with data-dir unset or as
-// the configuration it shows, and for any other data-dir the README names the
-// drop-in and links to Quota Cache's own steps, whose heading is still there.
-func TestReadmeMoveFromQuotaGlanceMatchesWhereQuotaCacheLooks(t *testing.T) {
-	readme := operatorDocs(t)["README.md"]
-	_, block, ok := strings.Cut(readme, "```yaml\n")
-	block, _, closed := strings.Cut(block, "```")
-	if !ok || !closed {
-		t.Fatal("README.md has no yaml block")
-	}
-	var shown struct {
-		Plugins struct {
-			Configs map[string]struct {
-				CachePath string `yaml:"cache-path"`
-				DataDir   string `yaml:"data-dir"`
-			} `yaml:"configs"`
-		} `yaml:"plugins"`
-	}
-	if err := yaml.Unmarshal([]byte(block), &shown); err != nil {
-		t.Fatal(err)
-	}
-	cfg := shown.Plugins.Configs["quota-glance"]
-	if cfg.CachePath == "" || cfg.DataDir == "" {
-		t.Fatalf("README.md's configuration = %+v", cfg)
-	}
-	unset, err := filepath.Abs(filepath.Join(defaultDataDir, source.LegacySettingsFile))
+// Quota Cache 0.2.0 lists only the organizations added on its page: at most
+// 16, each with an Organization ID no other has. The degraded golden still
+// carries the API credit values only Quota Cache 0.1.x's claude-api-credits
+// gave rise to, so that it covers the whole contract. The contract names each
+// of them where it says what 0.2.0 never publishes, so a client does not take
+// them for states Quota Cache sends.
+func TestContractSaysWhichDegradedCreditValuesQuotaCacheNeverPublishes(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "summary-degraded.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidates := qc.LegacySettingsCandidates(cfg.CachePath)
-	for _, legacy := range []string{filepath.Join(cfg.DataDir, source.LegacySettingsFile), unset} {
-		if !slices.Contains(candidates, legacy) {
-			t.Errorf("Quota Cache does not look for %s beside README.md's cache-path, only %v", legacy, candidates)
+	var doc aggregate.Document
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.APICredits == nil {
+		t.Fatal("summary-degraded.json has no API credit card")
+	}
+	never := map[string]bool{}
+	for _, account := range doc.APICredits.Accounts {
+		switch {
+		case strings.HasPrefix(account.ID, "item-"):
+			never["`item-<n>`"] = true
+		case strings.HasPrefix(account.ID, "label-"):
+			never["Quota Cache 0.1.13"] = true
+		}
+		if account.State == qc.CreditStateMisconfigured || account.State == qc.CreditStateCacheTooOld {
+			never["`"+account.State+"`"] = true
+		}
+		if reason := account.Settings.NotEditableReason; reason != qc.CreditEditingQuotaCache && reason != qc.CreditEditingSettingsUnreadable {
+			never["`"+reason+"`"] = true
 		}
 	}
-
-	move := readmeMoveFromQuotaGlance(t)
-	const section = "moving-from-quota-glance"
-	for _, want := range []string{"`" + qc.LegacySettingsDropIn + "`", "](../quota-cache/README.md#" + section + ")"} {
-		if !strings.Contains(move, want) {
-			t.Errorf("README.md's move from Quota Glance 0.7 does not say %q", want)
+	for _, unlinked := range doc.APICredits.Unlinked {
+		if unlinked.Reason != qc.CreditUnlinkedNotConfigured {
+			never["`reason` is `"+unlinked.Reason+"`"] = true
 		}
+	}
+	if len(never) == 0 {
+		t.Fatal("summary-degraded.json carries no API credit value Quota Cache 0.2.0 never publishes; it no longer covers the contract")
+	}
+	const opening = "The organizations are the ones added on Quota Cache's page."
+	said := ""
+	for _, paragraph := range strings.Split(operatorDocs(t)["docs/summary-contract.md"], "\n\n") {
+		if paragraph := prose("docs/summary-contract.md", paragraph); strings.HasPrefix(paragraph, opening) {
+			said = paragraph
+		}
+	}
+	if said == "" {
+		t.Fatalf("docs/summary-contract.md has no paragraph beginning %q", opening)
+	}
+	for value := range never {
+		if !strings.Contains(said, value) {
+			t.Errorf("summary-degraded.json carries %s, which the contract does not name among what Quota Cache 0.2.0 never publishes", value)
+		}
+	}
+	if !strings.Contains(said, "0.2.0 never publishes an item it could not link") {
+		t.Error("docs/summary-contract.md does not say Quota Cache 0.2.0 never publishes an item it could not link")
+	}
+}
+
+// Only Quota Cache 0.2.0's published state makes an account pending, and 0.2.0
+// takes its organizations from its page alone. So the contract's pending rule
+// explains a dormant organization as Quota Cache does, by when it was linked,
+// and never sends the operator to a configuration it ignores.
+func TestContractExplainsPendingByTheLinkNotTheConfiguration(t *testing.T) {
+	const heading = "### `accounts[].state`"
+	_, section, found := strings.Cut(operatorDocs(t)["docs/summary-contract.md"], "\n"+heading)
+	if !found {
+		t.Fatalf("docs/summary-contract.md has no %q section", heading)
+	}
+	section, _, _ = strings.Cut(section, "\n#")
+	var rows []string
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "| ") && strings.Contains(line, "| `"+qc.CreditStatePending+"` |") {
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%s in docs/summary-contract.md has %d rows for %s, want 1", heading, len(rows), qc.CreditStatePending)
+	}
+	if row := strings.ToLower(rows[0]); strings.Contains(row, "config") || !strings.Contains(row, "linked") {
+		t.Errorf("the contract's %s rule should say the meter has not saved since the organization was linked, not tie it to configuration: %s", qc.CreditStatePending, rows[0])
+	}
+}
+
+// Quota Cache does not read what Quota Glance 0.7 saved, so the operator
+// enters it again on Quota Cache's page. The README's paragraph on updating
+// from 0.7 links to Quota Cache's own steps, whose heading is still there.
+func TestReadmeLinksToQuotaCachesStepsForUpdatingFrom07(t *testing.T) {
+	const section = "updating-from-quota-glance-07"
+	found := false
+	for _, paragraph := range strings.Split(operatorDocs(t)["README.md"], "\n\n") {
+		if strings.HasPrefix(paragraph, "**Updating from Quota Glance 0.7.**") {
+			found = true
+			if !strings.Contains(prose("README.md", paragraph), "](../quota-cache/README.md#"+section+")") {
+				t.Errorf("README.md's update from Quota Glance 0.7 does not link to Quota Cache's #%s", section)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("README.md has no paragraph on updating from Quota Glance 0.7")
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "quota-cache", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, line := range strings.Split(string(raw), "\n") {
-		heading := strings.TrimSpace(strings.TrimLeft(line, "#"))
-		if strings.HasPrefix(line, "#") && strings.ReplaceAll(strings.ToLower(heading), " ", "-") == section {
-			found = true
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		// The anchor GitHub gives a heading: lower case, spaces as hyphens,
+		// and every other character that is not a letter or digit dropped.
+		slug := strings.Map(func(r rune) rune {
+			switch {
+			case r == ' ':
+				return '-'
+			case r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r):
+				return unicode.ToLower(r)
+			}
+			return -1
+		}, strings.TrimSpace(strings.TrimLeft(line, "#")))
+		if slug == section {
+			return
 		}
 	}
-	if !found {
-		t.Errorf("Quota Cache's README.md has no heading for #%s", section)
-	}
-}
-
-// The migration note rides on the API credit card, and there is no card while
-// Quota Cache lists no organization, as for an operator who saved only renewal
-// dates in Quota Glance 0.7. The note is then only in /health, so the README's
-// move from 0.7 says to look there rather than promising the card says so.
-func TestReadmeSaysWhereTheMigrationNoteIsWithoutACard(t *testing.T) {
-	p, _, cachePath, dataDir := newPublishedPlugin(t, "")
-	waitForDocument(t, p, publishedDocument)
-	const legacy = `{"schema":1,"revision":12,"apiCredits":{},"renewals":{}}`
-	if err := os.WriteFile(filepath.Join(dataDir, source.LegacySettingsFile), []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	editState(t, cachePath, func(state map[string]any) { state["api_credits"] = nil })
-	p.Rebuild()
-	res := summary(t, p)
-	if _, ok := creditsOf(decode(t, res)); ok {
-		t.Fatal("a state listing no organization still has a card")
-	}
-	if strings.Contains(string(res.Body), `"notImported"`) {
-		t.Fatal("the document carries the migration note without a card; the README can point to it")
-	}
-	if h, _ := healthOf(t, p); h.Settings.Migration != "notImported" {
-		t.Fatalf("health's migration = %q", h.Settings.Migration)
-	}
-	move := readmeMoveFromQuotaGlance(t)
-	for _, want := range []string{"`settings.migration`", "`.../health`"} {
-		if !strings.Contains(move, want) {
-			t.Errorf("README.md's move from Quota Glance 0.7 does not say %q, where the note is without a card", want)
-		}
-	}
+	t.Errorf("Quota Cache's README.md has no heading for #%s", section)
 }

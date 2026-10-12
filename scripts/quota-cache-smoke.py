@@ -34,14 +34,12 @@ def utc(epoch):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(epoch))
 
 # Placeholder Claude Console organizations, as quota-cache keys them: "org-"
-# and 12 hex digits of the SHA-256 of the organization id. The second label
-# carries the two characters CPA HTML-escapes in a plugin's management JSON
-# below schema 6. The third is added on Quota Cache's page.
+# and 12 hex digits of the SHA-256 of the organization id. Both are added on
+# Quota Cache's page. The second label carries the two characters CPA
+# HTML-escapes in a plugin's management JSON below schema 6.
 ORG = '00000000-0000-4000-8000-00000000000a'
 ORG_B = '00000000-0000-4000-8000-00000000000b'
-ORG_C = '00000000-0000-4000-8000-00000000000c'
 LABEL_B = "O'Brien & Co"
-RENEWAL_ID = '0123456789abcdef'
 
 def account_of(org):
     return 'org-' + hashlib.sha256(org.encode()).hexdigest()[:12]
@@ -64,21 +62,6 @@ def commit(path, document):
     temporary.write_text(json.dumps(document))
     temporary.chmod(0o600)
     temporary.replace(path)
-
-def legacy_settings(now):
-    """Settings as Quota Glance 0.7 saves them (schema 1): the first
-    organization's monthly credit and a Console reading, the second's refill
-    date, and one Claude renewal date. A reading's baseline holds the meter's
-    usage from the start of its day to its hour, none here."""
-    at = now - 7200 - now % 60
-    return {'schema': 1, 'revision': 3,
-            'apiCredits': {
-                account_of(ORG): {'monthlyUsd': '150', 'reading': {
-                    'remainingUsd': '120.50', 'at': utc(at), 'enteredAt': utc(at + 300), 'organizationId': ORG,
-                    'baseline': {'dayStart': utc(at - at % 86400), 'until': utc(at - at % 3600), 'usage': []}},
-                    'rev': 2, 'updatedAt': utc(at + 300)},
-                account_of(ORG_B): {'renews': '2026-10-20', 'rev': 1, 'updatedAt': utc(at - 86400)}},
-            'renewals': {RENEWAL_ID: {'date': '2026-11-03', 'rev': 3, 'updatedAt': utc(at + 360)}}}
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--candidate', choices=PLUGINS, help='Test one local build with the other published plugins')
@@ -111,33 +94,21 @@ with tempfile.TemporaryDirectory(prefix='cpa-suite-smoke-') as tmp:
     snapshot.write_text(json.dumps({'schema': 1, 'written_at': stamp, 'next_request': stamp,
                                     'provider_cooldown': {}, 'entries': {}}))
 
-    # Two Claude API credit items with fake organizations, so quota-cache
-    # registers as a CPA usage plugin and opens its API meter beside the
-    # snapshot. Nothing is ever sent to Anthropic: an item is listed, never
-    # polled, and the meter only counts records CPA delivers, of which this
-    # empty roster produces none. The items are configured only when the local
-    # build is the one loaded, so a peer smoke runs the published quota-cache
-    # as it is.
+    # A Claude API credit item as quota-cache 0.1.x read it, which this one
+    # accepts and ignores: the organizations are added on its page below,
+    # after which quota-cache opens its API meter beside the snapshot. Nothing
+    # is ever sent to Anthropic: an organization is listed, never polled, and
+    # the meter only counts records CPA delivers, of which this empty roster
+    # produces none. The item is configured, and the organizations added,
+    # only when the local build is the one loaded, so a peer smoke runs the
+    # published quota-cache as it is.
     METERED = not args.candidate or args.candidate == 'quota-cache'
     credits = '''      claude-api-credits:
         - label: smoke
           organization-id: ''' + ORG + '''
           monthly-usd: "200"
           renews: "2026-10-29"
-        - label: ''' + json.dumps(LABEL_B) + '''
-          organization-id: ''' + ORG_B + '''
 ''' if METERED else ''
-    # Quota Glance's saved settings where it keeps them in the documented
-    # layout, the sibling of Quota Cache's data directory, so Quota Cache 0.2.0
-    # imports them when it first opens its cache. Nothing in an older Quota
-    # Cache reads this file. It lives under the plugins mount only because
-    # that is where the layout puts it; CPA looks for libraries in that
-    # directory alone, not below it.
-    legacy = plugins/'data/quota-glance/settings.json'
-    if METERED:
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text(json.dumps(legacy_settings(int(time.time())), indent=2) + '\n')
-        legacy_bytes, legacy_mtime = legacy.read_bytes(), legacy.stat().st_mtime_ns
     config = work/'config.yaml'
     config.write_text('''host: 0.0.0.0
 port: 8317
@@ -285,11 +256,43 @@ plugins:
             raise AssertionError('private cache route accepted unauthenticated request')
         except urllib.error.HTTPError as err:
             assert err.code in (401,403)
+        data = plugins/'data/quota-cache'
+        credits_file = data/'snapshot.credits.json'
+        organizations_file = data/'snapshot.organizations.json'
+        def published():
+            return json.loads(credits_file.read_text()) if credits_file.is_file() else None
+        def accounts_of(state):
+            return {a['id']: a for a in ((state or {}).get('api_credits') or {}).get('accounts', [])}
         if metered:
-            # Each item is listed as an anthropic-api entry keyed by its
-            # organization, and never polled.
+            # claude-api-credits is accepted and ignored: no organizations
+            # file is written from it, nothing is listed or metered, and the
+            # published state counts the item, which the log says is ignored.
+            state = wait_until(lambda: published() if (published() or {}).get('organizations') else None, 60, 'the credit state was never published')
+            assert state['organizations'] == {'state': 'missing', 'revision': '', 'config_items_ignored': 1}, state['organizations']
+            assert state['api_credits'] is None, state['api_credits']
+            assert not organizations_file.exists(), 'the configuration wrote an organizations file'
+            status = get('plugins/quota-cache/status')
+            assert not [key for key in status['entries'] if key.startswith('anthropic-api:')], status['entries']
+            assert 'api_meter' not in status and not (data/'snapshot.meter.json').exists(), 'a meter ran with no organization'
+            assert 'quota-cache keeps Claude Console organizations on its page; claude-api-credits in its configuration is ignored' in run('docker','logs',container)
+            editor = status['editor']['organizations']
+            assert editor['available'] and editor['revision'] == '' and editor['items'] == [], editor
+            # Two organizations added on the page: the file appears, and the
+            # credit state lists exactly those two before the save answers.
+            code, answer = save({'kind': 'organizations', 'baseRevision': '',
+                                 'ops': [{'op': 'add', 'label': 'smoke', 'organizationId': ORG}, {'op': 'add', 'label': LABEL_B, 'organizationId': ORG_B}]})
+            assert code == 200 and answer['ok'] and not answer['unchanged'], (code, answer)
+            assert [o['organization_id'] for o in answer['organizations']] == [ORG, ORG_B], answer
+            organizations = json.loads(organizations_file.read_text())
+            assert [(o['label'], o['organization_id']) for o in organizations['organizations']] == [('smoke', ORG), (LABEL_B, ORG_B)], organizations
+            assert set(organizations) == {'schema', 'revision', 'organizations'}, organizations
+            state = published()
+            assert set(accounts_of(state)) == {account_of(ORG), account_of(ORG_B)}, accounts_of(state)
+            assert state['organizations'] == {'state': 'ok', 'revision': answer['revision'], 'config_items_ignored': 1}, state['organizations']
+            # Each organization is listed as an anthropic-api entry keyed by
+            # it at the next scan, and never polled.
             credit_keys = {'anthropic-api:'+account_of(org): org for org in (ORG, ORG_B)}
-            wait_until(lambda: set(get('plugins/quota-cache/status')['entries']) == set(credit_keys) or None, 15, 'credit items were not listed')
+            wait_until(lambda: set(get('plugins/quota-cache/status')['entries']) == set(credit_keys) or None, 15, 'the organizations were not listed')
             for _ in range(25):
                 entries = get('plugins/quota-cache/status')['entries']
                 assert set(entries) == set(credit_keys), entries
@@ -319,67 +322,33 @@ plugins:
         # published quota-cache still passes. Every request carries the key, so
         # none of these counts toward CPA's management-key ban.
         publishing = metered and tuple(map(int, records['quota-cache']['metadata']['version'].split('.'))) >= (0, 2, 0)
-        data = plugins/'data/quota-cache'
-        credits_file = data/'snapshot.credits.json'
-        def published():
-            return json.loads(credits_file.read_text()) if credits_file.is_file() else None
-        def accounts_of(state):
-            return {a['id']: a for a in ((state or {}).get('api_credits') or {}).get('accounts', [])}
         if publishing:
-            # The first start imported Quota Glance's settings verbatim,
-            # wrote its record, and left Quota Glance's file exactly as it was.
-            # The publisher writes its first state once the cache has written
-            # a snapshot.
-            state = wait_until(lambda: published() if len(accounts_of(published())) == 2 else None, 60,
-                               'the credit state was never published with both organizations')
-            assert (data/'snapshot.settings.json').read_bytes() == legacy_bytes, 'the import did not copy the legacy bytes'
-            assert (data/'snapshot.settings-import.json').is_file(), 'no import record'
-            assert legacy.read_bytes() == legacy_bytes and legacy.stat().st_mtime_ns == legacy_mtime, 'Quota Glance\'s file changed'
-            imported = state['settings']['import']
-            assert (state['settings']['state'], imported['state'], imported['kind']) == ('ok', 'imported', 'automatic'), state['settings']
-            assert imported['sha256'] == hashlib.sha256(legacy_bytes).hexdigest(), imported
-            assert imported['counts'] == {'monthly_credits': 1, 'refill_dates': 1, 'readings': 1, 'renewal_dates': 1}, imported
+            # Nothing is saved on the page yet: the settings are empty and
+            # editable, with no settings file until the first save, and no
+            # organization has a credit or a refill date, since none comes
+            # from the configuration.
+            state = published()
+            assert state['settings'] == {'state': 'ok', 'editable': True, 'revision': ''}, state['settings']
+            assert not (data/'snapshot.settings.json').exists(), 'a settings file was written before any save'
             first = accounts_of(state)[account_of(ORG)]
-            assert (first['monthlyCreditSource'], first['settings']['monthlyUsd'], first['settings']['configMonthlyUsd']) == ('dashboard', '150', '200'), first
-            assert first['settings']['reading'] and first['settings']['reading']['remainingUsd'] == '120.50', first['settings']
-            assert accounts_of(state)[account_of(ORG_B)]['renewsSource'] == 'dashboard', state
-            assert state['renewals'][RENEWAL_ID]['date'] == '2026-11-03', state['renewals']
-            assert "quota-cache imported Quota Glance's settings" in run('docker','logs',container)
-
-            # The configured items moved to the organizations file at
-            # that first start, and the configuration's list is ignored from
-            # then on. An organization added on the page is counted and
-            # published before the save answers.
-            organizations = json.loads((data/'snapshot.organizations.json').read_text())
-            assert [(o['label'], o['organization_id']) for o in organizations['organizations']] == [('smoke', ORG), (LABEL_B, ORG_B)], organizations
-            assert (organizations['organizations'][0].get('default_monthly_usd'), organizations['organizations'][0].get('default_renews')) == ('200', '2026-10-29'), organizations
-            assert (organizations['migration']['moved'], organizations['migration']['skipped']) == (2, 0), organizations
+            assert (first['monthlyCreditSource'], first['renewsSource'], first['settings']['monthlyUsd'], first['settings']['configMonthlyUsd']) == ('none', 'none', '', ''), first
+            assert state['renewals'] == {}, state['renewals']
             status = get('plugins/quota-cache/status')
-            source = status['credit_state']['organizations']
-            assert (source['state'], source['source'], source['config_items_ignored']) == ('ok', 'page', 2), source
-            editor = status['editor']['organizations']
-            assert editor['available'] and len(editor['items']) == 2, editor
-            code, answer = save({'kind': 'organizations', 'baseRevision': editor['revision'],
-                                 'ops': [{'op': 'add', 'label': 'smoke-three', 'organizationId': ORG_C}]})
-            assert code == 200 and answer['ok'] and not answer['unchanged'], (code, answer)
-            assert [o['organization_id'] for o in answer['organizations']] == [ORG, ORG_B, ORG_C], answer
-            listed = accounts_of(published())
-            assert {account_of(org) for org in (ORG, ORG_B, ORG_C)} <= set(listed), listed
             logs = run('docker','logs',container)
-            for line in ('quota-cache moved its Claude Console organizations to its page',
-                         'quota-cache keeps Claude Console organizations on its page; claude-api-credits in its configuration is ignored',
-                         'quota-cache organizations changed'):
-                assert line in logs, line
+            assert 'quota-cache organizations changed' in logs
+            assert 'quota-cache moved its Claude Console organizations' not in logs, 'something moved from the configuration'
 
             # A save through CPA's management route, published before
             # the answer; and the route's refusals that CPA must pass through.
             second = accounts_of(status['credit_state'])[account_of(ORG_B)]['settings']
             batch = {'kind': 'apiCredits', 'items': [{'id': account_of(ORG_B), 'baseRevision': second['revision'],
-                                                      'monthlyUsd': '175', 'renews': second['renews'], 'reading': None}]}
+                                                      'monthlyUsd': '175', 'renews': second['renews'] or None, 'reading': None}]}
             code, answer = save(batch, 'text/plain')
             assert (code, answer) == (415, {'error': 'unsupported_media_type'}), (code, answer)
             code, answer = save(batch, headers={'Sec-Fetch-Site': 'cross-site'})
             assert (code, answer) == (403, {'error': 'cross_site'}), (code, answer)
+            code, answer = save({'kind': 'importLegacy', 'baseRevision': ''})
+            assert (code, answer) == (400, {'error': 'invalid_request'}), (code, answer)
             code, answer = save(batch)
             assert code == 200 and answer['ok'] and answer['settings'][account_of(ORG_B)]['monthlyUsd'] == '175', (code, answer)
             saved = accounts_of(published())[account_of(ORG_B)]
@@ -406,8 +375,8 @@ plugins:
             assert sentences, 'no published sentence carries an apostrophe: ' + json.dumps({id: a['issue'] for id, a in listed.items()})
             for id, issue in sentences.items():
                 assert issue == written[id]['issue'], (issue, written[id]['issue'])
-            print(f'  credits       imported Quota Glance\'s settings verbatim; organizations moved to the page and one '
-                  f'added; a save published before its answer; 415, 403 and CPA\'s empty 404 as specified; '
+            print(f'  credits       claude-api-credits ignored and two organizations added on the page; a save published before its answer; '
+                  f'415, 403, 400 for an unknown kind and CPA\'s empty 404 as specified; '
                   f'{LABEL_B!r} and {len(sentences)} sentence(s) arrived unescaped')
         # Quota Cache 0.2.0 refreshes every account after Quota Glance spends a
         # banked reset. Placeholder Claude credentials give it accounts to
@@ -536,7 +505,7 @@ plugins:
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         evidence['api_meter'] = 'file, shutdown stop and gap verified' if metered else 'not configured'
-        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, restart' + (', the API meter file with its shutdown gap' if metered else '') + (', the settings import, organizations, save route and published credit state' if publishing else '') + ' verified with an empty synthetic roster' + ('; the refresh after a banked reset with three tokenless placeholder credentials' if refreshing else ''))
+        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, restart' + (', the API meter file with its shutdown gap' if metered else '') + (', organizations, save route and published credit state' if publishing else '') + ' verified with an empty synthetic roster' + ('; the refresh after a banked reset with three tokenless placeholder credentials' if refreshing else ''))
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.
         print(run('docker','logs',container)[-6000:])

@@ -125,21 +125,21 @@ func TestCheckReadingRules(t *testing.T) {
 		item APICreditItem
 		code string
 	}{
-		"now":                      {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:00:00Z")}, ""},
-		"48 hours ago":             {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-07T14:00:00Z")}, ""},
-		"48 hours and a second":    {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-07T13:59:59Z")}, CodeReadingTime},
-		"five minutes ahead":       {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:05:00Z")}, ""},
-		"more than five ahead":     {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:05:01Z")}, CodeReadingTime},
-		"with an offset":           {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T13:00:00+00:00")}, CodeReadingTime},
-		"with a fraction":          {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T13:00:00.5Z")}, CodeReadingTime},
-		"not a time":               {APICreditItem{ID: accountA, Reading: reading("1.00", "today")}, CodeReadingTime},
-		"a bad amount":             {APICreditItem{ID: accountA, Reading: reading("1.001", "2026-10-09T13:00:00Z")}, CodeReadingAmount},
-		"before the config refill": {APICreditItem{ID: accountA, ConfigRenews: "2026-10-09", Reading: reading("1.00", "2026-10-08T23:59:59Z")}, CodeReadingBeforeRefill},
-		"after the config refill":  {APICreditItem{ID: accountA, ConfigRenews: "2026-10-09", Reading: reading("1.00", "2026-10-09T00:00:00Z")}, ""},
-		// The batch's own refill date is the one that counts, and "Use config"
-		// (renews null) brings the config's back.
-		"before the batch's refill":  {APICreditItem{ID: accountA, Renews: ptr("2026-10-09"), Reading: reading("1.00", "2026-10-08T12:00:00Z")}, CodeReadingBeforeRefill},
-		"the batch moves the refill": {APICreditItem{ID: accountA, ConfigRenews: "2026-10-09", Renews: ptr("2026-10-01"), Reading: reading("1.00", "2026-10-08T12:00:00Z")}, ""},
+		"now":                   {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:00:00Z")}, ""},
+		"48 hours ago":          {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-07T14:00:00Z")}, ""},
+		"48 hours and a second": {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-07T13:59:59Z")}, CodeReadingTime},
+		"five minutes ahead":    {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:05:00Z")}, ""},
+		"more than five ahead":  {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T14:05:01Z")}, CodeReadingTime},
+		"with an offset":        {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T13:00:00+00:00")}, CodeReadingTime},
+		"with a fraction":       {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-09T13:00:00.5Z")}, CodeReadingTime},
+		"not a time":            {APICreditItem{ID: accountA, Reading: reading("1.00", "today")}, CodeReadingTime},
+		"a bad amount":          {APICreditItem{ID: accountA, Reading: reading("1.001", "2026-10-09T13:00:00Z")}, CodeReadingAmount},
+		// The row's own refill date is the only one: without one, nothing
+		// says when the credit last refilled.
+		"before the row's refill": {APICreditItem{ID: accountA, Renews: ptr("2026-10-09"), Reading: reading("1.00", "2026-10-08T23:59:59Z")}, CodeReadingBeforeRefill},
+		"on the row's refill day": {APICreditItem{ID: accountA, Renews: ptr("2026-10-09"), Reading: reading("1.00", "2026-10-09T00:00:00Z")}, ""},
+		"an earlier refill":       {APICreditItem{ID: accountA, Renews: ptr("2026-10-01"), Reading: reading("1.00", "2026-10-08T12:00:00Z")}, ""},
+		"no refill date":          {APICreditItem{ID: accountA, Reading: reading("1.00", "2026-10-08T12:00:00Z")}, ""},
 	} {
 		fail := Batch{APICredits: []APICreditItem{tc.item}}.Check(Values{}, now)
 		switch {
@@ -176,46 +176,21 @@ func TestCheckReadingRules(t *testing.T) {
 // before anything else is parsed.
 func TestRequestKind(t *testing.T) {
 	for body, want := range map[string]string{
-		`{"kind":"apiCredits","items":[]}`:                     KindAPICredits,
-		`{"kind":"renewals"}`:                                  KindRenewals,
-		` {"kind":"importLegacy","baseRevision":""}`:           KindImportLegacy,
-		`{"baseRevision":"4","ops":[],"kind":"organizations"}`: KindOrganizations,
-		`{"kind":"budgets"}`:                                   "budgets",
-		`{"kind":7}`:                                           "",
-		`{"kind":null}`:                                        "",
-		`{"items":[]}`:                                         "",
-		`["kind"]`:                                             "",
-		`"apiCredits"`:                                         "",
-		`{"kind":"apiCredits"`:                                 "",
-		``:                                                     "",
+		`{"kind":"apiCredits","items":[]}`:                                    KindAPICredits,
+		`{"kind":"renewals"}`:                                                 KindRenewals,
+		`{"baseRevision":"4","ops":[],"kind":"organizations"}`:                KindOrganizations,
+		"\n\t {\"kind\":\"organizations\",\"baseRevision\":\"4\",\"ops\":[]}": KindOrganizations,
+		`{"kind":"budgets"}`:                                                  "budgets",
+		`{"kind":7}`:                                                          "",
+		`{"kind":null}`:                                                       "",
+		`{"items":[]}`:                                                        "",
+		`["kind"]`:                                                            "",
+		`"apiCredits"`:                                                        "",
+		`{"kind":"apiCredits"`:                                                "",
+		``:                                                                    "",
 	} {
 		if got := RequestKind([]byte(body)); got != want {
 			t.Errorf("%s: %q, want %q", body, got, want)
-		}
-	}
-}
-
-func TestParseImportLegacy(t *testing.T) {
-	for body, want := range map[string]string{
-		`{"kind":"importLegacy","baseRevision":""}`:   "",
-		`{"baseRevision":"12","kind":"importLegacy"}`: "12",
-	} {
-		if got, err := ParseImportLegacy([]byte(body)); err != nil || got != want {
-			t.Errorf("%s: %q %v", body, got, err)
-		}
-	}
-	for _, body := range []string{
-		``, `null`, `[]`,
-		`{"kind":"importLegacy"}`,
-		`{"kind":"importLegacy","baseRevision":null}`,
-		`{"kind":"importLegacy","baseRevision":12}`,
-		`{"kind":"importLegacy","baseRevision":"012"}`,
-		`{"kind":"apiCredits","baseRevision":""}`,
-		`{"kind":"importLegacy","baseRevision":"","path":"/etc/passwd"}`,
-		`{"kind":"importLegacy","baseRevision":""} {}`,
-	} {
-		if _, err := ParseImportLegacy([]byte(body)); !errors.Is(err, ErrInvalidRequest) {
-			t.Errorf("%s: %v", body, err)
 		}
 	}
 }

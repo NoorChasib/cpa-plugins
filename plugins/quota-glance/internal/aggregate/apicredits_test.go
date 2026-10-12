@@ -46,9 +46,9 @@ func readOnlyMasked(card, published *APICredits) APICredits {
 
 // Every published field is shown as the overlay leaves it, except
 // editing and each account's editable and reason, which say the values are
-// edited on Quota Cache's page, or, while Quota Cache cannot use its saved
-// settings, which file is at fault. A reason no page could lift is kept. The
-// published state itself is never changed.
+// edited on Quota Cache's page, or, while Quota Cache cannot read its saved
+// settings, say so. A reason no page could lift is kept. The published state
+// itself is never changed.
 func TestCreditsArePassedThroughReadOnly(t *testing.T) {
 	for _, name := range []string{"api-credits", "degraded-states"} {
 		state := fixtureCredits(t, name)
@@ -89,40 +89,30 @@ func TestCreditsArePassedThroughReadOnly(t *testing.T) {
 		}
 	}
 
-	// Quota Cache that cannot use its saved settings says why, and so does
+	// Quota Cache that cannot read its saved settings says why, and so does
 	// every account it would otherwise let the operator edit.
-	for _, tc := range []struct{ settings, reason string }{
-		{qc.CreditSettingsUnreadable, qc.CreditEditingSettingsUnreadable},
-		{qc.CreditSettingsLegacyUnreadable, qc.CreditEditingLegacyUnreadable},
-	} {
-		state := fixtureCredits(t, "degraded-states")
-		state.Settings = qc.CreditSettingsState{State: tc.settings}
-		state.APICredits.Editing = APICreditEditing{Reason: tc.reason}
-		for i := range state.APICredits.Accounts {
-			if s := &state.APICredits.Accounts[i].Settings; !structuralReasons[s.NotEditableReason] {
-				s.Editable, s.NotEditableReason = false, tc.reason
-			}
-		}
-		card := cardAt(state, state.ComputedAt, 45*time.Minute)
-		if card.Editing != (APICreditEditing{Reason: tc.reason}) {
-			t.Errorf("%s: editing = %+v", tc.settings, card.Editing)
-		}
-		for _, account := range card.Accounts {
-			if s := account.Settings; s.Editable || (s.NotEditableReason != tc.reason && !structuralReasons[s.NotEditableReason]) {
-				t.Errorf("%s %s: %+v", tc.settings, account.ID, s)
-			}
+	const reason = qc.CreditEditingSettingsUnreadable
+	unreadable := fixtureCredits(t, "degraded-states")
+	unreadable.Settings = qc.CreditSettingsState{State: qc.CreditSettingsUnreadable}
+	unreadable.APICredits.Editing = APICreditEditing{Reason: reason}
+	for i := range unreadable.APICredits.Accounts {
+		if s := &unreadable.APICredits.Accounts[i].Settings; !structuralReasons[s.NotEditableReason] {
+			s.Editable, s.NotEditableReason = false, reason
 		}
 	}
-
-	// The migration note rides on editing, with a state and without one.
-	state := fixtureCredits(t, "api-credits")
-	if got := Build(Input{Credits: state, Migration: MigrationChangedSinceImport}, workedAt).APICredits.Editing; got !=
-		(APICreditEditing{Reason: qc.CreditEditingQuotaCache, Migration: MigrationChangedSinceImport}) {
-		t.Errorf("editing with a migration note = %+v", got)
+	card := cardAt(unreadable, unreadable.ComputedAt, 45*time.Minute)
+	if card.Editing != (APICreditEditing{Reason: reason}) {
+		t.Errorf("unreadable settings: editing = %+v", card.Editing)
+	}
+	for _, account := range card.Accounts {
+		if s := account.Settings; s.Editable || (s.NotEditableReason != reason && !structuralReasons[s.NotEditableReason]) {
+			t.Errorf("unreadable settings %s: %+v", account.ID, s)
+		}
 	}
 
 	// A Quota Cache that lists no organization publishes none, and there is
 	// no card, whatever the snapshot holds.
+	state := fixtureCredits(t, "api-credits")
 	state.APICredits = nil
 	if card := Build(Input{Snapshot: loadSnapshot(t, "api-credits.json"), Credits: state}, workedAt).APICredits; card != nil {
 		t.Errorf("apiCredits = %+v; want null", card)
@@ -132,16 +122,16 @@ func TestCreditsArePassedThroughReadOnly(t *testing.T) {
 // Without a usable state, each anthropic-api entry in the snapshot is one
 // account with no figures, cacheTooOld, not counted, and saying why; nothing
 // only Quota Cache could know is shown, and no renewal date entered on its
-// page is known. Which file is behind each cause, and the migration note, are
-// source's (source_test.go and legacy_test.go).
+// page is known. Which file is behind each cause is source's (source_test.go).
 func TestFallbackWithoutQuotaCacheState(t *testing.T) {
 	snapshot := loadSnapshot(t, "seven-credentials.json")
-	entries := 0
+	configured := map[string]*qc.APICredit{}
 	for _, entry := range snapshot.Entries {
 		if entry.Provider == qc.ProviderAnthropicAPI {
-			entries++
+			configured[entry.AuthIndex] = entry.APICredit
 		}
 	}
+	entries := len(configured)
 	if entries == 0 {
 		t.Fatal("the fixture has no anthropic-api entry; the test asserts nothing")
 	}
@@ -149,7 +139,7 @@ func TestFallbackWithoutQuotaCacheState(t *testing.T) {
 	for cause, sentence := range fallbackIssues {
 		in := Input{
 			Snapshot: snapshot, Identities: fixtureRoster(), StaleAfter: 45 * time.Minute,
-			CreditsError: cause, Migration: MigrationAwaitingImport,
+			CreditsError: cause,
 		}
 		if cause == CreditsAbandoned {
 			// An abandoned file is loaded, and ignored.
@@ -161,17 +151,20 @@ func TestFallbackWithoutQuotaCacheState(t *testing.T) {
 			t.Fatalf("%s: apiCredits is null", cause)
 		}
 		if card.Title != apiCreditsTitle || card.Currency != "USD" || card.Pricing != (APICreditPricing{}) || card.Meter != nil ||
-			card.Editing != (APICreditEditing{Reason: qc.CreditEditingQuotaCache, Migration: MigrationAwaitingImport}) ||
+			card.Editing != (APICreditEditing{Reason: qc.CreditEditingQuotaCache}) ||
 			card.Pool != (APICreditPool{AccountCount: entries, MissingCount: entries}) ||
 			card.Unlinked == nil || len(card.Unlinked) != 0 || card.Orphans == nil || len(card.Orphans) != 0 || len(card.Accounts) != entries {
 			t.Errorf("%s: card %s", cause, jsonOf(t, card))
 		}
 		for i, account := range card.Accounts {
-			// The published order, which is the configured one.
-			if want := published.APICredits.Accounts[i]; account.ID != want.ID || account.Label != want.Label ||
+			// The published order, and the credit and refill date the
+			// snapshot's entry carries, as a Quota Cache older than 0.2.0
+			// wrote them from its configuration.
+			want, c := published.APICredits.Accounts[i], configured[account.ID]
+			if c == nil || c.MonthlyUSD == "" || c.Renews == "" || account.ID != want.ID || account.Label != want.Label ||
 				account.Order != want.Order || account.OrganizationID != want.OrganizationID ||
-				account.Settings.ConfigMonthlyUSD != want.Settings.ConfigMonthlyUSD || account.Settings.ConfigRenews != want.Settings.ConfigRenews {
-				t.Errorf("%s: account %d = %s, want the configured %s", cause, i, jsonOf(t, account), jsonOf(t, want))
+				account.Settings.ConfigMonthlyUSD != c.MonthlyUSD || account.Settings.ConfigRenews != c.Renews {
+				t.Errorf("%s: account %d = %s, want %s with the snapshot's %s", cause, i, jsonOf(t, account), jsonOf(t, want), jsonOf(t, c))
 			}
 			if account.State != qc.CreditStateCacheTooOld || account.Counted || account.HasEstimate || account.Basis != "" ||
 				!reflect.DeepEqual(account.DataIssues, []string{qc.CreditIssueCacheTooOld}) || account.Issue != sentence ||

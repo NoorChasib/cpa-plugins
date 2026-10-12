@@ -39,7 +39,6 @@ import {
   markText,
   meterLine,
   meterStopped,
-  migrationText,
   moneyText,
   notEditableText,
   poolNotes,
@@ -104,14 +103,13 @@ const MISSING =
 
 /**
  * The card as Quota Glance builds it without Quota Cache's credit state, for
- * the golden organizations: listed from the snapshot, none counted, and the
- * values saved in Quota Glance awaiting Quota Cache's first start.
+ * the golden organizations: listed from the snapshot, none counted.
  */
 const fallback: APICredits = {
   ...golden,
   pricing: { asOf: "", source: "", cacheWrites: "" },
   meter: null,
-  editing: { available: false, reason: "quotaCache", migration: "awaitingImport" },
+  editing: { available: false, reason: "quotaCache" },
   pool: {
     ...golden.pool,
     hasEstimate: false,
@@ -474,9 +472,9 @@ describe("creditNotes", () => {
   })
 
   test("no link where Quota Cache's page cannot edit the row either", () => {
-    // A reason no page could lift, or Quota Cache unable to use its saved
+    // A reason no page could lift, or Quota Cache unable to read its saved
     // settings: the line keeps its sentence and loses its link.
-    for (const reason of ["noOrganization", "duplicateOrganization", "overLimit", "cacheTooOld", "settingsUnreadable", "legacyUnreadable"]) {
+    for (const reason of ["noOrganization", "duplicateOrganization", "overLimit", "cacheTooOld", "settingsUnreadable"]) {
       const alpha = account(degraded, "alpha")
       const locked = { ...alpha, settings: { ...alpha.settings, notEditableReason: reason } }
       assert.equal(editsInQuotaCache(locked), false, reason)
@@ -606,34 +604,36 @@ describe("the basis and the marks for values entered in Quota Cache", () => {
     assert.equal(creditBasis(account(degraded, "charlie")), null)
   })
 
-  test("a value entered on Quota Cache's page says what the config has instead", () => {
-    assert.deepEqual(setHere(account(golden, "bravo")), { credit: "100", refill: null })
-    assert.deepEqual(setHere(account(golden, "alpha")), { credit: null, refill: null })
-    const both = patched(golden, "alpha", { renewsSource: "dashboard", monthlyCreditSource: "dashboard" })
-    assert.deepEqual(setHere(both), { credit: "200", refill: "2026-09-29" })
+  /** Alpha with configured values beside the entered ones, which Quota Cache 0.2.0 never publishes. */
+  const configured = (patch: Partial<APICreditAccount["settings"]>) =>
+    patched(golden, "alpha", { settings: { ...account(golden, "alpha").settings, ...patch } })
+
+  test("a value entered on Quota Cache's page, with any configured value beside it", () => {
+    // Quota Cache 0.2.0 publishes no configured value.
+    assert.deepEqual(setHere(account(golden, "alpha")), { credit: "", refill: "" })
+    assert.deepEqual(setHere(account(degraded, "charlie")), { credit: "", refill: null })
+    assert.deepEqual(setHere(account(degraded, "india")), { credit: null, refill: null })
+    assert.deepEqual(setHere(configured({ configMonthlyUsd: "200", configRenews: "2026-09-29" })), { credit: "200", refill: "2026-09-29" })
+    assert.deepEqual(setHere(configured({ configMonthlyUsd: "x", configMonthlyUsdInvalid: true })), { credit: "", refill: "" })
     assert.equal(anySetHere(golden.accounts), true)
-    assert.equal(anySetHere(degraded.accounts), false)
+    assert.equal(anySetHere(fallback.accounts), false)
   })
 
-  test("its hover names the config's value, so Glance still tells config from entered", () => {
+  test("its hover says the value was entered in Quota Cache, and names a configured value beside it", () => {
     const day = (epoch: number) => `day ${epoch}`
-    assert.deepEqual(setHereTitles(account(golden, "bravo"), day), {
-      credit: "Entered in Quota Cache. Its config says $100.00.",
-      refill: null,
+    assert.deepEqual(setHereTitles(account(golden, "alpha"), day), {
+      credit: "Entered in Quota Cache.",
+      refill: "Entered in Quota Cache.",
     })
-    const both = patched(golden, "alpha", { renewsSource: "dashboard", monthlyCreditSource: "dashboard" })
-    assert.deepEqual(setHereTitles(both, day), {
+    assert.deepEqual(setHereTitles(account(degraded, "charlie"), day), { credit: "Entered in Quota Cache.", refill: null })
+    assert.deepEqual(setHereTitles(configured({ configMonthlyUsd: "200", configRenews: "2026-09-29" }), day), {
       credit: "Entered in Quota Cache. Its config says $200.00.",
       refill: `Entered in Quota Cache. Its config says day ${Date.UTC(2026, 8, 29) / 1000}.`,
     })
-    // Nothing usable in the config.
-    const bare = patched(golden, "bravo", {
-      renewsSource: "dashboard",
-      settings: { ...account(golden, "bravo").settings, configMonthlyUsd: "", configRenewsInvalid: true },
-    })
-    assert.deepEqual(setHereTitles(bare, day), {
-      credit: "Entered in Quota Cache. Not in its config.",
-      refill: "Entered in Quota Cache. Not in its config.",
+    // Nothing usable configured.
+    assert.deepEqual(setHereTitles(configured({ configMonthlyUsd: "200", configRenewsInvalid: true }), day), {
+      credit: "Entered in Quota Cache. Its config says $200.00.",
+      refill: "Entered in Quota Cache.",
     })
     assert.equal(ENTERED_HERE, "entered in Quota Cache")
   })
@@ -799,10 +799,32 @@ describe("editing copy: why nothing is edited here, and where it is", () => {
     assert.equal(notEditableText("overLimit"), "Only the first 16 items in claude-api-credits can be edited.")
     assert.equal(notEditableText("cacheTooOld"), "Update Quota Cache to edit this organization.")
     // The card's own reasons are the card's to say.
-    for (const reason of ["quotaCache", "settingsUnreadable", "legacyUnreadable", ""]) assert.equal(notEditableText(reason), null, reason)
+    for (const reason of ["quotaCache", "settingsUnreadable", ""]) assert.equal(notEditableText(reason), null, reason)
     // The degraded document carries one of each, and quotaCache everywhere else.
     const reasons = degraded.accounts.map((item) => item.settings.notEditableReason)
     for (const reason of ["noOrganization", "duplicateOrganization", "overLimit", "cacheTooOld", "quotaCache"]) assert.ok(reasons.includes(reason), reason)
+  })
+
+  test("an item's reason is told as its row's own sentence tells it, by claude-api-credits' items", () => {
+    // Quota Cache's page holds at most 16 organizations, each with its own
+    // valid Organization ID, so none of these is about the page.
+    const items = degraded.accounts.filter((item) =>
+      ["noOrganization", "duplicateOrganization", "overLimit"].includes(item.settings.notEditableReason),
+    )
+    assert.equal(items.length, 3)
+    for (const item of items) {
+      for (const text of [item.issue, notEditableText(item.settings.notEditableReason)!]) {
+        assert.match(text, /organization-id|claude-api-credits/, text)
+        assert.doesNotMatch(text, /Quota Cache's page/, text)
+      }
+    }
+    // The pool's line for the organization that item past the first 16 names
+    // says the same.
+    const over = degraded.unlinked.find((org) => org.reason === "overLimit")!
+    assert.ok(items.some((item) => item.organizationId === over.organizationId && item.settings.notEditableReason === "overLimit"))
+    const line = poolNotes(degraded, NOW).find((note) => note.text.includes(shortOrganization(over.organizationId)))!
+    assert.match(line.text, /in an item past the first 16 in claude-api-credits/)
+    assert.doesNotMatch(line.text, /Quota Cache's page/)
   })
 
   test("nothing on either card is editable here", () => {
@@ -817,49 +839,15 @@ describe("editing copy: why nothing is edited here, and where it is", () => {
     assert.equal(editingOffText(golden.editing), "Change these on Quota Cache's page in CPA's management console.")
     assert.equal(
       editingOffText({ available: false, reason: "settingsUnreadable" }),
-      "Quota Cache cannot read its saved settings, so only config values apply. See Quota Cache's page.",
-    )
-    assert.equal(
-      editingOffText({ available: false, reason: "legacyUnreadable" }),
-      "Quota Glance's settings.json could not be read, so Quota Cache imported nothing and only config values apply. Fix it or move it aside.",
+      "Quota Cache cannot read its saved settings, so the values entered there do not apply. See Quota Cache's page.",
     )
     // Only a plugin older than 0.8.0 offered editing here.
     assert.equal(editingOffText({ available: true, reason: "" }), null)
   })
 
-  test("the foot says more only while Quota Cache cannot use its saved settings", () => {
+  test("the foot says more only while Quota Cache cannot read its saved settings", () => {
     assert.equal(editingTrouble(golden.editing), null)
     assert.equal(editingTrouble({ available: false, reason: "settingsUnreadable" }), editingOffText({ available: false, reason: "settingsUnreadable" }))
-    assert.equal(editingTrouble({ available: false, reason: "legacyUnreadable" }), editingOffText({ available: false, reason: "legacyUnreadable" }))
-  })
-})
-
-describe("the migration line: whether Quota Glance's saved settings reached Quota Cache", () => {
-  const MIGRATION = {
-    notImported:
-      "Quota Cache has not imported the settings saved in Quota Glance. Import them on Quota Cache's page; its README says what to do if the page does not offer it.",
-    changedSinceImport: "Quota Glance's saved settings changed after Quota Cache imported them; open Quota Cache's page.",
-    awaitingImport:
-      "Your monthly credits, refill dates, Console readings and renewal dates saved in Quota Glance are kept, and Quota Cache 0.2.0 imports them when it starts.",
-  }
-
-  test("each value's copy, and nothing to say for the rest", () => {
-    for (const [migration, text] of Object.entries(MIGRATION)) assert.equal(migrationText(migration), text, migration)
-    assert.equal(migrationText(""), null)
-    assert.equal(migrationText("somethingNew"), null)
-  })
-
-  test("a pool line after the coverage line: amber while values are not in Quota Cache, quiet while kept for it", () => {
-    const with_ = (migration: string) => ({ ...golden, editing: { ...golden.editing, migration } })
-    assert.deepEqual(poolNotes(with_("notImported"), NOW)[0], { text: MIGRATION.notImported, tone: "warn" })
-    assert.deepEqual(poolNotes(with_("changedSinceImport"), NOW)[0], { text: MIGRATION.changedSinceImport, tone: "warn" })
-    // The degraded pool leaves accounts out: the coverage line comes first.
-    const texts = poolNotes({ ...degraded, editing: { ...degraded.editing, migration: "notImported" } }, NOW).map((note) => note.text)
-    assert.deepEqual(texts.slice(0, 2), ["counts 2 of 9 accounts · 7 are left out", MIGRATION.notImported])
-    // Nothing to say, or an older plugin that sends no migration at all.
-    assert.equal(poolNotes(golden, NOW).length, 1)
-    const { migration: _, ...older } = golden.editing
-    assert.equal(poolNotes({ ...golden, editing: older }, NOW).length, 1)
   })
 })
 
@@ -883,14 +871,8 @@ describe("without Quota Cache's credit state: the card Quota Glance builds itsel
     )
   })
 
-  test("the pool counts none of them, then says the saved settings are kept for Quota Cache's first start", () => {
-    assert.deepEqual(poolNotes(fallback, NOW), [
-      { text: "counts 0 of 5 accounts · 5 are left out", tone: "warn" },
-      {
-        text: "Your monthly credits, refill dates, Console readings and renewal dates saved in Quota Glance are kept, and Quota Cache 0.2.0 imports them when it starts.",
-        tone: "quiet",
-      },
-    ])
+  test("the pool counts none of them", () => {
+    assert.deepEqual(poolNotes(fallback, NOW), [{ text: "counts 0 of 5 accounts · 5 are left out", tone: "warn" }])
     // One organization: named, and why in the neutral words.
     const one = { ...fallback, accounts: fallback.accounts.slice(0, 1), pool: { ...fallback.pool, accountCount: 1, missingCount: 1 } }
     assert.equal(poolNotes(one, NOW)[0]!.text, "counts 0 of 1 accounts · alpha is left out: Quota Cache has no figures for it")
