@@ -278,6 +278,16 @@ func (b *Bridge) HTTPDo(ctx context.Context, req HTTPRequest) (HTTPResponse, err
 	resultCh := make(chan httpResult, 1)
 	go func() {
 		defer b.releaseCaller()
+		// A panic here would abort CPA, because no goroutine above this worker
+		// recovers, so the caller gets an error instead, without the panic
+		// value, which can carry response bytes. A Go panic cannot occur while
+		// the native call is inside the host, so releasing the admission above
+		// is still correct. Nothing was sent yet, so the send cannot block.
+		defer func() {
+			if recover() != nil {
+				resultCh <- httpResult{err: fmt.Errorf("host callback %s: internal error", MethodHostHTTPDo)}
+			}
+		}()
 		// Cancellation can win before this newly admitted worker is scheduled. In
 		// that case do not enter CPA later with a callback ID whose management
 		// request may already have unwound. Once invoke begins, ABI v1 provides no

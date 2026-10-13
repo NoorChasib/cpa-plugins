@@ -196,6 +196,7 @@ func New(cfg config.Config, deps Deps) *Engine {
 		}
 		runAsync(func() {
 			defer e.workWG.Done()
+			defer e.recoverWork()
 			f()
 		})
 	}
@@ -782,18 +783,9 @@ func accountLabel(entry hostapi.AuthEntry) string {
 // semaphore, so full reconciliations, exact-deadline fetches, and retry waves
 // all share the same bounded-concurrency limit.
 func (e *Engine) fetchAll(ctx context.Context, authIndexes []string) {
-	if len(authIndexes) == 0 {
-		return
-	}
-	var wg sync.WaitGroup
-	for _, authIndex := range authIndexes {
-		wg.Add(1)
-		go func(idx string) {
-			defer wg.Done()
-			e.fetchOneInternal(ctx, idx, true, noRetrySequence)
-		}(authIndex)
-	}
-	wg.Wait()
+	e.fetchConcurrently(len(authIndexes), func(i int) {
+		e.fetchOneInternal(ctx, authIndexes[i], true, noRetrySequence)
+	})
 }
 
 const noRetrySequence = -1
@@ -1438,15 +1430,9 @@ func (e *Engine) confirmWaveStep(seq uint64, last bool) {
 	}
 	e.mu.Unlock()
 
-	var wg sync.WaitGroup
-	for _, t := range targets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			e.fetchOneInternal(ctx, t.authIndex, false, t.retrySeq)
-		}()
-	}
-	wg.Wait()
+	e.fetchConcurrently(len(targets), func(i int) {
+		e.fetchOneInternal(ctx, targets[i].authIndex, false, targets[i].retrySeq)
+	})
 
 	e.mu.Lock()
 	if e.stopped || seq != e.confirmSeq {
@@ -1713,6 +1699,37 @@ func (e *Engine) scheduleNextReconcileLocked() {
 	})
 }
 
+// logWorkPanic is the line recoverWork logs. It never carries the panic
+// value, which can hold credential data.
+const logWorkPanic = "reset-priority: recovered from an internal error in background work"
+
+// recoverWork is deferred at the top of every goroutine the engine starts:
+// RunAsync work, timer callbacks and fetch fan-outs. A panic there would abort
+// CPA, because no goroutine above it recovers, so it abandons that piece of
+// work and warns instead. It must be the deferred call itself for recover to
+// take effect.
+func (e *Engine) recoverWork() {
+	if recover() != nil {
+		e.logf("warn", logWorkPanic)
+	}
+}
+
+// fetchConcurrently runs fetch(i) for i in [0, n), each on its own goroutine,
+// and waits for all of them. A fetch that panics is recovered on its own
+// goroutine, so the others still complete.
+func (e *Engine) fetchConcurrently(n int, fetch func(i int)) {
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer e.recoverWork()
+			fetch(i)
+		}()
+	}
+	wg.Wait()
+}
+
 // afterFunc reserves engine work before exposing a timer to the clock. A
 // successful Stop releases a callback that will never run; otherwise the
 // callback releases itself after returning. This closes the fired-but-not-yet-
@@ -1724,6 +1741,7 @@ func (e *Engine) afterFunc(delay time.Duration, f func()) clock.Timer {
 	tracked := &trackedTimer{release: e.workWG.Done}
 	tracked.timer = e.clk.AfterFunc(delay, func() {
 		defer tracked.finish()
+		defer e.recoverWork()
 		f()
 	})
 	return tracked

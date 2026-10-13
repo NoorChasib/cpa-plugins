@@ -25,7 +25,7 @@ import (
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.2.0"
+	PluginVersion = "0.2.1"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )

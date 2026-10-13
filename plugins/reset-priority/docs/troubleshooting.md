@@ -228,6 +228,12 @@ The plugin caps native host callbacks at 64 in flight across the process. This i
 
 `host callback limit reached` means earlier callbacks entered CPA and have not returned, commonly because provider HTTP is stuck behind broken network/proxy behavior after the plugin-side timeout ended. New callbacks fail fast rather than adding more blocked cgo calls and OS threads. Check CPA/proxy connectivity and host-side HTTP timeouts, stop forcing Refresh, and restart CPA after correcting the underlying problem. Do not increase the limit to hide callbacks that never return. Terminal unload may still wait for the already-entered finite set, as described below.
 
+## Logs report `reset-priority: recovered from an internal error in background work`
+
+A bug in Reset Priority panicked in work it runs in the background: a reconciliation, an account's quota read, a retry or reset-deadline timer, or the worker behind a provider request. The plugin caught it rather than let it end CPA, and abandoned that piece of work. The line leaves out the panic's value, which could carry credential data. A provider request that panicked also gives its account the error `host callback host.http.do: internal error`.
+
+Accounts the abandoned work would have read can stay `unknown` or `stale` on the status page. **Refresh now**, or saving the plugin's configuration, starts a fresh reconciliation. Work abandoned partway can leave the plugin unable to finish a later configuration apply or unload; if one hangs after this line, restart CPA. If the line comes back, report it with the Reset Priority version and the CPA log lines around it, reviewed for secrets first.
+
 ## Release archive or checksum validation fails
 
 A release ZIP is valid only when its root contains exactly:

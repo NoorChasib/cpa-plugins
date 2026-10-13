@@ -2,10 +2,12 @@
 
 Every plugin keeps its own version. Releases currently target **Linux amd64 only**.
 
+This covers the CPA plugins in `registry.json`. Quota Glance Menu Bar is a macOS app outside the catalog and this workflow: its `quota-glance-menubar/v*` tags run its own workflow; see its [reference](../plugins/quota-glance-menubar/REFERENCE.md#github-releases).
+
 ## Publish a change
 
-1. Change the plugin and bump its native version. Account Health, Codex Catalog Filter, Quota Cache, and Token Usage have `Version` in `internal/plugin/plugin.go` and a matching Makefile `VERSION`. Auto Baseline and Reset Priority use `PluginVersion` in `internal/plugin/runtime.go`; their Makefiles derive it automatically.
-2. Update any plugin-specific version fixtures and run its existing checks. Token Usage deliberately binds the candidate version in its package helper, local registry, native/browser fixtures, browser package metadata, and historical workflow references. Its `scripts/check-candidate.py` and existing tests must all agree. Do not edit the root catalogs yet: they describe published downloads.
+1. Change the plugin and bump its native version. Account Health, Codex Catalog Filter, Quota Cache, Quota Glance, and Token Usage have `Version` in `internal/plugin/plugin.go` and a matching Makefile `VERSION`. Auto Baseline and Reset Priority use `PluginVersion` in `internal/plugin/runtime.go`; their Makefiles derive it automatically.
+2. Update any plugin-specific version fixtures and run its existing checks. Token Usage deliberately binds the candidate version in its package helper, local registry, native/browser fixtures, browser package metadata, and historical workflow references. Its `scripts/check-candidate.py` and existing tests must all agree. Do not edit the root catalogs' `version` or `install` fields: they describe published downloads, and the release writes them. A release copies every other field of the plugin's entry, such as `description` and `tags`, from the current `registry.json`, so change those in an ordinary commit, identically in both `registry.json` and `preview/registry.json`. A plugin with no entry yet takes them from `FIRST_RELEASE` in `scripts/plugin_release.py`.
 3. Commit and push the change to `main`. Then tag that exact commit with the plugin ID and numeric version:
 
    ```sh
@@ -17,12 +19,12 @@ Push each release tag separately; GitHub does not generate push events when more
 
 When one plugin's release needs another's newer version, release the other first and wait for its catalog commit: Quota Glance 0.7.0's API credit card needs Quota Cache 0.1.14, so tag `quota-cache/v0.1.14` alone, then `quota-glance/v0.7.0` once 0.1.14 is in `registry.json`, so the verification below loads it.
 
-Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `codex-catalog-filter`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
+Use a version higher than that plugin's catalog version. Other IDs are `account-health-pushover`, `auto-baseline`, `codex-catalog-filter`, `quota-glance`, `reset-priority`, and `token-usage`. Generic `v*`, extra tag path segments, and prerelease version strings do not trigger supported publications. Ordinary pushes to `main` run CI; they do not publish a release.
 
 The root **Release one plugin** workflow automatically:
 
-- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance. Token Usage retains its browser, SQLite/native, and official-image store checks. Codex Catalog Filter also runs its catalog-URL smoke in pinned CPA v8.0.4, the version it is verified on.
-- Loads the candidate with the four currently published peers in pinned CPA v8.0.4. It checks coexistence, status access, persistence/restart, and optional Quota Cache operation. Peers are downloaded with catalog checksum verification, not rebuilt or released.
+- Runs the selected plugin's tests, race/static checks, and existing native/package acceptance (`scripts/verify-plugin-release.sh`). Account Health, Codex Catalog Filter, Quota Glance, and Reset Priority also run their own smoke in pinned CPA v8.0.4: for Codex Catalog Filter its catalog URL, for Reset Priority its API credit router. Quota Cache also tests its page editor's rules and checks its sidebar in a browser. Token Usage retains its browser, SQLite/native, and official-image store checks.
+- Loads the candidate with every other plugin published in `registry.json` in pinned CPA v8.0.4; a plugin with no catalog entry yet is skipped. It checks coexistence, status access, persistence/restart, and optional Quota Cache operation. Peers are downloaded with catalog checksum verification, not rebuilt or released.
 - Packages the exact tested library, license, and Token Usage third-party notices, with checksums and verification evidence.
 - Uploads to a draft GitHub release, reads every asset back, verifies its bytes, and publishes the release. Published bytes are never overwritten.
 - Verifies the anonymous ZIP download, then commits only that plugin's entry in both `registry.json` and `preview/registry.json`. Concurrent releases reapply against current `main` with fast-forward retries, preserving other entries.
@@ -49,4 +51,4 @@ The publisher needs GitHub Actions `contents: write` and permission to push cata
 
 Rerun the failed **publish** job to reuse the same verified Actions artifact. A partial draft upload resumes with missing files only; existing assets must match byte for byte. If assets were published but the catalog commit failed, rerunning verifies them and retries the catalog update. A catalog already containing the exact entry is a successful no-op. A newer entry or conflicting same-version entry is rejected: make a new version instead of moving a tag or replacing assets.
 
-The old `scripts/package-quota-preview.py` remains historical tooling for the fixed suite preview. Do not use it for new releases: it rewrites all five catalog entries.
+The old `scripts/package-quota-preview.py` remains historical tooling for the fixed suite preview. Do not use it for new releases: it rewrites both catalogs, putting five of their entries back to its fixed preview versions.

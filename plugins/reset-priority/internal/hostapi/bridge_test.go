@@ -285,6 +285,47 @@ func TestBridgeQuiesceRejectsNewCallbacksAndDrainWaits(t *testing.T) {
 	}
 }
 
+// panickingCaller panics in the call, as a bug between the cgo call and the
+// envelope decode would. Its value stands for one that carries response
+// bytes.
+type panickingCaller struct{}
+
+func (panickingCaller) Call(string, []byte) ([]byte, error) {
+	panic("host response carrying tok-secret")
+}
+
+// TestBridgeHTTPDoRecoversWorkerPanic: HTTPDo's worker runs on a goroutine of
+// its own with nothing above it to recover, so a panic there would end CPA.
+// Without the recover this test ends the test binary. The caller must get an
+// error without the panic value, and the worker must give back its admission,
+// or Drain would wait for it forever.
+func TestBridgeHTTPDoRecoversWorkerPanic(t *testing.T) {
+	limiter := newCallbackLimiter(1)
+	bridge := newBridgeWithLimiter(panickingCaller{}, limiter)
+
+	_, err := bridge.HTTPDo(context.Background(), HTTPRequest{Method: "GET", URL: "https://example.com"})
+	if err == nil {
+		t.Fatal("HTTPDo returned no error for a worker that panicked")
+	}
+	if strings.Contains(err.Error(), "tok-secret") {
+		t.Errorf("err = %q repeats the panic value", err)
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		bridge.Drain()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain is still waiting for the worker that panicked")
+	}
+	if n := limiter.inFlight(); n != 0 {
+		t.Errorf("limiter holds %d admissions after Drain, want 0", n)
+	}
+}
+
 func TestBridgeErrorEnvelope(t *testing.T) {
 	raw, _ := json.Marshal(Envelope{OK: false, Error: &EnvelopeError{Code: "not_found", Message: "no auth"}})
 	caller := &scriptedCaller{response: raw}
