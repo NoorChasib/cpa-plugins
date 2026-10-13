@@ -1,4 +1,4 @@
-// Native ABI adapted from token-usage at 4286578.
+// Native ABI adapted from token-usage at b7683a1.
 // Copyright (c) 2026 NoorChasib. Distributed under the MIT license.
 package main
 

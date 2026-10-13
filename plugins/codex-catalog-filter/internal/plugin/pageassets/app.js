@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // Session reading is adapted from Token Usage 4286578, which audited the
+  // Session reading is adapted from Token Usage b7683a1, which audited the
   // official Management Center v1.22.15 storage format. Only a remembered
   // console session on this exact origin and API base is used.
   const RESOURCE_SUFFIX = '/v0/resource/plugins/codex-catalog-filter/settings';
