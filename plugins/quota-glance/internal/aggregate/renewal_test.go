@@ -154,12 +154,12 @@ func TestTheGoldenContractsCarryEstimatedRenewals(t *testing.T) {
 		}
 	}
 	for id, want := range map[string]*time.Time{
-		"claude-sierra@example.com.json": ptrTime(utc(2026, time.September, 30, 9, 15, 0)),
-		"claude-agency@example.com.json":        ptrTime(utc(2027, time.March, 12, 17, 40, 0)),
-		"claude-charlie@example.com.json":    ptrTime(utc(2026, time.September, 22, 14, 5, 0)),
-		"claude-stale@example.com.json":         ptrTime(utc(2027, time.February, 28, 8, 0, 0)),
-		"claude-fresh@example.com.json":         nil,
-		"claude-noor@example.com.json":          nil,
+		"claude-sierra@example.com.json":  ptrTime(utc(2026, time.September, 30, 9, 15, 0)),
+		"claude-agency@example.com.json":  ptrTime(utc(2027, time.March, 12, 17, 40, 0)),
+		"claude-charlie@example.com.json": ptrTime(utc(2026, time.September, 22, 14, 5, 0)),
+		"claude-stale@example.com.json":   ptrTime(utc(2027, time.February, 28, 8, 0, 0)),
+		"claude-fresh@example.com.json":   nil,
+		"claude-noor@example.com.json":    nil,
 	} {
 		c := byID[id]
 		switch {

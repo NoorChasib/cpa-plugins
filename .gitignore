@@ -11,3 +11,7 @@
 # Planning documents stay out of a public repository: they carry real addresses
 # and subscription details. Keep them beside the checkout, not in it.
 HANDOFF-*.md
+
+# Design-review screenshots stay out of the repository; capture.sh and similar
+# tools write them beside their board.
+plugins/quota-glance/web/design/**/shots/
