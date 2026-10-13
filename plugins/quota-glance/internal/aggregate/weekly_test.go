@@ -404,11 +404,11 @@ func TestHealthyContractCountsFableUnderEachWeekly(t *testing.T) {
 	fable := rowOf(t, doc, "claude", qc.WindowWeeklyFable)
 	// (weekly, Fable) remaining: (76, 0), (90, 88), (24, 45), (60, 70), (45, 10).
 	for id, want := range map[string][2]int{
-		"claude-sierra@example.com.json": {0, 0},
-		"claude-agency@example.com.json":        {88, 88},
-		"claude-charlie@example.com.json":    {45, 24},
-		"claude-noor@example.com.json":          {70, 60},
-		novemberID:                            {10, 10},
+		"claude-sierra@example.com.json":  {0, 0},
+		"claude-agency@example.com.json":  {88, 88},
+		"claude-charlie@example.com.json": {45, 24},
+		"claude-noor@example.com.json":    {70, 60},
+		novemberID:                        {10, 10},
 	} {
 		if entry := entryOf(t, fable, id); entry.RemainingPercent != want[0] || entry.PooledPercent != want[1] {
 			t.Errorf("%s prints %d%% and counts %d%%; want %v", id, entry.RemainingPercent, entry.PooledPercent, want)

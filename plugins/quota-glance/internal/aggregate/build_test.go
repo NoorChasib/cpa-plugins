@@ -1196,13 +1196,13 @@ func TestDegradedContractCoversEveryRenderableState(t *testing.T) {
 func TestPlanBadgesAreDisplayReadyInTheDocument(t *testing.T) {
 	doc := buildFixture(t)
 	want := map[string]string{
-		"claude-sierra@example.com.json": "Max 20x",
-		"claude-charlie@example.com.json":    "Max 5x",
-		novemberID:                            "Max",
-		"claude-agency@example.com.json":        "Team",
-		"claude-noor@example.com.json":          "Enterprise",
-		"codex-noor@example.com.json":           "Pro 200",
-		"xai-noor@example.com.json":             "SuperGrok Heavy",
+		"claude-sierra@example.com.json":  "Max 20x",
+		"claude-charlie@example.com.json": "Max 5x",
+		novemberID:                        "Max",
+		"claude-agency@example.com.json":  "Team",
+		"claude-noor@example.com.json":    "Enterprise",
+		"codex-noor@example.com.json":     "Pro 200",
+		"xai-noor@example.com.json":       "SuperGrok Heavy",
 	}
 	for _, c := range doc.Credentials {
 		if expected, ok := want[c.ID]; ok && c.Plan != expected {
