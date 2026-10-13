@@ -7,6 +7,7 @@ import (
 	"html"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -515,6 +516,48 @@ func TestNativeShutdownDrainsScheduledPluginWork(t *testing.T) {
 	case <-shutdownDone:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("native shutdown did not return after scheduled work drained")
+	}
+}
+
+// panickingListCaller panics in the roster list once armed, with a value that
+// stands for one carrying credential data.
+type panickingListCaller struct {
+	*fakeHostCaller
+	armed atomic.Bool
+}
+
+func (c *panickingListCaller) Call(method string, request []byte) ([]byte, error) {
+	if method == hostapi.MethodHostAuthList && c.armed.Load() {
+		panic("roster body carrying " + testAccessToken)
+	}
+	return c.fakeHostCaller.Call(method, request)
+}
+
+// TestDispatchPanicDoesNotEchoThePanicValue: a management refresh runs the
+// reconciliation on the Dispatch goroutine, so a panic in its roster list
+// reaches Dispatch's recover. That value can carry credential data, and the
+// envelope goes back to CPA, so it must not repeat it.
+func TestDispatchPanicDoesNotEchoThePanicValue(t *testing.T) {
+	caller := &panickingListCaller{fakeHostCaller: newFakeHostCaller()}
+	caller.addClaudeAccount("a", testBase.Add(48*time.Hour))
+	rt := newTestRuntime(t, caller)
+	registerRuntime(t, rt, "enabled: true\n")
+	caller.armed.Store(true)
+
+	reqRaw, err := json.Marshal(hostapi.ManagementRequest{
+		Method:  "POST",
+		Path:    "/v0/management/plugins/reset-priority/refresh",
+		Headers: map[string][]string{refreshRequestHeader: {refreshRequestHeaderValue}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := decodeEnvelope(t, rt.Dispatch(hostapi.MethodManagementHandle, reqRaw))
+	if env.OK || env.Error == nil || env.Error.Code != "plugin_panic" {
+		t.Fatalf("refresh that panicked = %+v, want a plugin_panic error", env)
+	}
+	if env.Error.Message != "reset-priority: internal error" {
+		t.Errorf("plugin_panic message = %q, want %q", env.Error.Message, "reset-priority: internal error")
 	}
 }
 

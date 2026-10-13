@@ -8,6 +8,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	quotaclient "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"strings"
@@ -356,6 +357,7 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 
 	e.reconcileMu.Lock()
 	defer e.reconcileMu.Unlock()
+	defer e.rearmReconcileOnPanic()
 
 	e.mu.Lock()
 	if e.stopped {
@@ -435,25 +437,33 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 	} else {
 		// Serialize roster health transitions with writeback so quarantine and
 		// recovery cannot race a stale rank write. A newly quarantined auth may
-		// then deliberately persist the sentinel through the next flush.
-		e.writeMu.Lock()
-		e.mu.Lock()
-		if e.stopped {
-			e.mu.Unlock()
-			e.writeMu.Unlock()
+		// then deliberately persist the sentinel through the next flush. Both
+		// locks are released by defer: applyRosterLocked works through the
+		// host's roster, and a panic there that kept them would hang Status,
+		// every later pass and Shutdown.
+		stopped := func() bool {
+			e.writeMu.Lock()
+			defer e.writeMu.Unlock()
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.stopped {
+				return true
+			}
+			e.lastRosterError = ""
+			var recoveryNeedsFlush bool
+			fetchTargets, recoveryNeedsFlush = e.applyRosterLocked(validated, e.clk.Now())
+			e.replaceReconcileFetchReservationsLocked(fetchTargets)
+			reservedTargets = fetchTargets
+			// Roster validation can block across the exact reset instant. Detect
+			// that transition under the same state lock; the conditional flush
+			// below avoids writing provisional rankings for newly discovered
+			// unknown accounts.
+			preFetchFlushNeeded = recoveryNeedsFlush || e.demoteExpiredLocked(e.clk.Now())
+			return false
+		}()
+		if stopped {
 			return ReconcileResultNoOp
 		}
-		e.lastRosterError = ""
-		var recoveryNeedsFlush bool
-		fetchTargets, recoveryNeedsFlush = e.applyRosterLocked(validated, e.clk.Now())
-		e.replaceReconcileFetchReservationsLocked(fetchTargets)
-		reservedTargets = fetchTargets
-		// Roster validation can block across the exact reset instant. Detect that
-		// transition under the same state lock; the conditional flush below avoids
-		// writing provisional rankings for newly discovered unknown accounts.
-		preFetchFlushNeeded = recoveryNeedsFlush || e.demoteExpiredLocked(e.clk.Now())
-		e.mu.Unlock()
-		e.writeMu.Unlock()
 
 		if preFetchFlushNeeded {
 			// Persist every deadline demotion and verify/write every recovery sentinel
@@ -467,9 +477,11 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 		e.flushAfterFetch(ctx)
 	}
 
+	// Released by defer, so a panic here leaves e.mu free for
+	// rearmReconcileOnPanic.
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.stopped {
-		e.mu.Unlock()
 		return ReconcileResultNoOp
 	}
 	e.scheduleRecoveryRetriesLocked()
@@ -477,7 +489,6 @@ func (e *Engine) Reconcile(ctx context.Context) (result ReconcileResult) {
 	e.scheduleNextReconcileLocked()
 	e.scheduleHealthPollLocked()
 	e.publishStatusLocked(e.clk.Now())
-	e.mu.Unlock()
 	return result
 }
 
@@ -889,20 +900,20 @@ func (e *Engine) fetchOneInternal(
 		var creds providers.Credentials
 		if quotaCachePath == "" {
 			// Read the latest credential JSON just before use; never cache tokens.
-			got, errGet := e.host.AuthGet(fetchCtx, authIndex)
-			if errGet != nil {
-				cancel()
-				e.applyFetchFailure(attempt, sanitize.Error(errGet))
-				return
-			}
-			var errCreds error
-			creds, errCreds = providers.ExtractCredentials(providerID, got.JSON)
+			errCreds := e.guardFetch(func() error {
+				got, errGet := e.host.AuthGet(fetchCtx, authIndex)
+				if errGet != nil {
+					return errGet
+				}
+				var errExtract error
+				creds, errExtract = providers.ExtractCredentials(providerID, got.JSON)
+				return errExtract
+			})
 			if errCreds != nil {
 				cancel()
 				e.applyFetchFailure(attempt, sanitize.Error(errCreds))
 				return
 			}
-
 		}
 
 		// Pair final provider admission with configuration publication. The shared
@@ -944,17 +955,23 @@ func (e *Engine) fetchOneInternal(
 		e.mu.Unlock()
 
 		var obs providers.Observation
-		var errFetch error
-		if quotaCachePath != "" {
-			var cached quotaclient.Entry
-			cached, errFetch = quotaclient.ReadFresh(quotaCachePath, providerID, authIndex, e.clk.Now(), 30*time.Minute)
-			if errFetch == nil {
+		errFetch := e.guardFetch(func() error {
+			// Deferred, so a read that panics still gives back its admission.
+			// Otherwise Reconfigure would wait for it forever, and a waiting
+			// writer holds back every later admission too.
+			defer e.providerCallMu.RUnlock()
+			if quotaCachePath != "" {
+				cached, errRead := quotaclient.ReadFresh(quotaCachePath, providerID, authIndex, e.clk.Now(), 30*time.Minute)
+				if errRead != nil {
+					return errRead
+				}
 				obs = providers.Observation{HasWeekly: !cached.ResetAt.IsZero(), ResetAt: cached.ResetAt, ObservedAt: cached.ObservedAt}
+				return nil
 			}
-		} else {
-			obs, errFetch = provider.FetchWeeklyReset(fetchCtx, creds)
-		}
-		e.providerCallMu.RUnlock()
+			var errProvider error
+			obs, errProvider = provider.FetchWeeklyReset(fetchCtx, creds)
+			return errProvider
+		})
 		cancel()
 		if errFetch != nil {
 			e.applyFetchFailure(attempt, sanitize.Error(errFetch))
@@ -1712,6 +1729,51 @@ func (e *Engine) recoverWork() {
 	if recover() != nil {
 		e.logf("warn", logWorkPanic)
 	}
+}
+
+// errFetchPanic is the failure a fetch attempt records when its credential
+// read or weekly reset read panics. Like logWorkPanic, it never carries the
+// panic value.
+var errFetchPanic = errors.New("internal error while reading the weekly reset")
+
+// guardFetch runs one step of a fetch attempt that calls host or provider
+// code, and turns a panic there into errFetchPanic, logged like recoverWork's.
+// The attempt then records it on its account like any failed read, instead of
+// being abandoned with no error shown. step must release by defer any lock it
+// takes. The caller holds no engine lock, because the log crosses the native
+// ABI (see Logger).
+func (e *Engine) guardFetch(step func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			e.logf("warn", logWorkPanic)
+			err = errFetchPanic
+		}
+	}()
+	return step()
+}
+
+// rearmReconcileOnPanic is deferred by Reconcile, which arms the next pass
+// only at its tail. A pass that panics never gets there, and recoverWork or
+// Dispatch recovers it further up, so background reconciliation would stop
+// until a refresh, a configuration save or a restart. This arms the next pass
+// and lets the panic continue. It must be the deferred call itself for
+// recover to take effect. It takes e.mu, so a panic must never leave e.mu held
+// on this goroutine: Reconcile's sections that run more than plain bookkeeping
+// release their locks by defer.
+func (e *Engine) rearmReconcileOnPanic() {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if !e.stopped {
+			e.scheduleNextReconcileLocked()
+			e.publishStatusLocked(e.clk.Now())
+		}
+	}()
+	panic(recovered)
 }
 
 // fetchConcurrently runs fetch(i) for i in [0, n), each on its own goroutine,

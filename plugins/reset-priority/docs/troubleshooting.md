@@ -230,9 +230,9 @@ The plugin caps native host callbacks at 64 in flight across the process. This i
 
 ## Logs report `reset-priority: recovered from an internal error in background work`
 
-A bug in Reset Priority panicked in work it runs in the background: a reconciliation, an account's quota read, a retry or reset-deadline timer, or the worker behind a provider request. The plugin caught it rather than let it end CPA, and abandoned that piece of work. The line leaves out the panic's value, which could carry credential data. A provider request that panicked also gives its account the error `host callback host.http.do: internal error`.
+A bug in Reset Priority panicked in work it runs in the background: a reconciliation, an account's quota read, a retry or reset-deadline timer, or the worker behind a provider request. The plugin caught it rather than let it end CPA, and abandoned that piece of work. The line leaves out the panic's value, which could carry credential data. An account whose quota read panicked also shows the error `internal error while reading the weekly reset`, and one whose provider request panicked shows `host callback host.http.do: internal error`.
 
-Accounts the abandoned work would have read can stay `unknown` or `stale` on the status page. **Refresh now**, or saving the plugin's configuration, starts a fresh reconciliation. Work abandoned partway can leave the plugin unable to finish a later configuration apply or unload; if one hangs after this line, restart CPA. If the line comes back, report it with the Reset Priority version and the CPA log lines around it, reviewed for secrets first.
+Accounts the abandoned work would have read can stay `unknown` or `stale` on the status page. A reconciliation that panicked still arms the next one, so the hourly pass reads them again; **Refresh now**, or saving the plugin's configuration, starts one sooner. If a configuration apply, **Refresh now** or unload hangs after this line, restart CPA. If the line comes back, report it with the Reset Priority version and the CPA log lines around it, reviewed for secrets first.
 
 ## Release archive or checksum validation fails
 
