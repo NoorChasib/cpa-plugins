@@ -186,14 +186,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	}
 	result, err := handleGuarded(current, C.GoString(method), requestBytes)
 	if err != nil {
-		code := "plugin_error"
-		switch {
-		case errors.Is(err, errPluginPanic):
-			code = "plugin_panic"
-		case strings.HasPrefix(err.Error(), "unknown method:"):
-			code = "unknown_method"
-		}
-		writeResponse(response, errorEnvelope(code, sanitizeError(err)))
+		writeResponse(response, callErrorEnvelope(err))
 		return 1
 	}
 	raw, err := okEnvelope(result)
@@ -365,6 +358,20 @@ func okEnvelope(result any) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(protocol.Envelope{OK: true, Result: raw})
+}
+
+// callErrorEnvelope answers a request Handle failed. The code tells CPA what
+// kind of failure it was; the message is only ever one sanitizeError allows,
+// so a method name or other wire input is never echoed.
+func callErrorEnvelope(err error) []byte {
+	code := "plugin_error"
+	switch {
+	case errors.Is(err, errPluginPanic):
+		code = "plugin_panic"
+	case strings.HasPrefix(err.Error(), "unknown method:"):
+		code = "unknown_method"
+	}
+	return errorEnvelope(code, sanitizeError(err))
 }
 
 func errorEnvelope(code, message string) []byte {

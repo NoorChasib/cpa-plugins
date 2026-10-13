@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +69,38 @@ func TestBothSummaryPathsServeTheSameDocumentBehindTheirOwnGate(t *testing.T) {
 	for _, res := range []protocol.ManagementResponse{viaCPA, viaToken} {
 		if got := res.Headers.Get("Cache-Control"); got != "no-store" {
 			t.Fatalf("Cache-Control = %q; the document must not be cached by a proxy", got)
+		}
+	}
+}
+
+// While CPA escapes the management tree's strings, the console's copy of the
+// summary says so and is otherwise the document the resource tree serves,
+// under an ETag of its own, since its bytes differ. Otherwise the two doors
+// serve the same bytes again.
+func TestTheConsoleSummarySaysWhenCPAEscapesIt(t *testing.T) {
+	a := newTestAPI()
+	for _, escaped := range []bool{true, false} {
+		a.SetStringsEscaped(escaped)
+		viaCPA, viaToken := get(a, summaryPath, nil), get(a, tokenPath, bearer(testToken))
+		var console, token map[string]any
+		if json.Unmarshal(viaCPA.Body, &console) != nil || json.Unmarshal(viaToken.Body, &token) != nil {
+			t.Fatalf("escaped %v: %s / %s", escaped, viaCPA.Body, viaToken.Body)
+		}
+		if console["stringsEscaped"] != escaped || token["stringsEscaped"] != false {
+			t.Fatalf("escaped %v: console says %v, token door says %v", escaped, console["stringsEscaped"], token["stringsEscaped"])
+		}
+		delete(console, "stringsEscaped")
+		delete(token, "stringsEscaped")
+		if !reflect.DeepEqual(console, token) {
+			t.Fatalf("escaped %v: the doors serve different documents", escaped)
+		}
+		same := string(viaCPA.Body) == string(viaToken.Body) && viaCPA.Headers.Get("ETag") == viaToken.Headers.Get("ETag")
+		if same == escaped {
+			t.Fatalf("escaped %v: same bytes and ETag on both doors is %v", escaped, same)
+		}
+		// A conditional request is answered against the copy its door serves.
+		if res := get(a, summaryPath, http.Header{"If-None-Match": {viaCPA.Headers.Get("ETag")}}); res.StatusCode != http.StatusNotModified {
+			t.Fatalf("escaped %v: console If-None-Match -> %d", escaped, res.StatusCode)
 		}
 	}
 }

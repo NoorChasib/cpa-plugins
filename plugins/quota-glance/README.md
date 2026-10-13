@@ -334,7 +334,9 @@ have spent. It turns **amber below `openrouter-warn-below`** (default `$5`) and
 **red once nothing is left**, whatever the threshold. To change the threshold,
 on CPA's Plugins page, open quota-glance's **Edit config** and set
 `openrouter-warn-below`; it applies without a restart. Set it to `0` to keep
-the card green until the balance runs out.
+the card green until the balance runs out. A value that is not a dollar amount
+of 0 or more is refused, and the CPA log says
+`openrouter-warn-below must be a dollar amount of 0 or more`.
 
 It is a figure, not a bar. OpenRouter reports only lifetime totals, so a
 percentage would be a share of everything you have ever bought, which says

@@ -183,6 +183,8 @@ The shell also carries a client-side upgrade so the page is useful from the mana
 
 No route or log includes access tokens, refresh tokens, auth headers, raw auth JSON, or provider response bodies.
 
+A panic in work the plugin runs in the background (a reconciliation, an account's quota read, a retry or deadline timer, or the worker behind a provider request) is caught instead of ending CPA. That piece of work is abandoned and the log says `reset-priority: recovered from an internal error in background work`, without the panic's value. An account whose quota read panicked shows the error `internal error while reading the weekly reset`, and one whose provider request panicked shows the provider's usual request error ending in `host callback host.http.do: internal error`, such as `claude usage request failed: host callback host.http.do: internal error`. A reconciliation that panicked still arms the next hourly one. Reset Priority 0.2.0 and older end the CPA process instead. A panic while the plugin answers CPA directly, as during **Refresh now**, returns the error `plugin_panic` with the message `reset-priority: internal error`; 0.2.0 and older add the panic's value to that message. See [troubleshooting](docs/troubleshooting.md#logs-report-reset-priority-recovered-from-an-internal-error-in-background-work).
+
 ## Write safety
 
 `host.auth.save` replaces a complete auth JSON document; it is not a field patch and has no compare-and-swap operation. Before every write, the plugin re-reads the latest physical document, changes only top-level `priority`, preserves unrelated JSON values, skips no-op writes, and continues after per-account failures.

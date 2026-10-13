@@ -4,7 +4,7 @@
     {
       "id": "reset-priority",
       "name": "Reset Priority",
-      "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota.",
+      "description": "Prioritizes Claude and Codex OAuth accounts by the exact reset time of their regular weekly quota, and optionally routes Claude API key requests to the Console organization whose monthly API credit refills soonest.",
       "author": "NoorChasib",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "homepage": "https://github.com/NoorChasib/cpa-plugins",

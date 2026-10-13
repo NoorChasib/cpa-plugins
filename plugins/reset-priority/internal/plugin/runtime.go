@@ -8,7 +8,6 @@ package plugin
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -25,7 +24,7 @@ import (
 const (
 	PluginID      = "reset-priority"
 	PluginName    = "Reset Priority"
-	PluginVersion = "0.2.0"
+	PluginVersion = "0.2.1"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )
@@ -132,8 +131,10 @@ func (r *Runtime) Dispatch(method string, request []byte) (response []byte) {
 	}
 	defer r.dispatchWG.Done()
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			response = errorEnvelope("plugin_panic", fmt.Sprintf("reset-priority: internal error: %v", recovered))
+		// The panic value can carry credential data, such as a host response
+		// a management refresh was reading, so the envelope never repeats it.
+		if recover() != nil {
+			response = errorEnvelope("plugin_panic", "reset-priority: internal error")
 		}
 	}()
 	switch method {

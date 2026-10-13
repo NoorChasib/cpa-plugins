@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"sync"
@@ -471,6 +472,70 @@ func TestRedeemPassesEveryOutcomeThrough(t *testing.T) {
 			t.Fatalf("%s: body = %v", outcome, body)
 		}
 	}
+}
+
+// Below schema 6 CPA HTML-escapes every string of a management answer, the
+// press's included, and unlike the summary a press answer does not say so. It
+// needs not: every string any of them carries is a code html.EscapeString
+// leaves alone, so the page reads each the same at either schema.
+func TestEveryPressAnswerReadsTheSameEscapedOrNot(t *testing.T) {
+	var check func(where string, value any)
+	check = func(where string, value any) {
+		switch value := value.(type) {
+		case string:
+			if escaped := html.EscapeString(value); escaped != value {
+				t.Errorf("%s carries %q, which CPA turns into %q", where, value, escaped)
+			}
+		case map[string]any:
+			for _, item := range value {
+				check(where, item)
+			}
+		case []any:
+			for _, item := range value {
+				check(where, item)
+			}
+		}
+	}
+	answer := func(where string, res protocol.ManagementResponse) {
+		t.Helper()
+		var body any
+		if err := json.Unmarshal(res.Body, &body); err != nil {
+			t.Fatalf("%s: %q", where, res.Body)
+		}
+		check(where, body)
+	}
+	// Every answer to a press the provider answered.
+	for _, outcome := range []string{
+		redeem.OutcomeReset, redeem.OutcomeNothingToReset, redeem.OutcomeNoCredit, redeem.OutcomeFailed,
+		redeem.OutcomeNotLimited, redeem.OutcomeCooldown, redeem.OutcomePaused, redeem.OutcomeIneligible,
+		redeem.OutcomeAlreadyUsed,
+	} {
+		for _, cooldown := range []string{"", redeem.CooldownCleared, redeem.CooldownFailed, redeem.CooldownUnsupported, redeem.CooldownUnconfirmed} {
+			a, redeemer := redeemableAPI(t)
+			redeemer.result = redeem.Result{Outcome: outcome, Cooldown: cooldown, MayHaveSpent: true}
+			answer(outcome+"/"+cooldown, post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+		}
+	}
+	// Every failure the redeemer can return.
+	for _, err := range []error{
+		redeem.ErrInFlight, redeem.ErrUnsupportedProvider, redeem.ErrNoAccessToken, redeem.ErrNoAccountID,
+		redeem.ErrIdentityChanged, redeem.ErrRefused, redeem.ErrUnavailable, redeem.ErrRateLimited,
+		redeem.ErrOutcomeUnknown, redeem.ErrRetryWindowClosed,
+	} {
+		answer(err.Error(), redeemError(err, refresh{requested: true, at: time.Now()}))
+	}
+	// And every refusal before one.
+	a, _ := redeemableAPI(t)
+	answer("not redeemable", post(a, redeemPath, nil, map[string]any{"credentialId": "claude-a@example.com.json", "confirmed": true}))
+	answer("unconfirmed", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID}))
+	answer("malformed", post(a, redeemPath, nil, "not an object"))
+	answer("form-encoded", post(a, redeemPath, http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}, nil))
+	answer("retired settings", post(a, "/v0/management/plugins/quota-glance/settings", nil, map[string]any{}))
+	answer("unknown path", get(a, "/v0/management/plugins/quota-glance/nope", nil))
+	a.SetRedeemer(nil)
+	answer("redemption off", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+	a.Disable()
+	answer("disabled", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
 }
 
 // The press is bounded by the redeemer's own bound, which sits under the

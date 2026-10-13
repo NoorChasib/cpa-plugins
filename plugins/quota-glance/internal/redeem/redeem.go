@@ -449,6 +449,9 @@ func (r *Redeemer) afterSpend(ctx context.Context, authIndex string, got answer)
 	}
 }
 
+// errClearPanicked stands in for a ResetCooldown call that panicked.
+var errClearPanicked = errors.New("reset cooldown call failed")
+
 // clearCooldown asks CPA to clear the credential's routing cooldown, and
 // believes it only when the answer names the credential that was asked about.
 //
@@ -482,6 +485,14 @@ func (r *Redeemer) clearCooldown(ctx context.Context, authIndex string) string {
 	// answer and end.
 	done := make(chan reply, 1)
 	go func() {
+		// Nothing above this goroutine recovers, and in a native plugin a
+		// panic that escaped it would abort CPA. A host call that panics is a
+		// failed clear like any other; its value is never reported.
+		defer func() {
+			if recover() != nil {
+				done <- reply{err: errClearPanicked}
+			}
+		}()
 		response, err := r.host.ResetCooldown(ctx, authIndex)
 		done <- reply{response, err}
 	}()

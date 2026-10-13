@@ -163,6 +163,21 @@ func handleGuarded(current *pluginimpl.Plugin, method string, raw []byte) (resul
 
 var errPluginPanic = errors.New("plugin request failed")
 
+// unknownMethodPrefix starts the error for a method this plugin does not
+// handle, as it does in Account Health's.
+const unknownMethodPrefix = "unknown method:"
+
+// errorCode is the envelope code for a failed call.
+func errorCode(err error) string {
+	switch {
+	case errors.Is(err, errPluginPanic):
+		return "plugin_panic"
+	case strings.HasPrefix(err.Error(), unknownMethodPrefix):
+		return "unknown_method"
+	}
+	return "plugin_error"
+}
+
 //export cliproxyPluginCall
 func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
 	if response != nil {
@@ -186,14 +201,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	}
 	result, err := handleGuarded(current, C.GoString(method), requestBytes)
 	if err != nil {
-		code := "plugin_error"
-		switch {
-		case errors.Is(err, errPluginPanic):
-			code = "plugin_panic"
-		case strings.HasPrefix(err.Error(), "unknown method:"):
-			code = "unknown_method"
-		}
-		writeResponse(response, errorEnvelope(code, sanitizeError(err)))
+		writeResponse(response, errorEnvelope(errorCode(err), sanitizeError(err)))
 		return 1
 	}
 	raw, err := okEnvelope(result)
@@ -293,13 +301,7 @@ func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) 
 			request.OperationID = operation
 			finished := make(chan struct{})
 			defer close(finished)
-			go func() {
-				select {
-				case <-ctx.Done():
-					cancelHTTPOperation(operation)
-				case <-finished:
-				}
-			}()
+			go cancelOnDone(ctx, finished, func() { cancelHTTPOperation(operation) })
 		}
 	}
 	result, err := callHost(ctx, protocol.MethodHostHTTPDo, request)
@@ -333,6 +335,19 @@ func (hostBridge) ResetCooldown(ctx context.Context, authIndex string) (protocol
 		return protocol.HostRoutingResetCooldownResponse{}, errors.New("decode host.routing.reset_cooldown response")
 	}
 	return response, nil
+}
+
+// cancelOnDone runs cancel if ctx ends before finished closes. It runs on a
+// goroutine nothing above recovers, and in a native plugin a panic that
+// escaped it would abort CPA. A cancel that panics leaves the request to run to
+// its own end, as on a host without the operation callbacks.
+func cancelOnDone(ctx context.Context, finished <-chan struct{}, cancel func()) {
+	defer func() { _ = recover() }()
+	select {
+	case <-ctx.Done():
+		cancel()
+	case <-finished:
+	}
 }
 
 // openHTTPOperation asks the host for an operation id a later cancel can name.
@@ -467,16 +482,26 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 }
 
 func sanitizeError(err error) string {
+	// The method name after the prefix is CPA's own, but it is not echoed: the
+	// unknown_method code already says what went wrong.
+	if strings.HasPrefix(err.Error(), unknownMethodPrefix) {
+		return "unknown method"
+	}
 	// Fixed diagnostics only: no paths, credentials, tokens, or upstream text.
+	// TestEveryFixedConfigureErrorReachesTheOperator finds any a register or
+	// reconfigure can return that this does not list.
 	switch err.Error() {
 	case "invalid quota-glance configuration", "schema 4 or newer required",
+		"openrouter-warn-below must be a dollar amount of 0 or more",
 		"stale-after must be between 1m and 24h", "cache-path and data-dir are required",
 		"cache-path cannot be resolved", "data-dir cannot be resolved",
 		"quota-cache snapshot is unreadable at cache-path; check that quota-cache is installed and that cache-path matches its own",
 		"quota-glance data directory is not configured", "quota-glance data directory cannot be created",
-		"web token cannot be generated", "filesystem watcher cannot be created",
-		"watch requires a path and a change handler", "quota-glance shut down",
-		"invalid management request", "unknown method":
+		"web token cannot be generated",
+		"web token cannot be persisted; set web-token in configuration or make data-dir writable",
+		"filesystem watcher cannot be created", "watch requires a path and a change handler",
+		"cache path cannot be resolved", "credit state path cannot be resolved",
+		"quota-glance shut down", "invalid management request":
 		return err.Error()
 	default:
 		return "quota glance request failed"

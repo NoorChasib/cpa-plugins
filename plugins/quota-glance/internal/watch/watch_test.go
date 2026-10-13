@@ -5,6 +5,7 @@ package watch
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -407,4 +408,125 @@ func TestHeartbeatLeavesTheBackstopAbleToReport(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("the backstop never reported a change the heartbeat had already rebuilt over")
+}
+
+// OnChange runs on the watcher's own goroutine, which nothing above recovers,
+// and in a native plugin a panic that escapes it aborts CPA. One that panics
+// is reported, once per watcher and without the panic value, and the watcher
+// carries on, so the next heartbeat tries again.
+func TestAChangeHandlerThatPanicsLeavesTheWatcherRunning(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+
+	var calls atomic.Int64
+	var logMu sync.Mutex
+	var logged []string
+	w, err := Start(Options{
+		Path:      path,
+		Debounce:  time.Hour,
+		Backstop:  time.Hour,
+		Heartbeat: 10 * time.Millisecond,
+		OnChange: func() {
+			if calls.Add(1) <= 3 {
+				panic("snapshot at /private/path holds a secret")
+			}
+		},
+		Logf: func(message string) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logged = append(logged, message)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+
+	waitFor(t, &calls, 5)
+	if state := w.State(); state.LastError != logHandlerFailed || !state.Watching {
+		t.Fatalf("state = %+v; want the failure reported while still watching", state)
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	if len(logged) != 1 || logged[0] != logHandlerFailed {
+		t.Fatalf("logged %q; want %q once", logged, logHandlerFailed)
+	}
+}
+
+// Once fsnotify has given up, health says the watcher is polling, and nothing
+// will clear that. A reload that then panics must not replace it with its own
+// message, which would hide for good that delivery stopped.
+func TestAPanickingReloadKeepsThePollingFallbackInHealth(t *testing.T) {
+	const polling = "filesystem watcher stopped delivering events; polling instead"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	var panicking atomic.Bool
+	var logMu sync.Mutex
+	var logged []string
+	w, err := Start(Options{
+		Path:      path,
+		Debounce:  10 * time.Millisecond,
+		Backstop:  50 * time.Millisecond,
+		Heartbeat: time.Hour,
+		OnChange: func() {
+			calls.Add(1)
+			if panicking.Load() {
+				panic("snapshot at /private/path holds a secret")
+			}
+		},
+		Logf: func(message string) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logged = append(logged, message)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	// Wait for the watcher to report the fallback before any reload panics,
+	// so the two messages land in that order.
+	if err := w.fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool {
+		state := w.State()
+		return !state.Watching && state.LastError == polling
+	})
+	panicking.Store(true)
+	commit(t, path, `{"schema":1,"changed":true,"padding":"cccccccccccccccccccccccc"}`)
+	// handlerFailed logs only after it has updated health, so once the failure
+	// is logged its effect on health is final.
+	eventually(t, func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		for _, message := range logged {
+			if message == logHandlerFailed {
+				return true
+			}
+		}
+		return false
+	})
+
+	if state := w.State(); state.Watching || state.LastError != polling {
+		t.Fatalf("state = %+v; want the polling fallback still reported", state)
+	}
+}
+
+func eventually(t *testing.T, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not reached within 5s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

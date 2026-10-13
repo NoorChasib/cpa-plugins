@@ -1,6 +1,7 @@
 import { ConsoleUnansweredError, NoSessionError, readThrough, refetchInterval } from "./access"
 import { anyChecking, type Check, checkedInterval } from "./checks"
 import { managementPath, resourcePath } from "./cpa-auth"
+import { decodeSummary } from "./escaped"
 import { accessContext, openDoors } from "./session"
 import type { Summary } from "./types"
 
@@ -94,7 +95,9 @@ export async function fetchSummary(signal?: AbortSignal): Promise<Summary> {
   if (response.status === 304 && cached && cached.url === target.url) return cached.document
   if (!response.ok) throw new Error(`summary request failed: ${response.status}`)
 
-  const document = (await response.json()) as Summary
+  // Decoded once, here, so the cache and every reader hold the plugin's own
+  // text whichever door it came through (escaped.ts).
+  const document = decodeSummary((await response.json()) as Summary)
   const etag = response.headers.get("ETag")
   cached = etag ? { url: target.url, etag, document } : null
   return document

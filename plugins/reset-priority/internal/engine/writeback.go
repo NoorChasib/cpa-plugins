@@ -176,23 +176,30 @@ func (e *Engine) writeOne(ctx context.Context, item writeItem) {
 		return
 	}
 
-	// Pair the final live-state/dry-run check with AuthSave. Reconfigure updates
-	// cfg before crossing this same gate, so returning from a dry-run update
-	// means no stale read-before-write can save afterward.
-	e.saveMu.Lock()
-	if !e.writeItemCurrent(item) {
-		e.saveMu.Unlock()
-		return
-	}
 	name := got.Name
 	if name == "" {
 		name = item.name
 	}
-	errSave := e.host.AuthSave(ctx, name, raw)
-	if errSave == nil {
-		e.updateCurrentPriority(item.authIndex, item.desired, true)
+	// Pair the final live-state/dry-run check with AuthSave. Reconfigure updates
+	// cfg before crossing this same gate, so returning from a dry-run update
+	// means no stale read-before-write can save afterward. The gate is released
+	// by defer: a save that panicked and kept it would block Reconfigure, and
+	// with it CPA's configuration apply, forever.
+	admitted, errSave := func() (bool, error) {
+		e.saveMu.Lock()
+		defer e.saveMu.Unlock()
+		if !e.writeItemCurrent(item) {
+			return false, nil
+		}
+		errSave := e.host.AuthSave(ctx, name, raw)
+		if errSave == nil {
+			e.updateCurrentPriority(item.authIndex, item.desired, true)
+		}
+		return true, errSave
+	}()
+	if !admitted {
+		return
 	}
-	e.saveMu.Unlock()
 
 	// The reconfiguration barrier covers final admission, AuthSave, and state
 	// publication only. Host logging is another native callback and must not keep

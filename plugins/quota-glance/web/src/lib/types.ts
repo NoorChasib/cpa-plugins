@@ -353,6 +353,12 @@ export interface Summary {
    * an older plugin.
    */
   renewalOrphans?: RenewalOrphan[]
+  /**
+   * True when CPA HTML-escaped every string in this response, which it does
+   * on the console path while it holds the plugin to a schema below 6.
+   * fetchSummary decodes them (escaped.ts). Absent from an older plugin.
+   */
+  stringsEscaped?: boolean
 }
 
 export type APICreditState = Open<

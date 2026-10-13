@@ -154,6 +154,12 @@ type Document struct {
 	// RenewalOrphans are renewal dates Quota Cache stores for credentials the
 	// roster no longer lists, oldest updatedAt first. Always an array.
 	RenewalOrphans []RenewalOrphan `json:"renewalOrphans"`
+	// StringsEscaped says CPA HTML-escaped every string in this response, so
+	// a client decodes them before showing one. CPA does that to a management
+	// answer while it holds the plugin to an RPC schema below 6, and never to
+	// a resource answer, so only the copy the console path serves can say
+	// true. It is the serving layer's to set; Build leaves it false.
+	StringsEscaped bool `json:"stringsEscaped"`
 }
 
 // The API credit card is Quota Cache's published credit state, passed through:

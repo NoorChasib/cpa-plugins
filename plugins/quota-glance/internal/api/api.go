@@ -98,6 +98,14 @@ type API struct {
 	etag   string
 	doc    aggregate.Document
 	health Health
+	// escapedBody and escapedETag are the same document saying stringsEscaped,
+	// which the console path serves while stringsEscaped is set.
+	escapedBody []byte
+	escapedETag string
+	// stringsEscaped is set while CPA HTML-escapes every string of the
+	// management tree's JSON answers, which it does while it holds this plugin
+	// to an RPC schema below 6. It never escapes a resource answer.
+	stringsEscaped bool
 
 	tokenHash [sha256.Size]byte
 	hasToken  bool
@@ -200,10 +208,24 @@ func (a *API) SetToken(token string) {
 	a.tokenHash, a.hasToken = sha256.Sum256([]byte(token)), token != ""
 }
 
+// SetStringsEscaped says whether CPA HTML-escapes the strings of this plugin's
+// management answers, which it does while it holds the plugin to an RPC schema
+// below 6. Every JSON answer there that carries free text then says so, for a
+// client to decode it: an answer that carries none is the same either way.
+func (a *API) SetStringsEscaped(escaped bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stringsEscaped = escaped
+}
+
 // Publish replaces the served document.
 func (a *API) Publish(doc aggregate.Document, health Health) {
-	body, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
+	doc.StringsEscaped = false
+	body, etag, err := encodeDocument(doc)
+	escaped := doc
+	escaped.StringsEscaped = true
+	escapedBody, escapedETag, escapedErr := encodeDocument(escaped)
+	if err != nil || escapedErr != nil {
 		// Keep serving the previous document, but say so: silently serving
 		// stale data while health reports the older build is worse than either.
 		a.mu.Lock()
@@ -212,11 +234,30 @@ func (a *API) Publish(doc aggregate.Document, health Health) {
 		a.mu.Unlock()
 		return
 	}
-	body = append(body, '\n')
-	sum := sha256.Sum256(body)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.body, a.etag, a.doc, a.health = body, `"`+hex.EncodeToString(sum[:])+`"`, doc, health
+	a.body, a.etag, a.doc, a.health = body, etag, doc, health
+	a.escapedBody, a.escapedETag = escapedBody, escapedETag
+}
+
+// encodeDocument is doc as the summary routes serve it, and its ETag.
+func encodeDocument(doc aggregate.Document) ([]byte, string, error) {
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, "", err
+	}
+	body = append(body, '\n')
+	sum := sha256.Sum256(body)
+	return body, `"` + hex.EncodeToString(sum[:]) + `"`, nil
+}
+
+// BuildFailed keeps serving the current document and has health say why it was
+// not replaced. A rebuild that panicked publishes nothing else; the next
+// Publish clears it.
+func (a *API) BuildFailed(message string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.health.LastError = message
 }
 
 // Document returns the currently served document.
@@ -287,7 +328,7 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 	// plugin checks it. It is the fallback, and it is why the token still
 	// exists.
 	case a.managementPath("/summary"):
-		return a.documentResponse(req)
+		return a.documentResponse(req, true)
 	case a.resourcePath("/summary"):
 		return a.tokenSummaryResponse(req, now)
 	case a.resourcePath("/spend"):
@@ -704,7 +745,7 @@ func (a *API) tokenSummaryResponse(req protocol.ManagementRequest, now time.Time
 	if !a.authorized(req.Headers) {
 		return a.tokenRefusal(now)
 	}
-	return a.documentResponse(req)
+	return a.documentResponse(req, false)
 }
 
 // tokenRefusal answers a request on the resource tree that did not present the
@@ -727,10 +768,15 @@ func (a *API) tokenRefusal(now time.Time) protocol.ManagementResponse {
 }
 
 // documentResponse serves the document to a caller that is already authorized,
-// by whichever of the two routes it arrived on.
-func (a *API) documentResponse(req protocol.ManagementRequest) protocol.ManagementResponse {
+// by whichever of the two routes it arrived on. On the console's, while CPA
+// escapes it, that is the copy saying stringsEscaped, under its own ETag; the
+// two doors serve the same bytes otherwise.
+func (a *API) documentResponse(req protocol.ManagementRequest, console bool) protocol.ManagementResponse {
 	a.mu.RLock()
 	body, etag := a.body, a.etag
+	if console && a.stringsEscaped {
+		body, etag = a.escapedBody, a.escapedETag
+	}
 	a.mu.RUnlock()
 	headers := http.Header{
 		"Content-Type":           {"application/json; charset=utf-8"},
@@ -785,7 +831,7 @@ func matchesETag(header, etag string) bool {
 
 func (a *API) healthResponse() protocol.ManagementResponse {
 	a.mu.RLock()
-	health, doc := a.health, a.doc
+	health, doc, escaped := a.health, a.doc, a.stringsEscaped
 	a.mu.RUnlock()
 	health.Stale = doc.Stale
 	if doc.StaleReason != nil {
@@ -795,12 +841,16 @@ func (a *API) healthResponse() protocol.ManagementResponse {
 		Health
 		Counters         aggregate.Counters `json:"counters"`
 		GeneratedAtEpoch int64              `json:"generated_at_epoch"`
-	}{health, doc.Counters, doc.GeneratedAtEpoch})
+		// StringsEscaped says CPA HTML-escaped this answer's strings: a path
+		// holding an apostrophe arrives with &#39; in it. A boolean is never
+		// escaped.
+		StringsEscaped bool `json:"strings_escaped"`
+	}{health, doc.Counters, doc.GeneratedAtEpoch, escaped})
 }
 
 // windowsResponse reports which window keys were observed and which credentials
 // reported each, which is the quickest way to see a provider change its
-// vocabulary underneath the canonical mapping.
+// vocabulary underneath the canonical mapping. strings_escaped is health's.
 func (a *API) windowsResponse() protocol.ManagementResponse {
 	type window struct {
 		RowID       string   `json:"row_id"`
@@ -809,7 +859,9 @@ func (a *API) windowsResponse() protocol.ManagementResponse {
 		Matched     bool     `json:"matched"`
 		Credentials []string `json:"credentials"`
 	}
-	doc := a.Document()
+	a.mu.RLock()
+	doc, escaped := a.doc, a.stringsEscaped
+	a.mu.RUnlock()
 	windows := []window{}
 	for _, provider := range doc.Providers {
 		for _, row := range provider.Rows {
@@ -821,7 +873,7 @@ func (a *API) windowsResponse() protocol.ManagementResponse {
 			windows = append(windows, item)
 		}
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"windows": windows})
+	return jsonResponse(http.StatusOK, map[string]any{"windows": windows, "strings_escaped": escaped})
 }
 
 func jsonResponse(status int, value any) protocol.ManagementResponse {

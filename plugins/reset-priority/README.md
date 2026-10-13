@@ -40,7 +40,7 @@ Preserve the auth directory: written priority/quarantine values live in the phys
 
 ## Optional shared quota cache
 
-Version 0.2.0 works independently by default. Quota Cache is **not required** for OAuth priorities; API credit routing needs Quota Cache 0.2.0.
+Version 0.2.1 works independently by default. Quota Cache is **not required** for OAuth priorities; API credit routing needs Quota Cache 0.2.0.
 
 To share quota observations, install Quota Cache. Then, on CPA's Plugins page, open Reset Priority's **Edit config** and turn on **use-quota-cache**:
 
