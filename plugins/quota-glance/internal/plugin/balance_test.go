@@ -8,7 +8,7 @@ import (
 )
 
 func TestWarnBelowIsANumberInTheConfigurationPanel(t *testing.T) {
-	for _, field := range registration().Metadata.ConfigFields {
+	for _, field := range registration(rawManagementSchema).Metadata.ConfigFields {
 		if field.Name == "openrouter-warn-below" {
 			if field.Type != "number" {
 				t.Fatalf("type = %q; the panel should offer a number field", field.Type)

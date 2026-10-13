@@ -1,6 +1,8 @@
 // Package protocol mirrors the subset of CPA ABI 1 / schema 4 this plugin uses.
 // It matches the declaration in plugins/quota-cache, the other consumer of the
-// same snapshot, so both agree on the host contract.
+// same snapshot, so both agree on the host contract. Like Quota Cache, the
+// plugin answers the schema CPA offers, at most 6, at which CPA stops
+// HTML-escaping management JSON; nothing declared here differs at 6.
 //
 // Only the callbacks quota-glance actually needs are declared. Everything the
 // dashboard renders is read from a file and served from memory: no scheduled
@@ -26,7 +28,8 @@ import (
 )
 
 const (
-	ABIVersion    uint32 = 1
+	ABIVersion uint32 = 1
+	// SchemaVersion is the oldest RPC schema the plugin accepts.
 	SchemaVersion uint32 = 4
 
 	MethodPluginRegister     = "plugin.register"

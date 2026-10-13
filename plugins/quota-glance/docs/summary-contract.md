@@ -5,8 +5,10 @@ CPA authenticates it with the management key before this plugin sees the
 request. The identical document is served on
 `GET /v0/resource/plugins/quota-glance/summary` for a reader signed in with the
 dashboard password; CPA authenticates nothing there, so that path carries the
-plugin's own `web-token`. Same bytes, same ETag, two gates. Which of the two a
-browser uses, and when, is in [access.md](access.md). This
+plugin's own `web-token`. Same bytes, same ETag, two gates, on every
+supported CPA; on an older one the console path's copy says
+[`stringsEscaped`](#stringsescaped--whether-cpa-escaped-this-responses-strings).
+Which of the two a browser uses, and when, is in [access.md](access.md). This
 page is its reference: the vocabulary a client has to understand, and the
 guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
@@ -825,6 +827,22 @@ objects about the API credit card:
   the state could not be read and `"missing"` otherwise. Quota Glance no
   longer reads the meter itself.
 
+`last_error` is `"summary document could not be rebuilt"` after a rebuild that
+failed outright, on a fault in the plugin rather than in what it reads. The
+document served is then the last one built, unchanged, the CPA log says
+`quota-glance could not rebuild its summary and keeps serving the last one`
+once per configure, and the next rebuild that works clears it. Rebuilds run at
+least once a minute. Should the fault escape that, the watcher reports
+`snapshot reload failed; retrying at the next change` as its own
+`watcher.last_error`, and in the log once, and keeps watching. Neither failure
+stops the plugin, or CPA.
+
+`strings_escaped` says whether CPA HTML-escaped this answer's strings, as
+[`stringsEscaped`](#stringsescaped--whether-cpa-escaped-this-responses-strings)
+does for the summary: `true` while CPA holds the plugin to a schema below 6,
+when a path holding an apostrophe shows `&#39;`. `GET .../windows` carries it
+too.
+
 There is no `router`: routing on API credits is Reset Priority's, set up as
 [its README](../../reset-priority/README.md) says.
 
@@ -880,6 +898,28 @@ credit state decides in it, `apiCredits`, `renewalOrphans` and each
 credential's renewal fields, is rebuilt from the same snapshot and roster with
 the credit state as it is now, so a value entered on Quota Cache's page
 meanwhile shows at once.
+
+### `stringsEscaped` — whether CPA escaped this response's strings
+
+Quota Glance answers the RPC schema CPA offers, at most 6. Every supported CPA
+offers 6, at which CPA passes a management answer to the browser exactly as
+the plugin wrote it, so `stringsEscaped` is `false` on both paths and they
+serve the same bytes.
+
+Below schema 6, CPA HTML-escapes every string value of a management JSON
+answer on its way out: an address holding an apostrophe arrives on the console
+path with `&#39;` in it, and `&`, `<`, `>` and `"` as `&amp;`, `&lt;`, `&gt;`
+and `&#34;`. The copy the console path serves then says `stringsEscaped: true`,
+under an ETag of its own since its bytes differ, and a client decodes those
+five entities in every string value before showing one, in one pass so that
+`&amp;lt;` becomes `&lt;` and no further. Keys are never escaped. The dashboard
+does this. Decode only when it says `true`: in a document that says `false` a
+label that holds `&amp;` means exactly that. The resource path is never
+escaped and always says `false`.
+
+The press's answers (`POST .../redeem`, `GET .../spend`) and the retired
+settings routes carry no such field and need none: every string in them is a
+code, such as `not_redeemable` or `cleared`, that escaping leaves as it is.
 
 ## Rows
 

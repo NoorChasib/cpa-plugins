@@ -36,12 +36,24 @@ type fakeHost struct {
 	// confirmed reset clears one, so serving, reconfiguring and a press that
 	// is refused before the provider must leave it empty.
 	cooldowns []string
+	// panicking, when set, is what ListAuth panics with: a fault deep inside a
+	// rebuild.
+	panicking string
 }
 
 func (h *fakeHost) ListAuth(context.Context) ([]protocol.HostAuthFileEntry, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.panicking != "" {
+		panic(h.panicking)
+	}
 	return h.files, h.err
+}
+
+func (h *fakeHost) panicWith(value string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.panicking = value
 }
 
 func (h *fakeHost) Log(_ context.Context, level, message string, fields map[string]any) {
@@ -101,7 +113,13 @@ func fixtureSnapshot(t *testing.T) []byte {
 
 func configure(t *testing.T, p *Plugin, yaml string) (protocol.Registration, error) {
 	t.Helper()
-	raw, err := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte(yaml), SchemaVersion: 4})
+	return configureAt(t, p, yaml, 4)
+}
+
+// configureAt registers with schema as the one CPA offers.
+func configureAt(t *testing.T, p *Plugin, yaml string, schema uint32) (protocol.Registration, error) {
+	t.Helper()
+	raw, err := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte(yaml), SchemaVersion: schema})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +148,16 @@ func newFixturePlugin(t *testing.T) (*Plugin, *fakeHost, string) {
 	}}
 	p := New(host)
 	t.Cleanup(p.Shutdown)
-	cfg := "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(dir, "data") + "\nweb-token: test-token\nstale-after: 45m\n"
-	if _, err := configure(t, p, cfg); err != nil {
+	if _, err := configure(t, p, fixtureConfig(cachePath)); err != nil {
 		t.Fatal(err)
 	}
 	return p, host, cachePath
+}
+
+// fixtureConfig is newFixturePlugin's configuration, for a test that
+// reconfigures it unchanged.
+func fixtureConfig(cachePath string) string {
+	return "cache-path: " + cachePath + "\ndata-dir: " + filepath.Join(filepath.Dir(cachePath), "data") + "\nweb-token: test-token\nstale-after: 45m\n"
 }
 
 // The document is on the management tree, which CPA has already authenticated
@@ -312,6 +335,58 @@ func TestConfigurationIsValidated(t *testing.T) {
 	}
 }
 
+// The schema answered is the one CPA offers, at most 6, at which CPA stops
+// HTML-escaping management JSON; below 4 is refused, as before. A configure
+// that turns the plugin off answers the same way.
+func TestTheSchemaAnsweredIsTheOneOfferedAtMostSix(t *testing.T) {
+	p, _, cachePath := newFixturePlugin(t)
+	for _, cfg := range []string{fixtureConfig(cachePath), "enabled: false\n"} {
+		for offered, answered := range map[uint32]uint32{4: 4, 5: 5, 6: 6, 9: 6} {
+			registration, err := configureAt(t, p, cfg, offered)
+			if err != nil || registration.SchemaVersion != answered {
+				t.Fatalf("%q offered %d: answered %d, %v; want %d", cfg, offered, registration.SchemaVersion, err, answered)
+			}
+		}
+		if _, err := configureAt(t, p, cfg, 3); err == nil {
+			t.Fatalf("%q: schema 3 accepted", cfg)
+		}
+	}
+}
+
+// Below schema 6 CPA HTML-escapes every string of a management JSON answer,
+// so an apostrophe in an address reaches the console's page as &#39;. The page
+// may decode only when told, or a label that really holds &amp; would change,
+// so each answer the management tree reads out says whether CPA escapes it:
+// the summary as stringsEscaped, health and windows as strings_escaped, like
+// Quota Cache's status. The resource tree is never escaped.
+func TestManagementAnswersSayWhetherCPAEscapesThem(t *testing.T) {
+	p, _, cachePath := newFixturePlugin(t)
+	decode := func(res protocol.ManagementResponse) map[string]any {
+		t.Helper()
+		var body map[string]any
+		if res.StatusCode != http.StatusOK || json.Unmarshal(res.Body, &body) != nil {
+			t.Fatalf("status %d, body %.200s", res.StatusCode, res.Body)
+		}
+		return body
+	}
+	for schema, escaped := range map[uint32]bool{4: true, 5: true, 6: false, 9: false} {
+		if _, err := configureAt(t, p, fixtureConfig(cachePath), schema); err != nil {
+			t.Fatal(err)
+		}
+		if got := decode(summary(t, p))["stringsEscaped"]; got != escaped {
+			t.Errorf("schema %d: console summary says stringsEscaped %v", schema, got)
+		}
+		if got := decode(resource(t, p, "/summary", http.Header{"Authorization": {"Bearer test-token"}}))["stringsEscaped"]; got != false {
+			t.Errorf("schema %d: resource summary says stringsEscaped %v", schema, got)
+		}
+		for _, route := range []string{"/health", "/windows"} {
+			if got := decode(managementGet(t, p, "/v0/management/plugins/quota-glance"+route))["strings_escaped"]; got != escaped {
+				t.Errorf("schema %d: %s says strings_escaped %v", schema, route, got)
+			}
+		}
+	}
+}
+
 func toString(value any) string {
 	if s, ok := value.(string); ok {
 		return s
@@ -389,7 +464,7 @@ func TestRegisteredTextSurvivesPluginListEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := registration().Metadata
+	meta := registration(rawManagementSchema).Metadata
 	text := map[string]string{
 		"metadata Name":             meta.Name,
 		"metadata Version":          meta.Version,
@@ -481,6 +556,56 @@ func TestRosterFailureKeepsServingTheLastGoodDocument(t *testing.T) {
 	credentials, _ = doc["credentials"].([]any)
 	if len(credentials) != 7 || doc["staleReason"] != "cacheMissing" {
 		t.Fatalf("the last good document was lost: %d credentials, reason %v", len(credentials), doc["staleReason"])
+	}
+}
+
+// A rebuild runs on the watcher's goroutine, which nothing above recovers, and
+// in a native plugin a panic that escapes it aborts CPA. One that panics
+// publishes nothing: the last document keeps being served, health says why
+// until a rebuild works, and the CPA log says so once per configure, without
+// the panic value.
+func TestARebuildThatPanicsKeepsServingTheLastDocument(t *testing.T) {
+	p, host, _ := newFixturePlugin(t)
+	waitForDocument(t, p, func(doc map[string]any) bool {
+		credentials, _ := doc["credentials"].([]any)
+		return len(credentials) == 7
+	})
+	served := summary(t, p).Headers.Get("ETag")
+
+	host.panicWith("roster for /private/path")
+	p.Rebuild()
+	p.Rebuild()
+
+	if res := summary(t, p); res.StatusCode != http.StatusOK || res.Headers.Get("ETag") != served {
+		t.Fatalf("summary %d %s; want the last document, %s, still served", res.StatusCode, res.Headers.Get("ETag"), served)
+	}
+	lastError := func() any {
+		var health map[string]any
+		if err := json.Unmarshal(managementGet(t, p, "/v0/management/plugins/quota-glance/health").Body, &health); err != nil {
+			t.Fatal(err)
+		}
+		return health["last_error"]
+	}
+	if got := lastError(); got != errRebuildFailed {
+		t.Fatalf("health last_error = %v, want %q", got, errRebuildFailed)
+	}
+	warned := 0
+	for _, line := range host.logged() {
+		if strings.Contains(line.message, "/private/path") || strings.Contains(fmt.Sprint(line.fields), "/private/path") {
+			t.Fatalf("logged the panic value: %+v", line)
+		}
+		if line.message == logRebuildFailed && line.level == "warn" {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Fatalf("warned %d times, want once", warned)
+	}
+
+	host.panicWith("")
+	p.Rebuild()
+	if got := lastError(); got == errRebuildFailed {
+		t.Fatal("a rebuild that worked left the failure in health")
 	}
 }
 

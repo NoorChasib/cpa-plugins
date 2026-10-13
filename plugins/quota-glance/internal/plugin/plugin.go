@@ -35,12 +35,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
@@ -56,7 +58,14 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.8.0"
+var Version = "0.8.1"
+
+// rawManagementSchema is the first RPC schema at which CPA hands this plugin's
+// management JSON to the browser as it is. Below it, CPA HTML-escapes every
+// string value in it, so an apostrophe arrives as &#39;. Every supported CPA
+// offers it. Nothing else this plugin does depends on the schema: CPA's other
+// schema-gated changes are to request interceptors, and it registers none.
+const rawManagementSchema = 6
 
 const (
 	defaultStaleAfter = 45 * time.Minute
@@ -118,6 +127,14 @@ const logAllowEditIgnored = "quota-glance no longer edits API credits or renewal
 // not be written. It names neither the file nor the credential.
 const logRefreshNotRequested = "quota-glance could not ask Quota Cache to refresh after a banked reset"
 
+// logRebuildFailed is said once per configure whose rebuild panicked, and
+// errRebuildFailed is health's last_error until a rebuild works. Neither
+// carries the panic value, which can hold a path or a value read from a file.
+const (
+	logRebuildFailed = "quota-glance could not rebuild its summary and keeps serving the last one"
+	errRebuildFailed = "summary document could not be rebuilt"
+)
+
 // dollars is a money amount from configuration. The configuration panel saves
 // a number field as a YAML int or float depending on what was typed, and a
 // hand-edited file may quote it or keep the dollar sign, so all of those
@@ -169,6 +186,9 @@ type Plugin struct {
 	// configMu or stateMu ever takes it, and Rebuild never takes mu, so it
 	// cannot deadlock a close.
 	rebuildMu sync.Mutex
+	// rebuildWarned is set once a rebuild that panicked has been logged, and
+	// cleared by each configure that starts a watcher.
+	rebuildWarned atomic.Bool
 
 	// lastGood is the most recent document built from a readable snapshot. It
 	// is what gets re-served, marked stale, when the snapshot goes away: an
@@ -264,7 +284,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		p.configMu.RUnlock()
 		return served.Handle(req, time.Now().UTC()), nil
 	default:
-		return nil, errors.New("unknown method")
+		return nil, fmt.Errorf("unknown method: %s", method)
 	}
 }
 
@@ -273,9 +293,11 @@ const retiredSettingsDescription = "Retired: API credit and renewal settings are
 
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	var req protocol.LifecycleRequest
-	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
+	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < protocol.SchemaVersion {
 		return protocol.Registration{}, errors.New("schema 4 or newer required")
 	}
+	// What CPA holds the plugin to from this answer on, if it is accepted.
+	schema := min(req.SchemaVersion, rawManagementSchema)
 	cfg := config{CachePath: qc.DefaultPath, DataDir: defaultDataDir, StaleAfter: defaultStaleAfter.String()}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yamlDecoder(req.ConfigYAML)
@@ -325,7 +347,8 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.configMu.RUnlock()
 		served.Disable()
 		p.warnIgnored(cfg)
-		return registration(), nil
+		served.SetStringsEscaped(schema < rawManagementSchema)
+		return registration(schema), nil
 	}
 	// Refuse plainly rather than serve an empty document that is
 	// indistinguishable from a working install with no quota anywhere.
@@ -379,6 +402,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.log("warn", "quota-glance generated a fallback web token; set web-token in plugin configuration to choose your own", map[string]any{"web_token": token})
 	}
 
+	p.rebuildWarned.Store(false)
 	watcher, err := watch.Start(watch.Options{
 		Path:        cachePath,
 		CreditsPath: qc.CreditsPath(cachePath),
@@ -403,7 +427,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.log("info", "quota-glance is serving; if the app route returns 404, CPA's home page is enabled and resource routes are disabled", nil)
 	})
 	p.warnIgnored(cfg)
-	return registration(), nil
+	// Last, as the configure is accepted: the page decodes the summary's
+	// strings only while it says CPA escaped them.
+	served.SetStringsEscaped(schema < rawManagementSchema)
+	return registration(schema), nil
 }
 
 // warnIgnored says, once per configure that is accepted, that a key the
@@ -414,9 +441,11 @@ func (p *Plugin) warnIgnored(cfg config) {
 	}
 }
 
-func registration() protocol.Registration {
+// registration is the answer to an accepted configure, at schema: the one CPA
+// offered, at most rawManagementSchema.
+func registration(schema uint32) protocol.Registration {
 	return protocol.Registration{
-		SchemaVersion: protocol.SchemaVersion,
+		SchemaVersion: schema,
 		Metadata: protocol.Metadata{
 			Name: ID, Version: Version, Author: "NoorChasib",
 			GitHubRepository: "https://github.com/NoorChasib/cpa-plugins",
@@ -442,9 +471,38 @@ func registration() protocol.Registration {
 // Rebuild reads the snapshot and republishes. It runs on the watcher's
 // goroutine, including its startup read; rebuildMu takes any other caller one
 // at a time with it.
+//
+// Nothing above that goroutine recovers, and in a native plugin a panic that
+// escapes it aborts CPA, so Rebuild carries its own barrier. A rebuild that
+// panics publishes nothing: the last document keeps being served, and health
+// says why until a rebuild works (rebuildFailed).
 func (p *Plugin) Rebuild() {
 	p.rebuildMu.Lock()
 	defer p.rebuildMu.Unlock()
+	defer func() {
+		if recover() != nil {
+			p.rebuildFailed()
+		}
+	}()
+	p.rebuild()
+}
+
+// rebuildFailed reports a rebuild that panicked: in health, beside the
+// document still served, and in the log once per configure, so a fault that
+// recurs on every heartbeat is said once rather than once a minute.
+func (p *Plugin) rebuildFailed() {
+	p.configMu.RLock()
+	served := p.api
+	p.configMu.RUnlock()
+	served.BuildFailed(errRebuildFailed)
+	if p.rebuildWarned.CompareAndSwap(false, true) {
+		p.log("warn", logRebuildFailed, nil)
+	}
+}
+
+// rebuild is Rebuild's work, run behind its barrier and under rebuildMu. Every
+// lock it takes is released on the way out of a panic too.
+func (p *Plugin) rebuild() {
 	p.configMu.RLock()
 	settings, current, watcher, served := p.settings, p.store, p.watcher, p.api
 	p.configMu.RUnlock()

@@ -37,6 +37,11 @@ const (
 	DefaultHeartbeat = time.Minute
 )
 
+// logHandlerFailed is reported when OnChange panics: in health, until the
+// watch is next re-added, and in the log once per watcher. It names neither
+// the file nor the panic.
+const logHandlerFailed = "snapshot reload failed; retrying at the next change"
+
 // Why a rebuild ran. Only the reasons health reports are distinguished: a
 // backstop means fsnotify missed an event, a heartbeat means nothing was
 // missed and the clock came round.
@@ -77,6 +82,8 @@ type Watcher struct {
 	once     sync.Once
 	stateMu  sync.Mutex
 	state    State
+	// failedOnce logs the first panicking OnChange; see handlerFailed.
+	failedOnce sync.Once
 }
 
 // State is what .../health reports about the watcher.
@@ -336,6 +343,11 @@ func (w *Watcher) run() {
 	}
 }
 
+// fire runs OnChange behind a panic barrier. It runs on this watcher's own
+// goroutine, which nothing above recovers, and in a native plugin a panic that
+// escapes it aborts CPA. The run loop carries on, so the next change, backstop
+// or heartbeat tries again. The panic value is never reported: it can hold a
+// path or the contents of a file.
 func (w *Watcher) fire(kind reloadKind) {
 	w.stateMu.Lock()
 	w.state.Reloads++
@@ -346,5 +358,20 @@ func (w *Watcher) fire(kind reloadKind) {
 		w.state.Heartbeats++
 	}
 	w.stateMu.Unlock()
+	defer func() {
+		if recover() != nil {
+			w.handlerFailed()
+		}
+	}()
 	w.opts.OnChange()
+}
+
+// handlerFailed reports a panicking OnChange without changing whether the
+// directory is watched, and logs it once: a handler that panics on every
+// heartbeat would otherwise log once a minute for as long as it runs.
+func (w *Watcher) handlerFailed() {
+	w.stateMu.Lock()
+	w.state.LastError = logHandlerFailed
+	w.stateMu.Unlock()
+	w.failedOnce.Do(func() { w.opts.Logf(logHandlerFailed) })
 }

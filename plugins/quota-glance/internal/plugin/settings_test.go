@@ -240,7 +240,7 @@ func TestConfigFieldsCoverEveryKey(t *testing.T) {
 		decoded[key] = true
 	}
 	offered := map[string]protocol.ConfigField{}
-	for _, field := range registration().Metadata.ConfigFields {
+	for _, field := range registration(rawManagementSchema).Metadata.ConfigFields {
 		if !decoded[field.Name] {
 			t.Errorf("ConfigFields offers %q, which the configuration does not decode", field.Name)
 		}
