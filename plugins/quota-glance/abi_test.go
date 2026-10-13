@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	pluginimpl "github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/plugin"
@@ -158,14 +159,26 @@ func TestTheCooldownCallbackMatchesCPAsContract(t *testing.T) {
 }
 
 // The goroutine that cancels an abandoned host operation is one nothing above
-// recovers. A cancel that panics must end there, not abort CPA.
+// recovers. A cancel that panics must end there, not abort CPA; and the cancel
+// runs only for a request whose context ended before it finished.
 func TestACancelThatPanicsStaysOnItsGoroutine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	var called atomic.Bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cancelOnDone(ctx, make(chan struct{}), func() { panic("operation op-1 holds a token") })
+		cancelOnDone(ctx, make(chan struct{}), func() {
+			called.Store(true)
+			panic("operation op-1 holds a token")
+		})
 	}()
 	cancel()
 	<-done
+	if !called.Load() {
+		t.Fatal("an ended context did not cancel the operation")
+	}
+
+	finished := make(chan struct{})
+	close(finished)
+	cancelOnDone(context.Background(), finished, func() { t.Fatal("a finished request was cancelled") })
 }

@@ -459,11 +459,14 @@ func TestAChangeHandlerThatPanicsLeavesTheWatcherRunning(t *testing.T) {
 // will clear that. A reload that then panics must not replace it with its own
 // message, which would hide for good that delivery stopped.
 func TestAPanickingReloadKeepsThePollingFallbackInHealth(t *testing.T) {
+	const polling = "filesystem watcher stopped delivering events; polling instead"
 	dir := t.TempDir()
 	path := filepath.Join(dir, "snapshot.json")
 	commit(t, path, `{"schema":1}`)
 	var calls atomic.Int64
 	var panicking atomic.Bool
+	var logMu sync.Mutex
+	var logged []string
 	w, err := Start(Options{
 		Path:      path,
 		Debounce:  10 * time.Millisecond,
@@ -475,7 +478,11 @@ func TestAPanickingReloadKeepsThePollingFallbackInHealth(t *testing.T) {
 				panic("snapshot at /private/path holds a secret")
 			}
 		},
-		Logf: func(string) {},
+		Logf: func(message string) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logged = append(logged, message)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -484,16 +491,42 @@ func TestAPanickingReloadKeepsThePollingFallbackInHealth(t *testing.T) {
 	w.Begin()
 	waitFor(t, &calls, 1)
 
+	// Wait for the watcher to report the fallback before any reload panics,
+	// so the two messages land in that order.
 	if err := w.fs.Close(); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, func() bool {
+		state := w.State()
+		return !state.Watching && state.LastError == polling
+	})
 	panicking.Store(true)
-	before := calls.Load()
 	commit(t, path, `{"schema":1,"changed":true,"padding":"cccccccccccccccccccccccc"}`)
-	waitFor(t, &calls, before+1)
+	// handlerFailed logs only after it has updated health, so once the failure
+	// is logged its effect on health is final.
+	eventually(t, func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		for _, message := range logged {
+			if message == logHandlerFailed {
+				return true
+			}
+		}
+		return false
+	})
 
-	const polling = "filesystem watcher stopped delivering events; polling instead"
 	if state := w.State(); state.Watching || state.LastError != polling {
 		t.Fatalf("state = %+v; want the polling fallback still reported", state)
+	}
+}
+
+func eventually(t *testing.T, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not reached within 5s")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
