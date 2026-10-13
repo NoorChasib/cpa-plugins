@@ -454,3 +454,46 @@ func TestAChangeHandlerThatPanicsLeavesTheWatcherRunning(t *testing.T) {
 		t.Fatalf("logged %q; want %q once", logged, logHandlerFailed)
 	}
 }
+
+// Once fsnotify has given up, health says the watcher is polling, and nothing
+// will clear that. A reload that then panics must not replace it with its own
+// message, which would hide for good that delivery stopped.
+func TestAPanickingReloadKeepsThePollingFallbackInHealth(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	var panicking atomic.Bool
+	w, err := Start(Options{
+		Path:      path,
+		Debounce:  10 * time.Millisecond,
+		Backstop:  50 * time.Millisecond,
+		Heartbeat: time.Hour,
+		OnChange: func() {
+			calls.Add(1)
+			if panicking.Load() {
+				panic("snapshot at /private/path holds a secret")
+			}
+		},
+		Logf: func(string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	if err := w.fs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	panicking.Store(true)
+	before := calls.Load()
+	commit(t, path, `{"schema":1,"changed":true,"padding":"cccccccccccccccccccccccc"}`)
+	waitFor(t, &calls, before+1)
+
+	const polling = "filesystem watcher stopped delivering events; polling instead"
+	if state := w.State(); state.Watching || state.LastError != polling {
+		t.Fatalf("state = %+v; want the polling fallback still reported", state)
+	}
+}

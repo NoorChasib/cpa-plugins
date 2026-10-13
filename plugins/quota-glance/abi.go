@@ -301,13 +301,7 @@ func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) 
 			request.OperationID = operation
 			finished := make(chan struct{})
 			defer close(finished)
-			go func() {
-				select {
-				case <-ctx.Done():
-					cancelHTTPOperation(operation)
-				case <-finished:
-				}
-			}()
+			go cancelOnDone(ctx, finished, func() { cancelHTTPOperation(operation) })
 		}
 	}
 	result, err := callHost(ctx, protocol.MethodHostHTTPDo, request)
@@ -341,6 +335,19 @@ func (hostBridge) ResetCooldown(ctx context.Context, authIndex string) (protocol
 		return protocol.HostRoutingResetCooldownResponse{}, errors.New("decode host.routing.reset_cooldown response")
 	}
 	return response, nil
+}
+
+// cancelOnDone runs cancel if ctx ends before finished closes. It runs on a
+// goroutine nothing above recovers, and in a native plugin a panic that
+// escaped it would abort CPA. A cancel that panics leaves the request to run to
+// its own end, as on a host without the operation callbacks.
+func cancelOnDone(ctx context.Context, finished <-chan struct{}, cancel func()) {
+	defer func() { _ = recover() }()
+	select {
+	case <-ctx.Done():
+		cancel()
+	case <-finished:
+	}
 }
 
 // openHTTPOperation asks the host for an operation id a later cancel can name.

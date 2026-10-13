@@ -38,7 +38,8 @@ const (
 )
 
 // logHandlerFailed is reported when OnChange panics: in health, until the
-// watch is next re-added, and in the log once per watcher. It names neither
+// watch is next re-added (unless the watcher is already polling, whose error
+// it leaves in place), and in the log once per watcher. It names neither
 // the file nor the panic.
 const logHandlerFailed = "snapshot reload failed; retrying at the next change"
 
@@ -368,10 +369,14 @@ func (w *Watcher) fire(kind reloadKind) {
 
 // handlerFailed reports a panicking OnChange without changing whether the
 // directory is watched, and logs it once: a handler that panics on every
-// heartbeat would otherwise log once a minute for as long as it runs.
+// heartbeat would otherwise log once a minute for as long as it runs. A
+// watcher already polling keeps its own error: nothing clears this one once
+// delivery has stopped, and the fallback is the state that lasts.
 func (w *Watcher) handlerFailed() {
 	w.stateMu.Lock()
-	w.state.LastError = logHandlerFailed
+	if w.state.Watching || w.state.LastError == "" {
+		w.state.LastError = logHandlerFailed
+	}
 	w.stateMu.Unlock()
 	w.failedOnce.Do(func() { w.opts.Logf(logHandlerFailed) })
 }

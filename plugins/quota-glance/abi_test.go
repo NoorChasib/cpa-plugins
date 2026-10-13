@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"go/ast"
@@ -154,4 +155,17 @@ func TestTheCooldownCallbackMatchesCPAsContract(t *testing.T) {
 		response.AuthIndex != "a1b2c3" || len(response.Models) != 1 {
 		t.Fatalf("response = %+v, %v", response, err)
 	}
+}
+
+// The goroutine that cancels an abandoned host operation is one nothing above
+// recovers. A cancel that panics must end there, not abort CPA.
+func TestACancelThatPanicsStaysOnItsGoroutine(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cancelOnDone(ctx, make(chan struct{}), func() { panic("operation op-1 holds a token") })
+	}()
+	cancel()
+	<-done
 }

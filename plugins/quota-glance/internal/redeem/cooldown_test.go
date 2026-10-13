@@ -315,3 +315,16 @@ func TestAStalledClearDoesNotHoldThePress(t *testing.T) {
 		t.Fatalf("%d spends and %d inventory reads, want two presses' worth", host.postCount(), host.calls(codexCreditsURL))
 	}
 }
+
+// The clear runs on a goroutine of its own, which nothing above recovers, and
+// in a native plugin a panic that escaped it would abort CPA. A host call that
+// panics there is a failed clear like any other: the reset still reported,
+// the claim settled.
+func TestAClearThatPanicsIsAFailedClear(t *testing.T) {
+	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset","windows_reset":1}`})
+	host.onCooldown = func() { panic("auth manager holds a token") }
+	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "codex", "c")
+	if err != nil || result.Outcome != OutcomeReset || result.Cooldown != CooldownFailed {
+		t.Fatalf("result = %+v, %v; want a reset with its clear failed", result, err)
+	}
+}

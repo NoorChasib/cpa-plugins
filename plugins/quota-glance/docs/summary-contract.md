@@ -834,8 +834,9 @@ document served is then the last one built, unchanged, the CPA log says
 once per configure, and the next rebuild that works clears it. Rebuilds run at
 least once a minute. Should the fault escape that, the watcher reports
 `snapshot reload failed; retrying at the next change` as its own
-`watcher.last_error`, and in the log once, and keeps watching. Neither failure
-stops the plugin, or CPA.
+`watcher.last_error`, and in the log once, and keeps watching. A watcher that
+has already fallen back to polling keeps reporting that instead. Neither
+failure stops the plugin, or CPA.
 
 `strings_escaped` says whether CPA HTML-escaped this answer's strings, as
 [`stringsEscaped`](#stringsescaped--whether-cpa-escaped-this-responses-strings)
@@ -915,7 +916,9 @@ five entities in every string value before showing one, in one pass so that
 `&amp;lt;` becomes `&lt;` and no further. Keys are never escaped. The dashboard
 does this. Decode only when it says `true`: in a document that says `false` a
 label that holds `&amp;` means exactly that. The resource path is never
-escaped and always says `false`.
+escaped and always says `false`. A document with no `stringsEscaped` key comes
+from Quota Glance 0.8.0 or older, which always held CPA to schema 4: read its
+console-path copy as `true` and its resource-path copy as `false`.
 
 The press's answers (`POST .../redeem`, `GET .../spend`) and the retired
 settings routes carry no such field and need none: every string in them is a
