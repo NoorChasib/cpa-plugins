@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -26,7 +27,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.2.0"
+var Version = "0.2.1"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -152,7 +153,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		}
 		return p.status(), nil
 	default:
-		return nil, errors.New("unknown method")
+		return nil, fmt.Errorf("unknown method: %s", method)
 	}
 }
 
