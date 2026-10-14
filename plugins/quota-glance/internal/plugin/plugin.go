@@ -58,7 +58,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.8.1"
+var Version = "0.9.0"
 
 // rawManagementSchema is the first RPC schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every

@@ -28,7 +28,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.2.1"
+var Version = "0.3.0"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
