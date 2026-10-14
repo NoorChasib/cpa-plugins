@@ -116,7 +116,9 @@ function Recovery({ row, named, now }: { row: Row; named: Named[]; now: number }
   const who = recoveryNames(row.entries.flatMap((entry, index) => (entry.resetsNext ? [named[index]!.name] : [])))
   if (!who) return null
   const remaining = secondsUntil(aggregate.soonestResetAtEpoch, now)
-  const verb = who.plural ? "reset" : "resets"
+  const verb = (aggregate.returningAccountCount ?? 0) > 0
+    ? (who.plural ? "become available" : "becomes available")
+    : (who.plural ? "reset" : "resets")
 
   return (
     <p className="qg-rec">
@@ -145,7 +147,9 @@ function recoverySentence(row: Row, named: Named[], now: number): string {
   if (!who) return aggregate.subtext
   const remaining = secondsUntil(aggregate.soonestResetAtEpoch, now)
   const when = remaining > 0 ? `in ${formatDuration(remaining)}` : "now"
-  const verb = who.plural ? "reset" : "resets"
+  const verb = (aggregate.returningAccountCount ?? 0) > 0
+    ? (who.plural ? "become available" : "becomes available")
+    : (who.plural ? "reset" : "resets")
   return aggregate.projectedGainPercent > 0
     ? `Plus ${aggregate.projectedGainPercent}% when ${who.who} ${verb} ${when}.`
     : `${who.who} ${verb} ${when}.`

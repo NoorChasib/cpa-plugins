@@ -22,6 +22,7 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/quota"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/settings"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/warmup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,9 +44,14 @@ type Host interface {
 }
 
 type Plugin struct {
-	mu    sync.Mutex
-	host  Host
-	cache *cache.Cache
+	mu           sync.Mutex
+	host         Host
+	warmup       *warmup.Manager
+	warmupDone   chan struct{}
+	providerGate providerGate
+	// Tests may supply a runner; production always uses the native Claude CLI.
+	warmupRunner warmup.Runner
+	cache        *cache.Cache
 	// store, organizations and publisher run while the cache does, and are
 	// nil while it is stopped: the settings the operator saves on the page,
 	// the Claude Console organizations, and the credit state worked out from
@@ -134,6 +140,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 				{Method: "GET", Path: "/plugins/" + ID + "/status", Description: "Private cached quota observations and polling activity"},
 				// No Menu: CPA would turn the route into a public resource.
 				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: "Save Claude Console organizations, API credit amounts, refill dates, Console readings and Claude renewal dates; requires the management key"},
+				{Method: "POST", Path: "/plugins/" + ID + "/warmup", Description: "Queue idle Claude accounts for warm-up; requires warm-up enabled and the management key"},
 			},
 			Resources: []protocol.ResourceRoute{{Path: "/status", Menu: "Quota Cache", Description: "Quota cache status and polling history"}},
 		}, nil
@@ -148,6 +155,9 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		if req.Method == "POST" && req.Path == settingsPath {
 			return p.saveSettings(req), nil
 		}
+		if req.Method == "POST" && req.Path == warmupPath {
+			return p.warmAll(), nil
+		}
 		if req.Method != "GET" || req.Path != "/v0/management/plugins/"+ID+"/status" {
 			return response(404, map[string]string{"error": "not_found"}), nil
 		}
@@ -161,7 +171,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 // activity, the meter file, and the credit state and editor the page shows.
 func (p *Plugin) status() protocol.ManagementResponse {
 	p.mu.Lock()
-	opts, current, store, organizations, publisher, refresh := p.opts, p.cache, p.store, p.organizations, p.publisher, p.refresh
+	opts, current, store, organizations, publisher, refresh, warmer := p.opts, p.cache, p.store, p.organizations, p.publisher, p.refresh, p.warmup
 	p.mu.Unlock()
 	if current == nil {
 		return response(503, map[string]string{"error": "cache_stopped"})
@@ -200,10 +210,11 @@ func (p *Plugin) status() protocol.ManagementResponse {
 		// strings, which the page then decodes. A boolean is never escaped.
 		StringsEscaped bool `json:"strings_escaped"`
 		// Refresh is the latest refresh after a banked reset.
-		Refresh refreshStatus `json:"refresh"`
+		Refresh refreshStatus       `json:"refresh"`
+		Warmup  *client.WarmupState `json:"warmup,omitempty"`
 	}{snapshot, now, true, opts.Path, opts.Interval.String(), opts.Spacing.String(), current.Activity(), reads, previous, apiMeter,
 		client.CreditsAt(state, now, client.DefaultCreditStaleAfter), p.editorOf(store, organizations, state, snapshot, now),
-		p.schema.Load() < rawManagementSchema, refreshStatusOf(current, refresh)})
+		p.schema.Load() < rawManagementSchema, refreshStatusOf(current, refresh), warmupStatus(warmer, now)})
 }
 
 func response(status int, value any) protocol.ManagementResponse {
@@ -216,10 +227,17 @@ func response(status int, value any) protocol.ManagementResponse {
 // never added to it lightly, since an older quota-cache would then refuse the
 // configuration after a downgrade.
 type configuration struct {
-	Path          string `yaml:"cache-path"`
-	Interval      string `yaml:"poll-interval"`
-	Spacing       string `yaml:"request-spacing"`
-	OpenRouterKey string `yaml:"openrouter-management-key"`
+	WarmupEnabled     bool   `yaml:"warmup-enabled"`
+	WarmupModel       string `yaml:"warmup-model"`
+	WarmupEffort      string `yaml:"warmup-effort"`
+	WarmupHours       string `yaml:"warmup-hours"`
+	WarmupTimezone    string `yaml:"warmup-timezone"`
+	WarmupCLIPath     string `yaml:"warmup-cli-path"`
+	WarmupProfileRoot string `yaml:"warmup-profile-root"`
+	Path              string `yaml:"cache-path"`
+	Interval          string `yaml:"poll-interval"`
+	Spacing           string `yaml:"request-spacing"`
+	OpenRouterKey     string `yaml:"openrouter-management-key"`
 	// CreditItems is claude-api-credits, where quota-cache 0.1.x listed its
 	// organizations. They are listed on the page now, so its items are only
 	// counted. It is decoded as raw nodes, as in 0.1.x, so a configuration
@@ -240,6 +258,13 @@ var configFields = []protocol.ConfigField{
 	{Name: "poll-interval", Type: "string", Description: "Least time between scheduled polls of one credential; a refresh after a banked reset polls sooner; default 15m"},
 	{Name: "request-spacing", Type: "string", Description: "Minimum spacing between provider requests; default 10s"},
 	{Name: "openrouter-management-key", Type: "string", Description: "OpenRouter management key for reading your account balance; empty disables it. It can also create and delete API keys, so give it an expiry"},
+	{Name: "warmup-enabled", Type: "boolean", Description: "Warm idle Claude subscription windows using separately signed-in Claude Code profiles; default false"},
+	{Name: "warmup-model", Type: "string", Description: "Model used only for warm-ups; default claude-haiku-5-5; changes apply without a restart"},
+	{Name: "warmup-effort", Type: "enum", EnumValues: []string{"low", "medium", "high", "xhigh", "max"}, Description: "Warm-up effort; default low; the selected model must support it"},
+	{Name: "warmup-hours", Type: "string", Description: "Daily automatic warm-up hours HH:MM-HH:MM; default 00:00-24:00; overnight ranges are supported"},
+	{Name: "warmup-timezone", Type: "string", Description: "IANA timezone for warm-up hours; default UTC"},
+	{Name: "warmup-cli-path", Type: "string", Description: "Claude Code executable available inside the CPA host or container; default claude; requires 2.1.293 or newer"},
+	{Name: "warmup-profile-root", Type: "string", Description: "Directory of native Claude Code profiles named by CPA auth index; default claude-profiles beside the snapshot; sign in each profile separately"},
 }
 
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
@@ -251,7 +276,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
 		return p.reject(errors.New("schema 4 or newer required"))
 	}
-	cfg := configuration{Path: client.DefaultPath, Interval: "15m", Spacing: "10s"}
+	cfg := configuration{Path: client.DefaultPath, Interval: "15m", Spacing: "10s", WarmupModel: warmup.DefaultModel, WarmupEffort: "low", WarmupHours: "00:00-24:00", WarmupTimezone: "UTC", WarmupCLIPath: "claude"}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
 		decoder.KnownFields(true)
@@ -273,6 +298,16 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	if p.terminal {
 		return p.reject(errors.New("cache shut down"))
+	}
+	warmOpts := warmup.Defaults(opts.Path)
+	warmOpts.Enabled, warmOpts.Model, warmOpts.Effort = cfg.WarmupEnabled, cfg.WarmupModel, cfg.WarmupEffort
+	warmOpts.Hours, warmOpts.Timezone, warmOpts.CLIPath, warmOpts.Spacing = cfg.WarmupHours, cfg.WarmupTimezone, cfg.WarmupCLIPath, spacing
+	if cfg.WarmupProfileRoot != "" {
+		warmOpts.ProfileRoot = cfg.WarmupProfileRoot
+	}
+	warmOpts, e1 = warmOpts.Validate()
+	if e1 != nil {
+		return p.reject(e1)
 	}
 	if p.cache != nil && p.opts.Path != opts.Path {
 		return p.reject(errors.New("cache path changes require native restart"))
@@ -297,7 +332,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	opened := false
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
-		current, err := cache.Open(opts, hostFetcher{host: p.host, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits, roster: &p.roster})
+		current, err := cache.Open(opts, hostFetcher{host: gatedHost{p.host, &p.providerGate}, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits, roster: &p.roster})
 		if err != nil {
 			return p.reject(err)
 		}
@@ -307,6 +342,20 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.publisher = newPublisher(opts.Path, Version, p.store, p.itemsInForce, p.logLine)
 		p.publisher.prepare = p.prepareTick(p.store, p.organizations)
 		p.refresh = newRefreshWatch(opts.Path)
+		runner := p.warmupRunner
+		if runner == nil {
+			runner = warmup.CLI{}
+		}
+		p.warmup = warmup.New(opts.Path, warmOpts, warmup.RunnerFunc(func(ctx context.Context, options warmup.Options, identity warmup.Identity) error {
+			if !p.providerGate.acquire(ctx) {
+				return ctx.Err()
+			}
+			defer p.providerGate.release()
+			return runner.Warm(ctx, options, identity)
+		}), p.warmupRoster, func(id string, now time.Time) { current.RequestPoll(client.Key("claude", id), now) })
+	}
+	if p.warmup != nil {
+		p.warmup.Configure(warmOpts)
 	}
 	now := time.Now().UTC()
 	if p.cache != nil {
@@ -333,6 +382,8 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.cancel, p.done = cancel, make(chan struct{})
 		p.wake = make(chan time.Duration, 1)
 		go p.run(ctx, p.cache, p.refresh, p.done, p.wake, spacing)
+		p.warmupDone = make(chan struct{})
+		go func(manager *warmup.Manager, done chan struct{}) { defer close(done); manager.Run(ctx) }(p.warmup, p.warmupDone)
 		p.publisher.start()
 	}
 	if p.publisher != nil {
@@ -443,6 +494,9 @@ func (p *Plugin) stopMeter(reason string) {
 // fits: to CPA the plugin is as good as switched off. The cache carries on;
 // it needs no usage records. It is called under p.mu.
 func (p *Plugin) reject(err error) (protocol.Registration, error) {
+	if p.warmup != nil {
+		p.warmup.Disable()
+	}
 	p.linkMu.Lock()
 	p.metering = false
 	p.stopMeter(client.MeterStopDisabled)
@@ -598,11 +652,15 @@ func (p *Plugin) closeLocked(reason string) {
 	p.step("poller")
 	p.cancel()
 	<-p.done
+	if p.warmupDone != nil {
+		<-p.warmupDone
+	}
 	p.step("publisher")
 	p.publisher.Stop()
 	p.step("cache")
 	p.cache.Close()
 	p.cache, p.store, p.organizations, p.publisher, p.refresh = nil, nil, nil, nil, nil
+	p.warmup, p.warmupDone = nil, nil
 }
 
 func (p *Plugin) step(name string) {

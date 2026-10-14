@@ -93,7 +93,7 @@ func TestCreditsAreNotAPanelField(t *testing.T) {
 	for _, field := range result.(protocol.Registration).Metadata.ConfigFields {
 		names = append(names, field.Name)
 	}
-	if want := []string{"cache-path", "poll-interval", "request-spacing", "openrouter-management-key"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"cache-path", "poll-interval", "request-spacing", "openrouter-management-key", "warmup-enabled", "warmup-model", "warmup-effort", "warmup-hours", "warmup-timezone", "warmup-cli-path", "warmup-profile-root"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("fields=%v want %v", names, want)
 	}
 }
@@ -307,7 +307,7 @@ func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	if len(registration.Routes) != 2 || registration.Routes[0].Path != "/plugins/quota-cache/status" || registration.Routes[1].Path != "/plugins/quota-cache/settings" ||
+	if len(registration.Routes) != 3 || registration.Routes[0].Path != "/plugins/quota-cache/status" || registration.Routes[1].Path != "/plugins/quota-cache/settings" || registration.Routes[2].Path != "/plugins/quota-cache/warmup" ||
 		len(registration.Resources) != 1 || registration.Resources[0].Path != "/status" {
 		t.Fatalf("routes=%+v", registration)
 	}

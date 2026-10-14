@@ -187,6 +187,7 @@ export interface Aggregate {
   soonestResetAtEpoch: number | null
   soonestResetInSeconds: number | null
   projectedGainPercent: number
+  returningAccountCount?: number
   /**
    * The same gain unrounded, on the 0-1 scale of `remainingFraction`. The
    * width of what the next reset returns comes from this; the label beside it
@@ -249,6 +250,7 @@ export interface RowEntry {
    * the recovery names anyway. Always false when held out.
    */
   resetsNext?: boolean
+  recoveryKind?: "session" | "weekly" | (string & {})
   /**
    * Left out of the row's mean although it has a reading. On Claude's session
    * row, an account whose weekly limit is spent: its session can sit at 100%
@@ -331,6 +333,14 @@ export interface Balance {
 }
 
 export interface Summary {
+  warmup?: {
+    enabled: boolean
+    model: string
+    effort: string
+    updated_at: string
+    last_error?: string
+    accounts: { auth_index: string; state: string; error?: string; reset_at?: string }[]
+  }
   schemaVersion: number
   generatedAtEpoch: number
   observedAtEpoch: number | null

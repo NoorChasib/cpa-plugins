@@ -57,6 +57,14 @@ The page uses that session only if you signed in to the CPA console on the same 
 
 If version 0.1.0 becomes unregistered after changing the relative default to its equivalent absolute path, restore `cache-path: plugins/data/quota-cache/snapshot.json` until you update. Version 0.1.1 normalizes these paths before comparing configuration, so an unchanged location does not require a restart. Actual schedule or location changes still require a native restart; safe failure reasons now appear in CPA logs.
 
+## Claude session warm-up (optional)
+
+Warm idle Claude accounts with a tiny Haiku 5.5 prompt, automatically during
+your chosen hours or with **Warm all now** on the Quota Cache page. It is off by
+default and needs native Claude Code profiles on the CPA host. The model and
+effort are editable in **Plugins → Quota Cache → Edit config**, with no restart.
+See [warm-up setup and behavior](docs/claude-warmup.md).
+
 ## OpenRouter balance (optional)
 
 Quota Cache 0.1.9 can also read how much money is left on your OpenRouter account, which [Quota Glance](../quota-glance/README.md#openrouter-balance) shows as a card of its own. OpenRouter reports the account balance only to a **management key**. The inference keys CPA routes with are refused, so this needs a key of its own:

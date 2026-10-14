@@ -421,9 +421,9 @@
             "soonestResetAtEpoch": 1789014600,
             "soonestResetInSeconds": 1800,
             "projectedGainPercent": 8,
-            "projectedGainFraction": 0.08,
-            "fullAtEpoch": 1789020000,
-            "fullInSeconds": 7200,
+            "projectedGainFraction": 0.08000000000000007,
+            "fullAtEpoch": 1789128000,
+            "fullInSeconds": 115200,
             "subtext": "+8% when stale resets in 30m"
           },
           "entries": [
@@ -481,8 +481,9 @@
               "pooledFraction": 0.6,
               "pooledPercent": 60,
               "poolShare": 0.12,
-              "recoveryShare": 0.08000000000000002,
+              "recoveryShare": 0.08000000000000007,
               "resetsNext": true,
+              "recoveryKind": "session",
               "resetAtEpoch": 1789014600,
               "resetInSeconds": 1800,
               "resetDisplayHint": "countdown",

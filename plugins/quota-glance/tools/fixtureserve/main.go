@@ -75,6 +75,7 @@ func main() {
 	}
 	served := api.New("quota-glance", *token)
 	served.Publish(aggregate.Build(aggregate.Input{
+		Warmup:       result.Warmup,
 		Snapshot:     result.Snapshot,
 		Identities:   result.Identities,
 		StaleAfter:   45 * time.Minute,

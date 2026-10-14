@@ -539,6 +539,22 @@ func (c *Cache) save(now time.Time) error {
 // before the pause held it open, so a request then starts a new round, which
 // the waiting entries stay in. A target that is not a polled entry of the
 // latest scan changes nothing.
+// RequestPoll brings only one successful account forward after a warm-up.
+// Poll failures retain their backoff, and Step still enforces provider pauses
+// and global request spacing.
+func (c *Cache) RequestPoll(key string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.data.Entries[key]
+	if c.closed || !ok || !polled(entry) || entry.LastError != "" {
+		return false
+	}
+	entry.NextAttempt = now.Add(-c.opts.Interval)
+	c.data.Entries[key] = entry
+	c.unsaved = true
+	return true
+}
+
 func (c *Cache) RequestRound(key string, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -122,8 +122,9 @@ type Sample struct {
 
 // Document is the response body of GET .../summary.
 type Document struct {
-	SchemaVersion    int   `json:"schemaVersion"`
-	GeneratedAtEpoch int64 `json:"generatedAtEpoch"`
+	Warmup           *qc.WarmupState `json:"warmup,omitempty"`
+	SchemaVersion    int             `json:"schemaVersion"`
+	GeneratedAtEpoch int64           `json:"generatedAtEpoch"`
 	// ObservedAtEpoch is the newest successful observation across every
 	// credential; NextAttemptEpoch is the soonest poll quota-cache has
 	// scheduled. The dashboard header reads "observed 4m ago · next attempt in
@@ -436,6 +437,9 @@ type Aggregate struct {
 	// sizes it from this and prints ProjectedGainPercent beside it — the pair
 	// that keeps every other bar and label in this document in agreement.
 	ProjectedGainFraction float64 `json:"projectedGainFraction"`
+	// ReturningAccountCount counts weekly-blocked accounts becoming usable at
+	// the next recovery. Their return can lower the mean while adding capacity.
+	ReturningAccountCount int `json:"returningAccountCount,omitempty"`
 	// FullAtEpoch is when the row would read 100% if nothing more were used:
 	// the latest reset among the members below full. On Claude's Fable row a
 	// member waits for its weekly's reset as well, when that is below full.
@@ -462,7 +466,8 @@ type RowEntry struct {
 	// HeldOut is true for an entry with a reading that the row's mean leaves
 	// out: on Claude's session row, an account whose weekly is spent, whose
 	// session can read 100% with nothing able to use it. The figures above are
-	// still its real reading; its shares are zero and ResetsNext is false.
+	// still its real reading; its current PoolShare is zero. Its weekly reset
+	// may restore usable capacity in the forecast while it remains held out now.
 	// False on every other row.
 	HeldOut bool `json:"heldOut"`
 	// PooledFraction is what this credential counts as in the row's mean, and
@@ -491,6 +496,7 @@ type RowEntry struct {
 	// or still held down by its weekly: it is still the next thing to happen to
 	// the row.
 	ResetsNext       bool     `json:"resetsNext"`
+	RecoveryKind     string   `json:"recoveryKind,omitempty"`
 	ResetAtEpoch     *int64   `json:"resetAtEpoch"`
 	ResetInSeconds   *int64   `json:"resetInSeconds"`
 	ResetDisplayHint string   `json:"resetDisplayHint"`

@@ -61,7 +61,7 @@ func checkPoolAddsUp(t *testing.T, name string, doc Document) {
 					if !session {
 						t.Errorf("%s: %s is held out of a row nothing is held out of", where, entry.CredentialID)
 					}
-					if !entry.HasReading || entry.PoolShare != 0 || entry.RecoveryShare != 0 || entry.ResetsNext {
+					if !entry.HasReading || entry.PoolShare != 0 || (entry.ResetsNext && entry.RecoveryKind != "weekly") {
 						t.Errorf("%s: held-out %s holds a slice: %+v", where, entry.CredentialID, entry)
 					}
 				case entry.HasReading:

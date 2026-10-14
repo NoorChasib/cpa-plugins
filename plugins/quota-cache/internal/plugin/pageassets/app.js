@@ -506,6 +506,7 @@
     $('details').replaceChildren();
     for (const [label,value] of details) { const item = node('div'); const dd = node('dd'); dd.append(value instanceof Node ? value : document.createTextNode(value || '—')); item.append(node('dt',label),dd); $('details').append(item); }
     if (editor) editor.render(s);
+    if (window.QuotaCacheWarmup) window.QuotaCacheWarmup.render(s);
   }
   function syncButton(record) {
     clearTimeout(release);
