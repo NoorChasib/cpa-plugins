@@ -93,7 +93,7 @@
       "description": "Serialized weekly quota polling with a persistent cache and provider-wide 429 cooldowns. Preview: Linux amd64 only.",
       "author": "NoorChasib",
       "license": "MIT",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/quota-cache",
       "install": {
@@ -102,9 +102,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache/v0.2.1/quota-cache_0.2.1_linux_amd64.zip",
-            "sha256": "c92095d0dd80e747ad0c63bcf4ef55305aecd2b527b2181a6ce33e675b206c09",
-            "size": 4874255
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/quota-cache/v0.3.0/quota-cache_0.3.0_linux_amd64.zip",
+            "sha256": "bf39593f84017f50215bca3237097184841d68e4757dba3a149500ad127135fe",
+            "size": 5088949
           }
         ]
       }
