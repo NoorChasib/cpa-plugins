@@ -138,10 +138,10 @@ function Dashboard({
       {summary?.warmup?.enabled && (
         <p className="qg-warmup" role="status">
           Claude warm-up · {summary.warmup.model} · {summary.warmup.effort} effort
-          {summary.warmup.last_error
+          {summary.warmup.lastError
             ? " · unavailable"
             : ` · ${summary.warmup.accounts.filter((account) => account.state === "active").length} active`}
-          {!summary.warmup.last_error && summary.warmup.accounts.some((account) => account.state === "warming") && " · warming"}
+          {!summary.warmup.lastError && summary.warmup.accounts.some((account) => account.state === "warming") && " · warming"}
           {summary.warmup.accounts.some((account) => account.error) && " · check Quota Cache for account setup"}
         </p>
       )}

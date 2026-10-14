@@ -9,11 +9,18 @@ import (
 
 // sessionValue projects only known resets, with no further consumption. A
 // weekly reset unlocks a session; it does not refill that session itself.
+// An elapsed known session reset also clears that prerequisite for a future
+// weekly unlock, even while its displayed reading awaits the next poll.
 func sessionValue(m member, now, through time.Time) (float64, bool) {
 	restored := func(reset time.Time) bool { return reset.After(now) && !reset.After(through) }
 	gate := weeklyGateOf(m.record.windows, now)
-	if gate.spent() && !restored(gate.reset) {
-		return 0, false
+	if gate.spent() {
+		if !restored(gate.reset) {
+			return 0, false
+		}
+		if !m.window.ResetAt.IsZero() && !m.window.ResetAt.After(through) {
+			return 1, true
+		}
 	}
 	if restored(m.window.ResetAt) {
 		return 1, true

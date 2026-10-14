@@ -61,3 +61,31 @@ func TestSessionWeeklyUnlockRecomputesTheMean(t *testing.T) {
 		t.Fatalf("forecast times = %+v", row.Aggregate)
 	}
 }
+
+func TestSessionWeeklyUnlockAfterSessionTurnover(t *testing.T) {
+	row := rowOf(t, buildAccounts(t, map[string][]qc.EntryWindow{
+		"claude-blocked@example.com.json": {win(qc.WindowSession, 100, at(t, -300)), win(qc.WindowWeekly, 100, at(t, 3600))},
+	}, nil), "claude", qc.WindowSession)
+	if row.Aggregate.RemainingPercent != 0 {
+		t.Fatal("forecast changed the current quota reading")
+	}
+	if !epochIs(row.Aggregate.SoonestResetAtEpoch, at(t, 3600)) || !epochIs(row.Aggregate.FullAtEpoch, at(t, 3600)) {
+		t.Fatalf("turnover recovery = %+v; want recovery and full at the weekly reset", row.Aggregate)
+	}
+	if row.Aggregate.ProjectedGainPercent != 100 || row.Aggregate.ReturningAccountCount != 1 {
+		t.Fatalf("turnover gain = %+v; want a full returning account", row.Aggregate)
+	}
+}
+
+func TestSessionForecastDoesNotNameAnElapsedResetAsANewRecovery(t *testing.T) {
+	row := rowOf(t, buildAccounts(t, map[string][]qc.EntryWindow{
+		"claude-elapsed@example.com.json": {win(qc.WindowSession, 100, at(t, -300)), win(qc.WindowWeekly, 20, at(t, 86400))},
+		"claude-next@example.com.json":    {win(qc.WindowSession, 100, at(t, 3600)), win(qc.WindowWeekly, 20, at(t, 86400))},
+	}, nil), "claude", qc.WindowSession)
+	if !epochIs(row.Aggregate.SoonestResetAtEpoch, at(t, 3600)) || !entryOf(t, row, "claude-next@example.com.json").ResetsNext {
+		t.Fatalf("next recovery = %+v", row)
+	}
+	if entryOf(t, row, "claude-elapsed@example.com.json").ResetsNext {
+		t.Fatal("elapsed reset was attributed to an unrelated future event")
+	}
+}

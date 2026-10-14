@@ -337,9 +337,19 @@ export interface Summary {
     enabled: boolean
     model: string
     effort: string
-    updated_at: string
-    last_error?: string
-    accounts: { auth_index: string; state: string; error?: string; reset_at?: string }[]
+    hours: string
+    timezone: string
+    updatedAtEpoch: number | null
+    lastError?: string
+    accounts: {
+      authIndex: string
+      state: string
+      error?: string
+      lastAttemptEpoch: number | null
+      lastSuccessEpoch: number | null
+      nextAttemptEpoch: number | null
+      resetAtEpoch: number | null
+    }[]
   }
   schemaVersion: number
   generatedAtEpoch: number

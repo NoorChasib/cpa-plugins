@@ -989,7 +989,10 @@ session capacity usable again.
 Claude Session projects each account's session and weekly resets separately,
 without further consumption. A weekly reset unlocks only the session capacity
 available then. When both windows are exhausted, neither reset alone returns
-capacity. The next event is the earliest one that increases usable capacity,
+capacity. A known session reset that already passed between polls satisfies
+that session prerequisite for a later weekly unlock; the current displayed
+percentage still waits for a fresh reading.
+The next event is the earliest one that increases usable capacity,
 grouping resets in the same minute as before. The projected mean is recomputed
 over the accounts eligible at that future instant. `projectedGainPercent` is
 the nonnegative change in that mean. Returning an account with a lower session
@@ -1000,11 +1003,17 @@ and `session` for an ordinary session refill. `fullAtEpoch` also waits for
 weekly-blocked accounts to become available. Unknown necessary reset times
 leave the full-again time unknown.
 
-The optional top-level `warmup` object passes through Quota Cache's private,
-credential-free warm-up status. It includes enabled state, configured model
-and effort, update time, and per-auth-index state. Quota Glance never runs a
-warm-up. It reads `snapshot.warmup.json` and watches it alongside the snapshot
-and credit state. Missing files are normal for older Quota Cache installations.
+The optional top-level `warmup` object presents Quota Cache's credential-free
+warm-up status. It includes `enabled`, configured `model`, `effort`, `hours`,
+`timezone`, `updatedAtEpoch`, optional `lastError`, and an `accounts` array.
+Each account has `authIndex`, `state`, optional `error`, and nullable Unix-second
+`lastAttemptEpoch`, `lastSuccessEpoch`, `nextAttemptEpoch` and `resetAtEpoch`.
+An unknown timestamp is `null`; internal identity hashes are not exposed.
+Enabled status older than two minutes, missing an update time, or dated more
+than a minute ahead carries `lastError: "warmup_status_stale"`.
+Quota Glance never runs a warm-up. It reads `snapshot.warmup.json` and watches
+it alongside the snapshot and credit state. Missing files are normal for older
+Quota Cache installations.
 
 ### The pool, slice by slice
 

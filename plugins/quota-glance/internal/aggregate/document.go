@@ -122,9 +122,9 @@ type Sample struct {
 
 // Document is the response body of GET .../summary.
 type Document struct {
-	Warmup           *qc.WarmupState `json:"warmup,omitempty"`
-	SchemaVersion    int             `json:"schemaVersion"`
-	GeneratedAtEpoch int64           `json:"generatedAtEpoch"`
+	Warmup           *WarmupStatus `json:"warmup,omitempty"`
+	SchemaVersion    int           `json:"schemaVersion"`
+	GeneratedAtEpoch int64         `json:"generatedAtEpoch"`
 	// ObservedAtEpoch is the newest successful observation across every
 	// credential; NextAttemptEpoch is the soonest poll quota-cache has
 	// scheduled. The dashboard header reads "observed 4m ago · next attempt in

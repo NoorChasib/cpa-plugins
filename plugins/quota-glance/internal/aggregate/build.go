@@ -433,7 +433,7 @@ func Build(in Input, now time.Time) Document {
 	// same data at a whole second prints "1h 15m".
 	now = now.Truncate(time.Second)
 	doc := Document{
-		Warmup:           in.Warmup,
+		Warmup:           warmupOf(in.Warmup, now),
 		SchemaVersion:    SchemaVersion,
 		GeneratedAtEpoch: now.Unix(),
 		Credentials:      []Credential{},
@@ -441,13 +441,6 @@ func Build(in Input, now time.Time) Document {
 		Balances:         balancesOf(in, now),
 		APICredits:       apiCreditsOf(in, now),
 		RenewalOrphans:   renewalOrphansOf(in),
-	}
-	if in.Warmup != nil {
-		state := *in.Warmup
-		if state.Enabled && (state.UpdatedAt.IsZero() || state.UpdatedAt.After(now.Add(time.Minute)) || now.Sub(state.UpdatedAt) > 2*time.Minute) {
-			state.LastError = "warmup_status_stale"
-		}
-		doc.Warmup = &state
 	}
 	renewals := renewalsOf(in)
 

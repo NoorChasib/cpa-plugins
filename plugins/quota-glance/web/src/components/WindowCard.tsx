@@ -99,6 +99,12 @@ export function PoolBar({
   )
 }
 
+function recoveryVerb(aggregate: Row["aggregate"], plural: boolean): string {
+  return (aggregate.returningAccountCount ?? 0) > 0
+    ? (plural ? "become available" : "becomes available")
+    : (plural ? "reset" : "resets")
+}
+
 /**
  * When this window next recovers, from the structured fields rather than the
  * server's sentence: the gain in large type, who resets, and a countdown that
@@ -116,9 +122,7 @@ function Recovery({ row, named, now }: { row: Row; named: Named[]; now: number }
   const who = recoveryNames(row.entries.flatMap((entry, index) => (entry.resetsNext ? [named[index]!.name] : [])))
   if (!who) return null
   const remaining = secondsUntil(aggregate.soonestResetAtEpoch, now)
-  const verb = (aggregate.returningAccountCount ?? 0) > 0
-    ? (who.plural ? "become available" : "becomes available")
-    : (who.plural ? "reset" : "resets")
+  const verb = recoveryVerb(aggregate, who.plural)
 
   return (
     <p className="qg-rec">
@@ -147,9 +151,7 @@ function recoverySentence(row: Row, named: Named[], now: number): string {
   if (!who) return aggregate.subtext
   const remaining = secondsUntil(aggregate.soonestResetAtEpoch, now)
   const when = remaining > 0 ? `in ${formatDuration(remaining)}` : "now"
-  const verb = (aggregate.returningAccountCount ?? 0) > 0
-    ? (who.plural ? "become available" : "becomes available")
-    : (who.plural ? "reset" : "resets")
+  const verb = recoveryVerb(aggregate, who.plural)
   return aggregate.projectedGainPercent > 0
     ? `Plus ${aggregate.projectedGainPercent}% when ${who.who} ${verb} ${when}.`
     : `${who.who} ${verb} ${when}.`
