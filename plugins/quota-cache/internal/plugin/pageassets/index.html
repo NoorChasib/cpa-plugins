@@ -20,6 +20,15 @@
       <div class="card stat"><div class="label">Last provider request</div><div id="last-call" class="value time-value">—</div><div id="last-call-detail" class="hint">Waiting for polling activity</div></div>
       <div class="card stat"><div class="label">Next eligible poll</div><div id="next-call" class="value time-value">—</div><div class="hint">Accounts run one at a time</div></div>
     </section>
+    <section id="warmup" class="section" aria-labelledby="warmup-heading" hidden>
+      <div class="section-head"><h2 id="warmup-heading">Claude session warm-up</h2><button id="warm-all" type="button">Warm all now</button></div>
+      <div class="card settings">
+        <p id="warmup-config"></p>
+        <p class="hint">Change the model, effort and automatic hours in Plugins → Quota Cache → Edit config. Each account needs a separate Claude Code sign-in profile; see the warm-up setup guide.</p>
+        <p id="warmup-result" class="hint" role="status" aria-live="polite"></p>
+        <ul id="warmup-accounts" class="meter-list"></ul>
+      </div>
+    </section>
     <section id="organizations" class="section" aria-labelledby="organizations-heading" hidden></section>
     <section id="api-credits" class="section" aria-labelledby="api-credits-heading" hidden></section>
     <section id="renewals" class="section" aria-labelledby="renewals-heading" hidden></section>

@@ -48,6 +48,7 @@ const (
 // Input is everything Build needs. It holds no clock and no file handle: the
 // caller reads the snapshot, asks the host for the roster, and passes both in.
 type Input struct {
+	Warmup   *qc.WarmupState
 	Snapshot qc.Snapshot
 	// SourceReason is non-empty when the snapshot could not be read at all,
 	// carrying ReasonCacheMissing or ReasonSchemaUnsupported.
@@ -432,6 +433,7 @@ func Build(in Input, now time.Time) Document {
 	// same data at a whole second prints "1h 15m".
 	now = now.Truncate(time.Second)
 	doc := Document{
+		Warmup:           warmupOf(in.Warmup, now),
 		SchemaVersion:    SchemaVersion,
 		GeneratedAtEpoch: now.Unix(),
 		Credentials:      []Credential{},
@@ -584,6 +586,9 @@ func Build(in Input, now time.Time) Document {
 // credit state as it is now, so a value entered on Quota Cache's page
 // meanwhile shows at once. doc itself is not modified.
 func WithCredits(doc, fresh Document) Document {
+	// Warm-up is another independent file, so its status keeps updating even
+	// while the quota snapshot cannot be read.
+	doc.Warmup = fresh.Warmup
 	doc.APICredits = fresh.APICredits
 	doc.RenewalOrphans = fresh.RenewalOrphans
 	now := make(map[string]Credential, len(fresh.Credentials))
@@ -892,14 +897,18 @@ func buildRows(records []record, in Input, now time.Time) []Row {
 		members := byRow[id]
 		pooled := pooledOf(members)
 		next := nextRecoveryOf(pooled, now)
-		rows = append(rows, Row{
+		row := Row{
 			RowID:     id,
 			Title:     title,
 			Order:     rowOrderOf(windowKeys[id]),
 			Matched:   !strings.HasPrefix(windowKeys[id], qc.WindowRawPrefix),
 			Aggregate: buildAggregate(id, pooled, len(members)-len(pooled), next, len(records), in, now),
 			Entries:   buildEntries(records, members, len(pooled), next, now),
-		})
+		}
+		if id == qc.WindowSession && len(members) > 0 && members[0].record.identity.Provider == "claude" {
+			forecastSession(&row, members, now)
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }

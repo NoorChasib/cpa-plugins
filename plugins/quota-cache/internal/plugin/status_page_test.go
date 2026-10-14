@@ -230,11 +230,11 @@ func TestSidebarIsOneScriptUnderOneHash(t *testing.T) {
 	if strings.Count(sidebarDocument, "<script") != 1 || strings.Count(sidebarDocument, "</script>") != 1 {
 		t.Fatal("the page must have exactly one script element")
 	}
-	if sidebarScript != sidebarApp+"\n"+sidebarEditor || !strings.Contains(sidebarDocument, "<script>"+sidebarApp+"\n"+sidebarEditor+"</script>") {
-		t.Fatal("the script element must be app.js then editor.js")
+	if sidebarScript != sidebarApp+"\n"+sidebarEditor+"\n"+sidebarWarmup || !strings.Contains(sidebarDocument, "<script>"+sidebarScript+"</script>") {
+		t.Fatal("the script element must include the status, editor and warm-up scripts")
 	}
 	csp := sidebarResponse().Headers.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "script-src "+sidebarHash(sidebarApp+"\n"+sidebarEditor)+";") || strings.Contains(csp, sidebarHash(sidebarApp)+";") {
+	if !strings.Contains(csp, "script-src "+sidebarHash(sidebarScript)+";") || strings.Contains(csp, sidebarHash(sidebarApp)+";") {
 		t.Fatalf("the script hash must cover app.js and editor.js together: %s", csp)
 	}
 	if !strings.Contains(csp, "connect-src 'self'") || strings.Contains(csp, "unsafe") {
@@ -245,8 +245,8 @@ func TestSidebarIsOneScriptUnderOneHash(t *testing.T) {
 	if regexp.MustCompile(`(?i)<[^>]+\son[a-z]+\s*=`).MatchString(sidebarHTML) {
 		t.Fatal("the markup has an inline event handler")
 	}
-	for _, name := range []string{"app.js", "editor.js"} {
-		script := map[string]string{"app.js": sidebarApp, "editor.js": sidebarEditor}[name]
+	for _, name := range []string{"app.js", "editor.js", "warmup.js"} {
+		script := map[string]string{"app.js": sidebarApp, "editor.js": sidebarEditor, "warmup.js": sidebarWarmup}[name]
 		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute('on", `setAttribute("on`, "javascript:"} {
 			if strings.Contains(script, banned) {
 				t.Fatalf("%s uses %q", name, banned)

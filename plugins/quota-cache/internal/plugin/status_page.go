@@ -28,10 +28,13 @@ var sidebarApp string
 //go:embed pageassets/editor.js
 var sidebarEditor string
 
+//go:embed pageassets/warmup.js
+var sidebarWarmup string
+
 // sidebarScript is the page's one script element: app.js, then editor.js,
 // which attaches to the namespace app.js defines. One element keeps one CSP
 // hash, worked out below from exactly these bytes.
-var sidebarScript = sidebarApp + "\n" + sidebarEditor
+var sidebarScript = sidebarApp + "\n" + sidebarEditor + "\n" + sidebarWarmup
 
 func sidebarHash(value string) string {
 	sum := sha256.Sum256([]byte(value))

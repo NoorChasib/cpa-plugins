@@ -28,6 +28,7 @@ type Host interface {
 // carries an aggregate stale reason, so a schema bump in quota-cache surfaces
 // as itself rather than as a generic read failure.
 type Result struct {
+	Warmup     *qc.WarmupState
 	Snapshot   qc.Snapshot
 	Reason     string
 	Identities []aggregate.Identity
@@ -97,6 +98,9 @@ func snapshotSchema(path string) (int, bool) {
 // never a blank. The staleness judgement is made in aggregate instead.
 func Read(ctx context.Context, host Host, path string) Result {
 	result := Result{}
+	if state, err := qc.LoadWarmup(path); err == nil {
+		result.Warmup = state
+	}
 	result.Credits, result.CreditsError = creditsAt(path)
 	snapshot, err := qc.Load(path)
 	if err != nil {

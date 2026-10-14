@@ -970,7 +970,7 @@ has the rule.
 | `excludedCount` | The rest: no reading, or held out. `memberCount + excludedCount == credentialCount`, which is also `entries.length`. Neither is ever negative. |
 | `heldOutCount` | The part of `excludedCount` that has a reading and was held out, so `excludedCount - heldOutCount` is the credentials with no reading. `0` on every row but Claude's session. |
 
-Everything the aggregate says is taken over members alone.
+The current aggregate percentage is taken over members alone.
 `aggregate.remainingFraction` is the arithmetic mean of their `pooledFraction`,
 which is each one's own remaining fraction on every row but Claude's Fable.
 `soonestResetAtEpoch` is the earliest *future* reset among them, and
@@ -978,13 +978,42 @@ which is each one's own remaining fraction on every row but Claude's Fable.
 over every member resetting in that same minute. `subtext` is that sentence
 already written out, naming the first member in entry order that resets at
 exactly `soonestResetAtEpoch`; it is empty when no member has a future reset. A
-held-out account's reset is never the soonest, never part of the gain, and
-never named, because it returns nothing the row can use.
+held-out account's session reset alone cannot restore usable capacity. Its
+weekly reset can, so Claude Session forecasts also consider held-out accounts.
 
 A session row whose every reporting account is held out has no members. It
-reads `remainingFraction: 0` and `critical`, with every reset, gain and full-at
-field `null` or `0` and `subtext` empty, while every account is still listed
-with its reading.
+reads `remainingFraction: 0` and `critical`, while every account is still listed
+with its reading. Its forecast can still announce a weekly reset that makes
+session capacity usable again.
+
+Claude Session projects each account's session and weekly resets separately,
+without further consumption. A weekly reset unlocks only the session capacity
+available then. When both windows are exhausted, neither reset alone returns
+capacity. A known session reset that already passed between polls satisfies
+that session prerequisite for a later weekly unlock; the current displayed
+percentage still waits for a fresh reading.
+The next event is the earliest one that increases usable capacity,
+grouping resets in the same minute as before. The projected mean is recomputed
+over the accounts eligible at that future instant. `projectedGainPercent` is
+the nonnegative change in that mean. Returning an account with a lower session
+reading can lower the mean while increasing capacity; then no positive gain
+is claimed, but `returningAccountCount` and the recovery names still announce
+its return. `entries[].recoveryKind` is `weekly` for those returning accounts
+and `session` for an ordinary session refill. `fullAtEpoch` also waits for
+weekly-blocked accounts to become available. Unknown necessary reset times
+leave the full-again time unknown.
+
+The optional top-level `warmup` object presents Quota Cache's credential-free
+warm-up status. It includes `enabled`, configured `model`, `effort`, `hours`,
+`timezone`, `updatedAtEpoch`, optional `lastError`, and an `accounts` array.
+Each account has `authIndex`, `state`, optional `error`, and nullable Unix-second
+`lastAttemptEpoch`, `lastSuccessEpoch`, `nextAttemptEpoch` and `resetAtEpoch`.
+An unknown timestamp is `null`; internal identity hashes are not exposed.
+Enabled status older than two minutes, missing an update time, or dated more
+than a minute ahead carries `lastError: "warmup_status_stale"`.
+Quota Glance never runs a warm-up. It reads `snapshot.warmup.json` and watches
+it alongside the snapshot and credit state. Missing files are normal for older
+Quota Cache installations.
 
 ### The pool, slice by slice
 
@@ -996,12 +1025,12 @@ they always add back up to it.
 | Field | Meaning |
 | --- | --- |
 | `entries[].pooledFraction` / `pooledPercent` | What this credential counts as in the row's mean, as a fraction and as printed. Equal to `remainingFraction` / `remainingPercent` on every row but Claude's Fable, where it is the lesser of the account's Fable and its weekly remaining. A held-out entry's is its own reading, though the mean leaves it out. `0` with no reading. |
-| `entries[].heldOut` | `true` for an entry with a reading that the mean leaves out: on Claude's session row, an account whose weekly is spent. Its figures are still its real reading; its shares are `0` and `resetsNext` is `false`. `false` everywhere else. |
+| `entries[].heldOut` | A Claude Session account whose weekly is spent is excluded from the current mean. Its real figures remain and `poolShare` is zero. A weekly unlock may still put it in the forecast. |
 | `entries[].poolShare` | This credential's slice of `remainingFraction`, on the row's 0–1 scale: its `pooledFraction` over `memberCount`. Across a row's entries the shares sum to `aggregate.remainingFraction`. `0` with no reading, and `0` when held out. |
-| `entries[].resetsNext` | The credential's window resets at `soonestResetAtEpoch` or within the minute after it — on Claude's Fable row, its Fable window or its weekly does. It is part of the next recovery. True too for a credential whose reset returns nothing — one already full, or a Fable reset under a weekly that still holds it down (one with no more left than the Fable, a spent one included): it is still the next thing to happen to the row. Always `false` when held out. |
-| `entries[].recoveryShare` | What the row regains from this credential at that recovery, on the same scale: the rise in its `pooledFraction`, over `memberCount`. On every row but Claude's Fable that is everything it has used. On Fable it is the rise in the lesser of its Fable and its weekly, each counted full if it resets in that minute. Never negative. `0` unless `resetsNext`. Across a row they sum to `projectedGainFraction`. |
+| `entries[].resetsNext` | Part of the next recovery. Claude Session includes weekly unlocks and only names accounts returning usable capacity. Other rows retain their reset-based rule, including Fable events returning no gain. |
+| `entries[].recoveryShare` | A nonnegative slice of the projected gain; zero unless `resetsNext`. Across entries these sum to `projectedGainFraction`. Claude Session distributes the change in the future mean in proportion to the usable capacity each account returns. Other rows retain their existing calculation. |
 | `aggregate.projectedGainFraction` | `projectedGainPercent` unrounded. Size a "what the next reset returns" mark from this and print the percent beside it, as with every other fraction/percent pair. |
-| `aggregate.fullAtEpoch` / `fullInSeconds` | When the row would read 100% if nothing more were used: the latest reset among members below full. On Claude's Fable row a member waits for its weekly's reset as well, when the weekly is below full. `null` when every member is already full, when a reset one below full waits for has no instant (that window does not refill on a schedule), or when every one below full is already mid-turnover. A held-out account is not a member and is not waited for. |
+| `aggregate.fullAtEpoch` / `fullInSeconds` | When the row would read 100% without further consumption. Claude Session also waits for weekly-blocked accounts to become usable; Fable waits for a weekly below full as before. Unknown necessary reset times leave this null. |
 
 Name the next recovery from the entries with `resetsNext` rather than from
 `subtext`, which is a sentence for printing whole and is never parsed. A
@@ -1026,11 +1055,10 @@ a pool whose accounts had burned through their weeklies showed a nearly full
 session. So on Claude, those two rows count each account by what its weekly
 still lets it use:
 
-- **Session holds a spent weekly out.** An account whose weekly is spent is
-  left out of the session mean and out of everything taken from it: the soonest
-  reset, the full-at instant, the projected gain, `subtext` and the trend. Its
-  entry is still listed with its real reading, `heldOut: true`, no `poolShare`
-  or `recoveryShare`, and `resetsNext: false`.
+- **Session holds a spent weekly out of today’s mean.** Its entry keeps its
+  real reading, `heldOut: true` and no `poolShare`. Its weekly reset remains a
+  forecast event when it returns usable session capacity; then it may carry
+  `resetsNext: true`, `recoveryKind: weekly` and a `recoveryShare`.
 - **Fable counts no more than the weekly leaves.** Nothing is held out of
   Fable. Each account counts as the lesser of its Fable and its weekly
   remaining (`pooledFraction`), since no account can spend more Fable than its

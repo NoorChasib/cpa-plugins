@@ -58,7 +58,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.8.1"
+var Version = "0.9.0"
 
 // rawManagementSchema is the first RPC schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -406,6 +406,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	watcher, err := watch.Start(watch.Options{
 		Path:        cachePath,
 		CreditsPath: qc.CreditsPath(cachePath),
+		WarmupPath:  qc.WarmupPath(cachePath),
 		OnChange:    p.Rebuild,
 		Logf:        func(message string) { p.log("warn", message, nil) },
 	})
@@ -514,6 +515,7 @@ func (p *Plugin) rebuild() {
 	defer cancel()
 	result := source.Read(ctx, hostSource{p.host}, settings.cachePath)
 	in := aggregate.Input{
+		Warmup:       result.Warmup,
 		Snapshot:     result.Snapshot,
 		SourceReason: result.Reason,
 		Identities:   result.Identities,

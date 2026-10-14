@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+.qg-warmup { margin: 0 0 1rem; color: var(--color-ink-2); font-size: .8rem; overflow-wrap: anywhere; }
+
 /* Tailwind generates a utility for every class-like word it finds under web/,
  * and two directories there are not the app. dist/ is the previous build: read
  * back in, it keeps every utility the last bundle had alive in the next one, so

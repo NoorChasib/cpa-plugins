@@ -95,7 +95,7 @@ func TestManagementRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	registration := result.(protocol.ManagementRegistration)
-	want := []protocol.ManagementRoute{{Method: "GET", Path: "/plugins/quota-cache/status"}, {Method: "POST", Path: "/plugins/quota-cache/settings"}}
+	want := []protocol.ManagementRoute{{Method: "GET", Path: "/plugins/quota-cache/status"}, {Method: "POST", Path: "/plugins/quota-cache/settings"}, {Method: "POST", Path: "/plugins/quota-cache/warmup"}}
 	if len(registration.Routes) != len(want) {
 		t.Fatalf("routes=%+v", registration.Routes)
 	}
@@ -143,7 +143,7 @@ func TestEveryKeyIsOfferedOrLeftOutOnPurpose(t *testing.T) {
 	offered := map[string]bool{}
 	for _, field := range configFields {
 		offered[field.Name] = true
-		if !decoded[field.Name] || field.Type != "string" || field.Description == "" {
+		if !decoded[field.Name] || (field.Type != "string" && field.Type != "boolean" && field.Type != "enum") || field.Description == "" {
 			t.Errorf("%s is offered but not decoded, or has no type or description", field.Name)
 		}
 		if _, both := leftOut[field.Name]; both {

@@ -434,7 +434,8 @@ func dropWarnings(log *fakeLog) []logLine {
 func TestOfferDuringStopNeitherPanicsNorRaces(t *testing.T) {
 	m := Open(filepath.Join(t.TempDir(), "snapshot.meter.json"), []string{orgA}, base, &fakeLog{})
 	raw := apiKeyRecord(orgA, base).bytes()
-	var wg sync.WaitGroup
+	var wg, firstOffers sync.WaitGroup
+	firstOffers.Add(8)
 	start := make(chan struct{})
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -443,11 +444,16 @@ func TestOfferDuringStopNeitherPanicsNorRaces(t *testing.T) {
 			<-start
 			for j := 0; j < 2000; j++ {
 				m.Offer(raw, base.Add(time.Duration(j)*time.Millisecond))
+				if j == 0 {
+					firstOffers.Done()
+				}
 			}
 		}()
 	}
 	close(start)
-	time.Sleep(time.Millisecond)
+	// Establish completed offers before stopping. A sleep can expire while
+	// every producer is still decoding, legitimately leaving nothing to drain.
+	firstOffers.Wait()
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)

@@ -16,7 +16,7 @@ import {describe, test} from 'node:test'
 import vm from 'node:vm'
 
 const assets = new URL('../../internal/plugin/pageassets/', import.meta.url)
-const script = readFileSync(new URL('app.js', assets), 'utf8') + '\n' + readFileSync(new URL('editor.js', assets), 'utf8')
+const script = ['app.js', 'editor.js', 'warmup.js'].map(name => readFileSync(new URL(name, assets), 'utf8')).join('\n')
 
 // The page as the scripts see it at load: elements that take any property,
 // a location that is not CPA's resource route, so app.js sends nothing, and

@@ -72,8 +72,8 @@ func TestSpentWeeklyHoldsItsSessionOut(t *testing.T) {
 		t.Errorf("membership = %d members, %d excluded, %d held out; want 2, 1, 1",
 			agg.MemberCount, agg.ExcludedCount, agg.HeldOutCount)
 	}
-	if !epochIs(agg.SoonestResetAtEpoch, at(t, 7200)) || !epochIs(agg.FullAtEpoch, at(t, 10800)) {
-		t.Errorf("soonest %v, full %v; want a's reset at 2h and b's at 3h", agg.SoonestResetAtEpoch, agg.FullAtEpoch)
+	if !epochIs(agg.SoonestResetAtEpoch, at(t, 7200)) || !epochIs(agg.FullAtEpoch, at(t, 2*86400)) {
+		t.Errorf("soonest %v, full %v; want a at 2h and the weekly-blocked account at 2d", agg.SoonestResetAtEpoch, agg.FullAtEpoch)
 	}
 	if want := "+20% when a resets in 2h"; agg.Subtext != want {
 		t.Errorf("subtext = %q; want %q", agg.Subtext, want)
@@ -132,9 +132,9 @@ func TestAPoolWithEveryWeeklySpentReadsEmpty(t *testing.T) {
 		t.Errorf("membership = %d members, %d excluded, %d held out; want 0, 4, 3",
 			agg.MemberCount, agg.ExcludedCount, agg.HeldOutCount)
 	}
-	if agg.SoonestResetAtEpoch != nil || agg.SoonestResetInSeconds != nil || agg.FullAtEpoch != nil || agg.FullInSeconds != nil ||
-		agg.ProjectedGainFraction != 0 || agg.ProjectedGainPercent != 0 || agg.Subtext != "" {
-		t.Errorf("session = %+v; an empty pool has nothing ahead to announce", agg)
+	if !epochIs(agg.SoonestResetAtEpoch, at(t, 86400)) || !epochIs(agg.FullAtEpoch, at(t, 86400)) ||
+		agg.ProjectedGainFraction != 1 || agg.ProjectedGainPercent != 100 || agg.ReturningAccountCount != 3 {
+		t.Errorf("session = %+v; the weekly resets restore all three sessions in 1d", agg)
 	}
 	for _, id := range []string{a, b, c} {
 		if entry := entryOf(t, session, id); !entry.HeldOut || !entry.HasReading || entry.RemainingPercent != 100 {

@@ -61,6 +61,7 @@ type Options struct {
 	// write to Path does. Optional. Only Path's directory is watched, so a
 	// file anywhere else is noticed by the backstop alone.
 	CreditsPath string
+	WarmupPath  string
 	Debounce    time.Duration
 	Backstop    time.Duration
 	Heartbeat   time.Duration
@@ -128,6 +129,11 @@ func Start(opts Options) (*Watcher, error) {
 	if opts.CreditsPath != "" {
 		if opts.CreditsPath, err = filepath.Abs(opts.CreditsPath); err != nil {
 			return nil, errors.New("credit state path cannot be resolved")
+		}
+	}
+	if opts.WarmupPath != "" {
+		if opts.WarmupPath, err = filepath.Abs(opts.WarmupPath); err != nil {
+			return nil, err
 		}
 	}
 	fs, err := fsnotify.NewWatcher()
@@ -219,16 +225,16 @@ func fingerprintOf(path string) fingerprint {
 
 // fingerprints is every watched file's version at once, so the backstop
 // notices a missed write to either.
-type fingerprints struct{ snapshot, credits fingerprint }
+type fingerprints struct{ snapshot, credits, warmup fingerprint }
 
 func (w *Watcher) fingerprints() fingerprints {
-	return fingerprints{snapshot: fingerprintOf(w.opts.Path), credits: fingerprintOf(w.opts.CreditsPath)}
+	return fingerprints{snapshot: fingerprintOf(w.opts.Path), credits: fingerprintOf(w.opts.CreditsPath), warmup: fingerprintOf(w.opts.WarmupPath)}
 }
 
 // watched reports whether an event names one of the watched files.
 func (w *Watcher) watched(name string) bool {
 	name = filepath.Clean(name)
-	return name == w.opts.Path || (w.opts.CreditsPath != "" && name == w.opts.CreditsPath)
+	return name == w.opts.Path || (w.opts.CreditsPath != "" && name == w.opts.CreditsPath) || (w.opts.WarmupPath != "" && name == w.opts.WarmupPath)
 }
 
 func (w *Watcher) run() {
