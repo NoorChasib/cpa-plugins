@@ -1,10 +1,10 @@
-// Package warmup primes idle Claude subscription windows with the unmodified
-// Claude Code CLI. It never reads, copies or routes subscription OAuth tokens.
+// Package warmup primes idle Claude subscription windows with one short request
+// CPA sends through the account it already holds. The plugin never reads,
+// copies or routes the account's OAuth token for it.
 package warmup
 
 import (
 	"errors"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,23 +15,23 @@ import (
 const DefaultModel = "claude-haiku-5-5"
 
 type Options struct {
-	Enabled                                              bool
-	Model, Effort, Hours, Timezone, CLIPath, ProfileRoot string
-	Spacing                                              time.Duration
-	location                                             *time.Location
-	start, end                                           int
+	Enabled                        bool
+	Model, Effort, Hours, Timezone string
+	Spacing                        time.Duration
+	location                       *time.Location
+	start, end                     int
 }
 
-func Defaults(snapshotPath string) Options {
-	return Options{Model: DefaultModel, Effort: "low", Hours: "00:00-24:00", Timezone: "UTC", CLIPath: "claude", ProfileRoot: filepath.Join(filepath.Dir(snapshotPath), "claude-profiles"), Spacing: 10 * time.Second}
+func Defaults() Options {
+	return Options{Model: DefaultModel, Effort: "low", Hours: "00:00-24:00", Timezone: "UTC", Spacing: 10 * time.Second}
 }
 
 var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 var authIndex = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 func (o Options) Validate() (Options, error) {
-	invalid := errors.New("invalid warm-up model, effort, hours, timezone or runner path")
-	if !modelName.MatchString(o.Model) || o.CLIPath == "" || o.ProfileRoot == "" || o.Spacing < time.Second {
+	invalid := errors.New("invalid warm-up model, effort, hours or timezone")
+	if !modelName.MatchString(o.Model) || o.Spacing < time.Second {
 		return o, invalid
 	}
 	switch o.Effort {
@@ -61,16 +61,6 @@ func (o Options) Validate() (Options, error) {
 	o.location, err = time.LoadLocation(o.Timezone)
 	if !a || !b || o.start == o.end || err != nil {
 		return o, invalid
-	}
-	o.ProfileRoot, err = filepath.Abs(o.ProfileRoot)
-	if err != nil {
-		return o, invalid
-	}
-	if strings.ContainsRune(o.CLIPath, filepath.Separator) {
-		o.CLIPath, err = filepath.Abs(o.CLIPath)
-		if err != nil {
-			return o, invalid
-		}
 	}
 	return o, nil
 }

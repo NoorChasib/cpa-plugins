@@ -128,6 +128,10 @@ func TestEveryKeyIsOfferedOrLeftOutOnPurpose(t *testing.T) {
 		// on Quota Cache's own page. It is decoded so that a configuration
 		// written for quota-cache 0.1.x still loads.
 		"claude-api-credits": "accepted and ignored",
+		// Accepted and ignored: quota-cache 0.3.0's Claude Code runner. Warm-ups
+		// go through CPA now; a configuration written for 0.3.0 still loads.
+		"warmup-cli-path":     "accepted and ignored",
+		"warmup-profile-root": "accepted and ignored",
 		// CPA's own keys, which its Plugins page sets with controls of its
 		// own: the switch, the load order and the catalog's bookkeeping.
 		"enabled":  "CPA's switch",

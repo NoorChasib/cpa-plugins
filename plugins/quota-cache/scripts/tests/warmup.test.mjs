@@ -51,3 +51,25 @@ test('a refused warm-up is remembered before any later press', async () => {
     assert.equal(f.rejected(), 1)
   }
 })
+
+test('every warm-up code the plugin stores has its own explanation', () => {
+  const codes = ['identity_unknown', 'subscription_login_required', 'account_unavailable', 'host_unsupported', 'runner_unavailable', 'runner_busy', 'outcome_unknown', 'request_failed', 'unconfirmed']
+  const shown = new Map()
+  let rows = 0
+  const node = (tag, text) => {
+    const made = {tag, text, append(...items) {
+      for (const item of items) if (item?.tag === 'span' && !/^(Auth index|Reset)/.test(item.text)) shown.set(this.code, item.text)
+    }}
+    if (tag === 'li') made.code = codes[rows++]
+    return made
+  }
+  const element = () => ({append() {}, replaceChildren() {}, addEventListener() {}})
+  const elements = new Map()
+  const page = {root: 'http://fixture', readSession: () => null, refusal: () => null, node, remember() {}, refusedSave() {}, unansweredSave() {}, reload() {}}
+  const context = vm.createContext({window: {QuotaCachePage: page}, document: {getElementById: id => elements.get(id) || elements.set(id, element()).get(id), createTextNode: value => value},
+    fetch: async () => ({status: 202}), AbortSignal, Map, Date, Boolean, Object})
+  vm.runInContext(script, context)
+  context.window.QuotaCacheWarmup.render({warmup: {enabled: true, model: 'm', effort: 'low', hours: '00:00-24:00', timezone: 'UTC',
+    accounts: codes.map((code, i) => ({auth_index: String(i).padStart(16, '0'), state: 'failed', error: code}))}})
+  for (const code of codes) assert.ok(shown.has(code) && shown.get(code) !== 'Warm-up unavailable', code)
+})

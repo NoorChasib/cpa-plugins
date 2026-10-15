@@ -10,16 +10,16 @@ plugins:
       cache-path: /CLIProxyAPI/plugins/data/quota-cache/snapshot.json
       poll-interval: 15m
       request-spacing: 10s
-      # Optional Claude session priming. Requires native Claude Code and one
-      # signed-in profile per account; see docs/claude-warmup.md. All fields
-      # are also available in Plugins -> Quota Cache -> Edit config.
+      # Optional Claude session priming. CPA (v8.0.4 or newer) sends each
+      # warm-up through the Claude account it already holds; see
+      # docs/claude-warmup.md. All fields are also available in
+      # Plugins -> Quota Cache -> Edit config. warmup-cli-path and
+      # warmup-profile-root, from 0.3.0, are accepted and ignored.
       warmup-enabled: false
       warmup-model: claude-haiku-5-5
       warmup-effort: low
       warmup-hours: 00:00-24:00
       warmup-timezone: UTC
-      warmup-cli-path: claude
-      # warmup-profile-root: /CLIProxyAPI/plugins/data/quota-cache/claude-profiles
       # Optional. An OpenRouter management key, for reading your account
       # balance (Quota Glance shows it). Create it at
       # https://openrouter.ai/settings/management-keys and give it an expiry:

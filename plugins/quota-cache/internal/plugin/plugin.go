@@ -28,7 +28,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -49,8 +49,11 @@ type Plugin struct {
 	warmup       *warmup.Manager
 	warmupDone   chan struct{}
 	providerGate providerGate
-	// Tests may supply a runner; production always uses the native Claude CLI.
+	// Tests may supply a runner. Production sends warm-ups through CPA with
+	// warmer, which lives as long as the plugin, so a model request it stopped
+	// waiting for still holds off the next one after the cache reopens.
 	warmupRunner warmup.Runner
+	warmer       *warmup.CPA
 	cache        *cache.Cache
 	// store, organizations and publisher run while the cache does, and are
 	// nil while it is stopped: the settings the operator saves on the page,
@@ -227,11 +230,15 @@ func response(status int, value any) protocol.ManagementResponse {
 // never added to it lightly, since an older quota-cache would then refuse the
 // configuration after a downgrade.
 type configuration struct {
-	WarmupEnabled     bool   `yaml:"warmup-enabled"`
-	WarmupModel       string `yaml:"warmup-model"`
-	WarmupEffort      string `yaml:"warmup-effort"`
-	WarmupHours       string `yaml:"warmup-hours"`
-	WarmupTimezone    string `yaml:"warmup-timezone"`
+	WarmupEnabled  bool   `yaml:"warmup-enabled"`
+	WarmupModel    string `yaml:"warmup-model"`
+	WarmupEffort   string `yaml:"warmup-effort"`
+	WarmupHours    string `yaml:"warmup-hours"`
+	WarmupTimezone string `yaml:"warmup-timezone"`
+	// WarmupCLIPath and WarmupProfileRoot named quota-cache 0.3.0's Claude
+	// Code executable and profiles. Warm-ups go through CPA now, so both are
+	// accepted, so that a configuration written for 0.3.0 still loads, and
+	// ignored.
 	WarmupCLIPath     string `yaml:"warmup-cli-path"`
 	WarmupProfileRoot string `yaml:"warmup-profile-root"`
 	Path              string `yaml:"cache-path"`
@@ -258,13 +265,11 @@ var configFields = []protocol.ConfigField{
 	{Name: "poll-interval", Type: "string", Description: "Least time between scheduled polls of one credential; a refresh after a banked reset polls sooner; default 15m"},
 	{Name: "request-spacing", Type: "string", Description: "Minimum spacing between provider requests; default 10s"},
 	{Name: "openrouter-management-key", Type: "string", Description: "OpenRouter management key for reading your account balance; empty disables it. It can also create and delete API keys, so give it an expiry"},
-	{Name: "warmup-enabled", Type: "boolean", Description: "Warm idle Claude subscription windows using separately signed-in Claude Code profiles; default false"},
+	{Name: "warmup-enabled", Type: "boolean", Description: "Warm idle Claude subscription windows with one short request CPA sends through each account; needs CPA v8.0.4 or newer; default false"},
 	{Name: "warmup-model", Type: "string", Description: "Model used only for warm-ups; default claude-haiku-5-5; changes apply without a restart"},
 	{Name: "warmup-effort", Type: "enum", EnumValues: []string{"low", "medium", "high", "xhigh", "max"}, Description: "Warm-up effort; default low; the selected model must support it"},
 	{Name: "warmup-hours", Type: "string", Description: "Daily automatic warm-up hours HH:MM-HH:MM; default 00:00-24:00; overnight ranges are supported"},
 	{Name: "warmup-timezone", Type: "string", Description: "IANA timezone for warm-up hours; default UTC"},
-	{Name: "warmup-cli-path", Type: "string", Description: "Claude Code executable available inside the CPA host or container; default claude; requires 2.1.293 or newer"},
-	{Name: "warmup-profile-root", Type: "string", Description: "Directory of native Claude Code profiles named by CPA auth index; default claude-profiles beside the snapshot; sign in each profile separately"},
 }
 
 func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
@@ -276,7 +281,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if json.Unmarshal(raw, &req) != nil || req.SchemaVersion < 4 {
 		return p.reject(errors.New("schema 4 or newer required"))
 	}
-	cfg := configuration{Path: client.DefaultPath, Interval: "15m", Spacing: "10s", WarmupModel: warmup.DefaultModel, WarmupEffort: "low", WarmupHours: "00:00-24:00", WarmupTimezone: "UTC", WarmupCLIPath: "claude"}
+	cfg := configuration{Path: client.DefaultPath, Interval: "15m", Spacing: "10s", WarmupModel: warmup.DefaultModel, WarmupEffort: "low", WarmupHours: "00:00-24:00", WarmupTimezone: "UTC"}
 	if len(req.ConfigYAML) > 0 {
 		decoder := yaml.NewDecoder(bytes.NewReader(req.ConfigYAML))
 		decoder.KnownFields(true)
@@ -299,12 +304,9 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if p.terminal {
 		return p.reject(errors.New("cache shut down"))
 	}
-	warmOpts := warmup.Defaults(opts.Path)
+	warmOpts := warmup.Defaults()
 	warmOpts.Enabled, warmOpts.Model, warmOpts.Effort = cfg.WarmupEnabled, cfg.WarmupModel, cfg.WarmupEffort
-	warmOpts.Hours, warmOpts.Timezone, warmOpts.CLIPath, warmOpts.Spacing = cfg.WarmupHours, cfg.WarmupTimezone, cfg.WarmupCLIPath, spacing
-	if cfg.WarmupProfileRoot != "" {
-		warmOpts.ProfileRoot = cfg.WarmupProfileRoot
-	}
+	warmOpts.Hours, warmOpts.Timezone, warmOpts.Spacing = cfg.WarmupHours, cfg.WarmupTimezone, spacing
 	warmOpts, e1 = warmOpts.Validate()
 	if e1 != nil {
 		return p.reject(e1)
@@ -344,11 +346,18 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		p.refresh = newRefreshWatch(opts.Path)
 		runner := p.warmupRunner
 		if runner == nil {
-			runner = warmup.CLI{}
+			if p.warmer == nil {
+				// A host without the model callbacks leaves every warm-up
+				// failing with host_unsupported, before any request.
+				host, _ := p.host.(warmup.Host)
+				p.warmer = warmup.NewCPA(host)
+			}
+			runner = p.warmer
 		}
 		p.warmup = warmup.New(opts.Path, warmOpts, warmup.RunnerFunc(func(ctx context.Context, options warmup.Options, identity warmup.Identity) error {
 			if !p.providerGate.acquire(ctx) {
-				return ctx.Err()
+				// Nothing was sent: a poll held the gate until the wait ended.
+				return errors.New("runner_unavailable")
 			}
 			defer p.providerGate.release()
 			return runner.Warm(ctx, options, identity)
@@ -376,6 +385,9 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	p.linkMu.Unlock()
 	if p.cache != nil && len(cfg.CreditItems) > 0 {
 		p.host.Log(context.Background(), "info", "quota-cache keeps Claude Console organizations on its page; claude-api-credits in its configuration is ignored", nil)
+	}
+	if p.cache != nil && (cfg.WarmupCLIPath != "" || cfg.WarmupProfileRoot != "") {
+		p.host.Log(context.Background(), "info", "quota-cache sends warm-ups through CPA; warmup-cli-path and warmup-profile-root in its configuration are ignored", nil)
 	}
 	if opened {
 		ctx, cancel := context.WithCancel(context.Background())
