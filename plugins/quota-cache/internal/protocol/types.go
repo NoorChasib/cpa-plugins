@@ -23,6 +23,8 @@ const (
 	MethodHostAuthGet        = "host.auth.get"
 	MethodHostAuthGetRuntime = "host.auth.get_runtime"
 	MethodHostHTTPDo         = "host.http.do"
+	MethodHostHTTPCancel     = "host.http.cancel"
+	MethodHostModelExecute   = "host.model.execute"
 )
 
 type Envelope struct {
@@ -178,6 +180,33 @@ type HostHTTPResponse struct {
 	StatusCode int                 `json:"StatusCode"`
 	Headers    map[string][]string `json:"Headers"`
 	Body       []byte              `json:"Body"`
+}
+
+// HostHTTPCancelRequest is the host.http.cancel request. CPA v7.3.16 added the
+// callback; an operation ID it does not hold cancels nothing.
+type HostHTTPCancelRequest struct {
+	OperationID string `json:"operation_id"`
+}
+
+// HostModelExecutionRequest is the host.model.execute request (Body is
+// base64-encoded by encoding/json). AuthID pins the request to one credential
+// and ForcedProvider to one provider. CPA before v7.3.3 does not know either
+// field and drops both without an error.
+type HostModelExecutionRequest struct {
+	EntryProtocol  string `json:"entry_protocol"`
+	ExitProtocol   string `json:"exit_protocol"`
+	Model          string `json:"model"`
+	Stream         bool   `json:"stream"`
+	Body           []byte `json:"body"`
+	ForcedProvider string `json:"forced_provider,omitempty"`
+	AuthID         string `json:"auth_id,omitempty"`
+}
+
+// HostModelExecutionResponse is the host.model.execute result.
+type HostModelExecutionResponse struct {
+	StatusCode int                 `json:"status_code"`
+	Headers    map[string][]string `json:"headers"`
+	Body       []byte              `json:"body"`
 }
 
 type HostLogRequest struct {

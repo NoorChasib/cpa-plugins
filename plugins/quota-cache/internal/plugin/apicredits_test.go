@@ -93,7 +93,7 @@ func TestCreditsAreNotAPanelField(t *testing.T) {
 	for _, field := range result.(protocol.Registration).Metadata.ConfigFields {
 		names = append(names, field.Name)
 	}
-	if want := []string{"cache-path", "poll-interval", "request-spacing", "openrouter-management-key", "warmup-enabled", "warmup-model", "warmup-effort", "warmup-hours", "warmup-timezone", "warmup-cli-path", "warmup-profile-root"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"cache-path", "poll-interval", "request-spacing", "openrouter-management-key", "warmup-enabled", "warmup-model", "warmup-effort", "warmup-hours", "warmup-timezone"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("fields=%v want %v", names, want)
 	}
 }

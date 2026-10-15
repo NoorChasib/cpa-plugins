@@ -258,7 +258,7 @@ func turnoverNeedsRefresh(entry client.Entry, now time.Time) bool {
 }
 
 // Step is also the deterministic scheduling seam for tests. Only Run calls it
-// in production. Its state lock is never held over host calls or a subprocess.
+// in production. Its state lock is never held over host calls.
 func (m *Manager) Step(ctx context.Context, now time.Time) {
 	m.mu.Lock()
 	opts, manual := m.opts, m.manual
@@ -336,12 +336,19 @@ func (m *Manager) Step(ctx context.Context, now time.Time) {
 				if account.Error == "" {
 					account.State = "awaiting_confirmation"
 				}
+			// CPA answered the last warm-up, yet no observation since showed an
+			// active session. Anthropic may have billed it as extra usage
+			// instead, and every automatic retry would do the same, so only
+			// Warm all now tries this account again.
+			case !manual && (account.Error == "" || account.Error == "unconfirmed") && !account.LastAttempt.IsZero() && account.LastSuccess.Before(account.LastAttempt):
+				account.State, account.Error = "failed", "unconfirmed"
 			case !manual && !opts.withinHours(now):
 				account.State = "outside_hours"
 			default:
 				due = true
 				if candidate == nil && !now.Before(m.lastStart.Add(opts.Spacing)) {
 					copy := identity
+					copy.Plan = entry.Plan
 					candidate = &copy
 				}
 			}
@@ -379,6 +386,9 @@ func (m *Manager) Step(ctx context.Context, now time.Time) {
 	if !m.saveLocked(now) {
 		return
 	}
+	// This bounds the wait, not the request: CPA cannot stop a model request
+	// once it is sent, and the runner reports outcome_unknown when it stops
+	// waiting.
 	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	m.cancel = cancel
 	m.mu.Unlock()
@@ -393,7 +403,7 @@ func (m *Manager) Step(ctx context.Context, now time.Time) {
 		// These failures prove inference was never attempted. They may recover
 		// after setup; ambiguous inference failures retain the five-hour guard.
 		switch account.Error {
-		case "profile_missing", "identity_unknown", "profile_identity_mismatch", "cli_unavailable", "subscription_login_required", "runner_unavailable":
+		case "identity_unknown", "subscription_login_required", "account_unavailable", "host_unsupported", "runner_unavailable", "runner_busy":
 			account.NextAttempt = now.Add(15 * time.Minute)
 		}
 	}
@@ -408,7 +418,7 @@ func (m *Manager) Step(ctx context.Context, now time.Time) {
 
 func errorCode(err error) string {
 	switch err.Error() {
-	case "profile_missing", "identity_unknown", "profile_identity_mismatch", "cli_unavailable", "subscription_login_required", "runner_unavailable", "outcome_unknown":
+	case "identity_unknown", "subscription_login_required", "account_unavailable", "host_unsupported", "runner_unavailable", "runner_busy", "outcome_unknown":
 		return err.Error()
 	default:
 		return "request_failed"

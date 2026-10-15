@@ -10,7 +10,7 @@ Add `https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 
 ### Build from source
 
-Target: Linux amd64, native ABI 1 / schema 4+, including CPA v7.2.155 and v8.0.4. The writer uses Linux file locking. You need Go 1.26+ and a C toolchain; verification uses Go 1.27.1.
+Target: Linux amd64, native ABI 1 / schema 4+, including CPA v7.2.155 and v8.0.4; Claude warm-up needs CPA v8.0.4 or newer. The writer uses Linux file locking. You need Go 1.26+ and a C toolchain; verification uses Go 1.27.1.
 
 From the repository root:
 
@@ -61,9 +61,10 @@ If version 0.1.0 becomes unregistered after changing the relative default to its
 
 Warm idle Claude accounts with a tiny Haiku 5.5 prompt, automatically during
 your chosen hours or with **Warm all now** on the Quota Cache page. It is off by
-default and needs native Claude Code profiles on the CPA host. The model and
-effort are editable in **Plugins → Quota Cache → Edit config**, with no restart.
-See [warm-up setup and behavior](docs/claude-warmup.md).
+default. CPA sends each warm-up through the account it already holds, so there
+is no second sign-in; it needs CPA v8.0.4 or newer. The model and effort are
+editable in **Plugins → Quota Cache → Edit config**, with no restart. See
+[warm-up requirements and behavior](docs/claude-warmup.md).
 
 ## OpenRouter balance (optional)
 

@@ -70,7 +70,12 @@ import (
 
 	pluginimpl "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/warmup"
 )
+
+// The plugin finds the warm-up callbacks by interface assertion and fails
+// every warm-up closed without them, so a signature drift must not compile.
+var _ warmup.Host = hostBridge{}
 
 var (
 	nativeLifecycleMu  sync.Mutex
@@ -271,8 +276,8 @@ func (hostBridge) GetAuth(ctx context.Context, authIndex string) ([]byte, error)
 }
 
 // HTTPDo performs one upstream HTTP request through CPA's proxy-aware client.
-// The native callback is synchronous and cannot be cancelled once entered;
-// the monitor bounds its own wait and lets a stuck call drain at shutdown.
+// The native callback is synchronous and cannot be cancelled once entered; a
+// stuck call drains at shutdown.
 func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) (protocol.HostHTTPResponse, error) {
 	result, err := callHost(ctx, protocol.MethodHostHTTPDo, request)
 	if err != nil {
@@ -281,6 +286,29 @@ func (hostBridge) HTTPDo(ctx context.Context, request protocol.HostHTTPRequest) 
 	var response protocol.HostHTTPResponse
 	if err := json.Unmarshal(result, &response); err != nil {
 		return protocol.HostHTTPResponse{}, errors.New("decode host.http.do response")
+	}
+	return response, nil
+}
+
+// HTTPCancel cancels a host HTTP operation. quota-cache opens none: a warm-up
+// sends a fresh random ID only to learn whether CPA knows the callback.
+func (hostBridge) HTTPCancel(ctx context.Context, operationID string) error {
+	_, err := callHost(ctx, protocol.MethodHostHTTPCancel, protocol.HostHTTPCancelRequest{OperationID: operationID})
+	return err
+}
+
+// ExecuteModel runs one non-streaming model request through CPA's executor.
+// Like HTTPDo, the callback cannot be cancelled once entered and has no
+// deadline of its own; the warm-up runner bounds its wait, and a call it
+// stopped waiting for drains at shutdown.
+func (hostBridge) ExecuteModel(ctx context.Context, request protocol.HostModelExecutionRequest) (protocol.HostModelExecutionResponse, error) {
+	result, err := callHost(ctx, protocol.MethodHostModelExecute, request)
+	if err != nil {
+		return protocol.HostModelExecutionResponse{}, err
+	}
+	var response protocol.HostModelExecutionResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return protocol.HostModelExecutionResponse{}, errors.New("decode host.model.execute response")
 	}
 	return response, nil
 }

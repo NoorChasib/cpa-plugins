@@ -13,8 +13,9 @@ import (
 
 const warmupPath = "/v0/management/plugins/" + ID + "/warmup"
 
-// providerGate serializes quota HTTP requests with native CLI warm-ups. A
-// stalled CLI has a deadline and cannot create a second scheduled poller.
+// providerGate serializes quota HTTP requests with warm-ups. A warm-up holds
+// it only while it waits for its model request, at most a minute, so one CPA
+// cannot stop does not hold up the polls or create a second scheduled poller.
 type providerGate struct {
 	once sync.Once
 	slot chan struct{}
@@ -58,7 +59,7 @@ func (p *Plugin) warmupRoster(ctx context.Context) ([]warmup.Identity, error) {
 		if strings.ToLower(strings.TrimSpace(provider)) != "claude" || entry.RuntimeOnly {
 			continue
 		}
-		identities = append(identities, warmup.Identity{AuthIndex: entry.AuthIndex, Email: credentialName(entry, "claude"), Disabled: entry.Disabled})
+		identities = append(identities, warmup.Identity{AuthIndex: entry.AuthIndex, ID: entry.ID, Email: credentialName(entry, "claude"), Disabled: entry.Disabled})
 	}
 	return identities, nil
 }
@@ -75,8 +76,8 @@ func (p *Plugin) warmAll() protocol.ManagementResponse {
 	return response(202, map[string]string{"status": "queued"})
 }
 
-// warmupStatus is safe for the authenticated settings page. No profile auth
-// document or CLI output is part of it.
+// warmupStatus is safe for the authenticated settings page. No credential,
+// token or model response is part of it.
 func warmupStatus(manager *warmup.Manager, now time.Time) *client.WarmupState {
 	if manager == nil {
 		return nil

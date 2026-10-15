@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
+	"github.com/NoorChasib/cpa-plugins/plugins/quota-cache/internal/protocol"
 )
 
 const accountA = "0000000000000001"
@@ -19,7 +20,7 @@ func fixture(t *testing.T, runner Runner) (*Manager, time.Time, string) {
 	t.Helper()
 	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "snapshot.json")
-	options := Defaults(path)
+	options := Defaults()
 	options.Enabled = true
 	options, err := options.Validate()
 	if err != nil {
@@ -296,8 +297,99 @@ func TestDisableCancelsTheInFlightRunner(t *testing.T) {
 	}
 }
 
+// CPA cannot stop a model request once it is sent. Disabling warm-up still
+// returns at once and keeps the five-hour guard; the plan the cache recorded
+// is what lets the request go out at all.
+func TestDisableDoesNotWaitForAModelRequestCPACannotStop(t *testing.T) {
+	host, entered, release := newFakeHost(), make(chan struct{}), make(chan struct{})
+	host.execute = func() (protocol.HostModelExecutionResponse, error) {
+		close(entered)
+		<-release
+		return protocol.HostModelExecutionResponse{StatusCode: 200, Body: []byte(`{"type":"message"}`)}, nil
+	}
+	defer close(release)
+	m, now, path := fixture(t, NewCPA(host))
+	entry := idle(now)
+	entry.Plan = "max"
+	writeSnapshot(t, path, now, entry)
+	done := make(chan struct{})
+	go func() { defer close(done); m.Step(context.Background(), now) }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no model request was sent: %+v", m.Status(now).Accounts)
+	}
+	m.Disable()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("disable waited for the model request")
+	}
+	account := m.Status(now).Accounts[0]
+	if account.Error != "outcome_unknown" || !account.NextAttempt.Equal(now.Add(5*time.Hour)) {
+		t.Fatalf("an uncertain request lost its guard: %+v", account)
+	}
+}
+
+// Only a request that may have been sent keeps the five-hour guard. A code
+// that proves nothing was sent retries after 15 minutes; anything unknown is
+// treated as possibly sent.
+func TestEveryRunnerCodeKeepsTheRightGuard(t *testing.T) {
+	for code, wait := range map[string]time.Duration{
+		"identity_unknown": 15 * time.Minute, "subscription_login_required": 15 * time.Minute,
+		"account_unavailable": 15 * time.Minute, "host_unsupported": 15 * time.Minute,
+		"runner_unavailable": 15 * time.Minute, "runner_busy": 15 * time.Minute,
+		"outcome_unknown": 5 * time.Hour, "request_failed": 5 * time.Hour,
+		"context deadline exceeded": 5 * time.Hour, "provider said no": 5 * time.Hour,
+	} {
+		t.Run(code, func(t *testing.T) {
+			m, now, _ := fixture(t, RunnerFunc(func(context.Context, Options, Identity) error { return errors.New(code) }))
+			m.Step(context.Background(), now)
+			account := m.Status(now).Accounts[0]
+			stored := code
+			if wait == 5*time.Hour && code != "outcome_unknown" {
+				stored = "request_failed"
+			}
+			if account.State != "failed" || account.Error != stored || !account.NextAttempt.Equal(now.Add(wait)) {
+				t.Fatalf("%s: %+v", code, account)
+			}
+		})
+	}
+}
+
+// A warm-up CPA answered that never showed up as an active session is not
+// repeated automatically; only Warm all now tries that account again.
+func TestAnsweredWarmupWithoutASessionPausesAutomaticRetries(t *testing.T) {
+	calls := 0
+	m, now, path := fixture(t, RunnerFunc(func(context.Context, Options, Identity) error { calls++; return nil }))
+	m.Step(context.Background(), now)
+	later := now.Add(5*time.Hour + time.Minute)
+	writeSnapshot(t, path, later, idle(later))
+	for range 2 {
+		m.Step(context.Background(), later)
+	}
+	if account := m.Status(later).Accounts[0]; calls != 1 || account.Error != "unconfirmed" || account.State != "failed" {
+		t.Fatalf("calls = %d, account = %+v", calls, account)
+	}
+	m.WarmAll()
+	m.Step(context.Background(), later)
+	if account := m.Status(later).Accounts[0]; calls != 2 || account.Error != "" || account.State != "awaiting_confirmation" {
+		t.Fatalf("Warm all now did not retry: calls = %d, account = %+v", calls, account)
+	}
+}
+
+func TestSetupFailuresBeforeTheRequestRetrySooner(t *testing.T) {
+	host := newFakeHost()
+	m, now, _ := fixture(t, NewCPA(host))
+	m.Step(context.Background(), now)
+	account := m.Status(now).Accounts[0]
+	if host.sent() != 0 || account.Error != "subscription_login_required" || !account.NextAttempt.Equal(now.Add(15*time.Minute)) {
+		t.Fatalf("an account with no recorded plan: %+v", account)
+	}
+}
+
 func TestHoursTimezoneAndOvernightRanges(t *testing.T) {
-	o := Defaults("/tmp/snapshot.json")
+	o := Defaults()
 	o.Hours, o.Timezone = "22:00-06:00", "Australia/Sydney"
 	o, err := o.Validate()
 	if err != nil {
