@@ -88,6 +88,11 @@ func TestStatusPageNeverPresentsAMissingOrRefusedKey(t *testing.T) {
 		"record.version !== 0", "state.rememberPassword !== true", "state.isAuthenticated === false",
 		"!matchesRoot(state.apiBase)", "!validKey(state.managementKey)", "stored('isLoggedIn') !== 'true'",
 		"value.length > 32768", "new TextDecoder('utf-8', {fatal: true})",
+		// Both console codecs: enc::v2:: (Management Center v1.27.0 and
+		// later) keyed by the host alone, enc::v1:: also by the user agent.
+		// scripts/tests/session.test.mjs runs them on upstream's own output.
+		"const current = value.startsWith('enc::v2::');", "if (current || value.startsWith('enc::v1::')) {",
+		"'cli-proxy-api-webui::secure-storage|' + location.host + (current ? '' : '|' + navigator.userAgent)",
 		// The persistent refusal record, and CPA's own refusal messages. The
 		// record names its CPA, so a page under another prefix leaves it
 		// alone, and falls back to the tab's storage when the origin's is full.

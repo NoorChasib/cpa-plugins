@@ -7,8 +7,10 @@ package plugin
 //     official management console (Cli-Proxy-API-Management-Center) persists
 //     in localStorage. The console stores its state under "cli-proxy-auth"
 //     (legacy installs used "managementKey") behind a documented reversible
-//     XOR obfuscation ("enc::v1::" prefix) keyed by a fixed salt,
-//     location.host, and navigator.userAgent. Reading that storage is the
+//     XOR obfuscation keyed by a fixed salt and location.host ("enc::v2::"
+//     prefix, written by Management Center v1.27.0 and later); legacy
+//     "enc::v1::" entries from older consoles also key on
+//     navigator.userAgent and still decode. Reading that storage is the
 //     officially documented trust model for plugin resource pages served from
 //     the same origin as the console; when the console runs on a different
 //     origin the entries simply do not exist here and this returns null.
@@ -25,13 +27,14 @@ const browserAuthScript = `
 (function (global) {
 	"use strict";
 	var SALT = "cli-proxy-api-webui::secure-storage";
-	var OBFUSCATION_PREFIX = "enc::v1::";
+	var OBFUSCATION_PREFIX = "enc::v2::";
+	var LEGACY_OBFUSCATION_PREFIX = "enc::v1::";
 	var PLUGIN_ID = "auto-baseline";
 
-	function keyBytes() {
+	function keyBytes(legacy) {
 		var text = SALT;
 		try {
-			text = SALT + "|" + global.location.host + "|" + global.navigator.userAgent;
+			text = SALT + "|" + global.location.host + (legacy ? "|" + global.navigator.userAgent : "");
 		} catch (ignored) {}
 		return new TextEncoder().encode(text);
 	}
@@ -40,16 +43,17 @@ const browserAuthScript = `
 		if (typeof raw !== "string" || raw === "") {
 			return null;
 		}
-		if (raw.indexOf(OBFUSCATION_PREFIX) !== 0) {
+		var legacy = raw.indexOf(LEGACY_OBFUSCATION_PREFIX) === 0;
+		if (!legacy && raw.indexOf(OBFUSCATION_PREFIX) !== 0) {
 			return raw;
 		}
 		try {
-			var binary = atob(raw.slice(OBFUSCATION_PREFIX.length));
+			var binary = atob(raw.slice((legacy ? LEGACY_OBFUSCATION_PREFIX : OBFUSCATION_PREFIX).length));
 			var data = new Uint8Array(binary.length);
 			for (var i = 0; i < binary.length; i++) {
 				data[i] = binary.charCodeAt(i);
 			}
-			var key = keyBytes();
+			var key = keyBytes(legacy);
 			var plain = new Uint8Array(data.length);
 			for (var j = 0; j < data.length; j++) {
 				plain[j] = data[j] ^ key[j % key.length];

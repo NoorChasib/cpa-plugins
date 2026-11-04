@@ -579,7 +579,7 @@ func TestResourcePageIsRedacted(t *testing.T) {
 			t.Errorf("resource page leaks %q", leak)
 		}
 	}
-	for _, want := range []string{"2.1.318", "claude-cli/2.1.280 (external, cli)", "Assumed CPA build", "Requests seen", "autoBaselineAuth", `managementPath("/status/html")`, "session-note"} {
+	for _, want := range []string{"2.1.318", "claude-cli/2.1.280 (external, cli)", "Assumed CPA build", "Requests seen", "autoBaselineAuth", `"enc::v2::"`, `"enc::v1::"`, `managementPath("/status/html")`, "session-note"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("resource page missing %q", want)
 		}

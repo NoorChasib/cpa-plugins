@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
-VERSION ?= 0.1.3
+VERSION ?= 0.1.4
 DIST ?= dist
 GO ?= go
 PYTHON ?= python3

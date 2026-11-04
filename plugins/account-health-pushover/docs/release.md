@@ -6,8 +6,8 @@ From the repository root, after committing the version bump and required changes
 
 ```sh
 git push origin main
-git tag account-health-pushover/v0.4.3
-git push origin account-health-pushover/v0.4.3
+git tag account-health-pushover/v0.4.4
+git push origin account-health-pushover/v0.4.4
 ```
 
 Use a fresh version for each release. The workflow builds and tests only this candidate with the other published plugins, publishes its Linux amd64 ZIP plus checksums and release metadata, and updates only its entry in both combined catalogs. A normal branch push runs CI without publishing.

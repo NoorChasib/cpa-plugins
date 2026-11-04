@@ -21,7 +21,7 @@ import (
 
 const ID = "codex-catalog-filter"
 
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 const (
 	// CatalogPath is where CPA serves the filtered catalog. Point Codex's

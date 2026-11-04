@@ -63,15 +63,19 @@
     if (value !== null && value.length > 32768) throw new Error('storage value too large');
     return value;
   }
-  // Audited console v1.22.15 (ed5f1c48): secureStorage JSON-serializes the
-  // Zustand {state, version} envelope before its optional XOR/Base64 codec.
-  // This is reversible obfuscation, NOT encryption or a security boundary.
+  // secureStorage JSON-serializes the Zustand {state, version} envelope before
+  // its optional XOR/Base64 codec. Audited console v1.27.2 (f154fa93), current
+  // since v1.27.0, writes enc::v2:: keyed by host only; legacy enc::v1:: from
+  // audited v1.22.15 (ed5f1c48) is keyed by host and user agent. Other prefixes
+  // stay unreadable. This is reversible obfuscation, NOT encryption or a
+  // security boundary.
   function decode(raw, legacy = false) {
     if (raw === null) return null;
     let value = raw;
-    if (value.startsWith('enc::v1::')) {
+    const v1 = value.startsWith('enc::v1::');
+    if (v1 || value.startsWith('enc::v2::')) {
       const bytes = Uint8Array.from(atob(value.slice(9)), (c) => c.charCodeAt(0));
-      const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+      const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + (v1 ? '|' + navigator.userAgent : ''));
       for (let i = 0; i < bytes.length; i++) bytes[i] ^= salt[i % salt.length];
       value = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     }

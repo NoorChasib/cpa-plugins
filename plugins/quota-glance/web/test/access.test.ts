@@ -97,29 +97,67 @@ function makeEnv(overrides: { origin?: string; pathname?: string; userAgent?: st
   }
 }
 
-/** The console's own codec (CPAMC src/utils/encryption.ts), written independently of the page's. */
-function obfuscate(text: string, host: string, userAgent: string): string {
-  const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${host}|${userAgent}`)
+/**
+ * The console's own codec (CPAMC src/utils/encryption.ts), written
+ * independently of the page's: `enc::v1::` keyed with a user agent, as consoles
+ * before v1.27 wrote it, or `enc::v2::` without one (`userAgent` null), as
+ * v1.27 and later do. Checked against the console's own output below.
+ */
+function obfuscate(text: string, host: string, userAgent: string | null): string {
+  const salt = `cli-proxy-api-webui::secure-storage|${host}`
+  const key = new TextEncoder().encode(userAgent === null ? salt : `${salt}|${userAgent}`)
   const bytes = new TextEncoder().encode(text)
   let binary = ""
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]! ^ key[i % key.length]!)
-  return `enc::v1::${btoa(binary)}`
+  return `${userAgent === null ? "enc::v2::" : "enc::v1::"}${btoa(binary)}`
 }
 
-/** A remembered console session, as the console's zustand store persists it. */
+/** A remembered console session, as the console's zustand store persists it. v1 unless `codec` says otherwise. */
 function remember(
   env: TestEnv,
   state: Record<string, unknown> = {},
-  options: { version?: unknown; obfuscated?: boolean; userAgent?: string } = {},
+  options: { version?: unknown; obfuscated?: boolean; userAgent?: string; codec?: "v1" | "v2" } = {},
 ): void {
   const record = JSON.stringify({
     state: { apiBase: env.origin, managementKey: "mgmt-key-1", rememberPassword: true, ...state },
     version: "version" in options ? options.version : 0,
   })
-  env.storage.seed(
-    "cli-proxy-auth",
-    options.obfuscated === false ? record : obfuscate(record, env.host, options.userAgent ?? env.userAgent),
-  )
+  const userAgent = options.codec === "v2" ? null : (options.userAgent ?? env.userAgent)
+  env.storage.seed("cli-proxy-auth", options.obfuscated === false ? record : obfuscate(record, env.host, userAgent))
+}
+
+// Written by Cli-Proxy-API-Management-Center's own src/utils/encryption.ts,
+// run unmodified under node with location.host and navigator.userAgent set to
+// UPSTREAM_HOST and UPSTREAM_UA. The enc::v2:: values are from tag v1.27.2
+// (commit f154fa9380825c4fe94bc577a9abaa7e505f8875), which writes v2; the
+// enc::v1:: value is from tag v1.26.7, the last release that wrote v1. Each
+// decodes to the record the console's store persists:
+//
+//   {"state":{"apiBase":"http://127.0.0.1:8317",
+//             "managementKey":"test-management-key-0123456789",
+//             "rememberPassword":true,"serverVersion":"8.0.53",
+//             "serverBuildDate":null},"version":0}
+//
+// with rememberPassword false in UPSTREAM_V2_FORGOTTEN. UPSTREAM_V2_OTHER_HOST
+// is that same record, written by a console whose location.host was
+// cpa.other.test:8317. Literals, so this file needs nothing outside the repo.
+const UPSTREAM_HOST = "127.0.0.1:8317"
+const UPSTREAM_UA = "Mozilla/5.0 (X11; Linux x86_64) TestUA/1"
+const UPSTREAM_KEY = "test-management-key-0123456789"
+const UPSTREAM_V2 =
+  "enc::v2::GE4aWREGClpDVkMRGUQ1BBEQSwAYGxEXBUhKAkJGWFxRSVVSAAgPHQEZEgITV1ldUFAGAQxDBDkKAVsXQwQMXgNIDxQHW10WCAYbBkhGFg1CQlBVVkgEBAAWCQwcDENfVVZcVQYeOUwDARgXC0lDSh1fAgBOVxpfSAUAESMXF14aGwFQW0VdUgEcAh0SAhJdVEhOVkN1FgUFSTQTGx1bFw8FBUEKSUADDEhJGgoNV0hVUA=="
+const UPSTREAM_V2_FORGOTTEN =
+  "enc::v2::GE4aWREGClpDVkMRGUQ1BBEQSwAYGxEXBUhKAkJGWFxRSVVSAAgPHQEZEgITV1ldUFAGAQxDBDkKAVsXQwQMXgNIDxQHW10WCAYbBkhGFg1CQlBVVkgEBAAWCQwcDENfVVZcVQYeOUwDARgXC0lDSg9MGxYHWUtJXwETBgckAF8AHQAcQ11HRB8CGRsDDBwMQl9KRVRFIRkAQRQ2DgwcD1seHEEbGE5XH19IAAwMG1BfHQ4="
+const UPSTREAM_V2_OTHER_HOST =
+  "enc::v2::GE4aWREGClpDVkMRGUQ1BBEQSwAYGxEXBUhKAkJGWFxRSVVSUkpZHV5DSklQQxULEhNfVVZfQygJEA9KUBsdCllMHQhDFgIHGAxUTl4OBgxfVRxBR1tHV1BdRUFcQ1wKGQ0IEEsGNRIHSU9cQ1NBVh1fBRdDWgpIEwYMXyEAEAYAVVRRX0FNXFUDRkdNXkMUAA4VFRNsGh0EATZPAABRTlRNX11KT04fSAIBBhcXD1tAFA=="
+const UPSTREAM_V1 =
+  "enc::v1::GE4aWREGClpDVkMRGUQ1BBEQSwAYGxEXBUhKAkJGWFxRSVVSAAgPHQEZEgITV1ldUFAZIAoUHScJGA0PDERFWywcXFpOLQ4LGB1ODBVdOk8ZGRFmVkdBY3YXCEFAS18VHwoVG0gTIAheBBINBw0YAAcXFhBeR14WBhkXEzEADkJbWEASFBIWHwoWBgIVUG8cHxsaCRNtQEdcRGw5RVQZGiIcAhkFDFpOUy1FXUZOdl9DCQ=="
+
+/** This page on the CPA the vectors were written for, with the console's entry set to `stored`. */
+function upstreamEnv(stored: string, userAgent = UPSTREAM_UA): TestEnv {
+  const env = makeEnv({ origin: `http://${UPSTREAM_HOST}`, userAgent })
+  env.storage.seed("cli-proxy-auth", stored)
+  return env
 }
 
 class TokenSlot {
@@ -312,7 +350,18 @@ describe("strict console reader", () => {
   })
 
   test("garbage in the modern entry is no session, never a fall back to legacy", () => {
-    for (const raw of ["enc::v1::%%%", "enc::v1::AAAA", "{not json", "null", "[]", '"a string"']) {
+    for (const raw of [
+      "enc::v1::%%%",
+      "enc::v1::AAAA",
+      "enc::v2::%%%",
+      "enc::v2::AAAA",
+      // A prefix this page does not know is left undecoded, and is not JSON.
+      `enc::v3::${UPSTREAM_V2.slice("enc::v2::".length)}`,
+      "{not json",
+      "null",
+      "[]",
+      '"a string"',
+    ]) {
       const env = makeEnv()
       env.storage.seed("cli-proxy-auth", raw)
       env.storage.seed("isLoggedIn", "true")
@@ -387,6 +436,107 @@ describe("strict console reader", () => {
   test("matchesRoot refuses a page that is not on http(s)", () => {
     const env = makeEnv({ origin: "file://" })
     assert.equal(matchesRoot("file://", env), false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The console's codec, against sessions the console itself wrote
+
+describe("the console's codec, against its own output", () => {
+  test("a v2 session, as Management Center v1.27 and later write it, is read", () => {
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V2)), UPSTREAM_KEY)
+  })
+
+  test("a v2 session does not depend on the user agent, which its key no longer includes", () => {
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V2, "Mozilla/5.0 (the same browser, updated)")), UPSTREAM_KEY)
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V2, "")), UPSTREAM_KEY)
+  })
+
+  test("a v2 session written under another host fails closed", () => {
+    // The record names this page's CPA; only the host in the key differs.
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V2_OTHER_HOST)), null)
+  })
+
+  test("a v2 session read on another host fails closed", () => {
+    const env = makeEnv({ origin: "http://cpa.other.test:8317", userAgent: UPSTREAM_UA })
+    env.storage.seed("cli-proxy-auth", UPSTREAM_V2)
+    assert.equal(readConsoleKey(env), null)
+  })
+
+  test("a v2 session with Remember password off is no session", () => {
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V2_FORGOTTEN)), null)
+  })
+
+  test("a v1 session, from a console before v1.27, is still read", () => {
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V1)), UPSTREAM_KEY)
+  })
+
+  test("a v1 session still needs the user agent it was written under", () => {
+    assert.equal(readConsoleKey(upstreamEnv(UPSTREAM_V1, "Mozilla/5.0 (another browser)")), null)
+  })
+
+  test("the prefix picks the key: a v2 body labelled v1, or a v1 body labelled v2, fails closed", () => {
+    const body = (stored: string) => stored.slice("enc::vN::".length)
+    assert.equal(readConsoleKey(upstreamEnv(`enc::v1::${body(UPSTREAM_V2)}`)), null)
+    assert.equal(readConsoleKey(upstreamEnv(`enc::v2::${body(UPSTREAM_V1)}`)), null)
+  })
+
+  test("the page's own independent v2 encoding agrees with the console's", () => {
+    const env = makeEnv({ origin: `http://${UPSTREAM_HOST}` })
+    const record = JSON.stringify({
+      state: { apiBase: `http://${UPSTREAM_HOST}`, managementKey: UPSTREAM_KEY, rememberPassword: true, serverVersion: "8.0.53", serverBuildDate: null },
+      version: 0,
+    })
+    assert.equal(obfuscate(record, env.host, null), UPSTREAM_V2)
+    assert.equal(obfuscate(record, env.host, UPSTREAM_UA), UPSTREAM_V1)
+  })
+
+  test("every rule the strict reader applies to a v1 session applies to a v2 one", () => {
+    const v2 = { codec: "v2" } as const
+    const cases: [string, Record<string, unknown>, { version?: unknown }, string | null][] = [
+      ["remembered, for this CPA", {}, {}, "mgmt-key-1"],
+      ["the console's management suffix", { apiBase: `${ORIGIN}/v8/management` }, {}, "mgmt-key-1"],
+      ["a logout record", { managementKey: "" }, {}, null],
+      ["Remember password off", { rememberPassword: false }, {}, null],
+      ["signed out", { isAuthenticated: false }, {}, null],
+      ["another store version", {}, { version: 1 }, null],
+      ["another CPA", { apiBase: "http://other.test:8317" }, {}, null],
+      ["a key no header can carry", { managementKey: " padded" }, {}, null],
+    ]
+    for (const [what, state, options, expected] of cases) {
+      const env = makeEnv()
+      remember(env, state, { ...options, ...v2 })
+      assert.ok(env.storage.getItem("cli-proxy-auth")?.startsWith("enc::v2::"), what)
+      assert.equal(readConsoleKey(env), expected, what)
+    }
+  })
+
+  test("a v2 entry is authoritative too: after a logout, the legacy key beside it is ignored", () => {
+    const env = makeEnv()
+    remember(env, { managementKey: "" }, { codec: "v2" })
+    env.storage.seed("isLoggedIn", "true")
+    env.storage.seed("apiBase", ORIGIN)
+    env.storage.seed("managementKey", "legacy-key")
+    assert.equal(readConsoleKey(env), null)
+  })
+
+  test("a v2 session opens the console door, and a read presents exactly its key", async () => {
+    const env = upstreamEnv(UPSTREAM_V2)
+    const net = makeFetch(() => json(200, { schemaVersion: 1 }))
+    const result = await read(makeAccess(env, net.fetch))
+    assert.equal(result.door.kind, "console")
+    assert.equal(net.management(), 1)
+    assert.equal(net.calls[0]?.init.headers.Authorization, `Bearer ${UPSTREAM_KEY}`)
+  })
+
+  test("a refused v2 key is latched, and presented no more", async () => {
+    const env = upstreamEnv(UPSTREAM_V2)
+    const net = makeFetch(() => json(401, { error: "invalid management key" }))
+    const access = makeAccess(env, net.fetch)
+    await assert.rejects(read(access), (error: unknown) => error instanceof NoSessionError && error.reason === "refused")
+    for (let tick = 0; tick < 5; tick++) await assert.rejects(read(access), NoSessionError)
+    assert.equal(net.management(), 1)
+    assert.equal(latchOf(env)?.fp, fingerprint(env, UPSTREAM_KEY))
   })
 })
 

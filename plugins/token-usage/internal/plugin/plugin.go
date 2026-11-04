@@ -21,7 +21,7 @@ import (
 
 const ID = "token-usage"
 
-var Version = "0.1.3"
+var Version = "0.1.4"
 
 type Plugin struct {
 	lifecycle                   sync.Mutex
