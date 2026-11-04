@@ -1036,6 +1036,7 @@ func TestResourcePageCarriesSameOriginUpgradeScript(t *testing.T) {
 		"accountHealthAuth",
 		`"cli-proxy-auth"`,
 		`"managementKey"`,
+		`"enc::v2::"`,
 		`"enc::v1::"`,
 		`managementPath("/status/html")`,
 		`credentials: "same-origin"`,

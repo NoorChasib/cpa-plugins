@@ -22,7 +22,7 @@ import (
 const (
 	PluginID      = "auto-baseline"
 	PluginName    = "Auto Baseline"
-	PluginVersion = "0.1.6"
+	PluginVersion = "0.1.7"
 	PluginAuthor  = "NoorChasib"
 	PluginRepo    = "https://github.com/NoorChasib/cpa-plugins"
 )

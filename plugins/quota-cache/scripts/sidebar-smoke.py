@@ -363,13 +363,21 @@ def remembered(key, base='location.origin', extra=''):
     return stored("{version:0, state:{managementKey:'%s', rememberPassword:true, apiBase:%s%s}}" % (key, base, extra))
 
 # The console's obfuscated form of a remembered session, as it stores it.
-OBFUSCATED = '''(() => {
+# Management Center v1.27.0 and later write enc::v2::, keyed by the address
+# alone; older consoles wrote enc::v1::, keyed by the address and the
+# browser's user agent. scripts/tests/session.test.mjs checks the page against
+# upstream's own output for both.
+def obfuscated(version):
+    agent = " + '|' + navigator.userAgent" if version == 'v1' else ''
+    return '''(() => {
   const plain = new TextEncoder().encode(JSON.stringify({version:0, state:{managementKey:'synthetic-sidebar-key', rememberPassword:true, apiBase:location.origin + '/v8/management'}}));
-  const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+  const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host%s);
   let raw = '';
-  plain.forEach((byte, i) => { raw += String.fromCharCode(byte ^ salt[i % salt.length]); });
-  localStorage.setItem('cli-proxy-auth', 'enc::v1::' + btoa(raw));
-})()'''
+  plain.forEach((byte, i) => { raw += String.fromCharCode(byte ^ salt[i %% salt.length]); });
+  localStorage.setItem('cli-proxy-auth', 'enc::%s::' + btoa(raw));
+})()''' % (agent, version)
+OBFUSCATED = obfuscated('v2')
+LEGACY_OBFUSCATED = obfuscated('v1')
 
 def load(*seeds):
     browser('eval', 'localStorage.removeItem("cli-proxy-auth"); localStorage.removeItem("managementKey"); localStorage.removeItem("apiBase"); localStorage.removeItem("isLoggedIn");' + ';'.join(seeds))
@@ -1125,6 +1133,7 @@ try:
         [remembered('synthetic-sidebar-key', base="'http://elsewhere.invalid:8317'")],
         [remembered('')],
         ["localStorage.setItem('cli-proxy-auth', 'enc::v1::' + btoa('not the console'))"],
+        ["localStorage.setItem('cli-proxy-auth', 'enc::v2::' + btoa('not the console'))"],
         [stored("'synthetic-sidebar-key'", 'managementKey'), stored('location.origin', 'apiBase')],
     ):
         load(*seeds)
@@ -1294,6 +1303,11 @@ try:
     assert state['reads'] == before+1, 'a reload presented a refused key the page could not remember in localStorage'
     check("localStorage.getItem('%s') === null && JSON.parse(sessionStorage.getItem('%s')).reason === 'refused'" % (REFUSED, REFUSED))
     browser('eval', EMPTY + "; sessionStorage.removeItem('%s')" % REFUSED)
+    # A session a console older than v1.27 saved (enc::v1::) still works.
+    before = state['reads']
+    load(LEGACY_OBFUSCATED)
+    check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
+    assert state['reads'] == before+1, 'the page did not read the status with a pre-v1.27 console session'
     load(OBFUSCATED)
     check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
     editor_checks()

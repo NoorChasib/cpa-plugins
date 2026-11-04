@@ -1,6 +1,6 @@
 # Codex Catalog Filter reference
 
-Maintained contract for **Codex Catalog Filter 0.1.0**, written 2026-09-30 against CPA **v8.0.4** (commit `d33f63f`) and Codex CLI **0.159**. Install steps are in the [README](README.md); test evidence is in [verification](docs/verification.md).
+Maintained contract for **Codex Catalog Filter 0.1.1**, written 2026-09-30 against CPA **v8.0.4** (commit `d33f63f`) and Codex CLI **0.159**. Install steps are in the [README](README.md); test evidence is in [verification](docs/verification.md).
 
 ## How Codex gets its model list
 
@@ -63,7 +63,9 @@ Anyone who can reach CPA can see that the routes exist. Only a valid client key 
 
 The page is fixed HTML, CSS, and JavaScript, always dark in the palette the other plugins' pages use in dark mode. It contains no model data, and its Content-Security-Policy pins the script and style by hash, allows requests only to the same origin, and allows framing only by the same origin.
 
-It uses the console's remembered session, read the same way as Token Usage's sidebar. It needs **Remember password** on this exact origin and API base, and it never offers a login of its own.
+It uses the console's remembered session, with a reader adapted from Token Usage's sidebar. It needs **Remember password** on this exact origin and API base, and it never offers a login of its own.
+
+The session is the Management Center's `cli-proxy-auth` entry in the browser's local storage. Management Center v1.27.0 and later store it as `enc::v2::`, keyed by the page's host. Older consoles stored `enc::v1::`, keyed by the host and the browser's user agent, and the page still reads that form. Both are reversible obfuscation, not encryption. An entry with another `enc::` version gives no session, and so does one written under another host. While a `cli-proxy-auth` entry exists, the page never falls back to the older separate storage entries.
 
 It makes one request per action and never retries a rejected key. Any change to the console session in another tab clears the page and stops requests until you select **Refresh**.
 

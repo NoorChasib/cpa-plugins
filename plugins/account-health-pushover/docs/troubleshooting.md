@@ -126,6 +126,7 @@ The note under the status pills explains why. Common causes:
 
 - the management console is hosted on a different origin than CPA, so its localStorage entries are not visible to the page;
 - the console was signed in without **Remember password**, so no key is persisted;
+- the console's `cli-proxy-auth` entry is in a format the page cannot decode. The page reads `enc::v2::` entries (Management Center v1.27.0 and later) and legacy `enc::v1::` entries; a legacy entry stops decoding when the browser's user agent changes (for example after a browser update) until the console is signed in again with **Remember password**;
 - a reverse proxy strips `Authorization` or the browser session does not carry ambient management auth.
 
 Sign in to the management console served from the same origin as CPA with **Remember password** enabled and reload, or use the authenticated JSON route and `curl`.

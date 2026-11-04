@@ -32,6 +32,13 @@ The constrained JSON/session controller and configuration lifecycle are adapted
 for Token Usage's distinct privacy and history requirements. Exact source
 links and the reuse/avoid rationale are in docs/sidebar-audit.md.
 
+- Official CLI Proxy API Management Center v1.27.2
+  https://github.com/router-for-me/Cli-Proxy-API-Management-Center
+  Revision: f154fa9380825c4fe94bc577a9abaa7e505f8875
+  Sources: src/stores/useAuthStore.ts,
+  src/services/storage/secureStorage.ts, src/utils/encryption.ts
+  Copyright (c) 2026 Router-For.ME
+
 - Official CLI Proxy API Management Center v1.22.15
   https://github.com/router-for-me/Cli-Proxy-API-Management-Center
   Revision: ed5f1c48e11ba7335f1e8f676f228c280196af85
@@ -40,11 +47,13 @@ links and the reuse/avoid rationale are in docs/sidebar-audit.md.
   Copyright (c) 2026 Router-For.ME
 
 The embedded page implements a constrained compatible reader for the console's
-remembered-session format and XOR/Base64 obfuscation (not secure encryption).
+remembered-session format and XOR/Base64 obfuscation (not secure encryption):
+current enc::v2:: (v1.27.2) and legacy enc::v1:: (v1.22.15).
 The unmodified src/utils/encryption.ts and
-src/services/storage/secureStorage.ts files are copied into
-internal/plugin/frontendtests/upstream/ as encryption.ts and secureStorage.ts,
-with the upstream LICENSE adjacent. The browser tests strip TypeScript for
+src/services/storage/secureStorage.ts files are copied as encryption.ts and
+secureStorage.ts into internal/plugin/frontendtests/upstream/ (v1.27.2) and
+internal/plugin/frontendtests/upstream-v1.22.15/ (v1.22.15), each with the
+upstream LICENSE adjacent. The browser tests strip TypeScript for
 execution; these source fixtures are not a frontend runtime dependency or a
 production credential/session setter.
 

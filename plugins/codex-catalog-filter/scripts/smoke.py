@@ -33,8 +33,10 @@ STATE = '/plugins/codex-catalog-filter/state'
 CODEX_QUERY = '/v1/models?client_version=0.159.0'
 # What the Codex Models page saves to leave only GPT models listed.
 OFF = {'claude-fable-5-1': False, 'cpa-sonnet': False, 'or-kimi-k2': False, 'grok-4.7': False}
-# Codex's current picker set, which CPA v8.0.4 registers for a Codex API key.
-TARGET = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']
+# Codex models CPA v8.0.4 registers for a Codex API key, both from its built-in
+# catalog and after its startup refresh from router-for-me/models, which can add
+# or drop models at any time (it dropped gpt-5.5 in November 2026).
+TARGET = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 FIXTURE = TARGET + ['codex-auto-review', 'claude-fable-5-1', 'cpa-sonnet', 'or-kimi-k2', 'grok-4.7']
 UNWANTED = ('claude-', 'cpa-', 'or-', 'grok-')
 

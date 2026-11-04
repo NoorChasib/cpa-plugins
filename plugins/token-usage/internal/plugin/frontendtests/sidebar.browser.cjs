@@ -1,7 +1,9 @@
 // Real browser execution of the shipped page using the installed agent-browser.
 // No npm project or frontend runtime dependency is introduced. Node 22.13+.
-// The two upstream .ts fixtures are byte-for-byte sources from Management Center
-// v1.22.15, ed5f1c48e11ba7335f1e8f676f228c280196af85. Their MIT notice is adjacent.
+// The upstream .ts fixtures are byte-for-byte Management Center sources, each
+// directory with its adjacent MIT notice:
+//   upstream/          v1.27.2, f154fa9380825c4fe94bc577a9abaa7e505f8875 (enc::v2::)
+//   upstream-v1.22.15/ v1.22.15, ed5f1c48e11ba7335f1e8f676f228c280196af85 (legacy enc::v1::)
 // Type stripping lets tests generate sessions with the ACTUAL console codec and
 // storage writer rather than an independently invented encryption format.
 const assert = require('node:assert/strict');
@@ -45,10 +47,15 @@ writeFileSync(initPath, `(() => {
   };
   if (window.name === 'blocked-storage') Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Blocked', 'SecurityError'); } });
 })();`);
-const codec = ['encryption.ts', 'secureStorage.ts'].map((name) => {
-  const source = readFileSync(join(__dirname, 'upstream', name), 'utf8').replace(/^import .*;\r?\n/gm, '');
+const loadCodec = (dir) => ['encryption.ts', 'secureStorage.ts'].map((name) => {
+  const source = readFileSync(join(__dirname, dir, name), 'utf8').replace(/^import .*;\r?\n/gm, '');
   return stripTypeScriptTypes(source).replace(/\bexport /g, '');
 }).join('\n');
+const codecs = { 'v1.27.2': loadCodec('upstream'), 'v1.22.15': loadCodec('upstream-v1.22.15') };
+// Each console's unmodified codec runs in its own function scope so identical
+// top-level names cannot collide. `window` is a parameter only so a test can
+// run that same code as if the console had been served from another host.
+const consoleStorage = (version, windowExpression = 'window') => `((window) => {${codecs[version]}\nreturn obfuscatedStorage;})(${windowExpression})`;
 function browser(...args) {
   let output;
   try { output = execFileSync(binary, ['--session', session, '--json', ...args], { encoding: 'utf8', timeout: 45000, maxBuffer: 4 * 1024 * 1024 }); }
@@ -68,19 +75,24 @@ function instantNS(value) {
   return BigInt(Date.parse(whole + 'Z')) * 1000000n + BigInt(fraction.padEnd(9, '0'));
 }
 const shownUTC = (value) => value.replace('T', ' ').replace(/Z$/, ' UTC');
-function setup({ scenario = 'normal', prefix = '', record = modern(base + prefix), legacy, raw, obfuscated = false, blocked = false, query = '' } = {}) {
+// `writer` selects which console version persists the modern record; legacy
+// standalone keys predate v1.27 and are always written by the v1.22.15 codec.
+function setup({ scenario = 'normal', prefix = '', record = modern(base + prefix), legacy, raw, obfuscated = false, writer = 'v1.27.2', foreignHost, blocked = false, query = '' } = {}) {
   browser('open', base + '/fixture?scenario=' + scenario);
   evaluate(`localStorage.clear(); window.name = ${JSON.stringify(blocked ? 'blocked-storage' : scenario)}; true`);
-  const writes = [];
+  const writes = [
+    `const modernStorage = ${consoleStorage(writer, foreignHost ? JSON.stringify({ location: { host: foreignHost } }) : 'window')};`,
+    `const legacyStorage = ${consoleStorage('v1.22.15')};`
+  ];
   if (raw !== undefined) writes.push(`localStorage.setItem('cli-proxy-auth', ${JSON.stringify(raw)});`);
-  else if (record !== null) writes.push(`obfuscatedStorage.setItem('cli-proxy-auth', ${JSON.stringify(record)}, {obfuscate:${obfuscated}});`);
+  else if (record !== null) writes.push(`modernStorage.setItem('cli-proxy-auth', ${JSON.stringify(record)}, {obfuscate:${obfuscated}});`);
   if (legacy) {
     writes.push(`localStorage.setItem('isLoggedIn', ${JSON.stringify(legacy.loggedIn === false ? 'false' : 'true')});`);
-    if (legacy.base !== undefined) writes.push(`obfuscatedStorage.setItem('apiBase', ${JSON.stringify(legacy.base)});`);
-    if (legacy.url !== undefined) writes.push(`obfuscatedStorage.setItem('apiUrl', ${JSON.stringify(legacy.url)});`);
-    writes.push(`obfuscatedStorage.setItem('managementKey', 'fixture-management-key');`);
+    if (legacy.base !== undefined) writes.push(`legacyStorage.setItem('apiBase', ${JSON.stringify(legacy.base)});`);
+    if (legacy.url !== undefined) writes.push(`legacyStorage.setItem('apiUrl', ${JSON.stringify(legacy.url)});`);
+    writes.push(`legacyStorage.setItem('managementKey', 'fixture-management-key');`);
   }
-  evaluate('(() => {' + codec + '\n' + writes.join('\n') + 'return true;})()');
+  evaluate('(() => {' + writes.join('\n') + '\nreturn true;})()');
   browser('open', base + prefix + sourceSuffix + query);
   settled();
 }
@@ -157,7 +169,11 @@ async function test(name, fn) { await fn(); passed++; process.stdout.write('PASS
     browser('set', 'viewport', '1280', '960');
     browser('set', 'media', 'light');
   });
-  await test('actual official obfuscated storage codec supports remembered modern state', () => { setup({ obfuscated: true }); assertLoaded(); });
+  for (const [writer, prefix] of [['v1.27.2', 'enc::v2::'], ['v1.22.15', 'enc::v1::']]) await test('actual official ' + writer + ' ' + prefix + ' storage codec supports remembered modern state', () => {
+    setup({ obfuscated: true, writer });
+    assert.equal(evaluate("localStorage.getItem('cli-proxy-auth').slice(0, 9)"), prefix, 'the console fixture must have written its own codec');
+    assertLoaded();
+  });
   for (const [scenario, key, obfuscated] of [['keyspaces', 'key with space', false], ['keyspaces', 'key with space', true], ['keylatin1', 'fixture-key-café', false]]) await test(scenario + (obfuscated ? ' obfuscated' : ' plaintext') + ' sends the exact accepted header bytes', async () => {
     setup({ scenario, record: modern(base, { managementKey: key }), obfuscated });
     assertLoaded();
@@ -189,6 +205,10 @@ async function test(name, fn) { await fn(); passed++; process.stdout.write('PASS
   const stale = { base };
   const denied = [
     ['missing session', { record: null }], ['remember off', { record: modern(base, { rememberPassword: false }), legacy: stale }],
+    ['v1.27.2 enc::v2:: remember off', { record: modern(base, { rememberPassword: false }), obfuscated: true, legacy: stale }],
+    ['v1.27.2 enc::v2:: written under another host', { obfuscated: true, foreignHost: 'console.example.invalid:8443', legacy: stale }],
+    ['malformed enc::v2:: obfuscation blocks stale legacy', { raw: 'enc::v2::%%%invalid%%%', legacy: stale }],
+    ['unknown enc::v3:: prefix blocks stale legacy', { raw: 'enc::v3::e30=', legacy: stale }],
     ['modern logout blocks stale legacy', { record: modern('', { managementKey: '' }), legacy: stale }],
     ['modern missing key blocks stale legacy', { record: { state: { apiBase: base, rememberPassword: true }, version: 0 }, legacy: stale }],
     ['modern invalid record blocks stale legacy', { raw: '{broken', legacy: stale }],

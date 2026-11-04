@@ -516,12 +516,14 @@ func TestResourceStatusPageSameOriginUpgradeScript(t *testing.T) {
 	page := string(resp.Body)
 
 	// The shell must carry the client-side upgrade: helper namespace, the
-	// management-console localStorage keys and obfuscation prefix, the
-	// authenticated HTML route fetch, and the fallback note element.
+	// management-console localStorage keys and obfuscation prefixes (current
+	// v2 and legacy v1), the authenticated HTML route fetch, and the fallback
+	// note element.
 	for _, marker := range []string{
 		"resetPriorityAuth",
 		`"cli-proxy-auth"`,
 		`"managementKey"`,
+		`"enc::v2::"`,
 		`"enc::v1::"`,
 		`managementPath("/status/html")`,
 		`credentials: "same-origin"`,

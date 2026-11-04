@@ -74,11 +74,11 @@ export interface Env {
   storage: StorageLike
   /** `location.origin`. */
   origin: string
-  /** `location.host`, one half of the console's obfuscation key. */
+  /** `location.host`, which the console's obfuscation key is built from. */
   host: string
   /** `location.pathname`, which carries any reverse-proxy prefix. */
   pathname: string
-  /** `navigator.userAgent`, the other half of that key. */
+  /** `navigator.userAgent`, which only the legacy `enc::v1::` key includes. */
   userAgent: string
   /** Epoch seconds. */
   now(): number
@@ -289,21 +289,29 @@ function stored(env: Env, name: string): string | null {
 }
 
 /**
- * The console's storage codec: an `enc::v1::` value is base64 of the JSON
- * XORed with a key built from a fixed salt, this host and this browser's user
- * agent. Reversible obfuscation, not encryption, and not a security boundary.
+ * The console's storage codec: an `enc::v2::` value, which Management Center
+ * v1.27.0 and later write, is base64 of the JSON XORed with a key built from a
+ * fixed salt and this host; an older `enc::v1::` value's key also includes this
+ * browser's user agent. Reversible obfuscation, not encryption, and not a
+ * security boundary.
  *
- * Strict by default: bytes that are not UTF-8 — what a blob written under
- * another user agent decodes to — or text that is not JSON throw, and the
- * caller reads that as no session. `loose` is for the legacy entries, which
- * were sometimes plain strings.
+ * Strict by default: bytes that are not UTF-8 or text that is not JSON — what
+ * a blob obfuscated under another host, or a v1 blob under another user agent,
+ * decodes to — throw, and the caller reads that as no session. A value with
+ * any other prefix is left as it is, which the strict reading refuses as not
+ * JSON. `loose` is for the legacy entries, which were sometimes plain strings.
  */
 function decode(raw: string | null, env: Env, loose: boolean): unknown {
   if (raw === null) return null
   let value = raw
-  if (value.startsWith("enc::v1::")) {
-    const binary = atob(value.slice("enc::v1::".length))
-    const salt = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${env.host}|${env.userAgent}`)
+  const prefix = ["enc::v2::", "enc::v1::"].find((one) => raw.startsWith(one))
+  if (prefix !== undefined) {
+    const binary = atob(value.slice(prefix.length))
+    const salt = new TextEncoder().encode(
+      prefix === "enc::v1::"
+        ? `cli-proxy-api-webui::secure-storage|${env.host}|${env.userAgent}`
+        : `cli-proxy-api-webui::secure-storage|${env.host}`,
+    )
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i) ^ (salt[i % salt.length] ?? 0)
     value = new TextDecoder("utf-8", { fatal: true }).decode(bytes)

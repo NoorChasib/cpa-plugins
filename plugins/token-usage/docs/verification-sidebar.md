@@ -43,15 +43,31 @@ These are the final **71-case local acceptance run's** disposable evidence files
 
 ### Verified console fixture hashes
 
-Official Management Center **v1.22.15**, commit `ed5f1c48e11ba7335f1e8f676f228c280196af85`:
+Official Management Center **v1.22.15**, commit `ed5f1c48e11ba7335f1e8f676f228c280196af85`, the legacy `enc::v1::` codec and the only codec used by the 71-case run above. At that snapshot these bytes lived in `upstream/`; they are now kept unchanged in `upstream-v1.22.15/`:
 
-| Repository fixture under `internal/plugin/frontendtests/upstream/` | Exact upstream filename | SHA-256 |
+| Repository fixture under `internal/plugin/frontendtests/upstream-v1.22.15/` | Exact upstream filename | SHA-256 |
 |---|---|---|
 | `encryption.ts` | `src/utils/encryption.ts` | `d40ea30965f76400ee4152e113bd73266d17215cf5fbf74239cdeec709236f6b` |
 | `secureStorage.ts` | `src/services/storage/secureStorage.ts` | `573222bfa00616bf311bad3bfdf6e5847350b0eb347871faa648650c54c97138` |
 | `LICENSE` | `LICENSE` | `48fc0d19e5d0918e7e2a7df2deed33b167d9aad1aebb07891a32a8e6f71f80ee` |
 
-The actual console storage writer/codec produces browser-test sessions after Node type stripping. The production page contains its own constrained compatible reader, not these test setters or a new bundled framework. Source links, pins and design/auth rationale are in [sidebar-audit.md](sidebar-audit.md).
+Added after this snapshot: official Management Center **v1.27.2**, commit `f154fa9380825c4fe94bc577a9abaa7e505f8875`, the current `enc::v2::` codec (introduced in v1.27.0):
+
+| Repository fixture under `internal/plugin/frontendtests/upstream/` | Exact upstream filename | SHA-256 |
+|---|---|---|
+| `encryption.ts` | `src/utils/encryption.ts` | `edd9c346e0de0bb298451e227e67b8f7acf83fbd286379dd48b2403c5325fbb8` |
+| `secureStorage.ts` | `src/services/storage/secureStorage.ts` | `5a59074cc829ea779e3770e42932beaaa5cf736c98a9e388a346d646340ea7a0` |
+| `LICENSE` | `LICENSE` | `48fc0d19e5d0918e7e2a7df2deed33b167d9aad1aebb07891a32a8e6f71f80ee` |
+
+The actual console storage writers/codecs produce browser-test sessions after Node type stripping.
+
+**Later console codec update (local, 2026-11-04).** Management Center v1.27.0 switched new remembered-session writes to `enc::v2::`, keyed by host only. The page now reads `enc::v2::` and still reads legacy `enc::v1::`. On that date, locally and with the pinned Node 26.8.1/npm 11.19.0, agent-browser 0.37.1 and Chrome for Testing 153.0.8010.36:
+
+- `make ci` passed, including the served-script codec test in `status_page_test.go`.
+- `make browser` passed **76 scenarios**, the 71 above plus current `enc::v2::` and legacy `enc::v1::` remembered sessions and `enc::v2::` remember-off, foreign-host, malformed and unknown-prefix refusals.
+- With the previous page script, the new `enc::v2::` scenario failed with the session-required notice.
+
+`scripts/browser/native.cjs` now seeds its session with the v1.27.2 codec. Native smoke, official-image store smoke and packaging were **not** rerun for this change, and no full console sign-in against a deployed Management Center was performed. The production page contains its own constrained compatible reader, not these test setters or a new bundled framework. Source links, pins and design/auth rationale are in [sidebar-audit.md](sidebar-audit.md).
 
 ## What the completed tests cover
 

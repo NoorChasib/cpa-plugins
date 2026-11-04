@@ -80,13 +80,17 @@
     return value;
   }
   // The console's optional XOR/Base64 codec is reversible obfuscation, NOT
-  // encryption or a security boundary.
+  // encryption or a security boundary. Management Center v1.27.0 and later
+  // write enc::v2::, keyed by the host alone; older consoles wrote enc::v1::,
+  // keyed by the host and the browser's user agent. Another enc:: version is
+  // not decoded, so it fails to parse and gives no session.
   function decode(raw, legacy = false) {
     if (raw === null) return null;
     let value = raw;
-    if (value.startsWith('enc::v1::')) {
+    const current = value.startsWith('enc::v2::');
+    if (current || value.startsWith('enc::v1::')) {
       const bytes = Uint8Array.from(atob(value.slice(9)), c => c.charCodeAt(0));
-      const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+      const salt = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + (current ? '' : '|' + navigator.userAgent));
       for (let i = 0; i < bytes.length; i++) bytes[i] ^= salt[i % salt.length];
       value = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
     }

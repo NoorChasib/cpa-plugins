@@ -86,11 +86,19 @@ failure. The reader is a port of Codex Catalog Filter's, which audited the
 console's storage format.
 
 - **`cli-proxy-auth` is authoritative whenever it exists**, after a logout
-  included. A value starting `enc::v1::` is base64 XORed with
-  `cli-proxy-api-webui::secure-storage|<host>|<user agent>` — reversible
-  obfuscation, not encryption. It must then decode as strict UTF-8 and parse as
-  JSON. Anything that fails is no session, and the legacy entries are **not**
-  consulted beside it.
+  included. The console obfuscates it as base64 of the JSON XORed with a
+  repeating key — reversible obfuscation, not encryption — and the prefix says
+  which key:
+  - `enc::v2::`, what Management Center v1.27.0 and later write:
+    `cli-proxy-api-webui::secure-storage|<host>`.
+  - `enc::v1::`, from consoles before v1.27.0:
+    `cli-proxy-api-webui::secure-storage|<host>|<user agent>`. A v1.27.0 or
+    later console discards an entry like this when it loads, so the next
+    session it remembers is v2.
+
+  It must then decode as strict UTF-8 and parse as JSON. Anything that fails,
+  an unknown prefix included, is no session, and the legacy entries are
+  **not** consulted beside it.
 - **It is accepted only if** `version` is `0`, `state.rememberPassword` is
   `true`, `state.isAuthenticated` is not `false`, `state.apiBase` is this
   page's CPA, and `state.managementKey` is a valid key.
@@ -111,7 +119,8 @@ console's storage format.
 A sidebar signed in with **Remember password** is unaffected by any of this.
 What the reader stops using are exactly the sessions that used to cost failed
 sign-ins: a legacy key left behind by a console logout, a session for another
-server, an entry obfuscated under another user agent.
+server, an entry obfuscated under another host or, for an `enc::v1::` entry,
+another user agent.
 
 ## When CPA refuses a key
 

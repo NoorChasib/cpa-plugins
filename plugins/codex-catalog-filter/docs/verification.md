@@ -74,7 +74,27 @@ The page ran in Chromium through agent-browser, against a throwaway CPA v8.0.4 c
 - **Stale switch:** a switch for a model not in the list appeared under "Switches for models Codex was not offered". **Forget** and **Save** removed it from `config.yaml`.
 - **Always dark:** with the browser's colour-scheme preference set to light, the page still rendered on the dark background `#0c111d`.
 
-Not covered by an automated browser test in CI. The console's obfuscated (`enc::v1::`) storage and legacy fallback use Token Usage's audited reader unchanged, but were not exercised here.
+Not covered by an automated browser test in CI. The console's obfuscated (`enc::v1::`) storage and legacy fallback use Token Usage's audited reader unchanged, but were not exercised here. Both console storage forms are now exercised outside a browser; see [Console session formats](#console-session-formats).
+
+## Console session formats
+
+Local results from 2026-11-04 on Linux amd64 with Go 1.27.3 and Node.js 26.13.0, for the change that reads the `enc::v2::` session format official Management Center v1.27.0 introduced (see [REFERENCE](../REFERENCE.md)). The page's reader decoded only `enc::v1::` before this change, so a session saved by v1.27.0 or later gave no session; the earlier `app.js` fails the `enc::v2::` cases below.
+
+`scripts/tests/session.test.mjs` loads the shipped `app.js` unchanged into a stub page at CPA's resource route and checks whether its first state request carries the remembered key. `TestSettingsPageReadsConsoleSessions` runs it with `go test` when `node` is on the path; it skips without Node on a workstation and fails without it when `CI` is set. Its vectors are literals that upstream's own `src/utils/encryption.ts` produced: tag v1.27.2 (commit `f154fa9380825c4fe94bc577a9abaa7e505f8875`) for `enc::v2::`, and v1.26.7 for `enc::v1::`.
+
+| Case | Result |
+| --- | --- |
+| `enc::v2::` session from v1.27.2 | Recovered, under any user agent |
+| `enc::v2::` written under another host, or opened on another host | No session |
+| `enc::v2::` with `rememberPassword: false`, with or without the key | No session |
+| `enc::v1::` session from v1.26.7 | Recovered with the user agent it was written under, and not with another |
+| An unknown prefix (`enc::v3::`) | No session |
+| `enc::v2::` that decodes to invalid UTF-8 | No session (strict decoding) |
+| An unreadable or remember-off `cli-proxy-auth` beside valid older entries | No session: the older entries are not revived |
+
+Each rule was mutated in a scratch copy of `app.js` and its case failed: no `enc::v2::` branch (the page before this change), the user agent in the `enc::v2::` key or missing from the `enc::v1::` key, lenient UTF-8, no `rememberPassword` check, an accepted `enc::v3::`, and falling back to the older entries when `cli-proxy-auth` cannot be read. `make ci` passed.
+
+Not verified: a live sign-in through Management Center v1.27 or later in a real browser, and the test's run on the hosted CI runner. The new form was checked against upstream's own encoder output only.
 
 ## Codex CLI
 
