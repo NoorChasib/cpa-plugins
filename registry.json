@@ -73,16 +73,16 @@
       "id": "codex-catalog-filter",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/codex-catalog-filter",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/codex-catalog-filter/v0.1.0/codex-catalog-filter_0.1.0_linux_amd64.zip",
-            "sha256": "04082008f6bbc0475a5f5c3afc600bc25d1d428c45b275f38ff351ae13f1db18",
-            "size": 3228938
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/codex-catalog-filter/v0.1.1/codex-catalog-filter_0.1.1_linux_amd64.zip",
+            "sha256": "64e038dbaa3836491377b8878fd92b08c835936861bd8fc3ca6d474883f57185",
+            "size": 3228871
           }
         ]
       }
