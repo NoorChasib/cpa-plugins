@@ -1,0 +1,9 @@
+{
+  "id": "int_synth_1",
+  "status": "completed",
+  "steps": [
+    {"type": "thought", "summary": [{"type": "text", "text": "Trains run hourly."}], "signature": "UmVzcG9uc2VJbnRlcmFjdGlvblNpZw=="},
+    {"type": "model_output", "content": [{"type": "text", "text": "Leave at nine."}]}
+  ],
+  "usage": {"total_tokens": 42}
+}

@@ -1,0 +1,45 @@
+{
+  "format": "openai.responses",
+  "raw_len": 214,
+  "skeleton": "8faa55bda0a36837b8b6ccd2cd262fd70e847d9684bac11660cf12fc154df049",
+  "items": [
+    {
+      "id": "56a5067f64bc768bc8d2e3e933a324b3b79f434478e1dc191e8692239bc7c26e",
+      "m": {
+        "role": "user",
+        "type": "message"
+      }
+    },
+    {
+      "id": "3434e6fdf36f1b4995bb2115d5597c619b800604719c90950214064ef47cabeb",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "cff63d146895953dd40fec8db3c05baa1113e4fe19d903c9115d5e608c1ec18f"
+    }
+  ],
+  "n": 2,
+  "list_sha": "8bfdc0d65cb0f3d5ff0cc0d256c459cac0a25e6b9d720315757643a21e32d0cb",
+  "refs": [
+    "8faa55bda0a36837b8b6ccd2cd262fd70e847d9684bac11660cf12fc154df049",
+    "cff63d146895953dd40fec8db3c05baa1113e4fe19d903c9115d5e608c1ec18f"
+  ],
+  "pieces": [
+    {
+      "hash": "8faa55bda0a36837b8b6ccd2cd262fd70e847d9684bac11660cf12fc154df049",
+      "kind": "json",
+      "len": 91,
+      "json": {
+        "event_id": "evt_synth_2",
+        "previous_response_id": "resp_synth_prev",
+        "type": "response.steer"
+      }
+    },
+    {
+      "hash": "cff63d146895953dd40fec8db3c05baa1113e4fe19d903c9115d5e608c1ec18f",
+      "kind": "text",
+      "len": 20,
+      "text": "Skip the slow tests."
+    }
+  ]
+}

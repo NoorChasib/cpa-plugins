@@ -1,0 +1,28 @@
+{
+  "format": "media.videos",
+  "raw_len": 156,
+  "skeleton": "a739c6ae21d43f81410479ce983bfe0a28b665d460d714a4e80270d61989bd72",
+  "n": 0,
+  "list_sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "refs": [
+    "a739c6ae21d43f81410479ce983bfe0a28b665d460d714a4e80270d61989bd72"
+  ],
+  "pieces": [
+    {
+      "hash": "a739c6ae21d43f81410479ce983bfe0a28b665d460d714a4e80270d61989bd72",
+      "kind": "json",
+      "len": 112,
+      "json": {
+        "model": "grok-video-test",
+        "status": "done",
+        "video": {
+          "duration": 6,
+          "url": "https://video.example.test/out/v1.mp4"
+        }
+      }
+    }
+  ],
+  "media_urls_masked": [
+    "https://video.example.test/out/v1.mp4"
+  ]
+}

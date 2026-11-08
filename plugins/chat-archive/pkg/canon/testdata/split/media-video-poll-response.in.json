@@ -1,0 +1,1 @@
+{"status": "done", "video": {"url": "https://video.example.test/out/v1.mp4?token=synthetic-signed-token-value", "duration": 6}, "model": "grok-video-test"}

@@ -1,0 +1,190 @@
+{
+  "format": "claude.messages",
+  "raw_len": 13226,
+  "skeleton": "5f3ef5e20ba21c27ef20afb5a4c9a714884ef4828fe4322c656f1d198e5967bf",
+  "items": [
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "1287d350fbe8589e920ec866a4702379d0472b8beb188ff4b125f8aba100c7d2",
+      "f": {
+        "source": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 3000,
+              "mime": "image/png",
+              "sha256": "369fa777247545a82d3341e865d5e6f9388b571cb8f9463b58be498c979a1050"
+            }
+          },
+          "media_type": "image/png",
+          "type": "base64"
+        },
+        "type": "image"
+      },
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    },
+    {
+      "id": "b04278cbd1faeca6d7997c3b97b502826e9a5573adca4e42d1d5510623684425",
+      "f": {
+        "source": {
+          "data": "iVBORw0KGgoLMFV6n8TpDjNYfaLH7BE2W4Clyu8UOV6DqM3yFzxhhqvQ9Ro/ZImu0/gdQmeMsdb7IEVqj7TZ/iNIbZK33AEmS3CVut8EKU5zmL3iByxRdpvA5QovVHmew+gNMld8ocbrEDVaf6TJ7hM4XYKnzPEWO2CFqs/0GT5jiK3S9xxBZouw1fofRGmOs9j9IkdskbbbACVKb5S53gMoTXKXvOEGK1B1mr/kCS5TeJ3C5wwxVnugxeoPNFl+o8jtEjdcgabL8BU6X4SpzvMYPWKHrNH2G0Bliq/U+R5DaI2y1/whRmuQtdr/JEluk7jdAidMcZa74AUqT3SZvuMILVJ3nMHmCzBVep/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW+yBFao+02f4jSG2St9wBJktwlbrfBClOc5i94gcsUXabwOUKL1R5nsPoDTJXfKHG6xA1Wn+kye4TOF2Cp8zxFjtgharP9Bk+Y4it0vccQWaLsNX6H0RpjrPY/SJHbJG22wAlSm+Uud4DKE1yl7zhBitQdZq/5AkuU3idwucMMVZ7oMXqDzRZfqPI7RI3XIGmy/AVOl+Eqc7zGD1ih6zR9htAZYqv1PkeQ2iNstf8IUZrkLXa/yRJbpO43QInTHGWu+AFKk90mb7jCC1Sd5zB5gswVXqfxOkOM1h9osfsETZbgKXK7xQ5XoOozfIXPGGGq9D1Gj9kia7T+B1CZ4yx1vsgRWqPtNn+I0htkrfcASZLcJW63wQpTnOYveIHLFF2m8DlCi9UeZ7D6A0yV3yhxusQNVp/pMnuEzhdgqfM8RY7YIWqz/QZPmOIrdL3HEFmi7DV+h9EaY6z2P0iR2yRttsAJUpvlLneAyhNcpe84QYrUHWav+QJLlN4ncLnDDFWe6DF6g80WX6jyO0SN1yBpsvwFTpfhKnO8xg9Yoes0fYbQGWKr9T5HkNojbLX/CFGa5C12v8kSW6TuN0CJ0xxlrvgBSpPdJm+4wgtUnecweYLMFV6n8TpDjNYfaLH7BE2W4Clyu8UOV6DqM3yFzxhhqvQ9Ro/ZImu0/gdQmeMsdb7IEVqj7TZ/iNIbZK33AEmS3CVut8EKU5zmL3iByxRdpvA5QovVHmew+gNMld8ocbrEDVaf6TJ7hM4XYKnzPEWO2CFqs/0GT5jiK3S9xxBZouw1fofRGmOs9j9IkdskbbbACVKb5S53gMoTXKXvOEGK1B1mr/kCS5TeJ3C5wwxVnugxeoPNFl+o8jtEjdcgabL8BU6X4SpzvMYPWKHrNH2G0Bliq/U+R5DaI2y1/whRmuQtdr/JEluk7jdAidMcZa74AUqT3SZ",
+          "media_type": "image/png",
+          "type": "base64"
+        },
+        "type": "image"
+      }
+    },
+    {
+      "id": "21891de0d92051aac88088fa6110bf604a6b9a906ee31f695d53f1ce40815073",
+      "f": {
+        "source": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1024,
+              "mime": "image/png",
+              "sha256": "3b9b19c6da0b874b208f480a857bec39aefe9690009446e056713c69b7601cbc"
+            }
+          },
+          "media_type": "image/png",
+          "type": "base64"
+        },
+        "type": "image"
+      }
+    },
+    {
+      "id": "47890984ad20b4bda04b5ae616a364e3cda934260dac1b405f79e9a7cbcc3334",
+      "f": {
+        "source": {
+          "type": "url",
+          "url": "https://example.test/picture.png"
+        },
+        "type": "image"
+      }
+    },
+    {
+      "id": "20bf604f5b91824b3d2f9fe7ab45f0320166080cc283fb114cf3e3a5d7535f50",
+      "f": {
+        "source": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 4096,
+              "mime": "application/pdf",
+              "sha256": "1adf2b3bd5b571c28da59f523d12b1525ab648753cd0a70c7e4aeff144c9ba96"
+            }
+          },
+          "media_type": "application/pdf",
+          "type": "base64"
+        },
+        "title": "Synthetic report",
+        "type": "document"
+      }
+    },
+    {
+      "id": "0ee7168a07a8ef83d7649fd559f1e88c79f974022583c2306e9808655c2fc3d3",
+      "f": {
+        "source": {
+          "media_type": "text/plain",
+          "type": "text"
+        },
+        "title": "Notes",
+        "type": "document"
+      },
+      "p": "5a1ae57d28ee63c18a4bc451a6f80c74e849b5190e04b310f211adc4d6d58420"
+    },
+    {
+      "id": "0be8ac48f22a713168d4ee1e4556b47d74c311040dd267e4301971bc0cfe61ff",
+      "f": {
+        "source": {
+          "file_id": "file_synth_01",
+          "type": "file"
+        },
+        "type": "document"
+      }
+    },
+    {
+      "id": "e77adeb51e6d40e1ade66b5378baf1dcbb01716affbe1ed06dc37a4046bdb8a6",
+      "f": {
+        "type": "container_upload"
+      },
+      "p": "4eba5c8af3bebb2bf4fb1c9f1573c39f03f4819915f1807eaa9b0016e33e082d"
+    },
+    {
+      "id": "464dfe62cd9f549dccf3e60fae07e27dc4b845c3ce6eb2827a2122a74fbf811c",
+      "f": {
+        "type": "text"
+      },
+      "p": "77cfe948bd5e97eb4fe4c4aa087c2528d18f825ef9eff84fe25299b3409ddcaf"
+    }
+  ],
+  "n": 10,
+  "list_sha": "9d3f6b3156deeb3d8285e16ba0a0d67c45d49d74ef4742e1c2322abbabee66bc",
+  "refs": [
+    "5f3ef5e20ba21c27ef20afb5a4c9a714884ef4828fe4322c656f1d198e5967bf",
+    "369fa777247545a82d3341e865d5e6f9388b571cb8f9463b58be498c979a1050",
+    "3b9b19c6da0b874b208f480a857bec39aefe9690009446e056713c69b7601cbc",
+    "1adf2b3bd5b571c28da59f523d12b1525ab648753cd0a70c7e4aeff144c9ba96",
+    "5a1ae57d28ee63c18a4bc451a6f80c74e849b5190e04b310f211adc4d6d58420",
+    "4eba5c8af3bebb2bf4fb1c9f1573c39f03f4819915f1807eaa9b0016e33e082d",
+    "77cfe948bd5e97eb4fe4c4aa087c2528d18f825ef9eff84fe25299b3409ddcaf"
+  ],
+  "pieces": [
+    {
+      "hash": "5f3ef5e20ba21c27ef20afb5a4c9a714884ef4828fe4322c656f1d198e5967bf",
+      "kind": "json",
+      "len": 46,
+      "json": {
+        "max_tokens": 512,
+        "model": "claude-test-model"
+      }
+    },
+    {
+      "hash": "369fa777247545a82d3341e865d5e6f9388b571cb8f9463b58be498c979a1050",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 3000
+    },
+    {
+      "hash": "3b9b19c6da0b874b208f480a857bec39aefe9690009446e056713c69b7601cbc",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1024
+    },
+    {
+      "hash": "1adf2b3bd5b571c28da59f523d12b1525ab648753cd0a70c7e4aeff144c9ba96",
+      "kind": "attachment",
+      "content_type": "application/pdf",
+      "len": 4096
+    },
+    {
+      "hash": "5a1ae57d28ee63c18a4bc451a6f80c74e849b5190e04b310f211adc4d6d58420",
+      "kind": "text",
+      "len": 30,
+      "text": "Plain synthetic document text."
+    },
+    {
+      "hash": "4eba5c8af3bebb2bf4fb1c9f1573c39f03f4819915f1807eaa9b0016e33e082d",
+      "kind": "json",
+      "len": 27,
+      "json": {
+        "file_id": "file_synth_02"
+      }
+    },
+    {
+      "hash": "77cfe948bd5e97eb4fe4c4aa087c2528d18f825ef9eff84fe25299b3409ddcaf",
+      "kind": "text",
+      "len": 36,
+      "text": "Describe the picture and the report."
+    }
+  ]
+}

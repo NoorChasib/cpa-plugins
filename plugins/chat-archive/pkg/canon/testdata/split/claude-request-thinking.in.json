@@ -1,0 +1,17 @@
+{
+  "model": "claude-test-model",
+  "max_tokens": 4096,
+  "thinking": {"type": "enabled", "budget_tokens": 2048},
+  "messages": [
+    {"role": "user", "content": "Plan a synthetic picnic."},
+    {"role": "assistant", "content": [
+      {"type": "thinking", "thinking": "The picnic needs bread and fruit.", "signature": "U3ludGhldGljU2lnbmF0dXJlQmxvYk9uZQ=="},
+      {"type": "thinking", "thinking": "", "signature": "U3ludGhldGljU2lnbmF0dXJlQmxvYlR3bw=="},
+      {"type": "redacted_thinking", "data": "UmVkYWN0ZWRTeW50aGV0aWNEYXRh"},
+      {"type": "compaction", "content": "Summary of a synthetic earlier conversation.", "encrypted_content": "RW5jcnlwdGVkU3ludGhldGlj", "signature": "Q29tcGFjdGlvblNpZw==", "tool_changes": []},
+      {"type": "advisor_tool_result", "tool_use_id": "toolu_synth_adv", "content": {"type": "advisor_redacted_result", "encrypted_content": "QWR2aXNvclN5bnRoZXRpYw=="}},
+      {"type": "text", "text": "Bring bread and fruit."}
+    ]},
+    {"role": "user", "content": "Thanks."}
+  ]
+}

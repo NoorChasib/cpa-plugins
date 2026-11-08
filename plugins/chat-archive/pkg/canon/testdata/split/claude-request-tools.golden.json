@@ -1,0 +1,293 @@
+{
+  "format": "claude.messages",
+  "raw_len": 5038,
+  "skeleton": "414bdf32fdcf911250dc8e13fdac7e2b2c173f3df06a9feb1a0610321c6219ad",
+  "tools": "fb6a90c6fc56404224c448a615df563a3cb83cd8d14ded7fc38faabee7f185f6",
+  "tools_v": [
+    {
+      "i": 1,
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": "fec1fb500f27df198d73e86260d4068f8df89d1cb30d2c5694ef3c7499cf57a6",
+      "m": {
+        "content_form": "string",
+        "role": "user"
+      }
+    },
+    {
+      "id": "4ff6db619fff84f06b3bee66542481c2441ab1d6b55d545674da8f92fe2fd67a",
+      "f": {
+        "type": "text"
+      },
+      "p": "401fa0add54805638c6ca7fb3bbe151a0883a135616c81ac0491eaeb6c5f2cac"
+    },
+    {
+      "id": "6e7c0f2b80256c5efdacc4b9f44da7325c22ddf95c67a9c11987d109ccbf9e49",
+      "m": {
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "f9e5fef0d1de5e81ecc1b524c34f55cf85f4014356b2f543f732172d0a8c2280",
+      "f": {
+        "type": "text"
+      },
+      "p": "0a65f58212c5868ec5488fddf20c6ef3a8656602e400dca312ec2790a26eb444"
+    },
+    {
+      "id": "3feaeb8931a3fd531c26c2e3fcc64556c2f6be5508ac4bfc941b79643ead49dc",
+      "f": {
+        "caller": {
+          "type": "direct"
+        },
+        "id": "toolu_synth_01",
+        "name": "Bash",
+        "type": "tool_use"
+      },
+      "p": "16171ded2aeb783eb944e336db4e339f3c95ee66a6aa2d2c0dcf6ad8c5fb1f35"
+    },
+    {
+      "id": "e5a0d7870b50da3a7349a436046bc5d583c954d3392c7731fe2a7058b34e539a",
+      "f": {
+        "id": "srvtoolu_synth_02",
+        "name": "web_search",
+        "type": "server_tool_use"
+      },
+      "p": "465ffe497fe63fa4c9a312afabbb396d4935fb28737561ccac9c6d943a113906"
+    },
+    {
+      "id": "9cdb8677b7c6cc865d526066c7bd4aac4924a6a17304a4373bde3f21542b77ca",
+      "f": {
+        "id": "mcptoolu_synth_03",
+        "name": "lookup",
+        "server_name": "synthetic-server",
+        "type": "mcp_tool_use"
+      },
+      "p": "b223eb7bf8fbbd8facd4a51b94ef01b0aaa4707ae9944c888a91f988c8e812d9"
+    },
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "c9f53b1e8d9d6bd37f5253c3bd10962b33b37f533d01a7c6fa14e65ca23f61d4",
+      "f": {
+        "tool_use_id": "toolu_synth_01",
+        "type": "tool_result"
+      },
+      "p": "8712fcc2cc5f21569e0223b308dbf8edcb10fcdad878baeb767712db36e4b27f",
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    },
+    {
+      "id": "9935111e60646b3df2aae4ab77e5531af84aed7ecfc68b0a02eeb4e7a87d395c",
+      "f": {
+        "is_error": true,
+        "tool_use_id": "toolu_synth_04",
+        "type": "tool_result"
+      },
+      "p": "dc247975cced47eb4181e59176dcc686734ae623f13368fc383572a5ddbe4eed"
+    },
+    {
+      "id": "29850a1c09db790d34e0732c0e3dc267d9f9a6ca3e8ade93b0d4e45b3ce56441",
+      "f": {
+        "tool_use_id": "mcptoolu_synth_03",
+        "type": "mcp_tool_result"
+      },
+      "p": "a67c9bb3444727fadb63e02e6e20a1443cf901986eced44ba914ff747d3d460b"
+    },
+    {
+      "id": "94b040a4fae3f29e6ef77a93a6f94aaac39505236a64992799cea0dcc25f187f",
+      "f": {
+        "type": "web_search_tool_result"
+      },
+      "p": "669d332291aacae2870d7f7477d12c645c984b484f31763dd06f97b48bcd7400"
+    },
+    {
+      "id": "c680c0db6c4e4db9c6f00f367cc82a24f108664d0a1a67b564c8020f862604f1",
+      "f": {
+        "tool_use_id": "toolu_synth_05",
+        "type": "tool_result"
+      }
+    }
+  ],
+  "n": 13,
+  "list_sha": "dc137ed1ce1f3358188640026e4ea642d58bcbb935591676b43a25d8e629ae2a",
+  "refs": [
+    "414bdf32fdcf911250dc8e13fdac7e2b2c173f3df06a9feb1a0610321c6219ad",
+    "fb6a90c6fc56404224c448a615df563a3cb83cd8d14ded7fc38faabee7f185f6",
+    "401fa0add54805638c6ca7fb3bbe151a0883a135616c81ac0491eaeb6c5f2cac",
+    "0a65f58212c5868ec5488fddf20c6ef3a8656602e400dca312ec2790a26eb444",
+    "16171ded2aeb783eb944e336db4e339f3c95ee66a6aa2d2c0dcf6ad8c5fb1f35",
+    "465ffe497fe63fa4c9a312afabbb396d4935fb28737561ccac9c6d943a113906",
+    "b223eb7bf8fbbd8facd4a51b94ef01b0aaa4707ae9944c888a91f988c8e812d9",
+    "8712fcc2cc5f21569e0223b308dbf8edcb10fcdad878baeb767712db36e4b27f",
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "dc247975cced47eb4181e59176dcc686734ae623f13368fc383572a5ddbe4eed",
+    "a67c9bb3444727fadb63e02e6e20a1443cf901986eced44ba914ff747d3d460b",
+    "669d332291aacae2870d7f7477d12c645c984b484f31763dd06f97b48bcd7400"
+  ],
+  "pieces": [
+    {
+      "hash": "414bdf32fdcf911250dc8e13fdac7e2b2c173f3df06a9feb1a0610321c6219ad",
+      "kind": "json",
+      "len": 77,
+      "json": {
+        "max_tokens": 2048,
+        "model": "claude-test-model",
+        "tool_choice": {
+          "type": "auto"
+        }
+      }
+    },
+    {
+      "hash": "fb6a90c6fc56404224c448a615df563a3cb83cd8d14ded7fc38faabee7f185f6",
+      "kind": "json",
+      "len": 256,
+      "json": [
+        {
+          "description": "Run a synthetic shell command.",
+          "input_schema": {
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "Bash"
+        },
+        {
+          "description": "Search the synthetic archive.",
+          "input_schema": {
+            "type": "object"
+          },
+          "name": "mcp__chat-archive__search"
+        }
+      ]
+    },
+    {
+      "hash": "401fa0add54805638c6ca7fb3bbe151a0883a135616c81ac0491eaeb6c5f2cac",
+      "kind": "text",
+      "len": 15,
+      "text": "List the files."
+    },
+    {
+      "hash": "0a65f58212c5868ec5488fddf20c6ef3a8656602e400dca312ec2790a26eb444",
+      "kind": "text",
+      "len": 14,
+      "text": "Listing files."
+    },
+    {
+      "hash": "16171ded2aeb783eb944e336db4e339f3c95ee66a6aa2d2c0dcf6ad8c5fb1f35",
+      "kind": "json",
+      "len": 78,
+      "json": {
+        "command": "ls -la",
+        "description": "List files",
+        "timeout": 12345678901234567890
+      }
+    },
+    {
+      "hash": "465ffe497fe63fa4c9a312afabbb396d4935fb28737561ccac9c6d943a113906",
+      "kind": "json",
+      "len": 29,
+      "json": {
+        "query": "synthetic weather"
+      }
+    },
+    {
+      "hash": "b223eb7bf8fbbd8facd4a51b94ef01b0aaa4707ae9944c888a91f988c8e812d9",
+      "kind": "json",
+      "len": 15,
+      "json": {
+        "term": "kite"
+      }
+    },
+    {
+      "hash": "8712fcc2cc5f21569e0223b308dbf8edcb10fcdad878baeb767712db36e4b27f",
+      "kind": "text",
+      "len": 22,
+      "text": "file-a.txt\nfile-b.txt\n"
+    },
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "dc247975cced47eb4181e59176dcc686734ae623f13368fc383572a5ddbe4eed",
+      "kind": "json",
+      "len": 602,
+      "json": [
+        {
+          "text": "Screenshot attached.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "data": {
+              "$att": {
+                "enc": "base64",
+                "len": 2048,
+                "mime": "image/png",
+                "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+              }
+            },
+            "media_type": "image/png",
+            "type": "base64"
+          },
+          "type": "image"
+        },
+        {
+          "source": {
+            "data": "iVBORw0KGgoLMFV6n8TpDjNYfaLH7BE2W4Clyu8UOV6DqM3yFzxhhqvQ9Ro/ZImu0/gdQmeMsdb7IEVqj7TZ/iNIbZK33AEmS3CVut8EKU5zmL3iByxRdpvA5QovVHmew+gNMld8ocbrEDVaf6TJ7hM4XYKnzPEWO2CFqs/0GT5jiK3S9xxBZouw1fofRGmOs9j9IkdskbbbACVKb5S53gMoTXKXvOEGK1B1mr/kCS5TeJ3C5wwxVnugxeoPNFl+o8jtEjdcgaY=",
+            "media_type": "image/png",
+            "type": "base64"
+          },
+          "type": "image"
+        }
+      ]
+    },
+    {
+      "hash": "a67c9bb3444727fadb63e02e6e20a1443cf901986eced44ba914ff747d3d460b",
+      "kind": "json",
+      "len": 66,
+      "json": [
+        {
+          "text": "kite: a light frame covered with cloth.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "hash": "669d332291aacae2870d7f7477d12c645c984b484f31763dd06f97b48bcd7400",
+      "kind": "json",
+      "len": 178,
+      "json": {
+        "content": [
+          {
+            "encrypted_content": "c3ludGhldGlj",
+            "title": "Synthetic forecast",
+            "type": "web_search_result",
+            "url": "https://example.test/forecast"
+          }
+        ],
+        "tool_use_id": "srvtoolu_synth_02"
+      }
+    }
+  ]
+}

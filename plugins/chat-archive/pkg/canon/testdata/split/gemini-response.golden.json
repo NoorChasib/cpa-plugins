@@ -1,0 +1,109 @@
+{
+  "format": "gemini.generate",
+  "raw_len": 3015,
+  "skeleton": "49d5298b76ed3eb88346fea2bef04fac764095d718250a778b11eecd1509c640",
+  "items": [
+    {
+      "id": "617d047ca21b32e09bd283ac492a1617a31926b1d49178381603c92dd8de7578",
+      "m": {
+        "role": "model"
+      }
+    },
+    {
+      "id": "85aeb00fabfaeb840fff48fe3d1b5420ad574eaed2892e8a50df23f93d522044",
+      "f": {
+        "thought": true
+      },
+      "p": "dabe62dfa0e4dd4bb0ef203e56ea768d0b4a53695ed9c2c39e3fd02d5f94b1c0"
+    },
+    {
+      "id": "6430fa0f1d5d2f5a745333c650edb0093ad9a4898eb2996f6826e1631927b5b4",
+      "f": {
+        "thoughtSignature": {
+          "$opaque": {
+            "len": 24,
+            "sha256": "00f4a2db3963a8699b8f8fae4e650f08dbee0ca896185f2dfdcaae87ea1ff6b3"
+          }
+        }
+      },
+      "p": "fb727c9c6a4dc8bd85186bd6e0b2f85304a9698e47b1fa3ab5f4489a7942c1a0"
+    },
+    {
+      "id": "971a2a6795202add887a93f419ffd31e23ebef2d4d2bb858bbc30d6751b8a140",
+      "f": {
+        "inlineData": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1800,
+              "mime": "image/png",
+              "sha256": "e57a24008cd1fc095991233b2eb829a9306a1741dd2b57e08199d207e49e7e98"
+            }
+          },
+          "mimeType": "image/png"
+        }
+      }
+    }
+  ],
+  "n": 4,
+  "list_sha": "624a9ed7d03354dc0aba328d5138bea723eba85cd3264c31fc54cd294ac42c64",
+  "refs": [
+    "49d5298b76ed3eb88346fea2bef04fac764095d718250a778b11eecd1509c640",
+    "dabe62dfa0e4dd4bb0ef203e56ea768d0b4a53695ed9c2c39e3fd02d5f94b1c0",
+    "fb727c9c6a4dc8bd85186bd6e0b2f85304a9698e47b1fa3ab5f4489a7942c1a0",
+    "e57a24008cd1fc095991233b2eb829a9306a1741dd2b57e08199d207e49e7e98"
+  ],
+  "pieces": [
+    {
+      "hash": "49d5298b76ed3eb88346fea2bef04fac764095d718250a778b11eecd1509c640",
+      "kind": "json",
+      "len": 319,
+      "json": {
+        "candidates": [
+          {
+            "finishReason": "STOP",
+            "index": 0
+          },
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "Plant peas."
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP",
+            "index": 1
+          }
+        ],
+        "modelVersion": "gemini-test-model",
+        "responseId": "resp-synth-gem",
+        "usageMetadata": {
+          "candidatesTokenCount": 8,
+          "promptTokenCount": 30,
+          "thoughtsTokenCount": 12,
+          "totalTokenCount": 50
+        }
+      }
+    },
+    {
+      "hash": "dabe62dfa0e4dd4bb0ef203e56ea768d0b4a53695ed9c2c39e3fd02d5f94b1c0",
+      "kind": "text",
+      "len": 21,
+      "text": "Think about sunlight."
+    },
+    {
+      "hash": "fb727c9c6a4dc8bd85186bd6e0b2f85304a9698e47b1fa3ab5f4489a7942c1a0",
+      "kind": "text",
+      "len": 12,
+      "text": "Plant beans."
+    },
+    {
+      "hash": "e57a24008cd1fc095991233b2eb829a9306a1741dd2b57e08199d207e49e7e98",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1800
+    }
+  ]
+}

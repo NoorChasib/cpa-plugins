@@ -1,0 +1,17 @@
+{
+  "id": "chatcmpl-synth-01",
+  "object": "chat.completion",
+  "created": 1767225600,
+  "model": "gpt-test-model",
+  "choices": [
+    {"index": 0, "finish_reason": "tool_calls", "message": {
+      "role": "assistant",
+      "content": "Drawing it now.",
+      "reasoning_content": "The user wants a picture.",
+      "tool_calls": [{"id": "call_synth_7", "type": "function", "function": {"name": "draw", "arguments": "{\"shape\":\"circle\"}"}}],
+      "images": [{"type": "image_url", "image_url": {"url": "{{dataurl:image/png:png:2048}}"}, "index": 0}]
+    }},
+    {"index": 1, "finish_reason": "stop", "message": {"role": "assistant", "content": "Alternate answer."}}
+  ],
+  "usage": {"prompt_tokens": 20, "completion_tokens": 9, "total_tokens": 29}
+}

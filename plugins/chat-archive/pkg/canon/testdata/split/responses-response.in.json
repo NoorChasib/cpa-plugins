@@ -1,0 +1,14 @@
+{
+  "id": "resp_synth_10",
+  "object": "response",
+  "status": "completed",
+  "model": "gpt-test-codex",
+  "instructions": "You are a synthetic coding agent.",
+  "tools": [{"type": "function", "name": "shell", "description": "Run a synthetic command.", "parameters": {"type": "object"}, "strict": false}],
+  "output": [
+    {"type": "reasoning", "id": "rs_synth_11", "summary": [{"type": "summary_text", "text": "Run lint next."}], "encrypted_content": "UmVzcG9uc2VFbmNyeXB0ZWQ="},
+    {"type": "message", "id": "msg_synth_12", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "Running lint.", "annotations": []}]},
+    {"type": "function_call", "id": "fc_synth_13", "call_id": "call_synth_13", "name": "shell", "status": "completed", "arguments": "{\"cmd\":[\"golangci-lint\",\"run\"]}"}
+  ],
+  "usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "input_tokens_details": {"cached_tokens": 64}}
+}

@@ -1,0 +1,120 @@
+{
+  "format": "openai.chat",
+  "raw_len": 3478,
+  "skeleton": "a888d7bb05553792b354db3861035f0645b40108a767047e76fb8330aabd06fc",
+  "items": [
+    {
+      "id": "9b19c8b193c678b4c6f38972212c4ecaf2ca705846f8461f3d7aa523b9c69c67",
+      "m": {
+        "content_form": "string",
+        "images": [
+          {
+            "image_url": {
+              "url": {
+                "$att": {
+                  "enc": "dataurl",
+                  "len": 2048,
+                  "mime": "image/png",
+                  "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+                }
+              }
+            },
+            "index": 0,
+            "type": "image_url"
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "94269d517dfae4509837bcb0ff139151d99fa284e3303838ede3d4813bf3a436",
+      "f": {
+        "type": "reasoning_content"
+      },
+      "p": "d2777e69d6c5687f898e9572f4637ba3f9e2366e4846339f5bb2bb8d7b0cdc3b"
+    },
+    {
+      "id": "3d2a6b07e6e3438194e600eaf2c72ff8d0aee08ee394a58a8323b0335c7869fe",
+      "f": {
+        "type": "text"
+      },
+      "p": "384f6ba5bbed7d0537fdc1f7e5353e88690a4a373c86dc07d121db68105853c3"
+    },
+    {
+      "id": "d5a0e3d90a2e9fb37222896b559814bf9ba2b016f112b5952b3c3617bc98f8ba",
+      "f": {
+        "function": {
+          "name": "draw"
+        },
+        "id": "call_synth_7",
+        "type": "function"
+      },
+      "p": "deb09876d9c66033d47855da36119edf887e7417073287149ddcefe50e468145"
+    }
+  ],
+  "n": 4,
+  "list_sha": "3a1def2a890ffdf9a2c06e0bc3a7aa56c05d3f21d2f9a8d6dc407be012719bc7",
+  "refs": [
+    "a888d7bb05553792b354db3861035f0645b40108a767047e76fb8330aabd06fc",
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "d2777e69d6c5687f898e9572f4637ba3f9e2366e4846339f5bb2bb8d7b0cdc3b",
+    "384f6ba5bbed7d0537fdc1f7e5353e88690a4a373c86dc07d121db68105853c3",
+    "deb09876d9c66033d47855da36119edf887e7417073287149ddcefe50e468145"
+  ],
+  "pieces": [
+    {
+      "hash": "a888d7bb05553792b354db3861035f0645b40108a767047e76fb8330aabd06fc",
+      "kind": "json",
+      "len": 317,
+      "json": {
+        "choices": [
+          {
+            "finish_reason": "tool_calls",
+            "index": 0
+          },
+          {
+            "finish_reason": "stop",
+            "index": 1,
+            "message": {
+              "content": "Alternate answer.",
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 1767225600,
+        "id": "chatcmpl-synth-01",
+        "model": "gpt-test-model",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 9,
+          "prompt_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    },
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "d2777e69d6c5687f898e9572f4637ba3f9e2366e4846339f5bb2bb8d7b0cdc3b",
+      "kind": "text",
+      "len": 25,
+      "text": "The user wants a picture."
+    },
+    {
+      "hash": "384f6ba5bbed7d0537fdc1f7e5353e88690a4a373c86dc07d121db68105853c3",
+      "kind": "text",
+      "len": 15,
+      "text": "Drawing it now."
+    },
+    {
+      "hash": "deb09876d9c66033d47855da36119edf887e7417073287149ddcefe50e468145",
+      "kind": "json",
+      "len": 24,
+      "json": "{\"shape\":\"circle\"}"
+    }
+  ]
+}

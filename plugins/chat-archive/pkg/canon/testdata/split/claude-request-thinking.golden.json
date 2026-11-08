@@ -1,0 +1,193 @@
+{
+  "format": "claude.messages",
+  "raw_len": 1013,
+  "skeleton": "e55f757d259d3a4263eba37dead50d8163e0bfa0fd9109ffa421a7bfcc072d45",
+  "items": [
+    {
+      "id": "fec1fb500f27df198d73e86260d4068f8df89d1cb30d2c5694ef3c7499cf57a6",
+      "m": {
+        "content_form": "string",
+        "role": "user"
+      }
+    },
+    {
+      "id": "f8bf1cb460c5afb5d1036105a911c15f635e85f172942c78aec85aa0502a7397",
+      "f": {
+        "type": "text"
+      },
+      "p": "49663a1bc30a1bd4e5acf2fe2420b1c7825197424fd04d11a081bd987653481d"
+    },
+    {
+      "id": "6e7c0f2b80256c5efdacc4b9f44da7325c22ddf95c67a9c11987d109ccbf9e49",
+      "m": {
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "ff0f674660d06927c9da416e0ffec85806afe291ea5beacc6d23b2b978bd88d3",
+      "f": {
+        "signature": {
+          "$opaque": {
+            "len": 36,
+            "sha256": "0c1d4a02d323c99b41e99b7fdbdbafe51c7586cf7745388385e4607f438e3104"
+          }
+        },
+        "type": "thinking"
+      },
+      "p": "b3e5841298726d2882337b3296d8facd4e267e64e1a5fa68df3a275de98d15b0"
+    },
+    {
+      "id": "b36e3e7152beeab87255c5b76bffdaffe7892c8b11c5224fe787145307d9b713",
+      "f": {
+        "signature": {
+          "$opaque": {
+            "len": 36,
+            "sha256": "4b4db38f05115f4d25576b174c1007b0d5b48ccbf763a497ff4eafaa112c9bf1"
+          }
+        },
+        "type": "thinking"
+      },
+      "p": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "a59e49d16a3f97ddd3dbef674f7813c004a74d5d3e4afa1f5ce82d2bf5ff2847",
+      "f": {
+        "data": {
+          "$opaque": {
+            "len": 28,
+            "sha256": "85e74a29a0e010e5084f93d4c547eb059282d9bb348ee8a7946736f201504288"
+          }
+        },
+        "type": "redacted_thinking"
+      }
+    },
+    {
+      "id": "e1edf949a7cc6be821990c1734141f9c9af978a5d2be3149bad743074b7561a3",
+      "f": {
+        "encrypted_content": {
+          "$opaque": {
+            "len": 24,
+            "sha256": "63be99835d69e327b7085ba498d0e0d2c269f790292f366df72662b7f2931f0e"
+          }
+        },
+        "signature": {
+          "$opaque": {
+            "len": 20,
+            "sha256": "5e82317993e9d728fd49ea8d131265c85c0150fd2c7dde7440132466582c7275"
+          }
+        },
+        "tool_changes": [],
+        "type": "compaction"
+      },
+      "p": "497a6199712b551cbce58b260605f06a14b8efc8eca0aa08621be3bf5c9ab54b"
+    },
+    {
+      "id": "f65c4cbc3e3325f8e989e24f1aef8d02a401990c530ff9e8c9168bbd38e75069",
+      "f": {
+        "type": "advisor_tool_result"
+      },
+      "p": "ad1eb798163fb50995e1bb32e50017176ce884f4c07a9a1582f11fd4e523e770"
+    },
+    {
+      "id": "8d2cf3d692b533f14d93836477fb4a36b29f1c01be0bdc9471bbe4bb0112f85a",
+      "f": {
+        "type": "text"
+      },
+      "p": "ae3c3083bc05dd298b22eb9f1c9154d5556b9082273d8ab3f3427fc24c8bfd31"
+    },
+    {
+      "id": "fec1fb500f27df198d73e86260d4068f8df89d1cb30d2c5694ef3c7499cf57a6",
+      "m": {
+        "content_form": "string",
+        "role": "user"
+      }
+    },
+    {
+      "id": "d432e254e0d474a7d99ae84335ff4d6cf53dd82946c5b0555cf946480d825f50",
+      "f": {
+        "type": "text"
+      },
+      "p": "f51bead488e14b656af3a13e33eb1d6fa9580832cbb9d7a20061f84c4b1c160f"
+    }
+  ],
+  "n": 11,
+  "list_sha": "7315f75aa85ec114b8e7092f6552e26c8f509c0479eb3fca71f81dba95559276",
+  "refs": [
+    "e55f757d259d3a4263eba37dead50d8163e0bfa0fd9109ffa421a7bfcc072d45",
+    "49663a1bc30a1bd4e5acf2fe2420b1c7825197424fd04d11a081bd987653481d",
+    "b3e5841298726d2882337b3296d8facd4e267e64e1a5fa68df3a275de98d15b0",
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "497a6199712b551cbce58b260605f06a14b8efc8eca0aa08621be3bf5c9ab54b",
+    "ad1eb798163fb50995e1bb32e50017176ce884f4c07a9a1582f11fd4e523e770",
+    "ae3c3083bc05dd298b22eb9f1c9154d5556b9082273d8ab3f3427fc24c8bfd31",
+    "f51bead488e14b656af3a13e33eb1d6fa9580832cbb9d7a20061f84c4b1c160f"
+  ],
+  "pieces": [
+    {
+      "hash": "e55f757d259d3a4263eba37dead50d8163e0bfa0fd9109ffa421a7bfcc072d45",
+      "kind": "json",
+      "len": 98,
+      "json": {
+        "max_tokens": 4096,
+        "model": "claude-test-model",
+        "thinking": {
+          "budget_tokens": 2048,
+          "type": "enabled"
+        }
+      }
+    },
+    {
+      "hash": "49663a1bc30a1bd4e5acf2fe2420b1c7825197424fd04d11a081bd987653481d",
+      "kind": "text",
+      "len": 24,
+      "text": "Plan a synthetic picnic."
+    },
+    {
+      "hash": "b3e5841298726d2882337b3296d8facd4e267e64e1a5fa68df3a275de98d15b0",
+      "kind": "text",
+      "len": 33,
+      "text": "The picnic needs bread and fruit."
+    },
+    {
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "kind": "text",
+      "len": 0,
+      "text": ""
+    },
+    {
+      "hash": "497a6199712b551cbce58b260605f06a14b8efc8eca0aa08621be3bf5c9ab54b",
+      "kind": "text",
+      "len": 44,
+      "text": "Summary of a synthetic earlier conversation."
+    },
+    {
+      "hash": "ad1eb798163fb50995e1bb32e50017176ce884f4c07a9a1582f11fd4e523e770",
+      "kind": "json",
+      "len": 197,
+      "json": {
+        "content": {
+          "encrypted_content": {
+            "$opaque": {
+              "len": 24,
+              "sha256": "36f8d3f895ce6cf629e57404e42ea20b8b57d1a894d6c9daad9b8ea40879ae38"
+            }
+          },
+          "type": "advisor_redacted_result"
+        },
+        "tool_use_id": "toolu_synth_adv"
+      }
+    },
+    {
+      "hash": "ae3c3083bc05dd298b22eb9f1c9154d5556b9082273d8ab3f3427fc24c8bfd31",
+      "kind": "text",
+      "len": 22,
+      "text": "Bring bread and fruit."
+    },
+    {
+      "hash": "f51bead488e14b656af3a13e33eb1d6fa9580832cbb9d7a20061f84c4b1c160f",
+      "kind": "text",
+      "len": 7,
+      "text": "Thanks."
+    }
+  ]
+}

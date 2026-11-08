@@ -1,0 +1,58 @@
+{
+  "format": "interactions",
+  "raw_len": 323,
+  "items": [
+    {
+      "id": "005dee323ab33bb6a4a3622d999913de11a69b622fc6e636869075bebcef838b",
+      "f": {
+        "type": "interaction"
+      },
+      "p": "03a4dd21c2883540531ca674b82c6cfba7d4f1cc1f929b3b90ede62f8d9ac5d5"
+    }
+  ],
+  "n": 1,
+  "list_sha": "7c9d78b1d1d10c0d7dd5df76d54934bbcbd837ed043bb6da1b4da55ea609cd19",
+  "refs": [
+    "03a4dd21c2883540531ca674b82c6cfba7d4f1cc1f929b3b90ede62f8d9ac5d5"
+  ],
+  "pieces": [
+    {
+      "hash": "03a4dd21c2883540531ca674b82c6cfba7d4f1cc1f929b3b90ede62f8d9ac5d5",
+      "kind": "json",
+      "len": 341,
+      "json": {
+        "id": "int_synth_1",
+        "status": "completed",
+        "steps": [
+          {
+            "signature": {
+              "$opaque": {
+                "len": 32,
+                "sha256": "103564f7d29ef20154062f967752fbba84d409fa5ffec8f4d522ce1e1ab43d86"
+              }
+            },
+            "summary": [
+              {
+                "text": "Trains run hourly.",
+                "type": "text"
+              }
+            ],
+            "type": "thought"
+          },
+          {
+            "content": [
+              {
+                "text": "Leave at nine.",
+                "type": "text"
+              }
+            ],
+            "type": "model_output"
+          }
+        ],
+        "usage": {
+          "total_tokens": 42
+        }
+      }
+    }
+  ]
+}

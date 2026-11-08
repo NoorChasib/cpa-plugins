@@ -1,0 +1,32 @@
+{
+  "model": "gpt-test-codex",
+  "instructions": "You are a synthetic coding agent.",
+  "stream": true,
+  "store": false,
+  "reasoning": {"effort": "medium", "summary": "auto"},
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "synthetic-cache-key",
+  "tools": [{"type": "function", "name": "shell", "description": "Run a synthetic command.", "parameters": {"type": "object"}, "strict": false}],
+  "input": [
+    {"type": "message", "role": "developer", "content": "Follow the synthetic rules."},
+    {"type": "message", "role": "user", "content": [
+      {"type": "input_text", "text": "Fix the test.", "prompt_cache_breakpoint": {"mode": "auto", "ttl": "5m"}},
+      {"type": "input_image", "image_url": "{{dataurl:image/png:png:2048}}", "detail": "auto"},
+      {"type": "input_file", "filename": "log.txt", "file_data": "{{dataurl:text/plain:text:1500}}"},
+      {"type": "input_file", "file_id": "file-synth-09"}
+    ]},
+    {"role": "user", "content": "An easy input message without a type."},
+    {"type": "reasoning", "id": "rs_synth_1", "summary": [{"type": "summary_text", "text": "Look at the failing test."}], "content": [{"type": "reasoning_text", "text": "The assertion compares two lists."}], "encrypted_content": "RW5jcnlwdGVkUmVhc29uaW5nQmxvYg=="},
+    {"type": "message", "id": "msg_synth_2", "role": "assistant", "status": "completed", "phase": "commentary", "content": [{"type": "output_text", "text": "Running the tests.", "annotations": []}]},
+    {"type": "function_call", "id": "fc_synth_3", "call_id": "call_synth_3", "name": "shell", "namespace": "tools", "status": "completed", "arguments": "{\"cmd\": [\"go\", \"test\"], \"cwd\": \"/work\"}"},
+    {"type": "function_call_output", "call_id": "call_synth_3", "output": "ok  synthetic/pkg 0.01s"},
+    {"type": "custom_tool_call", "id": "ctc_synth_4", "call_id": "call_synth_4", "name": "apply_patch", "input": "*** Begin Patch\n*** Update File: a.go\n*** End Patch"},
+    {"type": "custom_tool_call_output", "call_id": "call_synth_4", "output": [{"type": "input_text", "text": "Patched."}, {"type": "input_image", "image_url": "{{dataurl:image/png:png:1100}}"}]},
+    {"type": "computer_call_output", "call_id": "call_synth_5", "output": {"type": "computer_screenshot", "image_url": "{{dataurl:image/png:png:1300}}"}},
+    {"type": "compaction", "id": "cmp_synth_6", "encrypted_content": "Q29tcGFjdGlvbkJsb2I="},
+    {"type": "compaction", "id": "cmp_synth_7", "encrypted_content": "cpa-ag-compact-v1:U3ludGhldGljQ2Fwc3VsZQ=="},
+    {"type": "image_generation_call", "id": "ig_synth_8", "status": "completed", "result": "{{b64:png:2200}}"},
+    {"type": "web_search_call", "id": "ws_synth_9", "status": "completed", "action": {"type": "search", "query": "synthetic"}},
+    {"type": "additional_tools", "role": "developer", "tools": [{"type": "function", "name": "extra", "parameters": {"type": "object"}}]}
+  ]
+}

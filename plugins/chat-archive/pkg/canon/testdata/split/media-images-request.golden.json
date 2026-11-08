@@ -1,0 +1,59 @@
+{
+  "format": "media.images",
+  "raw_len": 4474,
+  "skeleton": "aeb25b439205cd27ec4e91bf79b75d5c598e2accf01a6ce2c0c86860e26f0752",
+  "n": 0,
+  "list_sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "refs": [
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+    "aeb25b439205cd27ec4e91bf79b75d5c598e2accf01a6ce2c0c86860e26f0752"
+  ],
+  "pieces": [
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1100
+    },
+    {
+      "hash": "aeb25b439205cd27ec4e91bf79b75d5c598e2accf01a6ce2c0c86860e26f0752",
+      "kind": "json",
+      "len": 460,
+      "json": {
+        "image": {
+          "type": "image_url",
+          "url": {
+            "$att": {
+              "enc": "dataurl",
+              "len": 2048,
+              "mime": "image/png",
+              "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+            }
+          }
+        },
+        "model": "grok-imagine-test",
+        "n": 2,
+        "prompt": "A synthetic lighthouse at dusk.",
+        "reference_images": [
+          {
+            "$att": {
+              "enc": "dataurl",
+              "len": 1100,
+              "mime": "image/png",
+              "sha256": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45"
+            }
+          },
+          "https://example.test/ref.png"
+        ],
+        "response_format": "b64_json"
+      }
+    }
+  ]
+}

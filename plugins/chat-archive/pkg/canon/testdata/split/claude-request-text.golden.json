@@ -1,0 +1,200 @@
+{
+  "format": "claude.messages",
+  "raw_len": 1140,
+  "skeleton": "09c33a7905b680cd07612cb2c43af408f5cf667a6f02c30b1964a3515945937f",
+  "system": [
+    {
+      "id": "46d3d8f9ae0e6c16f523406d55db30417a8d67cb0428ffb11f3248e66ef88c33",
+      "f": {
+        "type": "text"
+      },
+      "p": "6bead32b61aeb2911fd8af950db2c3a0ab86e52f9192166b15b124140ab53a04",
+      "v": {
+        "cache_control": {
+          "ttl": "1h",
+          "type": "ephemeral"
+        }
+      }
+    },
+    {
+      "id": "d6e54dd30fb8845c2182a20adac69803ebd260778508533ee79f722fb565d6b2",
+      "f": {
+        "type": "text"
+      },
+      "p": "975255c3c35221106555ab6f56ac40c7798d161d96f58b8881f23a35a5e6e2d5"
+    }
+  ],
+  "items": [
+    {
+      "id": "fec1fb500f27df198d73e86260d4068f8df89d1cb30d2c5694ef3c7499cf57a6",
+      "m": {
+        "content_form": "string",
+        "role": "user"
+      }
+    },
+    {
+      "id": "ac975255f43bbaae0671ace3fffbc9759bbeb9b9d28d4d26caacc6892673e50e",
+      "f": {
+        "type": "text"
+      },
+      "p": "d1962ae51e0982882de118d742e5b565d1b82b86dc15cb24d6b3a6b3cf3a0260"
+    },
+    {
+      "id": "6e7c0f2b80256c5efdacc4b9f44da7325c22ddf95c67a9c11987d109ccbf9e49",
+      "m": {
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "9aa82b4731a029fb2e34b16c80401807392d083e274fc2f61497715c3b8fa317",
+      "f": {
+        "type": "text"
+      },
+      "p": "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0"
+    },
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "24b298b39ea3584576f3e06e84bba30d476c4206871fbaa9643779239b4821c4",
+      "f": {
+        "type": "text"
+      },
+      "p": "d138f348428f188b6838c719ff942ca064afac3d2d1dea6aa141d482fd6a2347"
+    },
+    {
+      "id": "ae668c42d21a4260f93fb542b84a35979f2a7d5cbab9acd1ba7171ca39b9da53",
+      "f": {
+        "type": "text"
+      },
+      "p": "dd0705f5a908ff61c48adcd44ff8f9759926997c49a3a351635629149052e0b3",
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    },
+    {
+      "id": "0162a0419092a7c7c1a208bd12f57a878db0b80c5789ad9d87ebf115208c54ca",
+      "f": {
+        "citations": [
+          {
+            "cited_text": "synthetic note",
+            "document_index": 0,
+            "end_char_index": 14,
+            "start_char_index": 0,
+            "type": "char_location"
+          }
+        ],
+        "type": "text"
+      },
+      "p": "ad057ccad88cc33c97a7e82e197587aea685c090c2e4cc9eb045a0af2c7bee23"
+    },
+    {
+      "id": "3682458d1a0d217ef03ebab037eca782c6e83025de449b0c776e582de383bf6d",
+      "m": {
+        "content_form": "string",
+        "output_config": {
+          "effort": "high"
+        },
+        "role": "system"
+      }
+    },
+    {
+      "id": "79f526fa382b79e04251acd356f2fe58f3b750eb05e4beee5f5123b1017d0b78",
+      "f": {
+        "type": "text"
+      },
+      "p": "82fd05b0c325b65539253989f04ae8a8bc4e5a05b212ea3c6778bc6366222a74"
+    }
+  ],
+  "n": 10,
+  "list_sha": "e3f2c26e8f6861e9829facb1c89be69e136d8ccb6388ee667ca6889bbd11f902",
+  "refs": [
+    "09c33a7905b680cd07612cb2c43af408f5cf667a6f02c30b1964a3515945937f",
+    "6bead32b61aeb2911fd8af950db2c3a0ab86e52f9192166b15b124140ab53a04",
+    "975255c3c35221106555ab6f56ac40c7798d161d96f58b8881f23a35a5e6e2d5",
+    "d1962ae51e0982882de118d742e5b565d1b82b86dc15cb24d6b3a6b3cf3a0260",
+    "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0",
+    "d138f348428f188b6838c719ff942ca064afac3d2d1dea6aa141d482fd6a2347",
+    "dd0705f5a908ff61c48adcd44ff8f9759926997c49a3a351635629149052e0b3",
+    "ad057ccad88cc33c97a7e82e197587aea685c090c2e4cc9eb045a0af2c7bee23",
+    "82fd05b0c325b65539253989f04ae8a8bc4e5a05b212ea3c6778bc6366222a74"
+  ],
+  "pieces": [
+    {
+      "hash": "09c33a7905b680cd07612cb2c43af408f5cf667a6f02c30b1964a3515945937f",
+      "kind": "json",
+      "len": 232,
+      "json": {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "max_tokens": 1024,
+        "metadata": {
+          "user_id": "user-synthetic-001"
+        },
+        "model": "claude-test-model",
+        "output_config": {
+          "effort": "medium"
+        },
+        "stream": true,
+        "thinking": {
+          "display": "summarized",
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "hash": "6bead32b61aeb2911fd8af950db2c3a0ab86e52f9192166b15b124140ab53a04",
+      "kind": "text",
+      "len": 35,
+      "text": "You are a synthetic test assistant."
+    },
+    {
+      "hash": "975255c3c35221106555ab6f56ac40c7798d161d96f58b8881f23a35a5e6e2d5",
+      "kind": "text",
+      "len": 26,
+      "text": "Answer in short sentences."
+    },
+    {
+      "hash": "d1962ae51e0982882de118d742e5b565d1b82b86dc15cb24d6b3a6b3cf3a0260",
+      "kind": "text",
+      "len": 15,
+      "text": "Count to three."
+    },
+    {
+      "hash": "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0",
+      "kind": "text",
+      "len": 16,
+      "text": "One, two, three."
+    },
+    {
+      "hash": "d138f348428f188b6838c719ff942ca064afac3d2d1dea6aa141d482fd6a2347",
+      "kind": "text",
+      "len": 58,
+      "text": "<system-reminder>synthetic reminder text</system-reminder>"
+    },
+    {
+      "hash": "dd0705f5a908ff61c48adcd44ff8f9759926997c49a3a351635629149052e0b3",
+      "kind": "text",
+      "len": 18,
+      "text": "Now count to five."
+    },
+    {
+      "hash": "ad057ccad88cc33c97a7e82e197587aea685c090c2e4cc9eb045a0af2c7bee23",
+      "kind": "text",
+      "len": 19,
+      "text": "See the cited note."
+    },
+    {
+      "hash": "82fd05b0c325b65539253989f04ae8a8bc4e5a05b212ea3c6778bc6366222a74",
+      "kind": "text",
+      "len": 14,
+      "text": "Switch effort."
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+archive_mcp  none     "[{\"text\":\"[chat-archive-mcp/v1]\\nsession 12: synthetic hit\","
+params       none     "{\"model\":\"claude-test-model\"}"
+system       none     "Synthetic system prompt."
+tool_schema  none     "[{\"name\":\"Bash\"},{\"name\":\"mcp__chat-archive__search\"}]"

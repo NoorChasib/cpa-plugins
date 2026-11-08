@@ -1,0 +1,74 @@
+{
+  "format": "claude.messages",
+  "raw_len": 2389,
+  "skeleton": "0ade8da2e2dfa3e950f1dd819af360376ee0ecf9618cabb943c22d43370354f4",
+  "items": [
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "12e71a4cba1919a41c51de539645995304a60a18d050d3d408f8dfe74ca6bdb3",
+      "f": {
+        "source": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1525,
+              "masked": true,
+              "mime": "text/plain",
+              "sha256": "8bdfdd7f5c5d70aceeb164a010616ee232210caf20a3c8103707915bb5cebe2e"
+            }
+          },
+          "media_type": "text/plain",
+          "type": "base64"
+        },
+        "title": "Synthetic config dump",
+        "type": "document"
+      }
+    },
+    {
+      "id": "b1c2f7286bd87143da344736922a17997be10b4d4cbbcab0a57de8624b9d07e7",
+      "f": {
+        "type": "text"
+      },
+      "p": "b034dc4c407ad2d43862ddedd31cb0db73f55ad0c628df919b216685d5151303"
+    }
+  ],
+  "n": 3,
+  "list_sha": "36ac6b6518a98e4394b383bd2b600228d7cd81a5f1064239a2c8b49f9ba8551e",
+  "refs": [
+    "0ade8da2e2dfa3e950f1dd819af360376ee0ecf9618cabb943c22d43370354f4",
+    "8bdfdd7f5c5d70aceeb164a010616ee232210caf20a3c8103707915bb5cebe2e",
+    "b034dc4c407ad2d43862ddedd31cb0db73f55ad0c628df919b216685d5151303"
+  ],
+  "pieces": [
+    {
+      "hash": "0ade8da2e2dfa3e950f1dd819af360376ee0ecf9618cabb943c22d43370354f4",
+      "kind": "json",
+      "len": 46,
+      "json": {
+        "max_tokens": 256,
+        "model": "claude-test-model"
+      }
+    },
+    {
+      "hash": "8bdfdd7f5c5d70aceeb164a010616ee232210caf20a3c8103707915bb5cebe2e",
+      "kind": "attachment",
+      "content_type": "text/plain",
+      "len": 1525,
+      "text": "synthetic line 0000: amber kites drift over quiet hills.\nsynthetic line 0001: amber kites drift over quiet hills.\nsynthetic line 0002: amber kites drift over quiet hills.\nsynthetic line 0003: amber kites drift over quiet hills.\ndeploy credential [masked:test-canary] end\nsynthetic line 0004: amber kites drift over quiet hills.\nsynthetic line 0005: amber kites drift over quiet hills.\nsynthetic line 0006: amber kites drift over quiet hills.\nsynthetic line 0007: amber kites drift over quiet hills.\nsynthetic line 0008: amber kites drift over quiet hills.\nsynthetic line 0009: amber kites drift over quiet hills.\nsynthetic line 0010: amber kites drift over quiet hills.\nsynthetic line 0011: amber kites drift over quiet hills.\nsynthetic line 0012: amber kites drift over quiet hills.\nsynthetic line 0013: amber kites drift over quiet hills.\nsynthetic line 0014: amber kites drift over quiet hills.\nsynthetic line 0015: amber kites drift over quiet hills.\nsynthetic line 0016: amber kites drift over quiet hills.\nsynthetic line 0017: amber kites drift over quiet hills.\nsynthetic line 0018: amber kites drift over quiet hills.\nsynthetic line 0019: amber kites drift over quiet hills.\nsynthetic line 0020: amber kites drift over quiet hills.\nsynthetic line 0021: amber kites drift over quiet hills.\nsynthetic line 0022: amber kites drift over quiet hills.\nsynthetic line 0023: amber kites drift over quiet hills.\nsynthetic line 0024: amber kites drift over quiet hills.\nsynthetic line 0025: amber kites drift over quiet hills.\n"
+    },
+    {
+      "hash": "b034dc4c407ad2d43862ddedd31cb0db73f55ad0c628df919b216685d5151303",
+      "kind": "text",
+      "len": 28,
+      "text": "Summarize the attached file."
+    }
+  ],
+  "hits": {
+    "test-canary": 1
+  }
+}

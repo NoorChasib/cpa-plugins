@@ -1,0 +1,30 @@
+{
+  "format": "media.speech",
+  "raw_len": 3000,
+  "items": [
+    {
+      "id": "944854e6f7126ccb2f37be95ba4a58bf58d875069a0797c5a2961dcdb2a4a463",
+      "f": {
+        "$att": {
+          "enc": "raw",
+          "len": 3000,
+          "mime": "audio/mpeg",
+          "sha256": "04252199e859dff421ea33f13cf1e84e8749041040ed0271bd4150182e834ca3"
+        }
+      }
+    }
+  ],
+  "n": 1,
+  "list_sha": "5928ff54ed379d01600de3315ef9cb974d2184040f8d702a3bf05ad142de312a",
+  "refs": [
+    "04252199e859dff421ea33f13cf1e84e8749041040ed0271bd4150182e834ca3"
+  ],
+  "pieces": [
+    {
+      "hash": "04252199e859dff421ea33f13cf1e84e8749041040ed0271bd4150182e834ca3",
+      "kind": "attachment",
+      "content_type": "audio/mpeg",
+      "len": 3000
+    }
+  ]
+}

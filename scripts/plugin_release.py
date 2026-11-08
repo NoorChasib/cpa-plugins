@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = 'NoorChasib/cpa-plugins'
 URL = 'https://github.com/' + REPO
 IMAGE = 'eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d'
+# Chat Archive needs RPC schema 7 and CallerScope, which v8.0.4 lacks, so its release gate runs the
+# official v8.0.60 image instead of the shared suite smoke (its own store smoke loads every peer).
+CHAT_ARCHIVE_IMAGE = 'eceasy/cli-proxy-api@sha256:873ec3df3b673a82f7d956d4636c7736b0c961dc6ee28f9fb403238b2898dc0d'
 LIBRARIES = {
     'quota-cache': 'dist/quota-cache.so',
     'account-health-pushover': 'dist/account-health-pushover.so',
@@ -24,7 +27,11 @@ LIBRARIES = {
     'token-usage': 'dist/token-usage.so',
     'quota-glance': 'dist/quota-glance.so',
     'codex-catalog-filter': 'dist/codex-catalog-filter.so',
+    'chat-archive': 'dist/chat-archive.so',
 }
+
+# Plugins whose release ZIP carries docs/third-party-notices.txt as THIRD-PARTY-NOTICES.txt.
+NOTICES = {'token-usage', 'chat-archive'}
 
 # Descriptive catalog metadata for a plugin that has never been released, and so
 # has no catalog entry to copy it from. Kept here, in review, rather than
@@ -43,6 +50,13 @@ FIRST_RELEASE = {
         'author': 'NoorChasib',
         'license': 'MIT',
         'tags': ['Codex', 'Models', 'Catalog'],
+    },
+    'chat-archive': {
+        'name': 'Chat Archive',
+        'description': 'Archives every CPA chat exchange, masked and split into content-addressed pieces, to your private chat archive server. Needs CPA v8.0.60 or newer. Linux amd64 only.',
+        'author': 'NoorChasib',
+        'license': 'MIT',
+        'tags': ['Archive', 'History', 'Privacy'],
     },
 }
 
@@ -143,17 +157,23 @@ def released_library(entry):
 def package(tag, output):
     plugin, version = parse_tag(tag)
     require(source_version(plugin) == version, 'tag/native source version mismatch')
-    evidence = json.loads((ROOT / 'dist/quota-preview-evidence.json').read_text())
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    require(evidence['image'] == IMAGE and evidence['code_commit'] == commit, 'wrong runtime/commit evidence')
-    require(evidence.get('candidate') == plugin, 'candidate was not tested with released peers')
-    require(evidence.get('optional_cache_modes') == ['missing-cache-wait', 'standalone'], 'missing optional cache checks')
+    if plugin == 'chat-archive':
+        # Written by plugins/chat-archive/scripts/native/release_evidence.py after its store smoke.
+        evidence = json.loads((ROOT / 'dist/chat-archive-evidence.json').read_text())
+        require(evidence['image'] == CHAT_ARCHIVE_IMAGE and evidence['code_commit'] == commit, 'wrong runtime/commit evidence')
+        require(evidence.get('candidate') == plugin, 'candidate was not tested with released peers')
+    else:
+        evidence = json.loads((ROOT / 'dist/quota-preview-evidence.json').read_text())
+        require(evidence['image'] == IMAGE and evidence['code_commit'] == commit, 'wrong runtime/commit evidence')
+        require(evidence.get('candidate') == plugin, 'candidate was not tested with released peers')
+        require(evidence.get('optional_cache_modes') == ['missing-cache-wait', 'standalone'], 'missing optional cache checks')
     library = (ROOT / 'plugins' / plugin / LIBRARIES[plugin]).read_bytes()
     require(evidence['libraries'][plugin] == {'sha256': digest(library), 'version': version}, 'library differs from CPA-tested bytes/version')
     require(len(library) >= 20 and library[:6] == b'\x7fELF\x02\x01' and library[16:20] == b'\x03\x00\x3e\x00', 'expected ELF64 little-endian x86-64 shared library')
     members = [(plugin + '.so', library, 0o755), ('LICENSE', (ROOT / 'plugins' / plugin / 'LICENSE').read_bytes(), 0o644)]
-    if plugin == 'token-usage':
-        members.append(('THIRD-PARTY-NOTICES.txt', (ROOT / 'plugins/token-usage/docs/third-party-notices.txt').read_bytes(), 0o644))
+    if plugin in NOTICES:
+        members.append(('THIRD-PARTY-NOTICES.txt', (ROOT / 'plugins' / plugin / 'docs/third-party-notices.txt').read_bytes(), 0o644))
     output.mkdir(parents=True, exist_ok=True)
     name = f'{plugin}_{version}_linux_amd64.zip'
     with zipfile.ZipFile(output / name, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -173,7 +193,7 @@ def package(tag, output):
     (output / 'verification.json').write_text(json.dumps(evidence, indent=2) + '\n')
     names = [name, 'catalog-entry.json', 'verification.json']
     (output / 'checksums.txt').write_text(''.join(f'{digest((output / n).read_bytes())}  {n}\n' for n in sorted(names)))
-    print(f'Packaged {tag}; verified exact native bytes in CPA v8.0.4')
+    print(f'Packaged {tag}; verified exact native bytes in CPA ' + ('v8.0.60' if plugin == 'chat-archive' else 'v8.0.4'))
 
 
 def main():

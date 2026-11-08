@@ -1,0 +1,2 @@
+archive_mcp  none     "[chat-archive-mcp/v1]\nsynthetic transcript hit"
+params       none     "{\"interrupted\":false}"

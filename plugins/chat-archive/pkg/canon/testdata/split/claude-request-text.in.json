@@ -1,0 +1,23 @@
+{
+  "model": "claude-test-model",
+  "max_tokens": 1024,
+  "stream": true,
+  "cache_control": {"type": "ephemeral"},
+  "metadata": {"user_id": "user-synthetic-001"},
+  "system": [
+    {"type": "text", "text": "You are a synthetic test assistant.", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+    {"type": "text", "text": "Answer in short sentences."}
+  ],
+  "messages": [
+    {"role": "user", "content": "Count to three."},
+    {"role": "assistant", "content": [{"type": "text", "text": "One, two, three."}]},
+    {"role": "user", "content": [
+      {"type": "text", "text": "<system-reminder>synthetic reminder text</system-reminder>"},
+      {"text": "Now count to five.", "type": "text", "cache_control": {"type": "ephemeral"}},
+      {"type": "text", "text": "See the cited note.", "citations": [{"type": "char_location", "cited_text": "synthetic note", "document_index": 0, "start_char_index": 0, "end_char_index": 14}]}
+    ]},
+    {"role": "system", "content": "Switch effort.", "output_config": {"effort": "high"}}
+  ],
+  "thinking": {"type": "adaptive", "display": "summarized"},
+  "output_config": {"effort": "medium"}
+}

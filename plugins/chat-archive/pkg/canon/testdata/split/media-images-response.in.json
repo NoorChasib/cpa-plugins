@@ -1,0 +1,8 @@
+{
+  "created": 1767225600,
+  "data": [
+    {"b64_json": "{{b64:png:2500}}", "mime_type": "image/png", "revised_prompt": "A synthetic lighthouse at dusk, oil painting."},
+    {"url": "https://user:pw@images.example.test/gen/abc123.png?X-Amz-Signature=deadbeefcafe&X-Amz-Expires=3600#frag", "revised_prompt": "Second synthetic lighthouse."}
+  ],
+  "meta": {"links": ["https://cdn.example.test/v1/x.png?sig=0011223344", "not a url", "ftp://example.test/file"]}
+}

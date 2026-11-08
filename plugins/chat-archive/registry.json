@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "chat-archive",
+      "name": "Chat Archive",
+      "description": "Archives CPA chat exchanges, masked and canonical, to a private chat archive. Linux amd64 only.",
+      "author": "NoorChasib",
+      "version": "0.1.0",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "license": "MIT",
+      "install": {
+        "type": "github-release"
+      }
+    }
+  ]
+}

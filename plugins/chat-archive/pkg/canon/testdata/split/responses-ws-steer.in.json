@@ -1,0 +1,1 @@
+{"type": "response.steer", "event_id": "evt_synth_2", "previous_response_id": "resp_synth_prev", "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Skip the slow tests."}]}]}

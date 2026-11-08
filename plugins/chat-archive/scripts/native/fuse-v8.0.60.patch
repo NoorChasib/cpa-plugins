@@ -1,0 +1,22 @@
+--- a/internal/pluginhost/adapters_interceptors.go
++++ b/internal/pluginhost/adapters_interceptors.go
+@@ -8,6 +8,7 @@
+ 	"io"
+ 	"net/http"
+ 	"net/url"
++	"os"
+ 	"reflect"
+ 	"sort"
+ 	"strings"
+@@ -30,6 +31,11 @@
+ 			ok = false
+ 		}
+ 	}()
++	// Native acceptance fault injection (chat-archive fuse-smoke): a host-side panic in the
++	// recovered before-auth adapter fuses exactly the named plugin.
++	if method == "RequestInterceptor.InterceptRequestBeforeAuth" && os.Getenv("CPA_TEST_FUSE_PLUGIN") == record.id {
++		panic("test fuse")
++	}
+ 	resp, errIntercept := call(ctx, req)
+ 	if errIntercept != nil {
+ 		log.Warnf("pluginhost: request interceptor %s failed: %v", record.id, errIntercept)

@@ -1,0 +1,8 @@
+{
+  "model": "grok-imagine-test",
+  "prompt": "A synthetic lighthouse at dusk.",
+  "n": 2,
+  "response_format": "b64_json",
+  "image": {"type": "image_url", "url": "{{dataurl:image/png:png:2048}}"},
+  "reference_images": ["{{dataurl:image/png:png:1100}}", "https://example.test/ref.png"]
+}

@@ -1,0 +1,30 @@
+{
+  "format": "opaque",
+  "raw_len": 1500,
+  "items": [
+    {
+      "id": "f4ba2661c06fa3f2716976dc4c612c0c752fac48b04238538fa0b44c3d390a7a",
+      "f": {
+        "$att": {
+          "enc": "raw",
+          "len": 1500,
+          "mime": "application/octet-stream",
+          "sha256": "16252de3b481ed1a6334f6b280fe1e9cd8a228d810104c4b3b4ed496a50ced63"
+        }
+      }
+    }
+  ],
+  "n": 1,
+  "list_sha": "a728e7a6ae44c1c0eedb6ee25bb98e2926419d219ee12e932191c7341444f09d",
+  "refs": [
+    "16252de3b481ed1a6334f6b280fe1e9cd8a228d810104c4b3b4ed496a50ced63"
+  ],
+  "pieces": [
+    {
+      "hash": "16252de3b481ed1a6334f6b280fe1e9cd8a228d810104c4b3b4ed496a50ced63",
+      "kind": "attachment",
+      "content_type": "application/octet-stream",
+      "len": 1500
+    }
+  ]
+}

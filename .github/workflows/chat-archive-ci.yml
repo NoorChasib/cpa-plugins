@@ -1,0 +1,79 @@
+name: Chat Archive native acceptance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-archive-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GOTOOLCHAIN: local
+      AGENT_BROWSER_ARGS: --no-sandbox
+    defaults:
+      run:
+        working-directory: plugins/chat-archive
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      # Same pinned actions as token-usage-ci.yml.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Require the selected Go toolchain
+        run: test "$(go env GOVERSION)" = go1.27.1
+      - name: Install exact test-only Node with verified integrity
+        run: |
+          bash scripts/browser/install-node.sh "$RUNNER_TEMP/chat-archive-node"
+          printf '%s\n' "$RUNNER_TEMP/chat-archive-node/bin" >> "$GITHUB_PATH"
+      - name: Install locked browser CLI and pinned Chrome
+        run: make browser-tools
+      - name: Unit, race, static, glibc, purity and native builds
+        run: make ci
+      - name: Importer builds for both claimed platforms
+        run: make importer-dist
+      - name: Required real browser sidebar acceptance
+        run: make browser
+      - name: Required native acceptance on CPA v8.0.60 from pinned source
+        run: |
+          make smoke | tee "$RUNNER_TEMP/native-smoke.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          log = (Path(os.environ["RUNNER_TEMP"]) / "native-smoke.log").read_text()
+          matches = re.findall(r"^Pinned CPA source/build/runtime artifacts: (/tmp/chat-archive-smoke\.[A-Za-z0-9]+)$", log, re.M)
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one native smoke work directory")
+          work = Path(matches[0])
+          shutil.copyfile(work / "chat-archive-production.so", "dist/chat-archive.so")
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              out.write(f"CPA_SMOKE_WORK={work}\n")
+          PY
+      - name: Required host-side fuse acceptance (patched pinned CPA)
+        run: make fuse-smoke
+      - name: Required official-image store install beside published peers
+        run: |
+          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:873ec3df3b673a82f7d956d4636c7736b0c961dc6ee28f9fb403238b2898dc0d
+          docker pull --platform linux/amd64 python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+          make store-smoke CPA_SMOKE_WORK="$CPA_SMOKE_WORK"
+      - name: Prepare and verify exact smoke-tested package without publishing
+        run: |
+          make package-tested checksums verify-release
+          cmp "$CPA_SMOKE_WORK/chat-archive-production.so" dist/chat-archive.so
+          (cd dist && sha256sum -c checksums.txt)
+          python3 scripts/verify-cpa-package.py --cpa-source "$CPA_SMOKE_WORK/source"
+      # No release, artifact upload, store update, workflow_dispatch, or publish job.

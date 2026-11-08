@@ -1,0 +1,90 @@
+{
+  "format": "claude.messages",
+  "raw_len": 506,
+  "skeleton": "db095678f160a3738efc8f3e7ddf804be819993b7beb1a305f6f01a82fea2edf",
+  "items": [
+    {
+      "id": "6e7c0f2b80256c5efdacc4b9f44da7325c22ddf95c67a9c11987d109ccbf9e49",
+      "m": {
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "52ff82104c7fda69ba2960bd4bab6c2c5bd8abb88a4f28c412a0705a83401394",
+      "f": {
+        "signature": {
+          "$opaque": {
+            "len": 24,
+            "sha256": "0f1314c5d3bba11090533ada04efda718d871b46e24158a1df848c289dddb3c9"
+          }
+        },
+        "type": "thinking"
+      },
+      "p": "a14cc24bd4c3eb579a89edc08d0a8add5a90293506837c8646ebbcb02cf06dfd"
+    },
+    {
+      "id": "9aa82b4731a029fb2e34b16c80401807392d083e274fc2f61497715c3b8fa317",
+      "f": {
+        "type": "text"
+      },
+      "p": "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0"
+    },
+    {
+      "id": "aa8d96e8c90b49b85bf529786ea297ce853a1f34211289e35430a3785c203214",
+      "f": {
+        "id": "toolu_synth_09",
+        "name": "Bash",
+        "type": "tool_use"
+      },
+      "p": "44d2dd697e40c778440f259fdaad752d67a8104de37f8e8d578d28fff8df12d1"
+    }
+  ],
+  "n": 4,
+  "list_sha": "33454c66a19f018ba8cdb08f31c0bbde662ccc4cff0111678afae83582b3221a",
+  "refs": [
+    "db095678f160a3738efc8f3e7ddf804be819993b7beb1a305f6f01a82fea2edf",
+    "a14cc24bd4c3eb579a89edc08d0a8add5a90293506837c8646ebbcb02cf06dfd",
+    "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0",
+    "44d2dd697e40c778440f259fdaad752d67a8104de37f8e8d578d28fff8df12d1"
+  ],
+  "pieces": [
+    {
+      "hash": "db095678f160a3738efc8f3e7ddf804be819993b7beb1a305f6f01a82fea2edf",
+      "kind": "json",
+      "len": 205,
+      "json": {
+        "id": "msg_synth_01",
+        "model": "claude-test-model",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 12,
+          "output_tokens": 7
+        }
+      }
+    },
+    {
+      "hash": "a14cc24bd4c3eb579a89edc08d0a8add5a90293506837c8646ebbcb02cf06dfd",
+      "kind": "text",
+      "len": 13,
+      "text": "Count upward."
+    },
+    {
+      "hash": "0f0077a6e9db4121bdf3e45fcb97c9773a26a1b296910ef9b58e3ba687582bd0",
+      "kind": "text",
+      "len": 16,
+      "text": "One, two, three."
+    },
+    {
+      "hash": "44d2dd697e40c778440f259fdaad752d67a8104de37f8e8d578d28fff8df12d1",
+      "kind": "json",
+      "len": 23,
+      "json": {
+        "command": "echo done"
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "candidates": [
+    {"index": 0, "finishReason": "STOP", "content": {"role": "model", "parts": [
+      {"text": "Think about sunlight.", "thought": true},
+      {"text": "Plant beans.", "thoughtSignature": "UmVzcG9uc2VUaG91Z2h0U2ln"},
+      {"inlineData": {"mimeType": "image/png", "data": "{{b64:png:1800}}"}}
+    ]}},
+    {"index": 1, "finishReason": "STOP", "content": {"role": "model", "parts": [{"text": "Plant peas."}]}}
+  ],
+  "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 8, "thoughtsTokenCount": 12, "totalTokenCount": 50},
+  "modelVersion": "gemini-test-model",
+  "responseId": "resp-synth-gem"
+}

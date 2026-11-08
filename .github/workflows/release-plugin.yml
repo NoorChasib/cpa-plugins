@@ -6,6 +6,7 @@ on:
       - 'account-health-pushover/v*'
       - 'auto-baseline/v*'
       - 'codex-catalog-filter/v*'
+      - 'chat-archive/v*'
       - 'reset-priority/v*'
       - 'quota-cache/v*'
       - 'quota-glance/v*'
@@ -24,6 +25,7 @@ on:
           - codex-catalog-filter
           - reset-priority
           - token-usage
+          - chat-archive
 
 permissions:
   contents: read
@@ -87,9 +89,18 @@ jobs:
         env:
           PLUGIN: ${{ steps.select.outputs.plugin }}
         run: |
-          docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+          # Chat Archive needs RPC schema 7 (CPA v8.0.60); every other plugin keeps the v8.0.4 gate.
+          if [[ "$PLUGIN" == chat-archive ]]; then
+            mkdir -p dist
+            docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:873ec3df3b673a82f7d956d4636c7736b0c961dc6ee28f9fb403238b2898dc0d
+          else
+            docker pull --platform linux/amd64 eceasy/cli-proxy-api@sha256:72205ea2dff7e3e3ef23b03de4e17b169ff7449c02b12f2924a3d4d3eee68b7d
+          fi
           bash scripts/verify-plugin-release.sh "$PLUGIN"
+      # Chat Archive's own store smoke (above) already loaded it beside every published peer in
+      # the official v8.0.60 image; the shared v8.0.4 suite would reject its schema 7 registration.
       - name: Verify candidate with published peers in pinned CPA
+        if: steps.select.outputs.plugin != 'chat-archive'
         env:
           PLUGIN: ${{ steps.select.outputs.plugin }}
         run: python3 scripts/quota-cache-smoke.py --candidate "$PLUGIN"

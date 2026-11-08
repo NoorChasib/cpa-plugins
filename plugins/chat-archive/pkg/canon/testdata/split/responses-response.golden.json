@@ -1,0 +1,137 @@
+{
+  "format": "openai.responses",
+  "raw_len": 957,
+  "skeleton": "1a20a6201bcbf8b89a0606caec40ce375d9b0485d0f812602d525872900d5ac9",
+  "tools": "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+  "system": [
+    {
+      "id": "998b86629f6d3b44ca959dd3b345187fc778a6976fedb1f2e0d49f67b4d3a2b4",
+      "f": {
+        "type": "instructions"
+      },
+      "p": "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a"
+    }
+  ],
+  "items": [
+    {
+      "id": "5f16a2e6a3d831a9654af8f1ebcb18f096df210fb26a838e38f4e873c8a091cf",
+      "f": {
+        "encrypted_content": {
+          "$opaque": {
+            "len": 24,
+            "sha256": "6d9cf7e9dd6e205b392426ce39dea9406f4f37f13f6ac766ca8bc53a96e2241c"
+          }
+        },
+        "id": "rs_synth_11",
+        "type": "reasoning"
+      },
+      "p": "0725bf1fb8f928745e6cc57b9d6178f2d2d247d7824fcb2f657a63a2f43556dc"
+    },
+    {
+      "id": "4a88babdbe7514d0fb1badbbc0b29b85594449f5fd14726ede5404b9883e7842",
+      "m": {
+        "id": "msg_synth_12",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    },
+    {
+      "id": "7732acd957c131ad4f810a1f847f88b32388ac3a987cb11edef6c936bbcbfd75",
+      "f": {
+        "annotations": [],
+        "type": "output_text"
+      },
+      "p": "ea9cbf0792b413087bae1e1926056e11b5bf4bbc19d7e29066f0ad90c5d0e78c"
+    },
+    {
+      "id": "75a93d7b07f0049568c45cd07f415fff65114879e188cbbd0fb37c2f0056ab69",
+      "f": {
+        "call_id": "call_synth_13",
+        "id": "fc_synth_13",
+        "name": "shell",
+        "status": "completed",
+        "type": "function_call"
+      },
+      "p": "0481b64e0a3795a0ff035c8a87275cee1a49a131d950086f2b97b762463074d7"
+    }
+  ],
+  "n": 4,
+  "list_sha": "f98da7004de063287361109bd67470c4d4c9bba84f26ca315135640816bd899e",
+  "refs": [
+    "1a20a6201bcbf8b89a0606caec40ce375d9b0485d0f812602d525872900d5ac9",
+    "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+    "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a",
+    "0725bf1fb8f928745e6cc57b9d6178f2d2d247d7824fcb2f657a63a2f43556dc",
+    "ea9cbf0792b413087bae1e1926056e11b5bf4bbc19d7e29066f0ad90c5d0e78c",
+    "0481b64e0a3795a0ff035c8a87275cee1a49a131d950086f2b97b762463074d7"
+  ],
+  "pieces": [
+    {
+      "hash": "1a20a6201bcbf8b89a0606caec40ce375d9b0485d0f812602d525872900d5ac9",
+      "kind": "json",
+      "len": 199,
+      "json": {
+        "id": "resp_synth_10",
+        "model": "gpt-test-codex",
+        "object": "response",
+        "status": "completed",
+        "usage": {
+          "input_tokens": 100,
+          "input_tokens_details": {
+            "cached_tokens": 64
+          },
+          "output_tokens": 20,
+          "total_tokens": 120
+        }
+      }
+    },
+    {
+      "hash": "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+      "kind": "json",
+      "len": 123,
+      "json": [
+        {
+          "description": "Run a synthetic command.",
+          "name": "shell",
+          "parameters": {
+            "type": "object"
+          },
+          "strict": false,
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "hash": "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a",
+      "kind": "text",
+      "len": 33,
+      "text": "You are a synthetic coding agent."
+    },
+    {
+      "hash": "0725bf1fb8f928745e6cc57b9d6178f2d2d247d7824fcb2f657a63a2f43556dc",
+      "kind": "json",
+      "len": 61,
+      "json": {
+        "summary": [
+          {
+            "text": "Run lint next.",
+            "type": "summary_text"
+          }
+        ]
+      }
+    },
+    {
+      "hash": "ea9cbf0792b413087bae1e1926056e11b5bf4bbc19d7e29066f0ad90c5d0e78c",
+      "kind": "text",
+      "len": 13,
+      "text": "Running lint."
+    },
+    {
+      "hash": "0481b64e0a3795a0ff035c8a87275cee1a49a131d950086f2b97b762463074d7",
+      "kind": "json",
+      "len": 39,
+      "json": "{\"cmd\":[\"golangci-lint\",\"run\"]}"
+    }
+  ]
+}

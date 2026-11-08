@@ -1,0 +1,440 @@
+{
+  "format": "openai.chat",
+  "raw_len": 11975,
+  "skeleton": "a6c3d4ca2091872d14a409008add45fb6591450334e882548fc88a082665bd69",
+  "tools": "2e9b92848d7b0983d921386f599970d12ce943a6360fd20bd31ba104b0d66dd0",
+  "tools_v": [
+    {
+      "i": 0,
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": "c1dac4ab748a0f413ed39d7169ace0050ff04866b888e41db53caea1e2550e35",
+      "m": {
+        "content_form": "string",
+        "role": "system"
+      }
+    },
+    {
+      "id": "208c70b37e9167494db1e96c399623795062a3222c593d67326549941ee9af2a",
+      "f": {
+        "type": "text"
+      },
+      "p": "883389d67e82aea0b7b531a7ec6bc86cf76b1507c98fb7211246b84373b13538"
+    },
+    {
+      "id": "067f95c0a7327eabbf2458b579b2fa5f5f8c654dc22f3de01dea7f77aafd90ea",
+      "m": {
+        "role": "developer"
+      }
+    },
+    {
+      "id": "4bfeb128f6682cb5eb42dcd9f893c633c3bd0c43244be16a69c69f47be8008b0",
+      "f": {
+        "type": "text"
+      },
+      "p": "9a486e8eaf5fc9b83283ce6355f72952e6705b526ef63426cc23eae3a17fd7b0"
+    },
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "3f803139bfb1cc3ba4946c9545727f9f0970a353967c6a7a6130b22955eca51d",
+      "f": {
+        "type": "text"
+      },
+      "p": "187ce547b66fc3ad8daf83c62b47dfddfb2e6759e3cf57c3828fbc6a94affc75",
+      "v": {
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    },
+    {
+      "id": "ae21ea02e17ff0a7424c911344573801c9ff8f142dbd0d850a05c4f73d76a6f5",
+      "f": {
+        "image_url": {
+          "detail": "high",
+          "url": {
+            "$att": {
+              "enc": "dataurl",
+              "len": 2048,
+              "mime": "image/png",
+              "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+            }
+          }
+        },
+        "type": "image_url"
+      }
+    },
+    {
+      "id": "598018446c1f7174a7f5c74c67e1abbf1b3311cd10e0f0073964a27a42a92b38",
+      "f": {
+        "image_url": {
+          "url": "https://example.test/small.png"
+        },
+        "type": "image_url"
+      }
+    },
+    {
+      "id": "1ea662912f47b85161781d7711f2607bc1dc83b00383795b2cd791ea24cde24b",
+      "f": {
+        "input_audio": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1500,
+              "mime": "audio/wav",
+              "sha256": "6f074519a75c5e02b4b757464a70f318356cd64669cad84b7c1b2505864f77d9"
+            }
+          },
+          "format": "wav"
+        },
+        "type": "input_audio"
+      }
+    },
+    {
+      "id": "a77663489fad2ca085ed5e24575946c88a3f66b63610049825716f24b19789ad",
+      "f": {
+        "file": {
+          "file_data": {
+            "$att": {
+              "enc": "dataurl",
+              "len": 2500,
+              "mime": "application/pdf",
+              "sha256": "92c7739e44fd0e6b0b5b135f7fe763aae9f4a233ffbc9eebe23b8431c9053e61"
+            }
+          },
+          "filename": "report.pdf"
+        },
+        "type": "file"
+      }
+    },
+    {
+      "id": "a4d834da53a345b1b7f735055e9c84f215e742b9b33dc7e10d4716cddff08d58",
+      "f": {
+        "file": {
+          "file_data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1200,
+              "masked": true,
+              "mime": "text/plain",
+              "sha256": "dee37be3cc777df3e73884661fca00d23e45d952d5912814a3aef6fc7074204f"
+            }
+          },
+          "filename": "notes.txt"
+        },
+        "type": "file"
+      }
+    },
+    {
+      "id": "2a113254c3576eca7456ec12f3abd9357d4434d79ef070a9caf155dffd311b8b",
+      "f": {
+        "file": {
+          "file_id": "file-synth-01"
+        },
+        "type": "file"
+      }
+    },
+    {
+      "id": "5033dbdea48c2fe76512c23398b026e3aa155990397d65c1ebe2498ba6f083d2",
+      "f": {
+        "refusal": "Synthetic refusal text.",
+        "type": "refusal"
+      }
+    },
+    {
+      "id": "8a5afcf24754f286b962ae498c6c773840c9c5d0904a6e08d64f4d23a4e67602",
+      "m": {
+        "content": null,
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "492f4a0fb2fb0c174ee259d30673d4b12109f3f76d502596735c978c8fb52467",
+      "f": {
+        "type": "reasoning_content"
+      },
+      "p": "2707dcbfed040404d9cc7e75ee893e6f4e2dd024434667853ec015fd7e7a4829"
+    },
+    {
+      "id": "801aec3d80f5bcb7d716feed8eecd0ad89fa04734fd835b01b400e7f010a1f18",
+      "f": {
+        "function": {
+          "name": "lookup"
+        },
+        "id": "call_synth_1",
+        "type": "function"
+      },
+      "p": "1cc60ce71a64434779eec577edaa687301d274e57bb1b69d847f1a878f259c0c"
+    },
+    {
+      "id": "64e7173df3bc9f29972aa56fc0c7fa9b155569a332412a521fdd81c8dec67526",
+      "f": {
+        "extra_content": {
+          "google": {
+            "thought_signature": {
+              "$opaque": {
+                "len": 24,
+                "sha256": "ccca140ed0aeedb05802c33b237667e6df7493ffc43dcbc8621913a923f0639e"
+              }
+            }
+          }
+        },
+        "function": {
+          "name": "lookup"
+        },
+        "id": "call_synth_2",
+        "type": "function"
+      },
+      "p": "92072df399cb74703f8e86f450d552bc0bb01eeeb98a90985a1b7772c8fd0016"
+    },
+    {
+      "id": "61bb0702c2a271ec54786a080d42c7ee0c77c8d95c9bf9cc537414071cd5a241",
+      "m": {
+        "content_form": "string",
+        "role": "tool",
+        "tool_call_id": "call_synth_1"
+      }
+    },
+    {
+      "id": "3a57a2744734c53cebafb0cbbf7692b361fee892ea4b5757df0e38706ef61015",
+      "f": {
+        "type": "text"
+      },
+      "p": "eee5086d785f6df1957b05a2be17f841aab286d86482197c6cf716b08f9a1b33"
+    },
+    {
+      "id": "930459f24bbf5f1a89e059df9d8be19b9b1cbc919e3fc8b17dda69ccd8d4a792",
+      "m": {
+        "role": "tool",
+        "tool_call_id": "call_synth_2"
+      }
+    },
+    {
+      "id": "32633df8276a1ebac45aab3e0bc291b8907cad4e0b339b1fc589216e348878b0",
+      "f": {
+        "type": "text"
+      },
+      "p": "5251d2b5fa35d560b105eaf848eb349ec9ed38fab5d9b4e2c24bcd9c0d842f33"
+    },
+    {
+      "id": "c2b8ec32a25947168c27f0a0944071bc747a155bb221e43527f0e273a049583f",
+      "m": {
+        "content_form": "string",
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "d9f4c6eb3aea7555ff5670dd14d0b3343d97aa09ff8c8971af59ce04212d220a",
+      "f": {
+        "type": "reasoning"
+      },
+      "p": "dac687507aaeafb099ef57b1ee9e93e5e99a1cf5623095de0daeb8b2bfa30e40"
+    },
+    {
+      "id": "60a7c5ba9dacecf9b60aca79db74838c5b05db77ba5c6b9e2f2e67f0089dc2fa",
+      "f": {
+        "type": "reasoning_details"
+      },
+      "p": "6c8e508a91d1f6a9c46c5a538391ea995c15b8f865982ee99319c1ee8f83943f"
+    },
+    {
+      "id": "ff9dc25f004eb79d0c0e5f0ddc81b68fa6531d63da213c70c29f5a5e26ebaaec",
+      "f": {
+        "type": "text"
+      },
+      "p": "6ba729e2ed45c51e311018cb0e4a120ec29172f480712baa703bd8d4281c4fd0"
+    }
+  ],
+  "n": 25,
+  "list_sha": "940e874f3512c4e73d7a8334dca0608f65ef4d3b7263f32fe4f4660d60c0af38",
+  "refs": [
+    "a6c3d4ca2091872d14a409008add45fb6591450334e882548fc88a082665bd69",
+    "2e9b92848d7b0983d921386f599970d12ce943a6360fd20bd31ba104b0d66dd0",
+    "883389d67e82aea0b7b531a7ec6bc86cf76b1507c98fb7211246b84373b13538",
+    "9a486e8eaf5fc9b83283ce6355f72952e6705b526ef63426cc23eae3a17fd7b0",
+    "187ce547b66fc3ad8daf83c62b47dfddfb2e6759e3cf57c3828fbc6a94affc75",
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "6f074519a75c5e02b4b757464a70f318356cd64669cad84b7c1b2505864f77d9",
+    "92c7739e44fd0e6b0b5b135f7fe763aae9f4a233ffbc9eebe23b8431c9053e61",
+    "dee37be3cc777df3e73884661fca00d23e45d952d5912814a3aef6fc7074204f",
+    "2707dcbfed040404d9cc7e75ee893e6f4e2dd024434667853ec015fd7e7a4829",
+    "1cc60ce71a64434779eec577edaa687301d274e57bb1b69d847f1a878f259c0c",
+    "92072df399cb74703f8e86f450d552bc0bb01eeeb98a90985a1b7772c8fd0016",
+    "eee5086d785f6df1957b05a2be17f841aab286d86482197c6cf716b08f9a1b33",
+    "5251d2b5fa35d560b105eaf848eb349ec9ed38fab5d9b4e2c24bcd9c0d842f33",
+    "dac687507aaeafb099ef57b1ee9e93e5e99a1cf5623095de0daeb8b2bfa30e40",
+    "6c8e508a91d1f6a9c46c5a538391ea995c15b8f865982ee99319c1ee8f83943f",
+    "6ba729e2ed45c51e311018cb0e4a120ec29172f480712baa703bd8d4281c4fd0"
+  ],
+  "pieces": [
+    {
+      "hash": "a6c3d4ca2091872d14a409008add45fb6591450334e882548fc88a082665bd69",
+      "kind": "json",
+      "len": 106,
+      "json": {
+        "model": "gpt-test-model",
+        "reasoning_effort": "high",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "hash": "2e9b92848d7b0983d921386f599970d12ce943a6360fd20bd31ba104b0d66dd0",
+      "kind": "json",
+      "len": 155,
+      "json": [
+        {
+          "function": {
+            "description": "Synthetic lookup.",
+            "name": "lookup",
+            "parameters": {
+              "properties": {
+                "term": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "hash": "883389d67e82aea0b7b531a7ec6bc86cf76b1507c98fb7211246b84373b13538",
+      "kind": "text",
+      "len": 27,
+      "text": "You are a synthetic helper."
+    },
+    {
+      "hash": "9a486e8eaf5fc9b83283ce6355f72952e6705b526ef63426cc23eae3a17fd7b0",
+      "kind": "text",
+      "len": 13,
+      "text": "Prefer lists."
+    },
+    {
+      "hash": "187ce547b66fc3ad8daf83c62b47dfddfb2e6759e3cf57c3828fbc6a94affc75",
+      "kind": "text",
+      "len": 14,
+      "text": "Look at these."
+    },
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "6f074519a75c5e02b4b757464a70f318356cd64669cad84b7c1b2505864f77d9",
+      "kind": "attachment",
+      "content_type": "audio/wav",
+      "len": 1500
+    },
+    {
+      "hash": "92c7739e44fd0e6b0b5b135f7fe763aae9f4a233ffbc9eebe23b8431c9053e61",
+      "kind": "attachment",
+      "content_type": "application/pdf",
+      "len": 2500
+    },
+    {
+      "hash": "dee37be3cc777df3e73884661fca00d23e45d952d5912814a3aef6fc7074204f",
+      "kind": "attachment",
+      "content_type": "text/plain",
+      "len": 1200,
+      "text": "synthetic line 0000: amber kites drift over quiet hills.\nsynthetic line 0001: amber kites drift over quiet hills.\nsynthetic line 0002: amber kites drift over quiet hills.\nsynthetic line 0003: amber kites drift over quiet hills.\nsynthetic line 0004: amber kites drift over quiet hills.\nsynthetic line 0005: amber kites drift over quiet hills.\nsynthetic line 0006: amber kites drift over quiet hills.\nsynthetic line 0007: amber kites drift over quiet hills.\nsynthetic line 0008: amber kites drift over quiet hills.\nsynthetic line 0009: amber kites drift over quiet hills.\nsynthetic line 0010: amber kites drift over quiet hills.\nsynthetic line 0011: amber kites drift over quiet hills.\nsynthetic line 0012: amber kites drift over quiet hills.\nsynthetic line 0013: amber kites drift over quiet hills.\nsynthetic line 0014: amber kites drift over quiet hills.\nsynthetic line 0015: amber kites drift over quiet hills.\nsynthetic line 0016: amber kites drift over quiet hills.\nsynthetic line 0017: amber kites drift over quiet hills.\nsynthetic line 0018: amber kites drift over quiet hills.\nsynthetic line 0019: amber kites drift over quiet hills.\nsynthetic line 0020: amber kites drift over quiet hills.\nsyn"
+    },
+    {
+      "hash": "2707dcbfed040404d9cc7e75ee893e6f4e2dd024434667853ec015fd7e7a4829",
+      "kind": "text",
+      "len": 17,
+      "text": "Need two lookups."
+    },
+    {
+      "hash": "1cc60ce71a64434779eec577edaa687301d274e57bb1b69d847f1a878f259c0c",
+      "kind": "json",
+      "len": 64,
+      "json": "{\"limit\":10.50,\"opts\":{\"a\":1,\"b\":2},\"term\":\"kite\"}"
+    },
+    {
+      "hash": "92072df399cb74703f8e86f450d552bc0bb01eeeb98a90985a1b7772c8fd0016",
+      "kind": "text",
+      "len": 9,
+      "text": "{not json"
+    },
+    {
+      "hash": "eee5086d785f6df1957b05a2be17f841aab286d86482197c6cf716b08f9a1b33",
+      "kind": "text",
+      "len": 23,
+      "text": "kite: a toy that flies."
+    },
+    {
+      "hash": "5251d2b5fa35d560b105eaf848eb349ec9ed38fab5d9b4e2c24bcd9c0d842f33",
+      "kind": "text",
+      "len": 10,
+      "text": "No result."
+    },
+    {
+      "hash": "dac687507aaeafb099ef57b1ee9e93e5e99a1cf5623095de0daeb8b2bfa30e40",
+      "kind": "text",
+      "len": 23,
+      "text": "Summarize both results."
+    },
+    {
+      "hash": "6c8e508a91d1f6a9c46c5a538391ea995c15b8f865982ee99319c1ee8f83943f",
+      "kind": "json",
+      "len": 398,
+      "json": [
+        {
+          "index": 0,
+          "signature": {
+            "$opaque": {
+              "len": 20,
+              "sha256": "1198a592b2dc7fd4e1c26416ea003e95270fc8a27537dc2707be68720dd4dda3"
+            }
+          },
+          "text": "Summarize.",
+          "type": "reasoning.text"
+        },
+        {
+          "data": {
+            "$opaque": {
+              "len": 24,
+              "sha256": "857278aef3973b64052af9fca11f5934f2ab9446e758d0e76b333c75122880c6"
+            }
+          },
+          "index": 1,
+          "type": "reasoning.encrypted"
+        },
+        {
+          "index": 2,
+          "signature": null,
+          "summary": "Short summary.",
+          "type": "reasoning.summary"
+        }
+      ]
+    },
+    {
+      "hash": "6ba729e2ed45c51e311018cb0e4a120ec29172f480712baa703bd8d4281c4fd0",
+      "kind": "text",
+      "len": 21,
+      "text": "Here is what I found."
+    }
+  ],
+  "flags": [
+    "args_raw"
+  ]
+}

@@ -1,0 +1,40 @@
+<main class="page">
+  <header class="header">
+    <div>
+      <h1>Chat Archive</h1>
+      <p class="subtitle">Capture and upload health of this CPA's chat archive plugin. Counts only; no chat content is shown or sent here.</p>
+      <div class="pills"><span id="plugin-state" class="pill">State: checking session</span><span id="plugin-version" class="pill info">Version: —</span></div>
+    </div>
+    <div class="actions"><button type="button" id="refresh" class="secondary">Refresh</button><span class="result">Snapshot <span id="snapshot-at">—</span></span></div>
+  </header>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div id="notice" class="alert info" role="status">Checking your existing console session…</div>
+  <noscript><p class="alert">Enable JavaScript to load this page using your existing console session.</p></noscript>
+  <section id="workspace" aria-label="Chat archive health" aria-busy="false" hidden>
+    <div class="stats" role="group" aria-label="Upload backlog">
+      <div class="stat"><div class="label">Pending envelopes</div><div class="value" id="pending">—</div><div class="hint">Waiting in the local outbox</div></div>
+      <div class="stat"><div class="label">Oldest pending</div><div class="value" id="oldest">—</div><div class="hint">Age of the oldest unsent envelope</div></div>
+      <div class="stat"><div class="label">Last archive ack</div><div class="value small" id="last-ack">—</div><div class="hint">Last envelope the archive confirmed</div></div>
+    </div>
+    <section class="section" aria-labelledby="faults-heading">
+      <div class="section-head"><h2 id="faults-heading">Faults and drops</h2></div>
+      <div class="card health-card"><dl id="faults" class="health-grid"></dl></div>
+    </section>
+    <section class="section" aria-labelledby="outbox-heading">
+      <div class="section-head"><h2 id="outbox-heading">Outbox and uploader</h2></div>
+      <div class="card health-card"><dl id="outbox" class="health-grid"></dl></div>
+    </section>
+    <section class="section" aria-labelledby="hooks-heading">
+      <div class="section-head"><h2 id="hooks-heading">Hooks</h2><span class="count">Calls, latency and last activity since this plugin instance started</span></div>
+      <div class="card">
+        <div class="table-wrap" role="region" aria-label="Hook activity, horizontally scrollable" tabindex="0">
+          <table><caption class="sr-only">Hook calls, errors, latency and last activity</caption><thead><tr><th scope="col">Hook</th><th scope="col" class="num">Calls</th><th scope="col" class="num">Errors</th><th scope="col" class="num">p50 µs</th><th scope="col" class="num">p99 µs</th><th scope="col">Last call (UTC)</th></tr></thead><tbody id="hook-rows"></tbody></table>
+        </div>
+      </div>
+    </section>
+    <details class="card totals-details"><summary>Configuration summary, dead letters and requeue jobs</summary><div id="details" class="details-body"></div></details>
+  </section>
+  <footer class="footnote">
+    <p>This page reads the plugin's authenticated status route with your console session. It never retries a rejected session and never shows prompts, answers, tool data or secrets: the plugin reports counters, names and times only.</p>
+  </footer>
+</main>

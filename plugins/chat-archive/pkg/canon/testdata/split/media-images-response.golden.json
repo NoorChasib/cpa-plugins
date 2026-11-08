@@ -1,0 +1,56 @@
+{
+  "format": "media.images",
+  "raw_len": 3780,
+  "skeleton": "daf1e4b7ecca5f1588a2a6385720a6fa9ad0184551c14b4d4b0e71c1ba8b428f",
+  "n": 0,
+  "list_sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "refs": [
+    "5b9d029a4e7d554dbe92582dd48bb55bca04764bdc40ea2e2b0bebb4af91f514",
+    "daf1e4b7ecca5f1588a2a6385720a6fa9ad0184551c14b4d4b0e71c1ba8b428f"
+  ],
+  "pieces": [
+    {
+      "hash": "5b9d029a4e7d554dbe92582dd48bb55bca04764bdc40ea2e2b0bebb4af91f514",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2500
+    },
+    {
+      "hash": "daf1e4b7ecca5f1588a2a6385720a6fa9ad0184551c14b4d4b0e71c1ba8b428f",
+      "kind": "json",
+      "len": 459,
+      "json": {
+        "created": 1767225600,
+        "data": [
+          {
+            "b64_json": {
+              "$att": {
+                "enc": "base64",
+                "len": 2500,
+                "mime": "image/png",
+                "sha256": "5b9d029a4e7d554dbe92582dd48bb55bca04764bdc40ea2e2b0bebb4af91f514"
+              }
+            },
+            "mime_type": "image/png",
+            "revised_prompt": "A synthetic lighthouse at dusk, oil painting."
+          },
+          {
+            "revised_prompt": "Second synthetic lighthouse.",
+            "url": "https://images.example.test/gen/abc123.png"
+          }
+        ],
+        "meta": {
+          "links": [
+            "https://cdn.example.test/v1/x.png",
+            "not a url",
+            "ftp://example.test/file"
+          ]
+        }
+      }
+    }
+  ],
+  "media_urls_masked": [
+    "https://images.example.test/gen/abc123.png",
+    "https://cdn.example.test/v1/x.png"
+  ]
+}

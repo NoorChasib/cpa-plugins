@@ -1,0 +1,26 @@
+{
+  "format": "opaque",
+  "raw_len": 30,
+  "items": [
+    {
+      "id": "4b3c479e16ddbc920f2c22e301287d6d30c57e3946014b00abb9967fe4795f5c",
+      "f": {
+        "type": "text"
+      },
+      "p": "564a991cf0fea82487c24334a0a20f49dcdd9bbf618be69ad5841d05804a62a5"
+    }
+  ],
+  "n": 1,
+  "list_sha": "28bcad3244db8a39af7c91ee9ddfe4572e5a7a5314e1640e366ded9f5d4cec07",
+  "refs": [
+    "564a991cf0fea82487c24334a0a20f49dcdd9bbf618be69ad5841d05804a62a5"
+  ],
+  "pieces": [
+    {
+      "hash": "564a991cf0fea82487c24334a0a20f49dcdd9bbf618be69ad5841d05804a62a5",
+      "kind": "text",
+      "len": 30,
+      "text": "{\"model\": \"claude-test-model\","
+    }
+  ]
+}

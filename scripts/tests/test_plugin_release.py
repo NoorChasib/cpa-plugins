@@ -85,10 +85,17 @@ class ReleaseTests(unittest.TestCase):
         raw = b'\x7fELF\x02\x01' + b'\0' * 10 + b'\x03\x00\x3e\x00' + b'synthetic-library'
         library.write_bytes(raw)
         (directory / 'LICENSE').write_text('license')
-        if plugin == 'token-usage':
+        if plugin in release.NOTICES:
             (directory / 'docs').mkdir()
             (directory / 'docs/third-party-notices.txt').write_text('notices')
         (root / 'dist').mkdir()
+        if plugin == 'chat-archive':
+            # Chat Archive's own evidence: the v8.0.60 image, no quota-cache modes.
+            evidence = {'image': release.CHAT_ARCHIVE_IMAGE, 'code_commit': 'commit', 'candidate': plugin,
+                        'libraries': {plugin: {'sha256': release.digest(raw), 'version': '0.1.1'}}, 'peers': {}}
+            evidence_path = root / 'dist/chat-archive-evidence.json'
+            evidence_path.write_text(json.dumps(evidence))
+            return library, evidence_path, evidence
         evidence = {'image': release.IMAGE, 'code_commit': 'commit', 'candidate': plugin,
                     'optional_cache_modes': ['missing-cache-wait', 'standalone'],
                     'libraries': {plugin: {'sha256': release.digest(raw), 'version': '0.1.1'}}}
@@ -97,7 +104,7 @@ class ReleaseTests(unittest.TestCase):
         return library, evidence_path, evidence
 
     def test_exact_tested_package_and_notices(self):
-        for plugin in ('quota-cache', 'token-usage'):
+        for plugin in ('quota-cache', 'token-usage', 'chat-archive'):
             with self.subTest(plugin=plugin), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 library, _, _ = self.package_fixture(root, plugin)
@@ -113,8 +120,10 @@ class ReleaseTests(unittest.TestCase):
                     with zipfile.ZipFile(archive_path) as archive:
                         self.assertEqual(archive.read(plugin + '.so'), library.read_bytes())
                         self.assertIn('LICENSE', archive.namelist())
-                        if plugin == 'token-usage':
+                        if plugin in release.NOTICES:
                             self.assertEqual(archive.read('THIRD-PARTY-NOTICES.txt'), b'notices')
+                        else:
+                            self.assertNotIn('THIRD-PARTY-NOTICES.txt', archive.namelist())
                     release.package(tag, bundle)
                     self.assertEqual(archive_path.read_bytes(), original)
                     archive_path.write_bytes(b'corrupt')
@@ -143,6 +152,38 @@ class ReleaseTests(unittest.TestCase):
                 with patch.object(release, 'ROOT', root), patch.object(release, 'source_version', return_value='0.1.1'), \
                      patch.object(release.subprocess, 'check_output', return_value='commit'), self.assertRaises(ValueError):
                     release.package('quota-cache/v0.1.1', root / 'bundle')
+
+    # Chat Archive is released on CPA v8.0.60 evidence; the shared v8.0.4 image or another
+    # candidate's evidence must not package it, and its evidence never packages another plugin.
+    def test_chat_archive_requires_its_own_v8_0_60_evidence(self):
+        for failure in ('image', 'candidate', 'sha', 'shared_image'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                library, evidence_path, evidence = self.package_fixture(root, 'chat-archive')
+                if failure == 'image':
+                    evidence['image'] = 'wrong'
+                elif failure == 'shared_image':
+                    evidence['image'] = release.IMAGE
+                elif failure == 'candidate':
+                    evidence['candidate'] = 'token-usage'
+                else:
+                    library.write_bytes(library.read_bytes() + b'changed')
+                evidence_path.write_text(json.dumps(evidence))
+                with patch.object(release, 'ROOT', root), patch.object(release, 'source_version', return_value='0.1.1'), \
+                     patch.object(release.subprocess, 'check_output', return_value='commit'), self.assertRaises(ValueError):
+                    release.package('chat-archive/v0.1.1', root / 'bundle')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.package_fixture(root, 'chat-archive')
+            with patch.object(release, 'ROOT', root), patch.object(release, 'source_version', return_value='0.1.1'), \
+                 patch.object(release.subprocess, 'check_output', return_value='commit'), self.assertRaises((ValueError, OSError)):
+                release.package('quota-cache/v0.1.1', root / 'bundle')
+
+    def test_chat_archive_first_release_metadata(self):
+        entry = release.first_release_entry('chat-archive')
+        self.assertEqual(entry['id'], 'chat-archive')
+        self.assertEqual(entry['homepage'], release.URL + '/tree/main/plugins/chat-archive')
+        self.assertEqual(release.parse_tag('chat-archive/v0.1.0'), ('chat-archive', '0.1.0'))
 
     def test_concurrent_catalog_push_reapplies_to_new_main(self):
         with tempfile.TemporaryDirectory() as tmp:

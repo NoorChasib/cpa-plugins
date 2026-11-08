@@ -1,0 +1,125 @@
+{
+  "format": "interactions",
+  "raw_len": 590,
+  "skeleton": "65de259b9d5e0eeba016e5c4489b3825626342b26820cb6aee72777a219af4ab",
+  "tools": "03b19d04f86c4696858e3af3cf3a6c1e4da5ef681ab12f5745aaf689866ae317",
+  "system": [
+    {
+      "id": "ecba76deb19bba0c22c70914c59ea7f9c669495f1b9b369e52143b377782016d",
+      "f": {
+        "type": "system_instruction"
+      },
+      "p": "a63abbb0200ad6721a996f9695633ca4431c9d0562b1d9f5a23262dbc1e6f4d2"
+    }
+  ],
+  "items": [
+    {
+      "id": "759ab537558c3621e7b4d598c1c704f5cc8dbfa9679481c01d42160dafb7b97c",
+      "f": {
+        "type": "user_input"
+      },
+      "p": "9e688ae4f2a6b0a56b79bc3770d087b9c0191249751ed57cee800dd1ea54ddfd"
+    },
+    {
+      "id": "f7837486c708d10eb2ca48c2155931dcee00c87d7204cf30ff45ef58584a6672",
+      "f": {
+        "type": "thought"
+      },
+      "p": "92809613bd8e787bf899947f198420472465bed410d386e71760ad347d435059"
+    },
+    {
+      "id": "c9380e68cf5df357b54ec196128ba852804031fdee7985a9a35ef37d2e1dd825",
+      "f": {
+        "type": "model_output"
+      },
+      "p": "5e5e4251db804200aecc4e4133e5df243f59a33c606af7301b0a3203126e6a75"
+    }
+  ],
+  "n": 3,
+  "list_sha": "876135ae911ecbfcfd44ea5136a711f7a5e7b4cf8cc5d9dd06c8bd4c683bd601",
+  "refs": [
+    "65de259b9d5e0eeba016e5c4489b3825626342b26820cb6aee72777a219af4ab",
+    "03b19d04f86c4696858e3af3cf3a6c1e4da5ef681ab12f5745aaf689866ae317",
+    "a63abbb0200ad6721a996f9695633ca4431c9d0562b1d9f5a23262dbc1e6f4d2",
+    "9e688ae4f2a6b0a56b79bc3770d087b9c0191249751ed57cee800dd1ea54ddfd",
+    "92809613bd8e787bf899947f198420472465bed410d386e71760ad347d435059",
+    "5e5e4251db804200aecc4e4133e5df243f59a33c606af7301b0a3203126e6a75"
+  ],
+  "pieces": [
+    {
+      "hash": "65de259b9d5e0eeba016e5c4489b3825626342b26820cb6aee72777a219af4ab",
+      "kind": "json",
+      "len": 133,
+      "json": {
+        "generation_config": {
+          "thinking_level": "high"
+        },
+        "model": "gemini-test-model",
+        "previous_interaction_id": "int_synth_prev",
+        "stream": false
+      }
+    },
+    {
+      "hash": "03b19d04f86c4696858e3af3cf3a6c1e4da5ef681ab12f5745aaf689866ae317",
+      "kind": "json",
+      "len": 41,
+      "json": [
+        {
+          "name": "find_train",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "hash": "a63abbb0200ad6721a996f9695633ca4431c9d0562b1d9f5a23262dbc1e6f4d2",
+      "kind": "text",
+      "len": 35,
+      "text": "You are a synthetic travel planner."
+    },
+    {
+      "hash": "9e688ae4f2a6b0a56b79bc3770d087b9c0191249751ed57cee800dd1ea54ddfd",
+      "kind": "json",
+      "len": 55,
+      "json": {
+        "content": [
+          {
+            "text": "Plan a day trip.",
+            "type": "text"
+          }
+        ]
+      }
+    },
+    {
+      "hash": "92809613bd8e787bf899947f198420472465bed410d386e71760ad347d435059",
+      "kind": "json",
+      "len": 163,
+      "json": {
+        "signature": {
+          "$opaque": {
+            "len": 20,
+            "sha256": "33edd5bc48dda076e61b973d1645d9e6002361a7733b1a7e73361cd7a5f17975"
+          }
+        },
+        "summary": [
+          {
+            "text": "Check trains.",
+            "type": "text"
+          }
+        ]
+      }
+    },
+    {
+      "hash": "5e5e4251db804200aecc4e4133e5df243f59a33c606af7301b0a3203126e6a75",
+      "kind": "json",
+      "len": 62,
+      "json": {
+        "content": [
+          {
+            "text": "Take the morning train.",
+            "type": "text"
+          }
+        ]
+      }
+    }
+  ]
+}

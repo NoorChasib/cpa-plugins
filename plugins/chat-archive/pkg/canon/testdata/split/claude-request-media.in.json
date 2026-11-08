@@ -1,0 +1,17 @@
+{
+  "model": "claude-test-model",
+  "max_tokens": 512,
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "{{b64:png:3000}}"}, "cache_control": {"type": "ephemeral"}},
+      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "{{b64:png:1023}}"}},
+      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "{{b64:png:1024}}"}},
+      {"type": "image", "source": {"type": "url", "url": "https://example.test/picture.png"}},
+      {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "{{b64:pdf:4096}}"}, "title": "Synthetic report"},
+      {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "Plain synthetic document text."}, "title": "Notes"},
+      {"type": "document", "source": {"type": "file", "file_id": "file_synth_01"}},
+      {"type": "container_upload", "file_id": "file_synth_02"},
+      {"type": "text", "text": "Describe the picture and the report."}
+    ]}
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "format": "openai.responses",
+  "raw_len": 138,
+  "skeleton": "92061a7e893397f061a84b7962e22261a70584cbe3234d2ca634f54e12af803b",
+  "items": [
+    {
+      "id": "56a5067f64bc768bc8d2e3e933a324b3b79f434478e1dc191e8692239bc7c26e",
+      "m": {
+        "role": "user",
+        "type": "message"
+      }
+    },
+    {
+      "id": "21166103c14fb2d567ff13c348c6f228a3a9914e5efd4a7c6988a8a6d49208a3",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "3e84e98d2eb12702a9d02609f9adb69697a7f874be830010c440c2ecbb379b30"
+    }
+  ],
+  "n": 2,
+  "list_sha": "8520aa795f0f14756ffd926fe78f37acc3e141e868392fdbf7bfb65247d98822",
+  "refs": [
+    "92061a7e893397f061a84b7962e22261a70584cbe3234d2ca634f54e12af803b",
+    "3e84e98d2eb12702a9d02609f9adb69697a7f874be830010c440c2ecbb379b30"
+  ],
+  "pieces": [
+    {
+      "hash": "92061a7e893397f061a84b7962e22261a70584cbe3234d2ca634f54e12af803b",
+      "kind": "json",
+      "len": 26,
+      "json": {
+        "type": "response.append"
+      }
+    },
+    {
+      "hash": "3e84e98d2eb12702a9d02609f9adb69697a7f874be830010c440c2ecbb379b30",
+      "kind": "text",
+      "len": 13,
+      "text": "Now run lint."
+    }
+  ]
+}

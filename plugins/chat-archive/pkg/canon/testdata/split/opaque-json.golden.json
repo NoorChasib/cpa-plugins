@@ -1,0 +1,24 @@
+{
+  "format": "opaque",
+  "raw_len": 27,
+  "skeleton": "79738facdba6fe11a61afc9028f77a62b2c6314f71610594ff7902028af5f871",
+  "n": 0,
+  "list_sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "refs": [
+    "79738facdba6fe11a61afc9028f77a62b2c6314f71610594ff7902028af5f871"
+  ],
+  "pieces": [
+    {
+      "hash": "79738facdba6fe11a61afc9028f77a62b2c6314f71610594ff7902028af5f871",
+      "kind": "json",
+      "len": 27,
+      "json": {
+        "a": "synthetic",
+        "b": [
+          1,
+          2
+        ]
+      }
+    }
+  ]
+}

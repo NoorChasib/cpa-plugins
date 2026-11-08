@@ -1,0 +1,13 @@
+{
+  "model": "gemini-test-model",
+  "system_instruction": "You are a synthetic travel planner.",
+  "tools": [{"type": "function", "name": "find_train"}],
+  "generation_config": {"thinking_level": "high"},
+  "previous_interaction_id": "int_synth_prev",
+  "input": [
+    {"type": "user_input", "content": [{"type": "text", "text": "Plan a day trip."}]},
+    {"type": "thought", "summary": [{"type": "text", "text": "Check trains."}], "signature": "SW50ZXJhY3Rpb25TaWc="},
+    {"type": "model_output", "content": [{"type": "text", "text": "Take the morning train."}]}
+  ],
+  "stream": false
+}

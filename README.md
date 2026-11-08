@@ -6,6 +6,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | --- | --- |
 | [Account Health Pushover](plugins/account-health-pushover/README.md) | Notifications when credentials need attention; optional weekly quota alerts |
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
+| [Chat Archive](plugins/chat-archive/README.md) | Every chat exchange CPA serves, masked and uploaded to your private chat archive server, with a health page in the sidebar (needs CPA v8.0.60 or newer) |
 | [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | A Codex Models page to switch each model on or off for Codex, served to Codex at its own catalog URL |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
@@ -30,7 +31,7 @@ https://raw.githubusercontent.com/NoorChasib/cpa-plugins/main/registry.json
 
 All catalog entries, download assets, and current native repository links use **NoorChasib/cpa-plugins**. Current packages target Linux amd64/glibc and include the optional [quota-cache preview](docs/quota-cache-preview.md). `preview/registry.json` is a compatibility alias with the same entries; if you already added that URL, keep it to avoid changing CPA's installed source identity.
 
-Each plugin works independently. Account Health and Reset Priority use Quota Cache for quota observations only when you opt in with `use-quota-cache: true`; unavailable cache data then waits without direct-provider fallback. Reset Priority's optional API credit routing (`route-api-credits: true`) also reads Quota Cache, whatever `use-quota-cache` says: it needs Quota Cache 0.2.0 or newer, and leaves every request to CPA while Quota Cache's credit data is missing or stale. Auto Baseline and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no scheduled provider requests of its own; it contacts Codex or Claude only to spend a banked reset you confirm, and the routing activity it shows comes from CPA's own request counter, in-process.
+Each plugin works independently. Account Health and Reset Priority use Quota Cache for quota observations only when you opt in with `use-quota-cache: true`; unavailable cache data then waits without direct-provider fallback. Reset Priority's optional API credit routing (`route-api-credits: true`) also reads Quota Cache, whatever `use-quota-cache` says: it needs Quota Cache 0.2.0 or newer, and leaves every request to CPA while Quota Cache's credit data is missing or stale. Auto Baseline, Chat Archive and Token Usage do not consume provider quotas. Quota Glance reads the same cache and makes no scheduled provider requests of its own; it contacts Codex or Claude only to spend a banked reset you confirm, and the routing activity it shows comes from CPA's own request counter, in-process.
 
 
 Publish updates independently with a tag such as `quota-cache/v0.1.1`. The root workflow verifies that plugin, publishes its Linux amd64 package, and updates only its catalog entry in both source aliases. CPA then offers that plugin's update; installation/restarts remain under your control. See [release commands and recovery](docs/releases.md).
@@ -49,7 +50,7 @@ See each plugin's reference documentation for its exact build and verification c
 
 ## Compatibility
 
-Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
+Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. Chat Archive declares ABI 1 / RPC schema 7, needs CPA v8.0.60 or newer, and is verified in CPA v8.0.60 built from source and in the official v8.0.60 image beside every published plugin. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 

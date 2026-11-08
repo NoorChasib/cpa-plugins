@@ -1,0 +1,29 @@
+{
+  "model": "claude-test-model",
+  "max_tokens": 2048,
+  "tools": [
+    {"name": "Bash", "description": "Run a synthetic shell command.", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}}},
+    {"name": "mcp__chat-archive__search", "description": "Search the synthetic archive.", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}
+  ],
+  "tool_choice": {"type": "auto"},
+  "messages": [
+    {"role": "user", "content": "List the files."},
+    {"role": "assistant", "content": [
+      {"type": "text", "text": "Listing files."},
+      {"type": "tool_use", "id": "toolu_synth_01", "name": "Bash", "input": {"description": "List files", "command": "ls -la", "timeout": 12345678901234567890}, "caller": {"type": "direct"}},
+      {"type": "server_tool_use", "id": "srvtoolu_synth_02", "name": "web_search", "input": {"query": "synthetic weather"}},
+      {"type": "mcp_tool_use", "id": "mcptoolu_synth_03", "name": "lookup", "server_name": "synthetic-server", "input": {"term": "kite"}}
+    ]},
+    {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "toolu_synth_01", "content": "file-a.txt\nfile-b.txt\n", "cache_control": {"type": "ephemeral"}},
+      {"type": "tool_result", "tool_use_id": "toolu_synth_04", "is_error": true, "content": [
+        {"type": "text", "text": "Screenshot attached."},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "{{b64:png:2048}}"}},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "{{b64:png:200}}"}}
+      ]},
+      {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_synth_03", "content": [{"type": "text", "text": "kite: a light frame covered with cloth."}]},
+      {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_synth_02", "content": [{"type": "web_search_result", "title": "Synthetic forecast", "url": "https://example.test/forecast", "encrypted_content": "c3ludGhldGlj"}]},
+      {"type": "tool_result", "tool_use_id": "toolu_synth_05"}
+    ]}
+  ]
+}

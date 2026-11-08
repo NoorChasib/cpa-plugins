@@ -1,0 +1,29 @@
+{
+  "systemInstruction": {"role": "system", "parts": [{"text": "You are a synthetic gardener."}, {"text": "Be brief."}]},
+  "contents": [
+    {"role": "user", "parts": [
+      {"text": "What grows here?"},
+      {"inlineData": {"mimeType": "application/pdf", "data": "{{b64:pdf:2048}}", "displayName": "soil.pdf"}},
+      {"inline_data": {"mime_type": "image/png", "data": "{{b64:png:1500}}"}},
+      {"fileData": {"fileUri": "https://example.test/files/abc", "mimeType": "image/jpeg"}}
+    ]},
+    {"role": "model", "parts": [
+      {"text": "Consider the soil first.", "thought": true, "thoughtSignature": "R2VtaW5pVGhvdWdodFNpZ09uZQ=="},
+      {"functionCall": {"name": "soil_test", "args": {"depth": 10, "area": "north"}}, "thoughtSignature": "R2VtaW5pRnVuY1NpZw=="},
+      {"text": "", "thoughtSignature": "U2lnbmF0dXJlT25seVBhcnQ="},
+      {"function_call": {"name": "weather", "args": {}}, "thought_signature": "U25ha2VTaWc="}
+    ]},
+    {"role": "user", "parts": [
+      {"functionResponse": {"name": "soil_test", "response": {"ph": 6.5}, "parts": [{"inlineData": {"mimeType": "image/png", "data": "{{b64:png:1200}}"}}]}},
+      {"function_response": {"name": "weather", "response": {"sky": "clear"}}}
+    ]},
+    {"role": "model", "parts": [
+      {"executableCode": {"language": "PYTHON", "code": "print(6.5 > 6)"}},
+      {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "True\n"}},
+      {"toolCall": {"name": "synthetic_tool"}},
+      {"text": "Tomatoes will grow well."}
+    ]}
+  ],
+  "tools": [{"functionDeclarations": [{"name": "soil_test", "description": "Synthetic soil test."}]}],
+  "generationConfig": {"temperature": 0.2, "thinkingConfig": {"includeThoughts": true, "thinkingBudget": 1024}}
+}

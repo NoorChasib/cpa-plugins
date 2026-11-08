@@ -1,0 +1,475 @@
+{
+  "format": "openai.responses",
+  "raw_len": 13732,
+  "skeleton": "d4cfe074df4ee40966564cb76d929c9be721a3b094bd4a8df47b06a4ab633eb8",
+  "tools": "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+  "system": [
+    {
+      "id": "998b86629f6d3b44ca959dd3b345187fc778a6976fedb1f2e0d49f67b4d3a2b4",
+      "f": {
+        "type": "instructions"
+      },
+      "p": "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a"
+    }
+  ],
+  "items": [
+    {
+      "id": "99548d4838ffbd1d9d9cb4cfaaedc9b12b2c37121c1aec31ee72c8d9558a83e7",
+      "m": {
+        "content_form": "string",
+        "role": "developer",
+        "type": "message"
+      }
+    },
+    {
+      "id": "e3dbd74860908815e8dab3ef621ea11cf5f9d19edb4f2c25bc8fc007c5ac0d97",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "806661f41a28b73fecb42ebb1e3faf10969544244580cef86c219d68f5765797"
+    },
+    {
+      "id": "56a5067f64bc768bc8d2e3e933a324b3b79f434478e1dc191e8692239bc7c26e",
+      "m": {
+        "role": "user",
+        "type": "message"
+      }
+    },
+    {
+      "id": "b3042a27f8d86e796a9154cab18521c1fb8dab731e7d94b95f1bf9bd0dd187c9",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "41d1364cec7bcaed79e0245c250b64ae5ea65e2da6dfa684cb5b4842aca5522b",
+      "v": {
+        "prompt_cache_breakpoint": {
+          "mode": "auto",
+          "ttl": "5m"
+        }
+      }
+    },
+    {
+      "id": "521cba6a27030f7c32f87bc8a2cf1aa9e10aa37b80f16f4b64cc29dfc2b72343",
+      "f": {
+        "detail": "auto",
+        "image_url": {
+          "$att": {
+            "enc": "dataurl",
+            "len": 2048,
+            "mime": "image/png",
+            "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+          }
+        },
+        "type": "input_image"
+      }
+    },
+    {
+      "id": "4c5c5ece8bd4e3de3f531bb066a2e63fa5f6dc9962ac3d7ec23b3399a42ad888",
+      "f": {
+        "file_data": {
+          "$att": {
+            "enc": "dataurl",
+            "len": 1500,
+            "masked": true,
+            "mime": "text/plain",
+            "sha256": "733fc5e6d07d76ae56a378527f607882744e8177189db781fb15e28a64e2412d"
+          }
+        },
+        "filename": "log.txt",
+        "type": "input_file"
+      }
+    },
+    {
+      "id": "5a27fb3c5792bd5d4384c726fcffc8907d799b340e0af3ad328e2977cca13854",
+      "f": {
+        "file_id": "file-synth-09",
+        "type": "input_file"
+      }
+    },
+    {
+      "id": "fec1fb500f27df198d73e86260d4068f8df89d1cb30d2c5694ef3c7499cf57a6",
+      "m": {
+        "content_form": "string",
+        "role": "user"
+      }
+    },
+    {
+      "id": "60a4b284e14b47616dbfc4b03dd778772437603447a21d5868f29578b803df2f",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "869f14f56f2ae5dd05dd5080189e84a3cbbb9bb75bd20b406a8c48fba1b6a06c"
+    },
+    {
+      "id": "180a55a55032b3d671e4282fe58bd9a68825d252eb3f31281c81a06faeaddf45",
+      "f": {
+        "encrypted_content": {
+          "$opaque": {
+            "len": 32,
+            "sha256": "ab7fc74d3e906dd8ec7037f66c72b9d7673ee1dbbe316b7ac73090adc98fd99f"
+          }
+        },
+        "id": "rs_synth_1",
+        "type": "reasoning"
+      },
+      "p": "7c5345c37ac0373667a07d0c03206ee012d8f3e9aa8c03e8fafc7f40bb8ddff9"
+    },
+    {
+      "id": "f2625d473ca0cf0394db517fddac734498ed21c2e9e669688566db204c17f4c4",
+      "m": {
+        "id": "msg_synth_2",
+        "phase": "commentary",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    },
+    {
+      "id": "161b892d83d2e3303185d253229f5e45b4826524c72959e715d5c12687c9e665",
+      "f": {
+        "annotations": [],
+        "type": "output_text"
+      },
+      "p": "359cdbbfae76811ffd9925195e5354bd17b037202855ee9046da757ed740d4f3"
+    },
+    {
+      "id": "af6788b57f6be6c7b7f418781dadbd2fef820acea3928264a2c3487a1fdfe07f",
+      "f": {
+        "call_id": "call_synth_3",
+        "id": "fc_synth_3",
+        "name": "shell",
+        "namespace": "tools",
+        "status": "completed",
+        "type": "function_call"
+      },
+      "p": "c98be2f8e5651de8b025779e872f7b73edf8536ca849d7e6aab1b8bcdc30d3c7"
+    },
+    {
+      "id": "b1f28f306bef9205eda11211d6dc6c654062d92a2597cf12a526160ee38bb8e7",
+      "f": {
+        "call_id": "call_synth_3",
+        "type": "function_call_output"
+      },
+      "p": "7b4bfc32d7fd390f7d95a627b5e929cceadc3e5fad95d6a40507e1730c75e3ed"
+    },
+    {
+      "id": "2ae2add735e4a544568974dac86f0bd46292d155dbd5222e23a629764deb7fc7",
+      "f": {
+        "call_id": "call_synth_4",
+        "id": "ctc_synth_4",
+        "name": "apply_patch",
+        "type": "custom_tool_call"
+      },
+      "p": "026383d0bf8b7d13cdd1eabc86c0cfe4117b898b5cde296bda5d2c40194d6ee4"
+    },
+    {
+      "id": "4b089ca58130c280d369ab7b371c2f9d1d31497f4a6dbf1670c3dc9c45f54c65",
+      "f": {
+        "call_id": "call_synth_4",
+        "type": "custom_tool_call_output"
+      },
+      "p": "19ace6cb2c3ef6d1e7016b88a33eb413c9282b5eaabed0ba2f863e295cb2d0dd"
+    },
+    {
+      "id": "3defbeeda3df79f7469cf0a0b6508ac73a8cd3d26b2860ecb1167f539e24c8e6",
+      "f": {
+        "type": "computer_call_output"
+      },
+      "p": "aebf28492ce99b6088bc89dce20d4e317c3c5ca2e045e8bb55ef6090581d9ca6"
+    },
+    {
+      "id": "882cd9cbb1726b25e8c510804cbff0f4034ad0c91334cb470271edcf832b0954",
+      "f": {
+        "encrypted_content": {
+          "$opaque": {
+            "len": 20,
+            "sha256": "e3c427b5ffd6aa16e8e029dcad83f7a692206c9430d7f20e2a5f1ca83467e08e"
+          }
+        },
+        "id": "cmp_synth_6",
+        "type": "compaction"
+      }
+    },
+    {
+      "id": "d66e6cc69657c953c8094773e0de4e5b5c27b1de531deedadcdcabfdf0192873",
+      "f": {
+        "encrypted_content": {
+          "$opaque": {
+            "len": 42,
+            "sha256": "e68a8a313f91cf9b50243b3384cb243f45a88ad8a0c6f7ad4dbb9fc4042a632d"
+          }
+        },
+        "id": "cmp_synth_7",
+        "type": "compaction"
+      }
+    },
+    {
+      "id": "af6e5cc0941e4e4d53dfd1e43e1b7ad416010c0d2d3d4ffd622b509efc1ff405",
+      "f": {
+        "type": "image_generation_call"
+      },
+      "p": "bfa306341246dd4da64b8e3e96a3884a54f0323bae489f8eab2cf7c4cb176502"
+    },
+    {
+      "id": "82cb83fcc6f521e18490883cf99ced5752cf3efe2cfff823c9091184aeb1c946",
+      "f": {
+        "type": "web_search_call"
+      },
+      "p": "8305bea49529f1c481fa1c4cae7ba8de3941d95cc584fe42ba6b3b956c2ff522"
+    },
+    {
+      "id": "874816c5dba7a73e7b449efe32fc2dbed066fdfb1e958690f3aa98591b520a0a",
+      "f": {
+        "type": "additional_tools"
+      },
+      "p": "85e2675f4472acb52d5bbe95bf1e82be4a3c080fa10ee41290f579a67f174b69"
+    }
+  ],
+  "n": 22,
+  "list_sha": "74c36f5f74eca7b98464f6ceebb7ee193f9c94b1728ee2856fe7d6600eaf030f",
+  "refs": [
+    "d4cfe074df4ee40966564cb76d929c9be721a3b094bd4a8df47b06a4ab633eb8",
+    "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+    "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a",
+    "806661f41a28b73fecb42ebb1e3faf10969544244580cef86c219d68f5765797",
+    "41d1364cec7bcaed79e0245c250b64ae5ea65e2da6dfa684cb5b4842aca5522b",
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "733fc5e6d07d76ae56a378527f607882744e8177189db781fb15e28a64e2412d",
+    "869f14f56f2ae5dd05dd5080189e84a3cbbb9bb75bd20b406a8c48fba1b6a06c",
+    "7c5345c37ac0373667a07d0c03206ee012d8f3e9aa8c03e8fafc7f40bb8ddff9",
+    "359cdbbfae76811ffd9925195e5354bd17b037202855ee9046da757ed740d4f3",
+    "c98be2f8e5651de8b025779e872f7b73edf8536ca849d7e6aab1b8bcdc30d3c7",
+    "7b4bfc32d7fd390f7d95a627b5e929cceadc3e5fad95d6a40507e1730c75e3ed",
+    "026383d0bf8b7d13cdd1eabc86c0cfe4117b898b5cde296bda5d2c40194d6ee4",
+    "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+    "19ace6cb2c3ef6d1e7016b88a33eb413c9282b5eaabed0ba2f863e295cb2d0dd",
+    "cf7f14a5efd2a71a4a7b4937b6c60c2f5f9a01e513d4f771a789cddf126a9bd1",
+    "aebf28492ce99b6088bc89dce20d4e317c3c5ca2e045e8bb55ef6090581d9ca6",
+    "fd04a4765f8f029c98eabba6f658ae468a916d3c09534644c8f3c95da83b173f",
+    "bfa306341246dd4da64b8e3e96a3884a54f0323bae489f8eab2cf7c4cb176502",
+    "8305bea49529f1c481fa1c4cae7ba8de3941d95cc584fe42ba6b3b956c2ff522",
+    "85e2675f4472acb52d5bbe95bf1e82be4a3c080fa10ee41290f579a67f174b69"
+  ],
+  "pieces": [
+    {
+      "hash": "d4cfe074df4ee40966564cb76d929c9be721a3b094bd4a8df47b06a4ab633eb8",
+      "kind": "json",
+      "len": 186,
+      "json": {
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "model": "gpt-test-codex",
+        "prompt_cache_key": "synthetic-cache-key",
+        "reasoning": {
+          "effort": "medium",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true
+      }
+    },
+    {
+      "hash": "8bb6d5dd6ad91bdedcf22ecbc01ad329f67f618b980dea6708ed193a2108a896",
+      "kind": "json",
+      "len": 123,
+      "json": [
+        {
+          "description": "Run a synthetic command.",
+          "name": "shell",
+          "parameters": {
+            "type": "object"
+          },
+          "strict": false,
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "hash": "0e2dfc65c59981f2d6e1ed0617c406e934c7c2adfe319e5660825b0f63c2d64a",
+      "kind": "text",
+      "len": 33,
+      "text": "You are a synthetic coding agent."
+    },
+    {
+      "hash": "806661f41a28b73fecb42ebb1e3faf10969544244580cef86c219d68f5765797",
+      "kind": "text",
+      "len": 27,
+      "text": "Follow the synthetic rules."
+    },
+    {
+      "hash": "41d1364cec7bcaed79e0245c250b64ae5ea65e2da6dfa684cb5b4842aca5522b",
+      "kind": "text",
+      "len": 13,
+      "text": "Fix the test."
+    },
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "733fc5e6d07d76ae56a378527f607882744e8177189db781fb15e28a64e2412d",
+      "kind": "attachment",
+      "content_type": "text/plain",
+      "len": 1500,
+      "text": "synthetic line 0000: amber kites drift over quiet hills.\nsynthetic line 0001: amber kites drift over quiet hills.\nsynthetic line 0002: amber kites drift over quiet hills.\nsynthetic line 0003: amber kites drift over quiet hills.\nsynthetic line 0004: amber kites drift over quiet hills.\nsynthetic line 0005: amber kites drift over quiet hills.\nsynthetic line 0006: amber kites drift over quiet hills.\nsynthetic line 0007: amber kites drift over quiet hills.\nsynthetic line 0008: amber kites drift over quiet hills.\nsynthetic line 0009: amber kites drift over quiet hills.\nsynthetic line 0010: amber kites drift over quiet hills.\nsynthetic line 0011: amber kites drift over quiet hills.\nsynthetic line 0012: amber kites drift over quiet hills.\nsynthetic line 0013: amber kites drift over quiet hills.\nsynthetic line 0014: amber kites drift over quiet hills.\nsynthetic line 0015: amber kites drift over quiet hills.\nsynthetic line 0016: amber kites drift over quiet hills.\nsynthetic line 0017: amber kites drift over quiet hills.\nsynthetic line 0018: amber kites drift over quiet hills.\nsynthetic line 0019: amber kites drift over quiet hills.\nsynthetic line 0020: amber kites drift over quiet hills.\nsynthetic line 0021: amber kites drift over quiet hills.\nsynthetic line 0022: amber kites drift over quiet hills.\nsynthetic line 0023: amber kites drift over quiet hills.\nsynthetic line 0024: amber kites drift over quiet hills.\nsynthetic line 0025: amber kites drift over quiet hills.\nsynthetic line 002"
+    },
+    {
+      "hash": "869f14f56f2ae5dd05dd5080189e84a3cbbb9bb75bd20b406a8c48fba1b6a06c",
+      "kind": "text",
+      "len": 37,
+      "text": "An easy input message without a type."
+    },
+    {
+      "hash": "7c5345c37ac0373667a07d0c03206ee012d8f3e9aa8c03e8fafc7f40bb8ddff9",
+      "kind": "json",
+      "len": 153,
+      "json": {
+        "content": [
+          {
+            "text": "The assertion compares two lists.",
+            "type": "reasoning_text"
+          }
+        ],
+        "summary": [
+          {
+            "text": "Look at the failing test.",
+            "type": "summary_text"
+          }
+        ]
+      }
+    },
+    {
+      "hash": "359cdbbfae76811ffd9925195e5354bd17b037202855ee9046da757ed740d4f3",
+      "kind": "text",
+      "len": 18,
+      "text": "Running the tests."
+    },
+    {
+      "hash": "c98be2f8e5651de8b025779e872f7b73edf8536ca849d7e6aab1b8bcdc30d3c7",
+      "kind": "json",
+      "len": 47,
+      "json": "{\"cmd\":[\"go\",\"test\"],\"cwd\":\"/work\"}"
+    },
+    {
+      "hash": "7b4bfc32d7fd390f7d95a627b5e929cceadc3e5fad95d6a40507e1730c75e3ed",
+      "kind": "text",
+      "len": 23,
+      "text": "ok  synthetic/pkg 0.01s"
+    },
+    {
+      "hash": "026383d0bf8b7d13cdd1eabc86c0cfe4117b898b5cde296bda5d2c40194d6ee4",
+      "kind": "text",
+      "len": 51,
+      "text": "*** Begin Patch\n*** Update File: a.go\n*** End Patch"
+    },
+    {
+      "hash": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1100
+    },
+    {
+      "hash": "19ace6cb2c3ef6d1e7016b88a33eb413c9282b5eaabed0ba2f863e295cb2d0dd",
+      "kind": "json",
+      "len": 209,
+      "json": [
+        {
+          "text": "Patched.",
+          "type": "input_text"
+        },
+        {
+          "image_url": {
+            "$att": {
+              "enc": "dataurl",
+              "len": 1100,
+              "mime": "image/png",
+              "sha256": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45"
+            }
+          },
+          "type": "input_image"
+        }
+      ]
+    },
+    {
+      "hash": "cf7f14a5efd2a71a4a7b4937b6c60c2f5f9a01e513d4f771a789cddf126a9bd1",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1300
+    },
+    {
+      "hash": "aebf28492ce99b6088bc89dce20d4e317c3c5ca2e045e8bb55ef6090581d9ca6",
+      "kind": "json",
+      "len": 211,
+      "json": {
+        "call_id": "call_synth_5",
+        "output": {
+          "image_url": {
+            "$att": {
+              "enc": "dataurl",
+              "len": 1300,
+              "mime": "image/png",
+              "sha256": "cf7f14a5efd2a71a4a7b4937b6c60c2f5f9a01e513d4f771a789cddf126a9bd1"
+            }
+          },
+          "type": "computer_screenshot"
+        }
+      }
+    },
+    {
+      "hash": "fd04a4765f8f029c98eabba6f658ae468a916d3c09534644c8f3c95da83b173f",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2200
+    },
+    {
+      "hash": "bfa306341246dd4da64b8e3e96a3884a54f0323bae489f8eab2cf7c4cb176502",
+      "kind": "json",
+      "len": 181,
+      "json": {
+        "id": "ig_synth_8",
+        "result": {
+          "$att": {
+            "enc": "base64",
+            "len": 2200,
+            "mime": "image/png",
+            "sha256": "fd04a4765f8f029c98eabba6f658ae468a916d3c09534644c8f3c95da83b173f"
+          }
+        },
+        "status": "completed"
+      }
+    },
+    {
+      "hash": "8305bea49529f1c481fa1c4cae7ba8de3941d95cc584fe42ba6b3b956c2ff522",
+      "kind": "json",
+      "len": 87,
+      "json": {
+        "action": {
+          "query": "synthetic",
+          "type": "search"
+        },
+        "id": "ws_synth_9",
+        "status": "completed"
+      }
+    },
+    {
+      "hash": "85e2675f4472acb52d5bbe95bf1e82be4a3c080fa10ee41290f579a67f174b69",
+      "kind": "json",
+      "len": 96,
+      "json": {
+        "role": "developer",
+        "tools": [
+          {
+            "name": "extra",
+            "parameters": {
+              "type": "object"
+            },
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "msg_synth_01",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-test-model",
+  "content": [
+    {"type": "thinking", "thinking": "Count upward.", "signature": "UmVzcG9uc2VTaWduYXR1cmU="},
+    {"type": "text", "text": "One, two, three."},
+    {"type": "tool_use", "id": "toolu_synth_09", "name": "Bash", "input": {"command": "echo done"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 12, "output_tokens": 7, "cache_read_input_tokens": 0}
+}

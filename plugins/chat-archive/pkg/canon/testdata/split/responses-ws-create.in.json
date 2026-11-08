@@ -1,0 +1,13 @@
+{
+  "type": "response.create",
+  "event_id": "evt_synth_1",
+  "stream_id": "lane-1",
+  "model": "gpt-test-codex",
+  "stream": true,
+  "previous_response_id": "resp_synth_prev",
+  "generate": true,
+  "input": [
+    {"type": "function_call_output", "call_id": "call_synth_3", "output": "ok  synthetic/pkg 0.01s"},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now run lint."}]}
+  ]
+}

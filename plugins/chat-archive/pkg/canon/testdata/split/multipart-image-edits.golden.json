@@ -1,0 +1,120 @@
+{
+  "format": "multipart",
+  "raw_len": 5864,
+  "skeleton": "e65d59ede2cd6de0d3f57d96790d7092a3536b4cfbc6b5140a5f912e5959988c",
+  "items": [
+    {
+      "id": "141d0cbe0906199b6bd4d5fc92e9faedda5192a38afd8856d82deb6a3c3196ef",
+      "f": {
+        "data": {
+          "$att": {
+            "enc": "raw",
+            "len": 2048,
+            "mime": "image/png",
+            "sha256": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52"
+          }
+        },
+        "filename": "fence.png",
+        "name": "image",
+        "type": "file"
+      }
+    },
+    {
+      "id": "f781be791e21d823d37ef626d816d78575c5a27517f83ce09d5ec6db9d07d85a",
+      "f": {
+        "data": {
+          "$att": {
+            "enc": "raw",
+            "len": 1100,
+            "mime": "image/png",
+            "sha256": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45"
+          }
+        },
+        "filename": "",
+        "name": "mask",
+        "type": "file"
+      }
+    },
+    {
+      "id": "00db5a25b47dc9a809da00eabe5ef10c928f5c726997556ec8ec5d6ba2fe4fe1",
+      "f": {
+        "data": {
+          "$att": {
+            "enc": "raw",
+            "len": 1069,
+            "masked": true,
+            "mime": "text/plain",
+            "sha256": "a2c940a9175249f595d321e345d6dfc717b946d36fe491143d19b1ddad217864"
+          }
+        },
+        "filename": "notes.txt",
+        "name": "notes",
+        "type": "file"
+      }
+    },
+    {
+      "id": "a98fafaeff8bfe5ad6b086a750977d0d52bc06d92dfb7daf4e16bdc79e348498",
+      "f": {
+        "data": {
+          "$att": {
+            "enc": "raw",
+            "len": 900,
+            "mime": "application/octet-stream",
+            "sha256": "ccb73bb287835c4d727bc43463b892f256a31e55b5314f6c8f6d8b05f999460e"
+          }
+        },
+        "name": "raw",
+        "type": "file"
+      }
+    }
+  ],
+  "n": 4,
+  "list_sha": "138cf3f6c76753d1a6524a97c8ee81689bfc66e5e74ace065c3b71f52ca3a3f1",
+  "refs": [
+    "e65d59ede2cd6de0d3f57d96790d7092a3536b4cfbc6b5140a5f912e5959988c",
+    "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+    "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+    "a2c940a9175249f595d321e345d6dfc717b946d36fe491143d19b1ddad217864",
+    "ccb73bb287835c4d727bc43463b892f256a31e55b5314f6c8f6d8b05f999460e"
+  ],
+  "pieces": [
+    {
+      "hash": "e65d59ede2cd6de0d3f57d96790d7092a3536b4cfbc6b5140a5f912e5959988c",
+      "kind": "json",
+      "len": 77,
+      "json": {
+        "model": "gpt-image-test",
+        "n": "1",
+        "prompt": "Paint the synthetic fence blue."
+      }
+    },
+    {
+      "hash": "b24a4c4ee2a947730f0896b6fc981c88cab062e1a83fca9d5162e9ab5867ff52",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 2048
+    },
+    {
+      "hash": "73b51627fc049290984aa13ea24c206258723393456e6226f3ecbcafe89ded45",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1100
+    },
+    {
+      "hash": "a2c940a9175249f595d321e345d6dfc717b946d36fe491143d19b1ddad217864",
+      "kind": "attachment",
+      "content_type": "text/plain",
+      "len": 1069,
+      "text": "synthetic line 0000: amber kites drift over quiet hills.\nsynthetic line 0001: amber kites drift over quiet hills.\nsynthetic line 0002: amber kites drift over quiet hills.\nsynthetic line 0003: amber kites drift over quiet hills.\ndeploy credential [masked:test-canary] end\nsynthetic line 0004: amber kites drift over quiet hills.\nsynthetic line 0005: amber kites drift over quiet hills.\nsynthetic line 0006: amber kites drift over quiet hills.\nsynthetic line 0007: amber kites drift over quiet hills.\nsynthetic line 0008: amber kites drift over quiet hills.\nsynthetic line 0009: amber kites drift over quiet hills.\nsynthetic line 0010: amber kites drift over quiet hills.\nsynthetic line 0011: amber kites drift over quiet hills.\nsynthetic line 0012: amber kites drift over quiet hills.\nsynthetic line 0013: amber kites drift over quiet hills.\nsynthetic line 0014: amber kites drift over quiet hills.\nsynthetic line 0015: amber kites drift over quiet hills.\nsynthetic line 0016: amber kites drift over quiet hills.\nsynthetic line 0017: amber kites drift over quiet hills.\n"
+    },
+    {
+      "hash": "ccb73bb287835c4d727bc43463b892f256a31e55b5314f6c8f6d8b05f999460e",
+      "kind": "attachment",
+      "content_type": "application/octet-stream",
+      "len": 900
+    }
+  ],
+  "hits": {
+    "test-canary": 1
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "format": "gemini.generate",
+  "raw_len": 8010,
+  "skeleton": "8e196d06ad4ede560d57cb001f6c4f37a477d4fd64d4e0e41d595ab34844856e",
+  "tools": "46b452078a4c2ff41ac96fae6b5dd562e3de7f625ac5579b654f73d0c09d9287",
+  "system": [
+    {
+      "id": "d041dbe40c8f490dbf6c6ee815264595fc728a792a2819747ce5419bd9287a5b",
+      "f": {},
+      "p": "b1b41a6d09fbb0b8a101819899cb28b71db14fdf89d3cdf6892280bfb2935acc"
+    },
+    {
+      "id": "40247bf504ea24a5ba3e2266e1c349a4e18064cd4c3ae3db3299ba16768997b1",
+      "f": {},
+      "p": "213c22ed7234eb11116e1e88f314c73cb3a019b5c87fe224b6ce5665bd9ec50e"
+    }
+  ],
+  "items": [
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "35470d4b2aff72f8033fd8045b344cba9b653f823c3daac7524171c3e753c42b",
+      "f": {},
+      "p": "e5d09cc343972f37569b3bfb55738e2a96d93f7117721572a66ebd10f2625b23"
+    },
+    {
+      "id": "f12eab9cec22b3f890db202a867941fb9e1f3b128857eec59e6f2fed02646407",
+      "f": {
+        "inlineData": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 2048,
+              "mime": "application/pdf",
+              "sha256": "b99b21c08bf182c535c8062887f04de97a07adb2d4c4df780d5d43557778bddb"
+            }
+          },
+          "displayName": "soil.pdf",
+          "mimeType": "application/pdf"
+        }
+      }
+    },
+    {
+      "id": "a99fa77a3b15984f3969c786e651b8ccfdeef25271d8b2f90e391742e5f6d2df",
+      "f": {
+        "inline_data": {
+          "data": {
+            "$att": {
+              "enc": "base64",
+              "len": 1500,
+              "mime": "image/png",
+              "sha256": "a781b96c11ea88143f7f849c759bea8d2498a72e70fb1f9d1d0ef3462334ec8e"
+            }
+          },
+          "mime_type": "image/png"
+        }
+      }
+    },
+    {
+      "id": "b43287817012ad1304cd4713c5d53b475cb8e2cee1d2b59cf81ec8e2f93d9ba8",
+      "f": {
+        "fileData": {
+          "fileUri": "https://example.test/files/abc",
+          "mimeType": "image/jpeg"
+        }
+      }
+    },
+    {
+      "id": "617d047ca21b32e09bd283ac492a1617a31926b1d49178381603c92dd8de7578",
+      "m": {
+        "role": "model"
+      }
+    },
+    {
+      "id": "aa19a9a96af9cc544505d5432bb85b74a18ba931f7d7959b2b8954de295e47b8",
+      "f": {
+        "thought": true,
+        "thoughtSignature": {
+          "$opaque": {
+            "len": 28,
+            "sha256": "d73bed7fe48c30bb75ca13d642a3dc9c92e2b68a9e35c8d98337167a4e1f9edb"
+          }
+        }
+      },
+      "p": "3447d01f1d25792e3118a9eda1d0dd3935a689a9023b523c3b2526c9c69d7347"
+    },
+    {
+      "id": "46408f14d4b53939256a162e08d07cabd4b5176e15f351022121a45def74c588",
+      "f": {
+        "thoughtSignature": {
+          "$opaque": {
+            "len": 20,
+            "sha256": "dcf577603d6df0cee8dec5cb65f07419d898c8c0d2e6775fb026f90ac634cb92"
+          }
+        },
+        "type": "functionCall"
+      },
+      "p": "d8fbef8ee1e38e6f8e000a2df8c34998e9a0e4aaaf6665406eb61efe0540a270"
+    },
+    {
+      "id": "7062c25031ebbd3b5f1b759d8eb4c2542ed285d5ff7ceccce52876357f101a06",
+      "f": {
+        "thoughtSignature": {
+          "$opaque": {
+            "len": 24,
+            "sha256": "00412713f1ef28a6760bef22eba5368b81f92578a88e954022bcfddf3f20e2a0"
+          }
+        }
+      },
+      "p": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "39b19517f6309011eb9ccf356a4d15db3d6a63277100eb6b7d0c032c00a49b21",
+      "f": {
+        "thought_signature": {
+          "$opaque": {
+            "len": 12,
+            "sha256": "3e4a01e3546b3a424a35fd5244030f31d2b91a3ae1da272041201948a6c6795d"
+          }
+        },
+        "type": "function_call"
+      },
+      "p": "6c65a2c7505bad6e2d5d914800e391ccdf9c1cd2dd30fb3e3a7b205806ed9241"
+    },
+    {
+      "id": "118d9f1b0eadbd0b8c94d6940111b23c1719f144e1aa7f8452960c94408db313",
+      "m": {
+        "role": "user"
+      }
+    },
+    {
+      "id": "c696f9e43be716dcc30080f41963a0ffd4d11e397b0a0f2f8637e7771dee3e52",
+      "f": {
+        "type": "functionResponse"
+      },
+      "p": "2fa2e671cb5fe0975e4fe27d37fc34899837280232c1d9443e8d7cf38e5a6981"
+    },
+    {
+      "id": "7113a830770125ad313cb7bb8e1030bbec508d4948c4069353bb86178b62eedc",
+      "f": {
+        "type": "function_response"
+      },
+      "p": "b7bb590108dd23992626b31cff8e2cb96388d1482d0320a294414169e381f8fa"
+    },
+    {
+      "id": "617d047ca21b32e09bd283ac492a1617a31926b1d49178381603c92dd8de7578",
+      "m": {
+        "role": "model"
+      }
+    },
+    {
+      "id": "ade1842ba7143bdc4a02ab5c1efd13efb9dfcc15a18c13a1d31e23bf44352453",
+      "f": {
+        "type": "executableCode"
+      },
+      "p": "56396ae293eb3ab8b6d57347effcdd5b457388820e140d42526be710294aa44d"
+    },
+    {
+      "id": "1ef6f9de930632832160cfcc25343f7883b8d6d5fc3529cd5462db84c66283c9",
+      "f": {
+        "type": "codeExecutionResult"
+      },
+      "p": "c9538353541132b6d9c4d6a5b415e3dace1b4d0991a8098b21c2629cabb519c1"
+    },
+    {
+      "id": "423e8eea8093954af4e9b32b436b6d3f679cdea02e4b905fb3ad9ef162167e45",
+      "f": {
+        "toolCall": {
+          "name": "synthetic_tool"
+        }
+      }
+    },
+    {
+      "id": "a96f4a7898d4a6d41a368c59f6e35a41a5934bbcb475ab17c1f19b94bb02699c",
+      "f": {},
+      "p": "f9f188dd2b186663818dc1f5d3fdbba51c69ad2d91b5c6974b5814e0d2ff97d8"
+    }
+  ],
+  "n": 18,
+  "list_sha": "dd0c0b35ec6e14e2372f16d3315714d558a78ffb61347921e04405bd0f5fb19a",
+  "refs": [
+    "8e196d06ad4ede560d57cb001f6c4f37a477d4fd64d4e0e41d595ab34844856e",
+    "46b452078a4c2ff41ac96fae6b5dd562e3de7f625ac5579b654f73d0c09d9287",
+    "b1b41a6d09fbb0b8a101819899cb28b71db14fdf89d3cdf6892280bfb2935acc",
+    "213c22ed7234eb11116e1e88f314c73cb3a019b5c87fe224b6ce5665bd9ec50e",
+    "e5d09cc343972f37569b3bfb55738e2a96d93f7117721572a66ebd10f2625b23",
+    "b99b21c08bf182c535c8062887f04de97a07adb2d4c4df780d5d43557778bddb",
+    "a781b96c11ea88143f7f849c759bea8d2498a72e70fb1f9d1d0ef3462334ec8e",
+    "3447d01f1d25792e3118a9eda1d0dd3935a689a9023b523c3b2526c9c69d7347",
+    "d8fbef8ee1e38e6f8e000a2df8c34998e9a0e4aaaf6665406eb61efe0540a270",
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "6c65a2c7505bad6e2d5d914800e391ccdf9c1cd2dd30fb3e3a7b205806ed9241",
+    "3e7e92e2204bf5c301c7fa4a5b94a9128126301b9714977052d35a744b8dd7ab",
+    "2fa2e671cb5fe0975e4fe27d37fc34899837280232c1d9443e8d7cf38e5a6981",
+    "b7bb590108dd23992626b31cff8e2cb96388d1482d0320a294414169e381f8fa",
+    "56396ae293eb3ab8b6d57347effcdd5b457388820e140d42526be710294aa44d",
+    "c9538353541132b6d9c4d6a5b415e3dace1b4d0991a8098b21c2629cabb519c1",
+    "f9f188dd2b186663818dc1f5d3fdbba51c69ad2d91b5c6974b5814e0d2ff97d8"
+  ],
+  "pieces": [
+    {
+      "hash": "8e196d06ad4ede560d57cb001f6c4f37a477d4fd64d4e0e41d595ab34844856e",
+      "kind": "json",
+      "len": 142,
+      "json": {
+        "generationConfig": {
+          "temperature": 0.2,
+          "thinkingConfig": {
+            "includeThoughts": true,
+            "thinkingBudget": 1024
+          }
+        },
+        "systemInstruction": {
+          "role": "system"
+        }
+      }
+    },
+    {
+      "hash": "46b452078a4c2ff41ac96fae6b5dd562e3de7f625ac5579b654f73d0c09d9287",
+      "kind": "json",
+      "len": 86,
+      "json": [
+        {
+          "functionDeclarations": [
+            {
+              "description": "Synthetic soil test.",
+              "name": "soil_test"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "hash": "b1b41a6d09fbb0b8a101819899cb28b71db14fdf89d3cdf6892280bfb2935acc",
+      "kind": "text",
+      "len": 29,
+      "text": "You are a synthetic gardener."
+    },
+    {
+      "hash": "213c22ed7234eb11116e1e88f314c73cb3a019b5c87fe224b6ce5665bd9ec50e",
+      "kind": "text",
+      "len": 9,
+      "text": "Be brief."
+    },
+    {
+      "hash": "e5d09cc343972f37569b3bfb55738e2a96d93f7117721572a66ebd10f2625b23",
+      "kind": "text",
+      "len": 16,
+      "text": "What grows here?"
+    },
+    {
+      "hash": "b99b21c08bf182c535c8062887f04de97a07adb2d4c4df780d5d43557778bddb",
+      "kind": "attachment",
+      "content_type": "application/pdf",
+      "len": 2048
+    },
+    {
+      "hash": "a781b96c11ea88143f7f849c759bea8d2498a72e70fb1f9d1d0ef3462334ec8e",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1500
+    },
+    {
+      "hash": "3447d01f1d25792e3118a9eda1d0dd3935a689a9023b523c3b2526c9c69d7347",
+      "kind": "text",
+      "len": 24,
+      "text": "Consider the soil first."
+    },
+    {
+      "hash": "d8fbef8ee1e38e6f8e000a2df8c34998e9a0e4aaaf6665406eb61efe0540a270",
+      "kind": "json",
+      "len": 55,
+      "json": {
+        "args": {
+          "area": "north",
+          "depth": 10
+        },
+        "name": "soil_test"
+      }
+    },
+    {
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "kind": "text",
+      "len": 0,
+      "text": ""
+    },
+    {
+      "hash": "6c65a2c7505bad6e2d5d914800e391ccdf9c1cd2dd30fb3e3a7b205806ed9241",
+      "kind": "json",
+      "len": 28,
+      "json": {
+        "args": {},
+        "name": "weather"
+      }
+    },
+    {
+      "hash": "3e7e92e2204bf5c301c7fa4a5b94a9128126301b9714977052d35a744b8dd7ab",
+      "kind": "attachment",
+      "content_type": "image/png",
+      "len": 1200
+    },
+    {
+      "hash": "2fa2e671cb5fe0975e4fe27d37fc34899837280232c1d9443e8d7cf38e5a6981",
+      "kind": "json",
+      "len": 231,
+      "json": {
+        "name": "soil_test",
+        "parts": [
+          {
+            "inlineData": {
+              "data": {
+                "$att": {
+                  "enc": "base64",
+                  "len": 1200,
+                  "mime": "image/png",
+                  "sha256": "3e7e92e2204bf5c301c7fa4a5b94a9128126301b9714977052d35a744b8dd7ab"
+                }
+              },
+              "mimeType": "image/png"
+            }
+          }
+        ],
+        "response": {
+          "ph": 6.5
+        }
+      }
+    },
+    {
+      "hash": "b7bb590108dd23992626b31cff8e2cb96388d1482d0320a294414169e381f8fa",
+      "kind": "json",
+      "len": 45,
+      "json": {
+        "name": "weather",
+        "response": {
+          "sky": "clear"
+        }
+      }
+    },
+    {
+      "hash": "56396ae293eb3ab8b6d57347effcdd5b457388820e140d42526be710294aa44d",
+      "kind": "json",
+      "len": 45,
+      "json": {
+        "code": "print(6.5 > 6)",
+        "language": "PYTHON"
+      }
+    },
+    {
+      "hash": "c9538353541132b6d9c4d6a5b415e3dace1b4d0991a8098b21c2629cabb519c1",
+      "kind": "json",
+      "len": 42,
+      "json": {
+        "outcome": "OUTCOME_OK",
+        "output": "True\n"
+      }
+    },
+    {
+      "hash": "f9f188dd2b186663818dc1f5d3fdbba51c69ad2d91b5c6974b5814e0d2ff97d8",
+      "kind": "text",
+      "len": 24,
+      "text": "Tomatoes will grow well."
+    }
+  ]
+}

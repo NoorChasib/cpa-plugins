@@ -1,0 +1,34 @@
+{
+  "model": "gpt-test-model",
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "reasoning_effort": "high",
+  "messages": [
+    {"role": "system", "content": "You are a synthetic helper."},
+    {"role": "developer", "content": [{"type": "text", "text": "Prefer lists."}]},
+    {"role": "user", "content": [
+      {"type": "text", "text": "Look at these.", "cache_control": {"type": "ephemeral"}},
+      {"type": "image_url", "image_url": {"url": "{{dataurl:image/png:png:2048}}", "detail": "high"}},
+      {"type": "image_url", "image_url": {"url": "https://example.test/small.png"}},
+      {"type": "input_audio", "input_audio": {"data": "{{b64:audio:1500}}", "format": "wav"}},
+      {"type": "file", "file": {"filename": "report.pdf", "file_data": "{{dataurl:application/pdf:pdf:2500}}"}},
+      {"type": "file", "file": {"filename": "notes.txt", "file_data": "{{b64:text:1200}}"}},
+      {"type": "file", "file": {"file_id": "file-synth-01"}},
+      {"type": "refusal", "refusal": "Synthetic refusal text."}
+    ]},
+    {"role": "assistant", "content": null, "reasoning_content": "Need two lookups.", "tool_calls": [
+      {"id": "call_synth_1", "type": "function", "function": {"name": "lookup", "arguments": "{ \"term\" : \"kite\", \"limit\": 10.50, \"opts\": {\"b\": 2, \"a\": 1} }"}},
+      {"id": "call_synth_2", "type": "function", "function": {"name": "lookup", "arguments": "{not json"}, "extra_content": {"google": {"thought_signature": "R29vZ2xlVGhvdWdodFNpZw=="}}}
+    ]},
+    {"role": "tool", "tool_call_id": "call_synth_1", "content": "kite: a toy that flies."},
+    {"role": "tool", "tool_call_id": "call_synth_2", "content": [{"type": "text", "text": "No result."}]},
+    {"role": "assistant", "content": "Here is what I found.", "reasoning": "Summarize both results.", "reasoning_details": [
+      {"type": "reasoning.text", "text": "Summarize.", "signature": "T3BlblJvdXRlclNpZw==", "index": 0},
+      {"type": "reasoning.encrypted", "data": "RW5jcnlwdGVkUmVhc29uaW5n", "index": 1},
+      {"type": "reasoning.summary", "summary": "Short summary.", "signature": null, "index": 2}
+    ]}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "lookup", "description": "Synthetic lookup.", "parameters": {"type": "object", "properties": {"term": {"type": "string"}}}}, "cache_control": {"type": "ephemeral"}}
+  ]
+}

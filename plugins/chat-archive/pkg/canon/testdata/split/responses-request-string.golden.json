@@ -1,0 +1,44 @@
+{
+  "format": "openai.responses",
+  "raw_len": 109,
+  "skeleton": "49ed6fd4ea1cb73718e64e8df57c58386debfb805ccf5cd821d1fc068b2ea31f",
+  "items": [
+    {
+      "id": "ebbada7dda1b42ef815521df05e5569c055ba1bd2744937d1564bee5ef9211e7",
+      "m": {
+        "content_form": "string"
+      }
+    },
+    {
+      "id": "2a71195a0bb4fe7d5782718db11959b4561141701e2eff381e9e86443d58f155",
+      "f": {
+        "type": "input_text"
+      },
+      "p": "9a2c6ff6a42d82aff44ea04249aba16dc76de35c4f2e4a39d218233269d51c40"
+    }
+  ],
+  "n": 2,
+  "list_sha": "69a517f5388ffaa19b5a2398b6dff35c2f68432615de0e48a919bf44fcc33b9b",
+  "refs": [
+    "49ed6fd4ea1cb73718e64e8df57c58386debfb805ccf5cd821d1fc068b2ea31f",
+    "9a2c6ff6a42d82aff44ea04249aba16dc76de35c4f2e4a39d218233269d51c40"
+  ],
+  "pieces": [
+    {
+      "hash": "49ed6fd4ea1cb73718e64e8df57c58386debfb805ccf5cd821d1fc068b2ea31f",
+      "kind": "json",
+      "len": 61,
+      "json": {
+        "instructions": null,
+        "model": "gpt-test-model",
+        "stream": false
+      }
+    },
+    {
+      "hash": "9a2c6ff6a42d82aff44ea04249aba16dc76de35c4f2e4a39d218233269d51c40",
+      "kind": "text",
+      "len": 29,
+      "text": "Say hello in three languages."
+    }
+  ]
+}
