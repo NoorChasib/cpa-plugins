@@ -61,6 +61,33 @@
       }
     },
     {
+      "name": "Chat Archive",
+      "description": "Archives every CPA chat exchange, masked and split into content-addressed pieces, to your private chat archive server. Needs CPA v8.0.60 or newer. Linux amd64 only.",
+      "author": "NoorChasib",
+      "license": "MIT",
+      "tags": [
+        "Archive",
+        "History",
+        "Privacy"
+      ],
+      "id": "chat-archive",
+      "repository": "https://github.com/NoorChasib/cpa-plugins",
+      "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/chat-archive",
+      "version": "0.1.0",
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/chat-archive/v0.1.0/chat-archive_0.1.0_linux_amd64.zip",
+            "sha256": "86405340e19c30cf65d0df6f09cf698816e54698378ac14d7a6c8c9bd880d965",
+            "size": 4785680
+          }
+        ]
+      }
+    },
+    {
       "name": "Codex Catalog Filter",
       "description": "Choose model by model what Codex shows: a Codex Models console page with a switch per model, and a filtered catalog URL for Codex's model_catalog_url. CPA's own model lists are unchanged. Linux amd64 only.",
       "author": "NoorChasib",
