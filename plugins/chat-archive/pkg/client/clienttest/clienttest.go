@@ -195,6 +195,18 @@ func (s *Server) SetEpoch(epoch uint64) {
 	s.epoch = epoch
 }
 
+// SetLimits sets the limits GET /v1/sources/self returns and the fake enforces from the next request
+// on, as a server restarted with new limits would. The zero value means wire.DefaultLimits, as in
+// Options.
+func (s *Server) SetLimits(lim wire.Limits) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if lim == (wire.Limits{}) {
+		lim = wire.DefaultLimits
+	}
+	s.limits = lim
+}
+
 // SetArchiveID sets the archive id.
 func (s *Server) SetArchiveID(id string) {
 	s.mu.Lock()
