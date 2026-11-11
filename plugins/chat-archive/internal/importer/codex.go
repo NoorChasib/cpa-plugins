@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/canon"
@@ -32,9 +31,9 @@ func (cf *codexFile) metadata(line int64) bool {
 }
 
 // readCodexHeader reads the first line of a rollout, which Codex always writes as session_meta.
-func readCodexHeader(path string) (*codexFile, error) {
+func readCodexHeader(f fileRef) (*codexFile, error) {
 	cf := &codexFile{histStart: -1}
-	fh, err := os.Open(path)
+	fh, err := openContent(f)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +90,8 @@ const (
 // usage record of their own, compaction calls and interrupted turns fail the shape check. So would a
 // usage record written before its outputs, which leaves calls of only inputs or outputs first: an
 // unexpected order falls back to full rather than dropping content.
-func codexGroups(path string) (map[int64]string, error) {
-	fh, err := os.Open(path)
+func codexGroups(f fileRef) (map[int64]string, error) {
+	fh, err := openContent(f)
 	if err != nil {
 		return nil, err
 	}

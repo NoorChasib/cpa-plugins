@@ -47,6 +47,7 @@ type fileRef struct {
 	AgentID   string // Claude agent files: from agent-<id>.jsonl
 	RunID     string // workflow journals: the wf_<id> directory
 	Whole     bool   // an import.file (whole file), not JSONL records
+	Zstd      bool   // a rollout Codex compressed in place: Path is the .zst file, Rel and Key the plain name (zst.go)
 	Size      int64
 	MtimeNS   int64
 	Inode     uint64
@@ -59,11 +60,20 @@ func classify(root, rel string) (fileRef, bool) {
 	name := parts[len(parts)-1]
 	switch root {
 	case RootCodexSessions:
-		if strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl") {
-			f.Role, f.Client = RoleCodexRollout, ClientCodex
-			return f, true
+		if !strings.HasPrefix(name, "rollout-") {
+			return f, false
 		}
-		return f, false
+		switch {
+		case strings.HasSuffix(name, ".jsonl"):
+		case strings.HasSuffix(name, ".jsonl"+zstSuffix):
+			// Compressed in place by Codex: the plain file's key, so the archive sees one file.
+			f.Rel = strings.TrimSuffix(rel, zstSuffix)
+			f.Key, f.Zstd = root+"/"+f.Rel, true
+		default:
+			return f, false
+		}
+		f.Role, f.Client = RoleCodexRollout, ClientCodex
+		return f, true
 	case RootClaudeSkills:
 		f.Role, f.Client, f.Whole = FileSkill, ClientClaudeCode, true
 		return f, true
@@ -168,7 +178,23 @@ func discover(roots map[string]string) ([]fileRef, error) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out, nil
+	return dropCompressedSiblings(out), nil
+}
+
+// dropCompressedSiblings keeps one file per key (sorted by key): a rollout found both plain and
+// compressed (Codex mid-way through compressing or restoring it) is read plain, as Codex reads it.
+func dropCompressedSiblings(files []fileRef) []fileRef {
+	keep := files[:0]
+	for _, f := range files {
+		if n := len(keep); n > 0 && keep[n-1].Key == f.Key {
+			if keep[n-1].Zstd && !f.Zstd {
+				keep[n-1] = f
+			}
+			continue
+		}
+		keep = append(keep, f)
+	}
+	return keep
 }
 
 func inodeOf(info os.FileInfo) uint64 {
@@ -189,7 +215,8 @@ func statRef(f *fileRef) error {
 }
 
 // matchesSession reports whether f belongs to the Claude Code session (or Codex thread) id: the main
-// file <id>.jsonl, anything under the <id>/ directory, or a rollout whose name ends in -<id>.jsonl.
+// file <id>.jsonl, anything under the <id>/ directory, or a rollout whose name ends in -<id>.jsonl
+// (or -<id>.jsonl.zst: Rel is the plain name).
 func matchesSession(f fileRef, id string) bool {
 	if id == "" {
 		return true

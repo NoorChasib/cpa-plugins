@@ -62,7 +62,12 @@ func (e *Env) status() error {
 		case !ok:
 			backlog += f.Size
 			pending++
-		case f.Whole && (c.Size != f.Size || c.MtimeNS != f.MtimeNS):
+		case f.Whole && (c.Size != f.Size || c.MtimeNS != f.MtimeNS),
+			f.Zstd && (c.Size != f.Size || c.MtimeNS != f.MtimeNS || c.Inode != f.Inode): // compressed size, an estimate
+			backlog += f.Size
+			pending++
+		case f.Zstd:
+		case !f.Whole && c.Inode != f.Inode && f.Role != RoleCodexRollout: // rescanned from 0 (processFile)
 			backlog += f.Size
 			pending++
 		case !f.Whole && f.Size > c.EndOffset:
