@@ -165,6 +165,60 @@ func TestPieceRoute(t *testing.T) {
 	}
 }
 
+// TestSetLimits: SetLimits changes, mid-test, the limits sources/self returns and the piece limit PUT
+// enforces; the zero value restores wire.DefaultLimits.
+func TestSetLimits(t *testing.T) {
+	f := newFake(t)
+	self := func() wire.Limits {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.srv.URL+wire.PathSourcesSelf, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+f.token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var s wire.SourcesSelf
+		if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s.Limits
+	}
+	put := func(n int) int {
+		raw := bytes.Repeat([]byte("p"), n)
+		h := wire.Hash(sha256.Sum256(raw))
+		resp, _ := f.do(http.MethodPut, wire.PathPiecePrefix+h.String(), f.token, raw, map[string]string{wire.HeaderPieceKind: "text"})
+		return resp.StatusCode
+	}
+	if got := self(); got != wire.DefaultLimits {
+		t.Fatalf("initial limits %+v", got)
+	}
+	lim := wire.DefaultLimits
+	lim.TextPiece = 8 << 10
+	f.srv.SetLimits(lim)
+	if got := self(); got != lim {
+		t.Fatalf("limits after SetLimits %+v", got)
+	}
+	if s := put(8 << 10); s != 201 {
+		t.Errorf("put at text_piece: %d", s)
+	}
+	if s := put(8<<10 + 1); s != 413 {
+		t.Errorf("put over text_piece: %d", s)
+	}
+	lim.TextPiece = 9 << 10
+	f.srv.SetLimits(lim)
+	if s := put(8<<10 + 1); s != 201 {
+		t.Errorf("put after the raise: %d", s)
+	}
+	f.srv.SetLimits(wire.Limits{})
+	if got := self(); got != wire.DefaultLimits {
+		t.Errorf("limits after SetLimits(zero) %+v", got)
+	}
+}
+
 func TestEnrollAndHeartbeatEdges(t *testing.T) {
 	f := newFake(t)
 	code := f.srv.NewEnrollCode()

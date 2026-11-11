@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"net/http"
@@ -781,6 +782,115 @@ func TestOversizeWholeFileNotRead(t *testing.T) {
 	}
 	if dead, _ := x.state().deadRows("rejected_too_large", "dead", 0); len(dead) != 1 || dead[0].Key != want {
 		t.Fatalf("after requeue: %+v", dead)
+	}
+	x.checkHW()
+}
+
+// atLimitLimits scales the production limits down: text_piece is the larger piece limit, so a whole file
+// of exactly text_piece bytes is read and masked, and its piece goes by PUT.
+func atLimitLimits() wire.Limits {
+	lim := wire.DefaultLimits
+	lim.TextPiece, lim.Attachment, lim.PieceInline = 64<<10, 50<<10, 32<<10
+	return lim
+}
+
+const atLimitFileKey = "claude-projects/" + gProject + "/" + gSession + "/tool-results/out.txt"
+
+// TestMaskGrowthOverTextPieceRequeued: a saved output of exactly limits.text_piece bytes holds short
+// credentials whose placeholders are longer than they are, so its masked piece is over the limit. It
+// becomes a rejected_too_large dead letter keyed by the masked piece, never sent. A dry-run requeue only
+// counts it, and a real requeue at the same limit dead-letters it again under the same key. Once the
+// archive raises text_piece, a plain requeue uploads it.
+func TestMaskGrowthOverTextPieceRequeued(t *testing.T) {
+	x := newH(t)
+	lim := atLimitLimits()
+	x.tooLargeServer(lim)
+	x.enroll()
+	var b strings.Builder
+	for i := range 8 {
+		b.WriteString("GET https://api.example.invalid/v1/items?page=" + strconv.Itoa(i) + "&token=" + x.g.Alnum(10) + " 200\n")
+	}
+	b.WriteString(synth.Text(int(lim.TextPiece), 7))
+	data := []byte(b.String()[:lim.TextPiece])
+	x.writeRaw(filepath.Join(x.projects(), gProject, gSession, "tool-results", "out.txt"), data)
+	p, err := testBuilder(t).textPiece(string(data))
+	if err != nil || int64(len(p.Bytes)) <= lim.TextPiece {
+		t.Fatalf("masked to %d bytes (%v), want over text_piece %d", len(p.Bytes), err, lim.TextPiece)
+	}
+	want := wire.ImportFileKey(ClientClaudeCode, atLimitFileKey, p.Hash)
+
+	x.mustRun()
+	dead, _ := x.state().deadRows("rejected_too_large", "dead", 0)
+	if len(dead) != 1 || dead[0].Key != want || dead[0].ByteLen != int64(len(data)) {
+		t.Fatalf("dead rows %+v, want one keyed by the masked piece", dead)
+	}
+	stillDead := func(stage string, tombs int) {
+		t.Helper()
+		if n := len(x.envelopes()); n != 0 {
+			t.Fatalf("%s: %d envelopes sent", stage, n)
+		}
+		if ts := x.srv.Tombstones(x.sourceID); len(ts) != tombs || ts[len(ts)-1].Reason != wire.TombRejectedTooLarge {
+			t.Fatalf("%s: tombstones %+v, want %d", stage, ts, tombs)
+		}
+		if dead, _ := x.state().deadRows("rejected_too_large", "", 0); len(dead) != 1 || dead[0].Key != want || dead[0].State != "dead" {
+			t.Fatalf("%s: dead rows %+v", stage, dead)
+		}
+		x.checkHW()
+	}
+	stillDead("run", 1)
+	requeue := func(args ...string) {
+		t.Helper()
+		x.out.Reset()
+		if rc := Main(append([]string{"requeue", "--reason", "rejected_too_large"}, args...), x.env); rc != 0 || !strings.Contains(x.out.String(), "found=1 gone=0") {
+			t.Fatalf("requeue %v rc=%d: %s", args, rc, x.out.String())
+		}
+	}
+	// A dry run counts rows only: it cannot show whether the archive's limit is raised yet.
+	requeue("--dry-run")
+	stillDead("dry-run requeue", 1)
+	// A real requeue at the same limit sends only its new seq's tombstone.
+	requeue()
+	stillDead("requeue at the old limit", 2)
+
+	lim.TextPiece = 72 << 10
+	x.srv.SetLimits(lim)
+	requeue()
+	all := x.envelopes()
+	if len(all) != 1 || all[0].Envelope.Kind != wire.KindImportFile || all[0].Envelope.Key != want || all[0].Status != wire.StatusOK {
+		t.Fatalf("after the raise: %d envelopes, want one import.file ok under the dead key", len(all))
+	}
+	if kind, raw, ok := x.srv.Piece(p.Hash); !ok || kind != wire.PieceText || !bytes.Equal(raw, p.Bytes) {
+		t.Fatalf("stored piece %v %d bytes %v, want the masked piece", kind, len(raw), ok)
+	}
+	if dead, _ := x.state().deadRows("rejected_too_large", "", 0); len(dead) != 1 || dead[0].State != "requeued" {
+		t.Fatalf("dead rows after the raise %+v", dead)
+	}
+	x.checkHW()
+}
+
+// TestWholeFileAtTextPieceSent: a saved output of exactly limits.text_piece bytes that masking leaves
+// unchanged is read whole and sent as one piece. The limit is inclusive.
+func TestWholeFileAtTextPieceSent(t *testing.T) {
+	x := newH(t)
+	lim := atLimitLimits()
+	x.tooLargeServer(lim)
+	x.enroll()
+	data := []byte(synth.Text(int(lim.TextPiece), 9)[:lim.TextPiece])
+	p, err := testBuilder(t).textPiece(string(data))
+	if err != nil || !bytes.Equal(p.Bytes, data) {
+		t.Fatalf("masking changed the file (%v)", err)
+	}
+	x.writeRaw(filepath.Join(x.projects(), gProject, gSession, "tool-results", "out.txt"), data)
+	x.mustRun()
+	all := x.envelopes()
+	if len(all) != 1 || all[0].Envelope.Key != wire.ImportFileKey(ClientClaudeCode, atLimitFileKey, p.Hash) || all[0].Status != wire.StatusOK {
+		t.Fatalf("%d envelopes, want one import.file ok", len(all))
+	}
+	if _, raw, ok := x.srv.Piece(p.Hash); !ok || len(raw) != len(data) {
+		t.Fatalf("stored piece %d bytes %v, want %d", len(raw), ok, len(data))
+	}
+	if dead, _ := x.state().deadRows("", "", 0); len(dead) != 0 {
+		t.Fatalf("dead rows %+v", dead)
 	}
 	x.checkHW()
 }

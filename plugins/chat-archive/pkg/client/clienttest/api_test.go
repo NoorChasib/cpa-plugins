@@ -38,4 +38,5 @@ var (
 	// Additions.
 	_ func(*clienttest.Server, ...wire.Hash)  = (*clienttest.Server).MarkStaged
 	_ func(*clienttest.Server, string) func() = (*clienttest.Server).Hold
+	_ func(*clienttest.Server, wire.Limits)   = (*clienttest.Server).SetLimits
 )

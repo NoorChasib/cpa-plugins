@@ -106,7 +106,7 @@ Claude Code always uploads full content; the archive's staging tier drops the CP
 | `rejected` (any reason) | dead row with that reason; the cursor moves past it |
 | `retry` `missing_ref` | need runs again; after 3 in a row, local dead letter `missing_ref` plus a tombstone |
 | `retry` `busy`, `store_unavailable` | re-sent with backoff, up to 6 rounds; then the run stops and the next run re-reads from the cursor |
-| envelope over `limits.envelope_json`, piece over `limits.text_piece`, attachment file over `limits.attachment` | local dead letter `rejected_too_large` plus a tombstone, never sent. A whole file larger than both piece limits is never held in memory or masked. It is hashed as it streams, and its dead row is keyed by the sha256 of its bytes |
+| envelope over `limits.envelope_json`, piece over `limits.text_piece`, attachment file over `limits.attachment` | local dead letter `rejected_too_large` plus a tombstone, never sent. A text piece is measured after masking. A placeholder can be longer than the secret it replaces, so a file at or just under `limits.text_piece` can come out a few bytes over it. A whole file larger than both piece limits is never held in memory or masked. It is hashed as it streams, and its dead row is keyed by the sha256 of its bytes |
 | `PUT` 422 `mask_violation` | local dead letter `mask_violation` (rule ids kept) plus a tombstone |
 | 400, 413 | halve the batch; one envelope that still fails becomes `rejected_local` or `rejected_too_large` |
 | 401, 403 | no upload for 15 minutes (kept across runs), fault `auth_failed`, never retried, no heartbeat |
@@ -117,6 +117,8 @@ Claude Code always uploads full content; the archive's staging tier drops the CP
 Tombstones go in the next commit (and at the end of the run), so the archive's hw passes every locally dead seq. A crash between a commit and its cursor transaction re-reads the same records into the same envelopes, and the archive answers `duplicate`. If files grew in between, a seq may now carry another key, which the archive allows (receipts are by key).
 
 `requeue` rebuilds a dead record from its file at the recorded position. Without `--remask` or `--split` the rebuilt key must equal the dead key, which proves the bytes are unchanged. With `--remask` (after `mask_violation` or `mask_version_retired`) the current masker may produce a new key. `--split` additionally moves frame strings of at least 1 KiB into text pieces, so an envelope that was too large can fit. A record whose file was rescanned since, or whose bytes are no longer one complete line at that position, is marked `gone`.
+
+After the archive raises `limits.text_piece` or `limits.attachment`, run `requeue --reason rejected_too_large --dry-run`. If it reports `gone=0`, run the same command without `--dry-run`. If `gone` is above 0, either the masker's output changed or those rows are keyed by their raw bytes (a whole file larger than both piece limits, or an attachment over `limits.attachment`): run `--remask --dry-run`, then `--remask`. A plain run would mark those rows `gone`, and `gone` rows are never requeued again. A dry run only counts rows, so it cannot show whether the new limit applies yet. A row that is still too large is dead-lettered again and can be requeued later.
 
 ## mask-dry-run and the masking gate
 
