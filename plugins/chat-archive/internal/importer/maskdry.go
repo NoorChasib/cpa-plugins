@@ -70,6 +70,13 @@ func (e *Env) maskDryRun(o dryRunOpts) error {
 	if err != nil {
 		return err
 	}
+	// A compressed rollout is masked as its decompressed content, so it is sized, sampled and rated by that
+	// length (mask-dry-run writes no cursor, so Size is free to change here).
+	for i := range files {
+		if files[i].Zstd {
+			files[i].Size = contentSize(files[i])
+		}
+	}
 	var total int64
 	for _, f := range files {
 		total += f.Size
@@ -316,7 +323,7 @@ func dryInputRun(b *builder, in *dryInput) error {
 		return err
 	}
 	f := in.ref
-	fh, err := os.Open(f.Path)
+	fh, err := openContent(f)
 	if err != nil {
 		return nil
 	}
@@ -334,7 +341,7 @@ func dryInputRun(b *builder, in *dryInput) error {
 	}
 	var cf *codexFile
 	if f.Role == RoleCodexRollout {
-		if cf, err = readCodexHeader(f.Path); err != nil {
+		if cf, err = readCodexHeader(f); err != nil {
 			return err
 		}
 	}
@@ -378,7 +385,7 @@ func profileInput(p *mask.Masker, in *dryInput, acc map[string]time.Duration) in
 // forEachString calls fn with every string value and key of a JSONL file's lines or a JSON file, or
 // with a text file's whole content.
 func forEachString(f fileRef, fn func(string)) {
-	fh, err := os.Open(f.Path)
+	fh, err := openContent(f)
 	if err != nil {
 		return
 	}

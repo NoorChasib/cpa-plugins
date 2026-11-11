@@ -339,7 +339,7 @@ func orderByFirstRecord(files []fileRef) {
 	for _, f := range files {
 		t := f.MtimeNS
 		if !f.Whole {
-			if fh, err := os.Open(f.Path); err == nil {
+			if fh, err := openContent(f); err == nil {
 				line, _ := bufio.NewReaderSize(fh, 64<<10).ReadBytes('\n')
 				fh.Close()
 				var rec struct {
@@ -374,6 +374,9 @@ func (r *runner) processFile(f fileRef, bt *batch) error {
 		r.limitHit = true
 		return nil
 	}
+	if f.Zstd {
+		return r.processCompressed(f, cur, has, bt)
+	}
 	fh, err := os.Open(f.Path)
 	if err != nil {
 		return nil // vanished since discovery
@@ -392,7 +395,11 @@ func (r *runner) processFile(f fileRef, bt *batch) error {
 	if has {
 		fs.scanGen = cur.ScanGen
 		start, ord = cur.EndOffset, cur.LineOrdinal
-		if cur.Size < 0 || cur.Inode != f.Inode || f.Size < cur.EndOffset || headOf(fs.prefix, cur.EndOffset) != cur.HeadSHA {
+		// A Codex rollout keeps its cursor across a new inode: Codex rewrites one only to compress or restore
+		// it (zst.go), with the same content, so after a restore the head and size decide, as they do for
+		// the compressed form.
+		moved := cur.Inode != f.Inode && f.Role != RoleCodexRollout
+		if cur.Size < 0 || moved || f.Size < cur.EndOffset || headOf(fs.prefix, cur.EndOffset) != cur.HeadSHA {
 			start, ord, fs.scanGen = 0, 0, cur.ScanGen+1
 		}
 	}
@@ -400,14 +407,103 @@ func (r *runner) processFile(f fileRef, bt *batch) error {
 	var cf *codexFile
 	if f.Role == RoleCodexRollout {
 		if cf, err = r.codexInfo(f); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // compressed or restored by Codex since it was opened: read again next run
+			}
 			return err
 		}
 	}
 	if _, err := fh.Seek(start, io.SeekStart); err != nil {
 		return err
 	}
-	rd := bufio.NewReaderSize(fh, 1<<20)
-	off := start
+	return r.readLines(fs, cf, bufio.NewReaderSize(fh, 1<<20), start, ord, bt)
+}
+
+// processCompressed reads a rollout Codex compressed in place as its decompressed content. The cursor's
+// stat (inode, size, mtime) is the .zst file's; its end_offset, line ordinal and head_sha256 are the
+// content's. Codex rewrites the file when it compresses it, so the inode and size never match a cursor the
+// plain file left: the head alone decides, and a cursor whose head still matches carries over, which
+// uploads nothing again. Content shorter than the cursor's end is read again from 0 with scan_gen + 1.
+func (r *runner) processCompressed(f fileRef, cur Cursor, has bool, bt *batch) error {
+	if f.Size == 0 {
+		r.stats.drop("zst_error")
+		return nil // not a zstd stream (Codex publishes a finished file): tried again when it changes
+	}
+	rc, err := openContent(f)
+	if err != nil {
+		return nil // vanished since discovery, or not a zstd stream: tried again next run
+	}
+	defer func() {
+		if rc != nil {
+			rc.Close()
+		}
+	}()
+	r.stats.files++
+	fs := &fileState{ref: f, cur: cur, has: has}
+	if has {
+		fs.ackSeq, fs.ackObx = cur.LastSeq, cur.OutboxID
+	}
+	// zstReader reports a cut-off stream as errZstDamaged, so io.EOF and io.ErrUnexpectedEOF here mean
+	// content shorter than headBytes.
+	head := make([]byte, headBytes)
+	n, err := io.ReadFull(rc, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		r.stats.drop("zst_error")
+		return nil // a damaged stream: its cursor stays, and the next run tries again
+	}
+	fs.prefix = head[:n]
+	start, ord := int64(0), int64(0)
+	if has {
+		fs.scanGen = cur.ScanGen
+		start, ord = cur.EndOffset, cur.LineOrdinal
+		if cur.Size < 0 || headOf(fs.prefix, cur.EndOffset) != cur.HeadSHA {
+			start, ord, fs.scanGen = 0, 0, cur.ScanGen+1
+		}
+	}
+	var rd io.Reader = io.MultiReader(bytes.NewReader(fs.prefix), rc)
+	if start > 0 {
+		if _, err := io.CopyN(io.Discard, rd, start); err != nil {
+			// io.CopyN reports content that ends before the cursor as io.EOF; anything else is a damaged
+			// stream, which keeps its cursor (no rescan, so nothing is uploaded again).
+			if !errors.Is(err, io.EOF) {
+				r.stats.drop("zst_error")
+				return nil
+			}
+			rc.Close()
+			nrc, err := openContent(f)
+			if err != nil {
+				rc = nil
+				return nil
+			}
+			rc = nrc
+			start, ord, fs.scanGen, rd = 0, 0, cur.ScanGen+1, rc
+		}
+	}
+	fs.ackEnd, fs.ackOrd = start, ord
+	br := bufio.NewReaderSize(rd, 1<<20)
+	if _, err := br.Peek(1); err != nil {
+		if !errors.Is(err, io.EOF) {
+			r.stats.drop("zst_error")
+			return nil
+		}
+		// Nothing past the cursor (Codex compressed a rollout already read): record the new stat only,
+		// without the header and coverage passes.
+		fs.complete = true
+		return r.fileDone(fs, 0)
+	}
+	cf, err := r.codexInfo(f)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // restored by Codex since it was opened: the plain file is read next run
+		}
+		return err
+	}
+	return r.readLines(fs, cf, br, start, ord, bt)
+}
+
+// readLines reads the complete lines of fs from rd, which is positioned at off (line ordinal ord).
+func (r *runner) readLines(fs *fileState, cf *codexFile, rd *bufio.Reader, off, ord int64, bt *batch) error {
+	f := fs.ref
 	units := 0
 	for {
 		if r.opts.maxBytes > 0 && r.stats.bytesRead >= r.opts.maxBytes {
@@ -416,7 +512,12 @@ func (r *runner) processFile(f fileRef, bt *batch) error {
 		}
 		line, err := rd.ReadBytes('\n')
 		if err != nil {
-			fs.complete = true // EOF: a trailing partial line waits for its newline
+			// At EOF a trailing partial line waits for its newline. Any other error (a damaged compressed
+			// rollout) leaves the file incomplete, so its stat is not recorded and the next run reads it again.
+			fs.complete = errors.Is(err, io.EOF)
+			if !fs.complete {
+				r.stats.drop("read_error")
+			}
 			break
 		}
 		ord++
@@ -513,10 +614,7 @@ func (r *runner) cursorFor(fs *fileState, statOK bool) Cursor {
 	}
 	if int64(len(fs.prefix)) < min(fs.ackEnd, headBytes) {
 		// The file grew past the prefix read at open while it was being read: read it again.
-		if fh, err := os.Open(f.Path); err == nil {
-			fs.prefix = readPrefix(fh, headBytes)
-			fh.Close()
-		}
+		fs.prefix = contentPrefix(f, headBytes)
 	}
 	return Cursor{
 		FileKey: f.Key, Inode: f.Inode, Size: f.Size, MtimeNS: mtime, EndOffset: fs.ackEnd, LineOrdinal: fs.ackOrd,
@@ -547,7 +645,7 @@ func headOf(prefix []byte, end int64) string {
 // cliproxyapi) with responses CPA holds in full, the per-call grouping that decides which records go
 // metadata-only. Every other rollout uploads full, and so does every record of a dry run.
 func (r *runner) codexInfo(f fileRef) (*codexFile, error) {
-	cf, err := readCodexHeader(f.Path)
+	cf, err := readCodexHeader(f)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +660,7 @@ func (r *runner) codexInfo(f fileRef) (*codexFile, error) {
 		return cf, nil
 	}
 	cf.covered = covered
-	if cf.groups, err = codexGroups(f.Path); err != nil {
+	if cf.groups, err = codexGroups(f); err != nil {
 		return nil, err
 	}
 	return cf, nil
@@ -1319,10 +1417,12 @@ func (r *runner) backlog() uint64 {
 		switch {
 		case !ok:
 			n += f.Size
-		case f.Whole:
-			if c.Size != f.Size || c.MtimeNS != f.MtimeNS {
+		case f.Whole, f.Zstd: // a compressed rollout counts its compressed size until read (an estimate)
+			if c.Size != f.Size || c.MtimeNS != f.MtimeNS || f.Zstd && c.Inode != f.Inode {
 				n += f.Size
 			}
+		case c.Inode != f.Inode && f.Role != RoleCodexRollout: // rescanned from 0 (processFile)
+			n += f.Size
 		case f.Size > c.EndOffset:
 			n += f.Size - c.EndOffset
 		}

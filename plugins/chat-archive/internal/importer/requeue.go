@@ -109,7 +109,14 @@ func (r *runner) rebuildDead(d Dead, o requeueOpts) (*unitRec, error) {
 	}
 	f.Path = filepath.Join(dir, filepath.FromSlash(rel))
 	if err := statRef(&f); err != nil {
-		return nil, nil
+		if f.Role != RoleCodexRollout {
+			return nil, nil
+		}
+		// Codex may have compressed the rollout since: its content is the same file's (zst.go).
+		f.Path, f.Zstd = f.Path+zstSuffix, true
+		if err := statRef(&f); err != nil {
+			return nil, nil
+		}
 	}
 	if c, ok := r.cursors[d.FileKey]; !ok || c.ScanGen != d.ScanGen {
 		return nil, nil // rescanned since: the recorded position no longer names these bytes
@@ -133,16 +140,14 @@ func (r *runner) rebuildDead(d Dead, o requeueOpts) (*unitRec, error) {
 			return nil, err
 		}
 	} else {
-		buf := make([]byte, d.ByteLen+1)
-		if _, err := fh.ReadAt(buf, d.ByteOffset); err != nil || buf[d.ByteLen] != '\n' {
+		// The record's line and the byte before it (the previous line's newline), from the content: the file
+		// itself, or a compressed rollout's decompressed stream.
+		lo := max(d.ByteOffset-1, 0)
+		buf := make([]byte, d.ByteOffset-lo+d.ByteLen+1)
+		if err := readContentAt(f, buf, lo); err != nil || buf[len(buf)-1] != '\n' || d.ByteOffset > 0 && buf[0] != '\n' {
 			return nil, nil
 		}
-		if d.ByteOffset > 0 {
-			prev := make([]byte, 1)
-			if _, err := fh.ReadAt(prev, d.ByteOffset-1); err != nil || prev[0] != '\n' {
-				return nil, nil
-			}
-		}
+		buf = buf[d.ByteOffset-lo:]
 		u.end = d.ByteOffset + d.ByteLen + 1
 		content := buf[:d.ByteLen]
 		if len(content) > 0 && content[len(content)-1] == '\r' {
