@@ -544,7 +544,7 @@ func (r *runner) readLines(fs *fileState, cf *codexFile, rd *bufio.Reader, off, 
 				return err
 			default:
 				u.b = bl
-				r.stats.records++
+				r.countRecord(bl)
 			}
 		}
 		units++
@@ -705,6 +705,15 @@ func (r *runner) coverageFor(cf *codexFile) (map[string]bool, error) {
 		r.coverage[id] = c
 	}
 	return out, nil
+}
+
+// countRecord counts one record a run or requeue will send or dead-letter, and as fitted when the fit
+// moved frame subtrees of it into pieces (the summary's fitted=N).
+func (r *runner) countRecord(bl *built) {
+	r.stats.records++
+	if bl.fitFrom != "" {
+		r.stats.status("fitted")
+	}
 }
 
 // add appends a unit and flushes the batch at the producer targets (500 envelopes, about 8 MiB), or

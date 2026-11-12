@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +54,15 @@ type built struct {
 	pieces    []canon.Piece
 	createdAt time.Time
 	tooLarge  bool
+	// fitFrom is the key the record had before fitRecord moved frame subtrees into pieces (empty when
+	// nothing moved). A dead row written when the record could not be fitted carries that key.
+	fitFrom string
+}
+
+// keyedAs reports whether k is the record's key, or its key from before the fit: either proves the
+// record was built from the same bytes.
+func (o *built) keyedAs(k string) bool {
+	return o.key == k || o.fitFrom != "" && o.fitFrom == k
 }
 
 // acc collects the items, pieces and refs of one record.
@@ -164,11 +175,21 @@ func (a *acc) pathJSON(ptr string, raw []byte) error {
 
 // pointer builds a JSON pointer from segments; keys are masked like the frame's keys.
 func (b *builder) pointer(segs ...string) string {
+	masked := make([]string, len(segs))
+	for i, s := range segs {
+		masked[i], _ = b.m.String(s)
+	}
+	return escapePointer(masked...)
+}
+
+var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
+
+// escapePointer builds an RFC 6901 JSON pointer from segments taken as they are (keys already masked).
+func escapePointer(segs ...string) string {
 	var sb strings.Builder
 	for _, s := range segs {
-		out, _ := b.m.String(s)
 		sb.WriteByte('/')
-		sb.WriteString(strings.NewReplacer("~", "~0", "/", "~1").Replace(out))
+		sb.WriteString(pointerEscaper.Replace(s))
 	}
 	return sb.String()
 }
@@ -304,17 +325,165 @@ func attRefs(raw []byte) []wire.Hash {
 	return out
 }
 
-// finishRecord computes the key and the canon/v1 body of an import record.
+// finishRecord computes the key and the canon/v1 body of an import record. A record whose envelope is
+// over limits.envelope_json while its pieces are within theirs is fitted (fitRecord) when fitAllowed;
+// a record that cannot be fitted keeps the key computed here and becomes a too-large dead letter.
+// Records under the limits never reach the fit, so they are built exactly as before it existed.
 func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time) (*built, error) {
+	out, err := b.encodeRecord(rec, a, key, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	if b.overEnvelope(out) && !b.overPieces(out) && fitAllowed(rec) {
+		fit, err := b.fitRecord(rec, a, key, createdAt, out)
+		if err != nil {
+			return nil, err
+		}
+		if fit != nil {
+			fit.fitFrom = out.key
+			return fit, nil
+		}
+	}
+	out.markTooLarge(b.overLimits(out))
+	return out, nil
+}
+
+// encodeRecord returns rec with a's items as a built: its key and canon/v1 body.
+func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time) (*built, error) {
 	rec.Items = a.items
 	sha := wire.RecordKeyHash(rec.Frame, canon.ItemIDs(rec.Items), rec.Extra)
 	body, err := canon.Marshal(rec)
 	if err != nil {
 		return nil, err
 	}
-	out := &built{kind: wire.KindImportRecord, key: key(sha), body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}
-	out.markTooLarge(b.overLimits(out))
-	return out, nil
+	return &built{kind: wire.KindImportRecord, key: key(sha), body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}, nil
+}
+
+// fitAllowed: every import record but a Codex response_item. Its frame holds no content (the Responses
+// rules already split the payload into items), and the archive's Responses grouping would read a path
+// item there as a message item.
+func fitAllowed(rec wire.ImportRecord) bool {
+	return rec.Client != ClientCodex || rec.RecordType != "response_item" && !strings.HasPrefix(rec.RecordType, "response_item/")
+}
+
+// fitRecord brings a record whose envelope is over limits.envelope_json under it by moving whole
+// objects and arrays out of its masked frame into json pieces. Each moved node becomes a path item
+// appended after the record's items, the same item the leaf rule writes: an object member is removed
+// from the frame, an array element becomes null. Each pass moves the node takeSubtree picks and
+// measures again. A subtree is a slice of the masked canon/v1 frame, so its piece is not masked again.
+// Applying the path items to the frame in reverse order gives back the masked record: a later move can
+// hold an earlier one, never the other way round.
+//
+// It works on copies of a's items, pieces and refs, so first (the record as built) is untouched. It
+// returns nil when no object or array of at least leafMin bytes is left to move, or when a piece would
+// be over its limit.
+func (b *builder) fitRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time, first *built) (*built, error) {
+	root, err := decodeAny(rec.Frame)
+	if err != nil {
+		return nil, err
+	}
+	fa := &acc{b: b, items: slices.Clone(a.items), pieces: slices.Clone(a.pieces), refs: slices.Clone(a.refs), seen: maps.Clone(a.seen)}
+	cur := first
+	for b.overEnvelope(cur) {
+		segs, v, err := takeSubtree(root, envelopeSize(cur)-b.limits.EnvelopeJSON+leafMin)
+		if err != nil || segs == nil {
+			return nil, err
+		}
+		raw, err := canon.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		if err := fa.pathItem(escapePointer(segs...), canon.NewPiece(wire.PieceJSON, "", raw)); err != nil {
+			return nil, err
+		}
+		if rec.Frame, err = canon.Marshal(root); err != nil {
+			return nil, err
+		}
+		if cur, err = b.encodeRecord(rec, fa, key, createdAt); err != nil {
+			return nil, err
+		}
+		if b.overPieces(cur) {
+			return nil, nil
+		}
+	}
+	return cur, nil
+}
+
+// takeSubtree removes the node one fit pass moves from the decoded frame and returns its pointer
+// segments and value, or nil segments when the root has no object or array child of at least leafMin
+// bytes. need is the number of bytes the envelope must lose, plus leafMin for the path item and its
+// ref. From the root it steps into the heaviest child (heaviest) while that child alone covers need,
+// and the node where it stops moves: the deepest node that is enough, which keeps small fields such as
+// type and ids in the frame. When no child of the root covers need, the root's heaviest child moves
+// and the next pass measures again.
+func takeSubtree(root any, need int64) ([]string, any, error) {
+	seg, node, size, err := heaviest(root)
+	if err != nil || node == nil {
+		return nil, nil, err
+	}
+	segs, parent := []string{seg}, root
+	for size >= need {
+		s, c, n, err := heaviest(node)
+		if err != nil {
+			return nil, nil, err
+		}
+		if c == nil || n < need {
+			break
+		}
+		segs, parent, node, size = append(segs, s), node, c, n
+	}
+	switch p := parent.(type) {
+	case map[string]any:
+		delete(p, segs[len(segs)-1])
+	case []any:
+		i, err := strconv.Atoi(segs[len(segs)-1])
+		if err != nil {
+			return nil, nil, err
+		}
+		p[i] = nil
+	}
+	return segs, node, nil
+}
+
+// heaviest returns n's object or array child with the longest canon/v1 encoding of at least leafMin
+// bytes: its pointer segment, value and size. Keys are visited in byte order and elements by index,
+// and a tie keeps the first, so the choice never depends on map iteration order.
+func heaviest(n any) (seg string, child any, size int64, err error) {
+	consider := func(s string, c any) error {
+		switch c.(type) {
+		case map[string]any, []any:
+		default:
+			return nil
+		}
+		raw, err := canon.Marshal(c)
+		if err != nil {
+			return err
+		}
+		if l := int64(len(raw)); l >= leafMin && l > size {
+			seg, child, size = s, c, l
+		}
+		return nil
+	}
+	switch x := n.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if err := consider(k, x[k]); err != nil {
+				return "", nil, 0, err
+			}
+		}
+	case []any:
+		for i, e := range x {
+			if err := consider(strconv.Itoa(i), e); err != nil {
+				return "", nil, 0, err
+			}
+		}
+	}
+	return seg, child, size, nil
 }
 
 // markTooLarge sets tooLarge and, when set, drops the body, refs and pieces at once: a too-large unit
@@ -327,12 +496,25 @@ func (o *built) markTooLarge(over bool) {
 }
 
 // overLimits reports whether the envelope or one of its pieces is over the server's limits (sources/self),
-// which makes it a local rejected_too_large dead letter. The envelope estimate adds 1 KiB for the
-// fields outside the body.
+// which makes it a local rejected_too_large dead letter.
 func (b *builder) overLimits(o *built) bool {
-	if int64(len(o.body))+int64(len(o.refs))*67+1024 > b.limits.EnvelopeJSON {
-		return true
-	}
+	return b.overEnvelope(o) || b.overPieces(o)
+}
+
+// envelopeSize estimates the envelope of o: its body, 67 bytes a ref, and 1 KiB for the fields outside
+// the body.
+func envelopeSize(o *built) int64 {
+	return int64(len(o.body)) + int64(len(o.refs))*67 + 1024
+}
+
+// overEnvelope reports whether the envelope estimate is over limits.envelope_json.
+func (b *builder) overEnvelope(o *built) bool {
+	return envelopeSize(o) > b.limits.EnvelopeJSON
+}
+
+// overPieces reports whether a json or text piece is over limits.text_piece, or an attachment over
+// limits.attachment.
+func (b *builder) overPieces(o *built) bool {
 	for _, p := range o.pieces {
 		limit := b.limits.TextPiece
 		if p.Kind == wire.PieceAttachment {

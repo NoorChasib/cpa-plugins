@@ -407,6 +407,14 @@ func (c *Codex) CommandExecution(output string, same bool) string {
 			"aggregated_output": output, "stdout": stdout, "stderr": "", "formatted_output": formatted}})
 }
 
+// McpToolCall is an event_msg/item_completed of an MCP tool call with the given arguments.
+func (c *Codex) McpToolCall(server, tool string, args any) string {
+	return c.rec("event_msg", M{"type": "item_completed", "thread_id": c.ThreadID, "turn_id": c.G.Hex(8),
+		"item": M{"type": "McpToolCall", "id": "call_" + c.G.Alnum(12), "server": server, "tool": tool, "arguments": args,
+			"status": "completed", "result": M{"content": []any{M{"type": "text", "text": "updated"}}, "isError": false},
+			"duration": M{"secs": 1, "nanos": 500}}})
+}
+
 func (c *Codex) TokenCount() string {
 	return c.rec("event_msg", M{"type": "token_count", "info": M{"last_token_usage": M{"input_tokens": 10, "output_tokens": 5}}})
 }

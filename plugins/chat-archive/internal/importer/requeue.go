@@ -23,8 +23,10 @@ type requeueOpts struct {
 // the current masker (--remask) or with large frame strings as pieces against the current limits
 // (--split), and uploads it with a new seq; the dead row becomes requeued. A record whose source
 // bytes changed or vanished is gone. Without --remask or --split the rebuilt key must equal
-// the dead key, which proves the bytes are unchanged; with them the key may differ, and the position
-// checks (same scan_gen, the bytes still one complete line) decide.
+// the dead key, or the rebuilt record's key from before the fit moved frame subtrees into pieces (a
+// row dead-lettered before the record could be fitted), which proves the bytes are unchanged; with
+// them the key may differ, and the position checks (same scan_gen, the bytes still one complete line)
+// decide.
 func (e *Env) requeueCmd(o requeueOpts) int {
 	p := pathsFor(e.Home)
 	release, _, err := acquireLock(p.LockFile, true)
@@ -72,7 +74,7 @@ func (r *runner) requeue(o requeueOpts) error {
 			gone = append(gone, d.Key)
 			continue
 		}
-		r.stats.records++
+		r.countRecord(u.b)
 		if r.opts.dryRun {
 			continue
 		}
@@ -166,7 +168,7 @@ func (r *runner) rebuildDead(d Dead, o requeueOpts) (*unitRec, error) {
 			return nil, err
 		}
 	}
-	if bl == nil || !o.remask && !o.split && bl.key != d.Key {
+	if bl == nil || !o.remask && !o.split && !bl.keyedAs(d.Key) {
 		return nil, nil
 	}
 	u.b = bl
