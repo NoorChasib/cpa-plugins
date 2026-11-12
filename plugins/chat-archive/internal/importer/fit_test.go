@@ -720,6 +720,50 @@ func TestFitFrameOnlyClaudeRecord(t *testing.T) {
 	x.checkHW()
 }
 
+// TestFitClaudeToolResultRecord: a Claude user record with content items (a tool result) whose frame
+// is over the limit keeps its items as built, and the fit's path item comes after them. On the archive
+// that path item is one more (opaque) block of the user message, so the turn derives as a message
+// rather than a tool result, as with `requeue --split`.
+func TestFitClaudeToolResultRecord(t *testing.T) {
+	x := newH(t)
+	x.tooLargeServer(smallEnvelope())
+	x.enroll()
+	c := x.claude(gSession)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(c.ToolResult("toolu_"+x.g.Alnum(12), "updated", nil)), &m); err != nil {
+		t.Fatal(err)
+	}
+	m["mcpMeta"] = M{"structuredContent": M{"rows": cellList("tr", 700)}}
+	raw, _ := json.Marshal(m)
+	result := string(raw)
+	path := x.mainFile(gProject, gSession)
+	x.write(path, c.UserText("one"), result)
+	x.mustRun()
+	all := x.envelopes()
+	if got := statuses(all); len(all) != 2 || got[wire.StatusOK] != 2 {
+		t.Fatalf("%d envelopes %v, want 2 ok", len(all), got)
+	}
+	r := decodeRecord(t, all[1].Envelope)
+	f, _ := classify(RootClaudeProjects, strings.TrimPrefix(filepath.ToSlash(strings.TrimPrefix(path, x.projects())), "/"))
+	f.Path = path
+	before, err := limitBuilder(t, noFitLimits()).claudeRecord(f, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := bodyRecord(t, before.body)
+	items := pre.Items
+	if len(items) == 0 || len(r.Items) != len(items)+1 || !reflect.DeepEqual(r.Items[:len(items)], items) {
+		t.Fatalf("items %+v, want the items as built (%d) and then the path item", r.Items, len(items))
+	}
+	if p, ok := itemPath(r.Items[len(items)]); !ok || p != "/mcpMeta/structuredContent/rows" {
+		t.Fatalf("last item %+v, want the path item /mcpMeta/structuredContent/rows", r.Items[len(items)])
+	}
+	fromServer := func(h wire.Hash) (wire.PieceKind, []byte, bool) { return x.srv.Piece(h) }
+	if !bytes.Equal(reassemble(t, r, fromServer), pre.Frame) {
+		t.Fatal("frame plus path items in reverse order is not the frame as built")
+	}
+}
+
 // TestFrameReencodesToItself: a frame decoded with decodeAny and encoded again with canon.Marshal is
 // byte-identical, for every import record of the golden corpus. The fit relies on it: a moved subtree's
 // piece is exactly the bytes it had inside the frame.
