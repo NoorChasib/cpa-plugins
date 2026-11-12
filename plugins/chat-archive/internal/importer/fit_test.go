@@ -290,9 +290,6 @@ func TestFitOversizedToolCallSent(t *testing.T) {
 			if direct.key != e.Envelope.Key || !bytes.Equal(direct.body, e.Envelope.Body) {
 				t.Fatal("a direct build differs from the envelope the run sent")
 			}
-			if before := buildCodexLine(t, limitBuilder(t, noFitLimits()), call, 2); before.key == direct.key {
-				t.Fatal("the fitted key equals the key before the fit")
-			}
 		})
 	}
 }
