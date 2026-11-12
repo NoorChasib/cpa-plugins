@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the importer's component version (heartbeats, enrollment, User-Agent).
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 // Env is the process environment of one command; tests replace its parts.
 type Env struct {
