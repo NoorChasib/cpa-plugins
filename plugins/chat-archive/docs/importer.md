@@ -92,6 +92,7 @@ Codex (`codex_rollout`): key `cx/<thread_id>/<ordinal>/<sha>`, with ids from the
 - A fitted record's key covers its new frame and items, so it differs from the key the record had before the fit. It is the same on every build of the same line with the same masker and `limits.envelope_json`. A record under the limit is built exactly as before.
 - `run`, `backfill` and `requeue` count fitted records as `fitted=N` in their summary line.
 - A frame-only Claude Code record (such as `api-request` or `file-history-*`) that gains a path item this way becomes a `system` turn on the archive, as it does with `requeue --split`.
+- A Claude Code record with content items keeps them and its turn, and on the archive the path item becomes one more (opaque) block of its message. A user record that holds only tool results then derives as a `message` turn instead of `tool_result`, as it does when `requeue --split` moves a string out of its frame. Its tool results still pair with their tool calls.
 
 Whole files become `import.file` envelopes. Workflow runs and agent meta are masked JSON pieces. Scripts, skills and saved tool outputs are masked text pieces, and bytes that are not UTF-8 are an attachment through canon's attachment rules. A script that a workflow run in the same session embeds byte for byte is skipped.
 
