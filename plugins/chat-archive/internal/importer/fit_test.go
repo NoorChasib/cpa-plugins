@@ -348,6 +348,92 @@ func TestFitDescentTieBreak(t *testing.T) {
 	}
 }
 
+// spread is n objects ("a", "b", …) of 220 cells (about 10 KB) each: under a 32 KiB envelope none of
+// them covers the overflow alone, so the descent stops on the node that holds them.
+func spread(tag string, n int) M {
+	out := M{}
+	for i := range n {
+		k := string(rune('a' + i))
+		out[k] = M{"cells": cellList(tag+k, 220)}
+	}
+	return out
+}
+
+// fitLine builds a rollout line (an MCP tool call) under lim and checks that it was fitted: not too
+// large, its estimate under the limit, and its frame plus path items in reverse order the masked line.
+// It returns the path items.
+func fitLine(t *testing.T, call string, lim wire.Limits) []string {
+	t.Helper()
+	bl := buildCodexLine(t, limitBuilder(t, lim), call, 2)
+	if bl.tooLarge || bl.fitFrom == "" {
+		t.Fatalf("too large %v, fitted %v: want fitted", bl.tooLarge, bl.fitFrom != "")
+	}
+	if est := estimate(bl); est > lim.EnvelopeJSON {
+		t.Fatalf("estimate %d over %d", est, lim.EnvelopeJSON)
+	}
+	r := bodyRecord(t, bl.body)
+	if !bytes.Equal(reassemble(t, r, builtPieces(bl)), maskedLine(t, call)) {
+		t.Fatal("frame plus path items in reverse order is not the masked line")
+	}
+	return itemPaths(r)
+}
+
+// TestFitDescentStops: the descent stops on an array element (which becomes null in the frame) and on
+// an object member whose key needs JSON-pointer escaping (~ as ~0, / as ~1), including a 1.5 KiB
+// string the leaf rule moved first from inside the moved subtree.
+func TestFitDescentStops(t *testing.T) {
+	note := spread("fn", 5)
+	note["note~1/x"] = synth.Text(1500, 3)
+	for _, tc := range []struct {
+		name string
+		args M
+		want []string
+	}{
+		{"array element", M{"target": "doc-7", "requests": []any{spread("q", 5), smallRequest("t1")}},
+			[]string{"/payload/item/arguments/requests/0"}},
+		{"escaped key", M{"target": "doc-8", "files": M{"src/a~b.go": note, "README": smallRequest("t1")}},
+			[]string{"/payload/item/arguments/files/src~1a~0b.go/note~01~1x", "/payload/item/arguments/files/src~1a~0b.go"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, call, _ := toolCallLines(synth.New(7), tc.args)
+			if got := fitLine(t, call, smallEnvelope()); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("path items %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFitNeedHeadroom pins how far the descent goes. A child is taken when its size is at least the
+// overflow plus leafMin (the room the path item and its ref need); a child even one byte smaller
+// stays, and its parent moves whole. Either way one pass is enough. The envelope limit is set from
+// the record's own sizes so that the child lands exactly on each side of that boundary.
+func TestFitNeedHeadroom(t *testing.T) {
+	_, call, _ := toolCallLines(synth.New(8), M{"target": "doc-9", "P": M{"C": cellList("pc", 360), "D": cellList("pd", 300)}})
+	before := buildCodexLine(t, limitBuilder(t, noFitLimits()), call, 2)
+	frame, err := decodeAny(bodyRecord(t, before.body).Frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := canon.Marshal(frame.(map[string]any)["payload"].(map[string]any)["item"].(map[string]any)["arguments"].(map[string]any)["P"].(map[string]any)["C"])
+	size := int64(len(c))
+	for _, tc := range []struct {
+		name string
+		room int64 // the child's size minus the overflow
+		want string
+	}{
+		{"parent moves", leafMin - 1, "/payload/item/arguments/P"},
+		{"child moves", leafMin, "/payload/item/arguments/P/C"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lim := wire.DefaultLimits
+			lim.EnvelopeJSON = estimate(before) - (size - tc.room)
+			if got := fitLine(t, call, lim); len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("path items %q, want [%s]", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestFitRootSpread: when no child of the root covers the overflow alone, the fit moves the root's
 // heaviest child and measures again; the second pass descends. Four root objects of about 12 KB put a
 // 32 KiB envelope about 17 KB over, so the first pass moves /d whole; the rest is then about 5 KB over,
@@ -422,6 +508,29 @@ func TestFitUnfittableKeepsTodaysKey(t *testing.T) {
 		c := x.claude(gSession)
 		path := x.mainFile(gProject, gSession)
 		x.write(path, c.UserText("one"), c.System("local_command", synth.Text(64<<10, 3)))
+		x.mustRun()
+		want := keyOfLine(t, x, path, 2)
+		if dead, _ := x.state().deadRows("rejected_too_large", "dead", 0); len(dead) != 1 || dead[0].Key != want {
+			t.Fatalf("dead rows %+v, want one under today's key", dead)
+		}
+		if strings.Contains(x.out.String(), "fitted=") {
+			t.Errorf("run output %q counts a fit", x.out.String())
+		}
+	})
+	t.Run("objects under 1 KiB", func(t *testing.T) {
+		x := newH(t)
+		x.tooLargeServer(smallEnvelope())
+		x.enroll()
+		c := x.claude(gSession)
+		fields := M{}
+		for i := range 60 {
+			fields[fmt.Sprintf("f%02d", i)] = M{"cells": cellList(fmt.Sprintf("u%02d", i), 18)}
+		}
+		if raw, _ := canon.Marshal(fields["f00"]); len(raw) >= leafMin {
+			t.Fatalf("an object of %d bytes, want under %d", len(raw), leafMin)
+		}
+		path := x.mainFile(gProject, gSession)
+		x.write(path, c.UserText("one"), c.State("cost-state", fields))
 		x.mustRun()
 		want := keyOfLine(t, x, path, 2)
 		if dead, _ := x.state().deadRows("rejected_too_large", "dead", 0); len(dead) != 1 || dead[0].Key != want {
