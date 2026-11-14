@@ -36,7 +36,7 @@ import (
 const ID = "chat-archive"
 
 // Version is stamped by the Makefile (-X …/internal/plugin.Version=$(VERSION)).
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 // Plugin states reported in status and heartbeats.
 const (

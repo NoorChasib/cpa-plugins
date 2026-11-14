@@ -26,7 +26,7 @@ LIBFLAGS='-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/intern
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
   -ldflags "-X main.Version=v8.0.60 -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
-  -ldflags "$LIBFLAGS=0.1.0" -o "$WORK/chat-archive-production.so" .
+  -ldflags "$LIBFLAGS=0.1.1" -o "$WORK/chat-archive-production.so" .
 # A second production build with a higher version, for the reload case (a different file and
 # different bytes, so CPA loads a new instance while the old one is quiesced).
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \

@@ -19,7 +19,7 @@ OPENER = build_opener(ProxyHandler({}))
 STATUS = "/v0/management/plugins/chat-archive/status"
 REQUEUE = "/v0/management/plugins/chat-archive/requeue"
 PUBLIC = "/v0/resource/plugins/chat-archive/status"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
