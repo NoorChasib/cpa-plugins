@@ -471,7 +471,8 @@ func TestNonStreamTerminalStatus(t *testing.T) {
 // arrives with Content-Encoding gzip, deflate, br or zstd (the host warm-up's model callbacks and
 // Claude Code's non-stream /v1/messages). The plugin stores it like an unlabelled body, masked, with
 // flag encoding_ignored and its response id. A body still in its coding is decoded (gzip flag
-// gunzipped, the others content_decoded), never dropped.
+// gunzipped, the others content_decoded), never dropped, and keeps its response id: read from the
+// decoded body, so the exchange can be linked to its transcript.
 func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 	h := plugintest.New(t, nil, "")
 	secret := "ghp_" + randomAlnum(36)
@@ -496,8 +497,8 @@ func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 		{"dec-br", "br", msg("msg_dec_br"), "", wire.FlagEncodingIgnored, "msg_dec_br"},
 		{"dec-zstd", "zstd", msg("msg_dec_zstd"), "", wire.FlagEncodingIgnored, "msg_dec_zstd"},
 		{"dec-deflate", "deflate", msg("msg_dec_deflate"), "", wire.FlagEncodingIgnored, "msg_dec_deflate"},
-		{"real-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped, ""},
-		{"still-deflate", "deflate", fl.Bytes(), "", wire.FlagContentDecoded, ""},
+		{"real-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped, "msg_real_gzip"},
+		{"still-deflate", "deflate", fl.Bytes(), "", wire.FlagContentDecoded, "msg_still_deflate"},
 	}
 	meta := plugintest.Meta("/v1/messages")
 	for _, c := range cases {

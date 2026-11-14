@@ -246,11 +246,11 @@ func topString(body []byte, key string) string {
 // for a stream: incomplete and failed as sent, cancelled as canceled, and no terminal status
 // for a background response that has not finished (queued, in_progress). A body that is not a
 // readable JSON object (metadata only, encoded) leaves completed.
-func nonStreamStatus(format string, body []byte) string {
+func nonStreamStatus(format, status string) string {
 	if format != canon.FormatOpenAIResponses {
 		return stream.StatusCompleted
 	}
-	switch topString(body, "status") {
+	switch status {
 	case "incomplete":
 		return stream.StatusIncomplete
 	case "failed":
@@ -285,8 +285,15 @@ func (rt *Runtime) buildResponse(r *hooks.Response, sr splitResult) (outbox.NewE
 		}
 	}
 	format := CanonFormat(r.SourceFormat)
+	// top reads a top-level string field of a non-stream body. r.Body is still compressed when the split
+	// decoded it (flag gunzipped or content_decoded), so the field then comes from the split; reading
+	// r.Body left a decoded response without its id, never linkable to a transcript.
+	top := func(k string) string { return topString(r.Body, k) }
+	if sp := sr.sp; sp != nil && (slices.Contains(sp.Flags, wire.FlagGunzipped) || slices.Contains(sp.Flags, wire.FlagContentDecoded)) {
+		top = func(k string) string { return sp.TopStrings[k] }
+	}
 	if !r.Stream {
-		er.TerminalStatus = nonStreamStatus(format, r.Body)
+		er.TerminalStatus = nonStreamStatus(format, top("status"))
 	}
 	var refs []wire.Hash
 	var pieces []canon.Piece
@@ -303,14 +310,14 @@ func (rt *Runtime) buildResponse(r *hooks.Response, sr splitResult) (outbox.NewE
 		body := sp.Body()
 		body.Flags = append(body.Flags, r.Flags...)
 		er.Body = body
-		// A body the split read as is despite its Content-Encoding (flag encoding_ignored) is
-		// plain JSON like an unlabelled one, so its id is read the same way.
-		if er.ResponseID == "" && !r.Stream && (r.ContentEncoding == "" || slices.Contains(sp.Flags, wire.FlagEncodingIgnored)) {
-			er.ResponseID = topString(r.Body, "id")
+		// The id of a non-stream body: plain, read as is despite its Content-Encoding (flag
+		// encoding_ignored), or decoded by the split (top reads the decoded fields).
+		if er.ResponseID == "" && !r.Stream {
+			er.ResponseID = top("id")
 			if er.ResponseID == "" {
-				er.ResponseID = topString(r.Body, "responseId")
+				er.ResponseID = top("responseId")
 			}
-			er.PrevResponseID = topString(r.Body, "previous_response_id")
+			er.PrevResponseID = top("previous_response_id")
 		}
 		refs = sp.Refs(0)
 		pieces = piecesFor(sp, refs)

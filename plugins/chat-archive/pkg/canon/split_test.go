@@ -462,6 +462,16 @@ func TestDecodedCodings(t *testing.T) {
 	e := newEnv(t)
 	plain := e.readInput("claude-response.in.json")
 	a := e.response(Input{Format: FormatClaude, Body: plain}, Options{})
+	if a.TopStrings != nil {
+		t.Fatalf("plain body: top strings %v, want nil (the caller reads its own bytes)", a.TopStrings)
+	}
+	var top struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(plain, &top); err != nil {
+		t.Fatal(err)
+	}
+	topID := top.ID
 	zs, err := zstd.NewWriter(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -513,6 +523,9 @@ func TestDecodedCodings(t *testing.T) {
 			t.Errorf("%s: flags %v raw_len %d", c.name, sp.Flags, sp.RawLen)
 		}
 		checkInvariants(t, sp)
+		if sp.TopStrings["id"] == "" || sp.TopStrings["id"] != topID {
+			t.Errorf("%s: top strings %v, want id %q", c.name, sp.TopStrings, topID)
+		}
 		if _, err := e.splitter(Options{MaxDecoded: int64(len(plain) - 1)}).split(Input{Format: FormatClaude, Body: c.body, ContentEncoding: c.ce}, true); !errors.Is(err, ErrBodyBudget) {
 			t.Errorf("%s over MaxDecoded: err %v", c.name, err)
 		}

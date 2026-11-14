@@ -75,6 +75,11 @@ type Split struct {
 	Hits      mask.Hits       // masking counts per rule id over the whole body
 	Oversize  int             // attachments kept as reference only ("dropped":"oversize")
 	MediaURLs []MediaURL      // media.* responses only; in body order (the MediaFetch ordinal is the index)
+	// TopStrings holds the top-level string fields named in TopKeys of a JSON object body the split
+	// decoded from its Content-Encoding (flag gunzipped or content_decoded), as sent, before masking;
+	// nil for any other body. The caller's own copy of such a body is still compressed, so it reads ids
+	// and status here instead.
+	TopStrings map[string]string
 
 	refs splitRefs // per-unit reference lists for Refs
 }
@@ -123,6 +128,11 @@ func (s *Split) Refs(from int) []wire.Hash {
 	return out
 }
 
+// TopKeys are the top-level string fields Split.TopStrings keeps from a decoded body: the response and
+// previous response ids (Responses and Claude id, Gemini responseId), a Responses status and a
+// WebSocket input type.
+var TopKeys = []string{"id", "responseId", "previous_response_id", "status", "type"}
+
 // SplitRequest splits a request body with the per-format block payload rules, in this order: parse
 // once with literal numbers, remove volatile fields to V/ToolsV, decode attachments, stub opaque fields,
 // mask every string and key (V and ToolsV included), canonicalize, hash. System units: Claude system
@@ -155,13 +165,13 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	// upstream body itself but hands the hooks the upstream Content-Encoding unchanged, so such a body
 	// is usually plain already. It is read as is only when it parses as a JSON object, which no
 	// compressed stream does; anything else is still encoded and never becomes a piece.
-	labelled := false
+	labelled, decoded := false, false
 	dec, flags, ok, err := decodeBody(body, in.ContentEncoding, s.maxDec)
 	switch {
 	case err != nil:
 		return nil, err
 	case ok:
-		body = dec
+		body, decoded = dec, len(flags) > 0
 		for _, f := range flags {
 			s.flag(f)
 		}
@@ -182,6 +192,16 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	n, p, err := s.parse(body)
 	if errors.Is(err, ErrBodyBudget) {
 		return nil, err
+	}
+	if err == nil && decoded && n.isObject() {
+		for _, k := range TopKeys {
+			if v := n.strField(k); v != "" && len(v) <= 1024 {
+				if sp.TopStrings == nil {
+					sp.TopStrings = map[string]string{}
+				}
+				sp.TopStrings[k] = v
+			}
+		}
 	}
 	if labelled {
 		if err != nil || !n.isObject() {
