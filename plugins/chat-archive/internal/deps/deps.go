@@ -7,6 +7,7 @@ package deps
 
 import (
 	_ "github.com/BobuSumisu/aho-corasick" // pkg/mask prefilter
+	_ "github.com/andybalholm/brotli"      // pkg/canon: br request and response bodies
 	_ "github.com/klauspost/compress/zstd" // commit stream and outbox blobs
 	_ "github.com/mattn/go-sqlite3"        // plugin outbox, cgo
 	_ "gopkg.in/yaml.v3"                   // plugin config loader

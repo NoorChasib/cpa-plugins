@@ -60,7 +60,8 @@ class ReleaseTests(unittest.TestCase):
     def test_notices_cover_every_linked_module(self):
         notices = (ROOT / "docs/third-party-notices.txt").read_text()
         for module in ("github.com/mattn/go-sqlite3 v1.14.52", "gopkg.in/yaml.v3 v3.0.1", "github.com/klauspost/compress v1.20.3",
-                       "github.com/BobuSumisu/aho-corasick v1.0.3", "gitleaks v8.30.1", "Go runtime and standard library"):
+                       "github.com/BobuSumisu/aho-corasick v1.0.3", "github.com/andybalholm/brotli v1.2.6", "gitleaks v8.30.1",
+                       "Go runtime and standard library"):
             self.assertIn(module, notices)
 
 

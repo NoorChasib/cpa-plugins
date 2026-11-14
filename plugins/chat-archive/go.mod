@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/BobuSumisu/aho-corasick v1.0.3
+	github.com/andybalholm/brotli v1.2.6
 	github.com/klauspost/compress v1.20.3
 	github.com/mattn/go-sqlite3 v1.14.52
 	gopkg.in/yaml.v3 v3.0.1

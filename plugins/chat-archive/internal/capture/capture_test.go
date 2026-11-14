@@ -13,6 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/capture"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/outbox"
@@ -467,8 +470,8 @@ func TestNonStreamTerminalStatus(t *testing.T) {
 // body itself but hands response.intercept_after the upstream headers unchanged, so plain JSON
 // arrives with Content-Encoding gzip, deflate, br or zstd (the host warm-up's model callbacks and
 // Claude Code's non-stream /v1/messages). The plugin stores it like an unlabelled body, masked, with
-// flag encoding_ignored and its response id. A body still in its coding stays metadata only
-// (parse_error), and a real gzip body is still gunzipped.
+// flag encoding_ignored and its response id. A body still in its coding is decoded (gzip flag
+// gunzipped, the others content_decoded), never dropped.
 func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 	h := plugintest.New(t, nil, "")
 	secret := "ghp_" + randomAlnum(36)
@@ -494,7 +497,7 @@ func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 		{"dec-zstd", "zstd", msg("msg_dec_zstd"), "", wire.FlagEncodingIgnored, "msg_dec_zstd"},
 		{"dec-deflate", "deflate", msg("msg_dec_deflate"), "", wire.FlagEncodingIgnored, "msg_dec_deflate"},
 		{"real-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped, ""},
-		{"still-deflate", "deflate", fl.Bytes(), wire.DroppedParseError, "", ""},
+		{"still-deflate", "deflate", fl.Bytes(), "", wire.FlagContentDecoded, ""},
 	}
 	meta := plugintest.Meta("/v1/messages")
 	for _, c := range cases {
@@ -566,4 +569,81 @@ func randomAlnum(n int) string {
 		b[i] = al[int(b[i])%len(al)]
 	}
 	return string(b)
+}
+
+// TestBeginCompressedRequestBody: a client that compresses its request body (Codex sends zstd) reaches
+// request.intercept_before still encoded when the host does not decode it. The begin is stored decoded,
+// flag content_decoded (gunzipped for gzip), with its text in its pieces and a secret masked; never
+// dropped as parse_error. A body that does not decode in its labelled coding stays metadata only.
+func TestBeginCompressedRequestBody(t *testing.T) {
+	h := plugintest.New(t, nil, "")
+	secret := "ghp_" + randomAlnum(36)
+	marker := "request-marker-" + randomAlnum(8)
+	body := plugintest.ClaudeBody("Reply only OK. " + marker + " " + secret)
+	zw, _ := zstd.NewWriter(nil)
+	var gz, br bytes.Buffer
+	g := gzip.NewWriter(&gz)
+	g.Write(body)
+	g.Close()
+	b := brotli.NewWriter(&br)
+	b.Write(body)
+	b.Close()
+	cases := []struct {
+		rid, ce      string
+		body         []byte
+		dropped, flg string
+	}{
+		{"req-zstd", "zstd", zw.EncodeAll(body, nil), "", wire.FlagContentDecoded},
+		{"req-br", "br", br.Bytes(), "", wire.FlagContentDecoded},
+		{"req-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped},
+		{"req-bad-zstd", "zstd", []byte("\x28\xb5\x2f\xfd not a frame"), wire.DroppedParseError, ""},
+	}
+	meta := plugintest.Meta("/v1/messages")
+	for _, c := range cases {
+		hdr := http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {c.ce}}
+		h.Plugin.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(c.rid, "claude", c.body, hdr, meta))
+		h.Plugin.Hook(protocol.MethodRequestComplete, plugintest.Complete(c.rid, "succeeded", meta))
+	}
+	type got struct {
+		b   wire.ExchangeBegin
+		env wire.Envelope
+	}
+	var begins map[string]got
+	plugintest.WaitFor(t, "begins", func() bool {
+		begins = map[string]got{}
+		for _, r := range h.Srv.Envelopes(h.SourceID) {
+			if r.Envelope.Kind == wire.KindExchangeBegin {
+				var x wire.ExchangeBegin
+				json.Unmarshal(r.Envelope.Body, &x)
+				begins[x.RequestID] = got{x, r.Envelope}
+			}
+		}
+		return len(begins) == len(cases)
+	})
+	for _, c := range cases {
+		g := begins[c.rid]
+		if g.b.Body.Dropped != c.dropped || (c.flg != "" && !slices.Contains(g.b.Body.Flags, c.flg)) {
+			t.Errorf("%s: dropped %q flags %v; want dropped %q flag %q", c.rid, g.b.Body.Dropped, g.b.Body.Flags, c.dropped, c.flg)
+			continue
+		}
+		if c.dropped != "" {
+			if len(g.env.Refs) != 0 {
+				t.Errorf("%s: an undecodable body made %d pieces", c.rid, len(g.env.Refs))
+			}
+			continue
+		}
+		found, masked := false, false
+		for _, ref := range g.env.Refs {
+			if _, raw, ok := h.Srv.Piece(ref); ok {
+				found = found || strings.Contains(string(raw), marker)
+				masked = masked || strings.Contains(string(raw), "[masked:")
+				if strings.Contains(string(raw), secret) {
+					t.Errorf("%s: secret reached a piece", c.rid)
+				}
+			}
+		}
+		if !found || !masked {
+			t.Errorf("%s: request text in pieces %v, masked %v", c.rid, found, masked)
+		}
+	}
 }

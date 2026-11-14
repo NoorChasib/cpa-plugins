@@ -2,9 +2,7 @@ package canon
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +23,7 @@ type Input struct {
 	Format          string // a Format* value
 	Body            []byte
 	ContentType     string // Content-Type of the body: multipart boundary, speech mime
-	ContentEncoding string // Content-Encoding of the body: "" and "identity" mean none; a "gzip" body that starts with the gzip magic is decoded first, capped at Options.MaxDecoded (flag gunzipped); any other labelled body is read as is only when it parses as a JSON object (flag encoding_ignored), else ErrUndecodableBody
+	ContentEncoding string // Content-Encoding of the body: "" and "identity" mean none; gzip, zstd, deflate and br are decoded first (last applied first), capped at Options.MaxDecoded (flag gunzipped for gzip, content_decoded for the others); a body that is not in its labelled coding is read as is only when it parses as a JSON object (flag encoding_ignored), else ErrUndecodableBody
 }
 
 // Memo caches Masker.String results across bodies: the plugin's masking memo LRU and the
@@ -42,7 +40,7 @@ type Options struct {
 	MaxAttachment int64        // limits.attachment; 0 means wire.DefaultLimits.Attachment. Larger attachments get "dropped":"oversize" stubs and no piece
 	Memo          Memo         // optional; nil disables memoization
 
-	// MaxDecoded caps the decoded size of a gzip body; 0 means MaxGunzip. Over it the split returns
+	// MaxDecoded caps the decoded size of a content-encoded body; 0 means MaxGunzip. Over it the split returns
 	// ErrBodyBudget after reading at most MaxDecoded+1 decoded bytes, so the plugin can bound a small
 	// compressed body that expands far past its reservation.
 	MaxDecoded int64
@@ -151,20 +149,22 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	}
 	sp := &Split{Format: in.Format, RawLen: int64(len(in.Body))}
 	body := in.Body
-	// labelled: Content-Encoding names a coding the split does not undo here. CPA decodes an
-	// upstream body itself but hands the hooks the upstream Content-Encoding unchanged, so such a
-	// body is usually plain already. It is read as is only when it parses as a JSON object, which
-	// no compressed stream does; anything else is still encoded and never becomes a piece.
+	// Content-Encoding: the split undoes gzip, zstd, deflate and br itself (decodeBody), so a request a
+	// client compressed (Codex sends zstd request bodies) is stored like a plain one, flag gunzipped
+	// or content_decoded. labelled: the body is not in the coding its header names. CPA decodes an
+	// upstream body itself but hands the hooks the upstream Content-Encoding unchanged, so such a body
+	// is usually plain already. It is read as is only when it parses as a JSON object, which no
+	// compressed stream does; anything else is still encoded and never becomes a piece.
 	labelled := false
-	switch enc := strings.ToLower(strings.TrimSpace(in.ContentEncoding)); {
-	case enc == "" || enc == "identity":
-	case (enc == "gzip" || enc == "x-gzip") && isGzip(body):
-		b, err := gunzip(body, s.maxDec)
-		if err != nil {
-			return nil, err
+	dec, flags, ok, err := decodeBody(body, in.ContentEncoding, s.maxDec)
+	switch {
+	case err != nil:
+		return nil, err
+	case ok:
+		body = dec
+		for _, f := range flags {
+			s.flag(f)
 		}
-		body = b
-		s.flag(wire.FlagGunzipped)
 	default:
 		labelled = true
 	}
@@ -255,45 +255,6 @@ func knownJSONFormat(f string) bool {
 
 // isGzip reports whether b starts with the gzip magic bytes 1f 8b (RFC 1952).
 func isGzip(b []byte) bool { return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b }
-
-// gunzip decodes a gzip body of at most maxOut decoded bytes. A stream
-// that does not decode is ErrUndecodableBody (its bytes are never stored, so no compressed plaintext
-// reaches a blob); more than maxOut decoded bytes is ErrBodyBudget, found after reading at most
-// maxOut+1. The buffer is sized from the gzip trailer's ISIZE when that is at most maxOut, so an honest
-// stream is decoded into one allocation; otherwise it doubles, never past maxOut+1.
-func gunzip(b []byte, maxOut int64) ([]byte, error) {
-	zr, err := gzip.NewReader(bytes.NewReader(b))
-	if err != nil {
-		return nil, fmt.Errorf("%w: gzip: %v", ErrUndecodableBody, err)
-	}
-	hint := int64(64 << 10)
-	if len(b) >= 4 {
-		if isize := int64(binary.LittleEndian.Uint32(b[len(b)-4:])); isize <= maxOut {
-			hint = isize
-		}
-	}
-	buf := make([]byte, 0, min(hint, maxOut)+1)
-	for {
-		if len(buf) == cap(buf) {
-			next := min(max(2*int64(cap(buf)), 64<<10), maxOut+1)
-			if next <= int64(cap(buf)) {
-				return nil, ErrBodyBudget
-			}
-			buf = append(make([]byte, 0, next), buf...)
-		}
-		n, err := zr.Read(buf[len(buf):cap(buf)])
-		buf = buf[:len(buf)+n]
-		if int64(len(buf)) > maxOut {
-			return nil, ErrBodyBudget
-		}
-		if err == io.EOF {
-			return buf, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%w: gzip: %v", ErrUndecodableBody, err)
-		}
-	}
-}
 
 // opaqueRaw stores an unparsable body as one text piece when it is valid UTF-8, else as one attachment.
 func (s *splitter) opaqueRaw(body []byte, contentType string) {

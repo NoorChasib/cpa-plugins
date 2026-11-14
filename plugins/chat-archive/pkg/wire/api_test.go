@@ -35,7 +35,7 @@ var (
 
 	_ = []string{wire.TombRejectedLocal, wire.TombRejectedTooLarge, wire.TombMissingRef}
 	_ = []string{wire.FlagDupKeys, wire.FlagBadUTF8, wire.FlagArgsRaw, wire.FlagGunzipped,
-		wire.FlagLegacyCompletions, wire.FlagInputParseError, wire.FlagEncodingIgnored}
+		wire.FlagLegacyCompletions, wire.FlagInputParseError, wire.FlagEncodingIgnored, wire.FlagContentDecoded}
 	_ = []string{wire.DroppedBodyBudget, wire.DroppedMaskTimeout, wire.DroppedOversize,
 		wire.DroppedParseError, wire.DroppedDiskGuard}
 

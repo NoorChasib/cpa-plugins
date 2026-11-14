@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -16,6 +17,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/mask"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
@@ -412,7 +416,8 @@ func TestGzipSamePieces(t *testing.T) {
 		t.Errorf("flags %v raw_len %d", b.Flags, b.RawLen)
 	}
 	// A body still content-encoded never becomes a piece: not gzip at all, a truncated stream, a corrupt
-	// stream, or another encoding's stream is ErrUndecodableBody; past MaxDecoded is ErrBodyBudget.
+	// stream, or one coding's stream labelled as another is ErrUndecodableBody; past MaxDecoded is
+	// ErrBodyBudget. (A deflate stream labelled deflate decodes: TestDecodedCodings.)
 	gz := gzipBytes(plain)
 	corrupt := append([]byte(nil), gz...)
 	corrupt[len(corrupt)/2] ^= 0xff
@@ -429,7 +434,7 @@ func TestGzipSamePieces(t *testing.T) {
 		{"not gzip", "gzip", []byte("not gzip"), 0, ErrUndecodableBody},
 		{"truncated", "gzip", gz[:len(gz)-8], 0, ErrUndecodableBody},
 		{"corrupt", "gzip", corrupt, 0, ErrUndecodableBody},
-		{"deflate", "deflate", flated.Bytes(), 0, ErrUndecodableBody},
+		{"deflate as gzip", "gzip", flated.Bytes(), 0, ErrUndecodableBody},
 		{"br", "br", flated.Bytes(), 0, ErrUndecodableBody},
 		{"zstd", "zstd", []byte("\x28\xb5\x2f\xfd\x00\x58\x00\x00"), 0, ErrUndecodableBody},
 		{"over MaxDecoded", "gzip", gz, int64(len(plain) - 1), ErrBodyBudget},
@@ -446,6 +451,96 @@ func TestGzipSamePieces(t *testing.T) {
 	}
 	if sp := e.response(Input{Format: FormatClaude, Body: gz, ContentEncoding: "gzip"}, Options{MaxDecoded: int64(len(plain))}); !slices.Equal(ItemIDs(a.Items), ItemIDs(sp.Items)) {
 		t.Error("gzip at exactly MaxDecoded split differently")
+	}
+}
+
+// TestDecodedCodings: a body compressed with zstd, br or deflate (zlib-wrapped or raw), alone or
+// stacked with gzip, is decoded before the split and splits exactly as the plain body, flag
+// content_decoded (gunzipped for gzip), on a request as on a response. The decoded size is capped by
+// MaxDecoded for every coding, and a corrupt stream of any coding is ErrUndecodableBody, never pieces.
+func TestDecodedCodings(t *testing.T) {
+	e := newEnv(t)
+	plain := e.readInput("claude-response.in.json")
+	a := e.response(Input{Format: FormatClaude, Body: plain}, Options{})
+	zs, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zstdOf := func(b []byte) []byte { return zs.EncodeAll(b, nil) }
+	brOf := func(b []byte) []byte {
+		var buf bytes.Buffer
+		w := brotli.NewWriter(&buf)
+		w.Write(b)
+		w.Close()
+		return buf.Bytes()
+	}
+	zlibOf := func(b []byte) []byte {
+		var buf bytes.Buffer
+		w := zlib.NewWriter(&buf)
+		w.Write(b)
+		w.Close()
+		return buf.Bytes()
+	}
+	rawFlate := func(b []byte) []byte {
+		var buf bytes.Buffer
+		w, _ := flate.NewWriter(&buf, flate.DefaultCompression)
+		w.Write(b)
+		w.Close()
+		return buf.Bytes()
+	}
+	for _, c := range []struct {
+		name, ce string
+		body     []byte
+		flags    []string
+	}{
+		{"zstd", "zstd", zstdOf(plain), []string{wire.FlagContentDecoded}},
+		{"br", "br", brOf(plain), []string{wire.FlagContentDecoded}},
+		{"deflate zlib", "deflate", zlibOf(plain), []string{wire.FlagContentDecoded}},
+		{"deflate raw", "Deflate", rawFlate(plain), []string{wire.FlagContentDecoded}},
+		{"gzip then br", "gzip, br", brOf(gzipBytes(plain)), []string{wire.FlagContentDecoded, wire.FlagGunzipped}},
+		{"zstd then identity", "zstd, identity", zstdOf(plain), []string{wire.FlagContentDecoded}},
+	} {
+		sp := e.response(Input{Format: FormatClaude, Body: c.body, ContentEncoding: c.ce}, Options{})
+		if !slices.Equal(ItemIDs(a.Items), ItemIDs(sp.Items)) || !slices.Equal(a.Refs(0), sp.Refs(0)) {
+			t.Errorf("%s: decoded body split differently", c.name)
+		}
+		for _, f := range c.flags {
+			if !slices.Contains(sp.Flags, f) {
+				t.Errorf("%s: flags %v, want %v", c.name, sp.Flags, c.flags)
+			}
+		}
+		if slices.Contains(sp.Flags, wire.FlagEncodingIgnored) || sp.RawLen != int64(len(c.body)) {
+			t.Errorf("%s: flags %v raw_len %d", c.name, sp.Flags, sp.RawLen)
+		}
+		checkInvariants(t, sp)
+		if _, err := e.splitter(Options{MaxDecoded: int64(len(plain) - 1)}).split(Input{Format: FormatClaude, Body: c.body, ContentEncoding: c.ce}, true); !errors.Is(err, ErrBodyBudget) {
+			t.Errorf("%s over MaxDecoded: err %v", c.name, err)
+		}
+	}
+	// A Codex-style zstd request body splits as the plain request.
+	req := e.readInput("claude-request-text.in.json")
+	ra := e.request(Input{Format: FormatClaude, Body: req}, Options{})
+	if rb := e.request(Input{Format: FormatClaude, Body: zstdOf(req), ContentEncoding: "zstd"}, Options{}); !slices.Equal(ItemIDs(ra.Items), ItemIDs(rb.Items)) ||
+		!slices.Contains(rb.Flags, wire.FlagContentDecoded) {
+		t.Errorf("zstd request split differently: flags %v", rb.Flags)
+	}
+	zc := zstdOf(plain)
+	zc[len(zc)/2] ^= 0xff
+	bc := brOf(plain)
+	bc = bc[:len(bc)/2]
+	for _, c := range []struct {
+		name, ce string
+		body     []byte
+	}{
+		{"corrupt zstd", "zstd", zc},
+		{"truncated br", "br", bc},
+		{"text as deflate", "deflate", []byte("not a deflate stream")},
+		{"zstd as br", "br", zstdOf(plain)},
+		{"unknown coding", "compress", zstdOf(plain)},
+	} {
+		if sp, err := e.splitter(Options{}).split(Input{Format: FormatClaude, Body: c.body, ContentEncoding: c.ce}, true); !errors.Is(err, ErrUndecodableBody) || sp != nil {
+			t.Errorf("%s: err %v, want ErrUndecodableBody", c.name, err)
+		}
 	}
 }
 

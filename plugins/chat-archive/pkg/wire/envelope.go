@@ -117,6 +117,9 @@ const (
 	// decodes an upstream body itself and still hands the hook the upstream Content-Encoding), so
 	// the split read it as is.
 	FlagEncodingIgnored = "encoding_ignored"
+	// FlagContentDecoded: the body came with Content-Encoding zstd, deflate or br (alone or stacked)
+	// and the split decoded it before masking (gzip keeps FlagGunzipped).
+	FlagContentDecoded = "content_decoded"
 )
 
 // Body.Dropped values.
