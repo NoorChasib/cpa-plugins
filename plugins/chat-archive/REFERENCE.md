@@ -56,6 +56,8 @@ A completion's outcome is CPA's, with one exception: a stream CPA reports `cance
 
 A stream response's terminal status (`completed`, `incomplete`, `failed`, `done`, `superseded`, `canceled`) comes from its terminal event, or from how the request ended when none arrived. CPA hands a non-stream response to the plugin only after a successful execution, so it records `completed`, unless a Responses object's own `status` says otherwise: `incomplete` and `failed` as sent, `cancelled` as `canceled`, and no terminal status for a background response that is still `queued` or `in_progress`.
 
+A body labelled `Content-Encoding: gzip` that is a gzip stream is decoded before the split (flag `gunzipped`). CPA decodes compressed upstream bodies itself but still hands the hooks the upstream `Content-Encoding` (gzip, deflate, br or zstd), so a labelled body that parses as a JSON object is split as it is, masked like any other, with flag `encoding_ignored`. Any other labelled body may still be compressed: none of it is stored, and the envelope keeps metadata only with `dropped: parse_error`.
+
 Model-list GETs are ignored by both the response and lifecycle hooks (counter `ignored_model_list`). Provider media URLs (images, video) are replaced by their stripped form in the stored response; the full signed URL is held only in memory and sent once to the archive's media-fetch route.
 
 ## Hot path and limits

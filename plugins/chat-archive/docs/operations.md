@@ -24,6 +24,7 @@ With the Pushover settings filled in, the plugin sends at most one message per k
 | fault `auth_failed` | The archive rejected the source token (rotated or revoked). Uploads pause 15 minutes at a time; mint a new token and redeploy |
 | `pending` grows, heartbeats stop at the archive | The archive is unreachable. Nothing is lost: envelopes stay pending until the archive answers |
 | `dropped.body_budget` | Several very large bodies arrived at once; their metadata was kept, their bodies were not. The content pool is a fixed 256 MiB, so raising `memory-limit-mib` does not change this; it only gives the plugin's Go runtime more room. Keep `memory-limit-mib` at 768 or more: one 50 MB prompt needs about 530 MiB |
+| `dropped.parse_error` | A body was still compressed (a corrupt gzip stream, or another coding that is not plain JSON), so only its metadata was kept. A plain JSON body that merely carries CPA's stale upstream `Content-Encoding` is stored with flag `encoding_ignored` and is not counted here |
 | dead letters `mask_violation` | The archive's re-check found a value the plugin's masker missed (typically one captured before the first exact-set sync). Requeue with `remask=1` |
 | `dropped.stopped` after a restart or upgrade | Bodies in flight when the plugin stopped are not written; their metadata is |
 
