@@ -359,3 +359,66 @@ func TestPendingRespectsBytes(t *testing.T) {
 		t.Fatalf("byte bound ignored: %d items", len(items))
 	}
 }
+
+// TestBootCountersPersist: a boot's saved counters replace its earlier record, survive a reopen (the
+// crash case), are deleted by boot id, are bounded oldest first, and a bad id is refused.
+func TestBootCountersPersist(t *testing.T) {
+	o, _ := openTest(t)
+	dir := filepath.Dir(o.Path())
+	id := func(i int) string {
+		return strings.Repeat("0", 30) + string("0123456789abcdef"[i/16]) + string("0123456789abcdef"[i%16])
+	}
+	b := BootCounters{BootID: id(1), StartedAt: time.Date(2026, 11, 14, 1, 2, 3, 0, time.UTC), Component: "cpa-plugin", Version: "0.1.0",
+		N: 7, Dropped: map[string]uint64{"parse_error": 1}}
+	if err := o.SaveBootCounters(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	b.Dropped, b.N = map[string]uint64{"parse_error": 5, "stopped": 2}, 9
+	if err := o.SaveBootCounters(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SaveBootCounters(ctx, BootCounters{BootID: id(2), Dropped: map[string]uint64{"oversize": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	o.Close()
+	o, err := Open(Options{Dir: dir, CapBytes: 1 << 40, Retention: 168 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { o.Close() })
+	recs, err := o.BootCounters(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || recs[0].BootID != id(1) || recs[1].BootID != id(2) {
+		t.Fatalf("records = %+v", recs)
+	}
+	if r := recs[0]; r.N != 9 || r.Dropped["parse_error"] != 5 || r.Dropped["stopped"] != 2 || r.Version != "0.1.0" || !r.StartedAt.Equal(b.StartedAt) {
+		t.Fatalf("record = %+v", r)
+	}
+	if err := o.DeleteBootCounters(ctx, id(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.DeleteBootCounters(ctx, id(1)); err != nil {
+		t.Fatal("deleting a missing record:", err)
+	}
+	for i := 3; i < 3+MaxBootRecords+5; i++ {
+		if err := o.SaveBootCounters(ctx, BootCounters{BootID: id(i), Dropped: map[string]uint64{"oversize": uint64(i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The newest MaxBootRecords saves are kept: id(2) and the oldest of the loop are gone.
+	last := 3 + MaxBootRecords + 4
+	recs, _ = o.BootCounters(ctx)
+	if len(recs) != MaxBootRecords || recs[0].BootID != id(last-MaxBootRecords+1) || recs[len(recs)-1].BootID != id(last) {
+		t.Fatalf("bounded records: %d, first %s, last %s", len(recs), recs[0].BootID, recs[len(recs)-1].BootID)
+	}
+	if m := o.Meta(); m.NextSeq != 1 || len(m.OutboxID) != 32 {
+		t.Fatalf("meta disturbed: %+v", m)
+	}
+	for _, bad := range []string{"", "ABC", "x%", strings.Repeat("a", 49), "a_b"} {
+		if err := o.SaveBootCounters(ctx, BootCounters{BootID: bad}); err != ErrBootID {
+			t.Fatalf("boot id %q: %v", bad, err)
+		}
+	}
+}

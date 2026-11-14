@@ -132,3 +132,31 @@ func TestStreamBudgets(t *testing.T) {
 		t.Fatalf("queued %d, channel %d", queued, len(e.Stream))
 	}
 }
+
+// TestDropSignals: a counted drop signals DropSignal once per burst (one slot, never blocking the
+// hook); an unknown name neither counts nor signals.
+func TestDropSignals(t *testing.T) {
+	s := NewStats()
+	s.Drop("no_such_counter")
+	select {
+	case <-s.DropSignal():
+		t.Fatal("unknown drop signalled")
+	default:
+	}
+	for range 1000 {
+		s.Drop("handoff_full")
+	}
+	select {
+	case <-s.DropSignal():
+	default:
+		t.Fatal("drop did not signal")
+	}
+	select {
+	case <-s.DropSignal():
+		t.Fatal("a burst signalled more than once")
+	default:
+	}
+	if s.Dropped()["handoff_full"] != 1000 || s.DroppedTotal() != 1000 {
+		t.Fatalf("dropped = %v", s.Dropped())
+	}
+}

@@ -37,7 +37,8 @@ var DroppedNames = []string{"body_budget", "handoff_full", "control_full", "usag
 var OtherNames = []string{"duplicate_key", "state_evicted", "ignored_model_list"}
 
 // Stats holds every counter the plugin reports. Counters are cumulative for the plugin instance
-// (one boot_id). Hook-side updates are atomics only.
+// (one boot_id). Hook-side updates are atomics only, plus, for a drop, a non-blocking send on a
+// one-slot channel (DropSignal) that costs no lock while the slot is already full.
 type Stats struct {
 	calls    [numHooks]atomic.Uint64
 	errors   [numHooks]atomic.Uint64
@@ -45,6 +46,7 @@ type Stats struct {
 	lat      [numHooks]histogram
 	lastUse  atomic.Int64
 	dropped  map[string]*atomic.Uint64
+	dropSig  chan struct{}
 	other    map[string]*atomic.Uint64
 
 	mu         sync.Mutex
@@ -55,7 +57,7 @@ type Stats struct {
 
 // NewStats returns zeroed counters.
 func NewStats() *Stats {
-	s := &Stats{dropped: map[string]*atomic.Uint64{}, other: map[string]*atomic.Uint64{}, panics: map[string]uint64{}, panicTypes: map[string]string{}, faults: map[string]bool{}}
+	s := &Stats{dropped: map[string]*atomic.Uint64{}, dropSig: make(chan struct{}, 1), other: map[string]*atomic.Uint64{}, panics: map[string]uint64{}, panicTypes: map[string]string{}, faults: map[string]bool{}}
 	for _, n := range DroppedNames {
 		s.dropped[n] = new(atomic.Uint64)
 	}
@@ -65,12 +67,20 @@ func NewStats() *Stats {
 	return s
 }
 
-// Drop increments dropped.<name>; unknown names are ignored.
+// Drop increments dropped.<name> and signals DropSignal; unknown names are ignored.
 func (s *Stats) Drop(name string) {
 	if c := s.dropped[name]; c != nil {
 		c.Add(1)
+		select {
+		case s.dropSig <- struct{}{}:
+		default:
+		}
 	}
 }
+
+// DropSignal receives after one or more Drop calls (coalesced in one slot). The uploader persists
+// the dropped counters to the outbox on it, so a crash before the next heartbeat loses no count.
+func (s *Stats) DropSignal() <-chan struct{} { return s.dropSig }
 
 // Count increments a non-drop counter.
 func (s *Stats) Count(name string, n uint64) {

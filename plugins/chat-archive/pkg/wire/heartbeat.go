@@ -7,7 +7,8 @@ import (
 
 // Heartbeat is the body of POST /v1/heartbeat, sent every 60 s and at shutdown by the plugin
 // (directly over HTTP, never queued) and at the end of every importer run. Counters are cumulative per
-// boot_id.
+// boot_id. State recovered is a previous plugin boot's saved dropped.* counters, sent by the next boot
+// under the previous boot_id (its other per-boot counters empty).
 type Heartbeat struct {
 	V           int                  `json:"v"`
 	OutboxID    string               `json:"outbox_id"`
@@ -17,7 +18,7 @@ type Heartbeat struct {
 	StartedAt   time.Time            `json:"started_at"`
 	Component   string               `json:"component"` // cpa-plugin | importer
 	Version     string               `json:"version"`
-	State       string               `json:"state"` // running | unconfigured | degraded | stopping (plugin); ok | partial (importer run)
+	State       string               `json:"state"` // running | unconfigured | degraded | stopping | recovered (plugin); ok | partial (importer run)
 	MaskVersion string               `json:"mask_version"`
 	RulesetSHA  string               `json:"ruleset_sha256"`
 	ExactRev    uint32               `json:"exact_rev"`

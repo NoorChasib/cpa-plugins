@@ -455,3 +455,41 @@ func TestHeartbeatReachesArchive(t *testing.T) {
 	}
 	_ = hooks.OK
 }
+
+// TestDropsReachArchiveAfterLostFinalHeartbeat: drops counted after the last heartbeat that reached
+// the archive (here the final one at shutdown fails) are reported by the next plugin instance on the
+// same data directory, in a heartbeat under the stopped instance's boot_id.
+func TestDropsReachArchiveAfterLostFinalHeartbeat(t *testing.T) {
+	h := plugintest.New(t, nil, "")
+	bootA, _ := statusJSON(t, h.Plugin)["boot_id"].(string)
+	plugintest.WaitFor(t, "first heartbeat", func() bool { return len(h.Srv.Heartbeats(h.SourceID)) >= 1 })
+	st := h.Plugin.Engine().Stats
+	st.Drop("parse_error")
+	st.Drop("parse_error")
+	st.Drop("stopped")
+	h.Srv.FailNext("POST "+wire.PathHeartbeat, 503, 0)
+	h.Plugin.Shutdown()
+	for _, hb := range h.Srv.Heartbeats(h.SourceID) {
+		if hb.Dropped["parse_error"] != 0 {
+			t.Fatalf("drops reached the archive before the restart: %+v", hb.Dropped)
+		}
+	}
+
+	next := plugin.New(nil)
+	if _, err := next.Handle(protocol.MethodPluginRegister, plugintest.Lifecycle(h.YAML)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(next.Shutdown)
+	bootB, _ := statusJSON(t, next)["boot_id"].(string)
+	if bootA == "" || bootB == "" || bootA == bootB {
+		t.Fatalf("boot ids %q %q", bootA, bootB)
+	}
+	plugintest.WaitFor(t, "recovered heartbeat", func() bool {
+		for _, hb := range h.Srv.Heartbeats(h.SourceID) {
+			if hb.BootID == bootA && hb.State == "recovered" {
+				return hb.Dropped["parse_error"] == 2 && hb.Dropped["stopped"] == 1 && hb.Component == "cpa-plugin" && hb.Version == plugin.Version
+			}
+		}
+		return false
+	})
+}

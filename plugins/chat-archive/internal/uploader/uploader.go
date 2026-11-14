@@ -1,7 +1,9 @@
 // Package uploader moves outbox envelopes to the archive: have/need, piece PUTs
 // for large pieces, CAB1 commits, per-seq outcomes, local dead letters with tombstones, epoch
 // replay, and the whole-request error rules (a 401 or 403 is never retried in a loop). It also
-// runs the heartbeat (directly over HTTP, never queued) and the in-memory media-fetch sender.
+// runs the heartbeat (directly over HTTP, never queued), the in-memory media-fetch sender, and
+// the saving of the dropped counters to the outbox, which the next boot reports if this one
+// crashes (outbox.BootCounters).
 package uploader
 
 import (
@@ -29,6 +31,8 @@ var (
 	StopDeadline     = 5 * time.Second
 	HeartbeatEvery   = 60 * time.Second
 	FinalHeartbeat   = 2 * time.Second
+	DropSaveGap      = 100 * time.Millisecond // a burst of drops is saved in one write
+	DropSaveRetry    = time.Second            // after a failed save
 	MissingRefLimit  = 3
 	haveCacheEntries = 200_000
 )
@@ -44,7 +48,17 @@ type Options struct {
 	OnDead         func(key string)    // an envelope was dead-lettered (prefix map)
 	OnAck          func(key string)    // the archive acked an envelope ok or duplicate (prefix map)
 	Heartbeat      func(state string) wire.Heartbeat
+
+	// Boot names this boot (BootID, StartedAt, Component, Version; N and Dropped are filled in).
+	// With a BootID the uploader saves the dropped counters to the outbox whenever they change
+	// (SaveDrops), and before its heartbeats reports every other boot's saved record in a heartbeat
+	// under that boot's id, deleting the record once the archive took it.
+	Boot outbox.BootCounters
 }
+
+// StateRecovered is the heartbeat state of a previous boot's saved counters, reported by the next
+// boot (outbox.BootCounters).
+const StateRecovered = "recovered"
 
 // Uploader is one running uploader.
 type Uploader struct {
@@ -65,6 +79,12 @@ type Uploader struct {
 	missing  map[uint64]int
 
 	media *Media
+
+	lastN      atomic.Uint64 // n of the last heartbeat built
+	saveMu     sync.Mutex
+	savedTotal uint64                // dropped total of the last saved record (saveMu)
+	boots      []outbox.BootCounters // other boots' records still to report (heartbeat loop)
+	bootsRead  bool                  // boots was loaded (heartbeat loop)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -96,11 +116,15 @@ func (u *Uploader) Start() {
 	safego.Loop(u.ctx, &u.wg, "uploader", rec, u.run)
 	safego.Loop(u.ctx, &u.wg, "heartbeat", rec, u.heartbeats)
 	safego.Loop(u.ctx, &u.wg, "media_fetch", rec, u.media.run)
+	if u.opts.Boot.BootID != "" {
+		safego.Loop(u.ctx, &u.wg, "drop_save", rec, u.saveDrops)
+	}
 }
 
 // Stop stops every loop. In-flight HTTP gets StopDeadline, then its context is cancelled; the
 // outbox is durable so nothing is lost. A final heartbeat (state stopping) is attempted within
-// FinalHeartbeat. Queued media fetches are dropped and counted.
+// FinalHeartbeat. Queued media fetches are dropped and counted. The owner calls SaveDrops after
+// it stopped capture, whose shutdown counts dropped.stopped after this final heartbeat.
 func (u *Uploader) Stop() {
 	u.once.Do(func() {
 		close(u.stop)
@@ -120,7 +144,7 @@ func (u *Uploader) Stop() {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), FinalHeartbeat)
 			defer cancel()
-			_, _ = u.cl.Heartbeat(ctx, u.opts.Heartbeat("stopping"))
+			_, _ = u.cl.Heartbeat(ctx, u.heartbeat("stopping"))
 		})
 	})
 }
@@ -586,8 +610,8 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 	return nil
 }
 
-// heartbeats sends a heartbeat every HeartbeatEvery, directly over HTTP. A changed exact_rev
-// makes the upload loop refresh the exact set.
+// heartbeats sends a heartbeat every HeartbeatEvery, directly over HTTP, after reporting any other
+// boot's saved counters (reportBoots). A changed exact_rev makes the upload loop refresh the exact set.
 func (u *Uploader) heartbeats(ctx context.Context) {
 	if u.opts.Heartbeat == nil {
 		select {
@@ -601,16 +625,20 @@ func (u *Uploader) heartbeats(ctx context.Context) {
 	for {
 		safego.Checkpoint("heartbeat")
 		if !u.authPaused() {
-			hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			resp, err := u.cl.Heartbeat(hctx, u.opts.Heartbeat(""))
-			cancel()
-			if err == nil {
-				if resp.ExactRev != u.exactRv.Load() {
-					u.exactQ.Store(true)
-					u.Notify()
+			hb := u.heartbeat("")
+			u.reportBoots(ctx, hb)
+			if !u.authPaused() {
+				hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				resp, err := u.cl.Heartbeat(hctx, hb)
+				cancel()
+				if err == nil {
+					if resp.ExactRev != u.exactRv.Load() {
+						u.exactQ.Store(true)
+						u.Notify()
+					}
+				} else if errors.Is(err, client.ErrUnauthorized) {
+					u.fail(err)
 				}
-			} else if errors.Is(err, client.ErrUnauthorized) {
-				u.fail(err)
 			}
 		}
 		select {
@@ -621,6 +649,110 @@ func (u *Uploader) heartbeats(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// heartbeat builds one heartbeat and remembers its n for the saved counters.
+func (u *Uploader) heartbeat(state string) wire.Heartbeat {
+	hb := u.opts.Heartbeat(state)
+	u.lastN.Store(hb.N)
+	return hb
+}
+
+// reportBoots sends, before cur (this boot's heartbeat of the same tick, so the archive's newest
+// heartbeat stays this boot's), one heartbeat per other boot whose counters the outbox holds, and
+// deletes each record once the archive took it. A record that fails to send stays for the next tick.
+// The recovered heartbeat carries that boot's id, start, version and dropped counters; its outbox,
+// uploader and mask fields are cur's (they describe the outbox and the sender, which the archive's
+// checks read from a source's newest heartbeat), and every other per-boot counter is empty.
+func (u *Uploader) reportBoots(ctx context.Context, cur wire.Heartbeat) {
+	if u.opts.Boot.BootID == "" {
+		return
+	}
+	ob := u.opts.Outbox
+	if !u.bootsRead {
+		recs, err := ob.BootCounters(ctx)
+		if err != nil {
+			return // read again next tick
+		}
+		u.bootsRead = true
+		for _, r := range recs {
+			if r.BootID != u.opts.Boot.BootID {
+				u.boots = append(u.boots, r)
+			}
+		}
+	}
+	for len(u.boots) > 0 {
+		r := u.boots[0]
+		hb := cur
+		hb.BootID, hb.N, hb.StartedAt, hb.Component, hb.Version, hb.State = r.BootID, r.N+1, r.StartedAt, r.Component, r.Version, StateRecovered
+		hb.Dropped = r.Dropped
+		if hb.Dropped == nil {
+			hb.Dropped = map[string]uint64{}
+		}
+		hb.LastHookAt, hb.LastUsageAt = map[string]time.Time{}, nil
+		hb.Calls, hb.HookErrors, hb.Panics = map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
+		hb.HookP50us, hb.HookP99us = map[string]uint32{}, map[string]uint32{}
+		hb.Runtime, hb.Masker, hb.Importer, hb.Faults = wire.RuntimeStats{}, wire.MaskerStats{}, nil, []string{}
+		hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, err := u.cl.Heartbeat(hctx, hb)
+		cancel()
+		if err != nil {
+			if errors.Is(err, client.ErrUnauthorized) {
+				u.fail(err)
+			}
+			return
+		}
+		if err = ob.DeleteBootCounters(ctx, r.BootID); err != nil {
+			return // reported again next tick: the archive takes the same total twice as no new drops
+		}
+		u.boots = u.boots[1:]
+	}
+}
+
+// saveDrops saves the dropped counters whenever a drop signals, a burst in one write.
+func (u *Uploader) saveDrops(ctx context.Context) {
+	sig := u.opts.Stats.DropSignal()
+	for {
+		safego.Checkpoint("drop_save")
+		var retry <-chan time.Time
+		if err := u.SaveDrops(ctx); err != nil && ctx.Err() == nil && !u.stopping() {
+			retry = time.After(DropSaveRetry)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-u.stop:
+			return
+		case <-sig:
+		case <-retry:
+		}
+		u.sleep(ctx, DropSaveGap)
+	}
+}
+
+// SaveDrops saves this boot's dropped counters to the outbox (outbox.BootCounters) unless none were
+// counted or they did not change since the last save. Without Options.Boot it does nothing.
+func (u *Uploader) SaveDrops(ctx context.Context) error {
+	if u.opts.Boot.BootID == "" {
+		return nil
+	}
+	u.saveMu.Lock()
+	defer u.saveMu.Unlock()
+	d := u.opts.Stats.Dropped()
+	var total uint64
+	for _, v := range d {
+		total += v
+	}
+	if total == 0 || total == u.savedTotal {
+		return nil
+	}
+	b := u.opts.Boot
+	b.N, b.Dropped = u.lastN.Load(), d
+	if err := u.opts.Outbox.SaveBootCounters(ctx, b); err != nil {
+		return err
+	}
+	u.savedTotal = total
+	return nil
 }
 
 // haveCache is the in-memory have-cache: a FIFO-bounded set of hashes the archive holds outside

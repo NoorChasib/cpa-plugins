@@ -306,6 +306,9 @@ var (
 	OpenRetryTimeout = 10 * time.Minute
 )
 
+// FinalSaveTimeout bounds the save of the dropped counters at stop.
+var FinalSaveTimeout = 2 * time.Second
+
 // openRetry is one background outbox-open loop.
 type openRetry struct {
 	cancel context.CancelFunc
@@ -392,6 +395,7 @@ func (p *Plugin) startWith(cfg config.Config, secrets config.Secrets, ob *outbox
 		BaseURL: cfg.ArchiveURL, Token: secrets.SourceToken, UserAgent: "chat-archive/" + Version, Outbox: ob, Stats: e.Stats,
 		OnExact: func(set wire.ExactSet) { p.applyExact(rs, set) }, OnDead: rs.prefix.Dead, OnAck: rs.prefix.Acked,
 		Heartbeat: func(state string) wire.Heartbeat { return p.heartbeat(rs, state) },
+		Boot:      outbox.BootCounters{BootID: p.bootID, StartedAt: p.startedAt, Component: "cpa-plugin", Version: Version},
 	})
 	rs.capture = capture.Start(capture.Options{
 		Engine: e, Outbox: ob, Workers: cfg.Workers, HMACKeyID: cfg.HMACKeyID, HMACKey: secrets.HMACKey, Masker: rs.masker,
@@ -441,7 +445,8 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 
 // stopRuntime is the graceful stop: admission stopping, uploader and media
 // sender stopped within their deadline, background loops cancelled, workers drained (≤ 10 s),
-// the writer flushed, the outbox closed.
+// the writer flushed, the dropped counters saved (the drain counts dropped.stopped after the
+// uploader's final heartbeat; the next boot reports them), the outbox closed.
 func (p *Plugin) stopRuntime() {
 	p.mu.RLock()
 	rs := p.rt
@@ -455,6 +460,9 @@ func (p *Plugin) stopRuntime() {
 	rs.cancel()
 	rs.wg.Wait()
 	rs.capture.Stop()
+	sctx, cancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
+	_ = rs.up.SaveDrops(sctx)
+	cancel()
 	p.refreshSnapshot(rs)
 	_ = rs.ob.Close()
 	p.engine.Stopped()

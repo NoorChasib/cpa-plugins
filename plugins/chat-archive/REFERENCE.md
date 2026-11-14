@@ -80,6 +80,8 @@ Hooks do no I/O, compression or masking. Bodies are decoded straight from CPA's 
 
 Every 60 seconds, and once at shutdown, the plugin posts counts, names and times to `POST /v1/heartbeat` directly (never through the outbox). A blackholed or unreachable archive stops heartbeats, which the archive's dead-man check alerts on; CPA keeps serving and the outbox grows.
 
+Counters are cumulative per `boot_id` (one plugin process), and the archive derives `capture_drop` and the daily `dropped.*` deltas from heartbeats only. So that a crash between heartbeats, a lost final heartbeat, or drops counted while capture drains after the final heartbeat (`dropped.stopped`) lose no count, the plugin saves its `dropped.*` counters in `outbox.sqlite` within about 100 ms of a drop (one write per burst, retried each second while the write fails) and once more when it stops. The next process that opens the outbox reports each other boot's saved counters in a heartbeat with that boot's `boot_id`, `version` and `started_at` and state `recovered`, sent just before its own heartbeat, and deletes the record once the archive answers; a record the archive refused is sent again next minute. A recovered heartbeat carries the current outbox, uploader and mask fields and no hook counters. The archive takes a boot's last heartbeat as its total, so a record reported twice adds no drops. At most 32 boot records are kept, oldest deleted first.
+
 ## Data path
 
 `outbox.sqlite` with its `-wal`, `-shm` and `.lock` files and `blobs/` for pieces over 256 KiB. Pending envelopes are never evicted; acked envelopes are kept `replay-retention-hours` for archive replay; dead letters 90 days. Times are UTC.
