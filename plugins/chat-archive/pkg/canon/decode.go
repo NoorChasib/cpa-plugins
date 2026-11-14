@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,8 +37,10 @@ func codings(ce string) []string {
 // others. ok is false when a coding is unknown or its stream does not decode; the caller then reads
 // the body as is only when it is a JSON object (a plain body under a stale header), else drops it as
 // still encoded. gzip and zstd streams are recognized by their magic bytes; deflate and br have none,
-// so a body that starts like JSON is never fed to them (CPA hands the hooks a body it decoded itself
-// with the original Content-Encoding still set).
+// so a body that is a valid JSON object is never fed to them (CPA hands the hooks a body it decoded
+// itself with the original Content-Encoding still set). Only a whole valid object counts: a compressed
+// stream can start with '{' or '[' (Brotli at quality 0 or 1 with lgwin 21 starts 09 5b, a raw deflate
+// block with fixed codes can start 7b), and such a stream is decoded, never refused.
 func decodeBody(body []byte, ce string, maxOut int64) (out []byte, flags []string, ok bool, err error) {
 	cs := codings(ce)
 	if len(cs) == 0 {
@@ -60,13 +63,13 @@ func decodeBody(body []byte, ce string, maxOut int64) (out []byte, flags []strin
 			dec, err = unzstd(out, maxOut)
 			flags = append(flags, wire.FlagContentDecoded)
 		case "deflate":
-			if looksJSON(out) {
+			if isJSONObject(out) {
 				return nil, nil, false, nil
 			}
 			dec, err = inflate(out, maxOut)
 			flags = append(flags, wire.FlagContentDecoded)
 		case "br":
-			if looksJSON(out) {
+			if isJSONObject(out) {
 				return nil, nil, false, nil
 			}
 			dec, err = readCapped(brotli.NewReader(bytes.NewReader(out)), maxOut, 64<<10)
@@ -90,10 +93,11 @@ func isZstd(b []byte) bool {
 	return len(b) >= 4 && b[0] == 0x28 && b[1] == 0xb5 && b[2] == 0x2f && b[3] == 0xfd
 }
 
-// looksJSON reports whether b's first non-space byte opens a JSON object or array.
-func looksJSON(b []byte) bool {
+// isJSONObject reports whether b is one valid JSON object (surrounding whitespace allowed): a body that
+// is plain already. A compressed stream that merely starts with '{' is not valid JSON, so it is decoded.
+func isJSONObject(b []byte) bool {
 	t := bytes.TrimLeft(b, " \t\r\n")
-	return len(t) > 0 && (t[0] == '{' || t[0] == '[')
+	return len(t) > 0 && t[0] == '{' && json.Valid(t)
 }
 
 func unzstd(b []byte, maxOut int64) ([]byte, error) {

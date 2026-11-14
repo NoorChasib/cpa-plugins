@@ -544,6 +544,42 @@ func TestDecodedCodings(t *testing.T) {
 	}
 }
 
+// TestBrotliStartingLikeJSON: Brotli and raw deflate have no magic bytes, and a valid stream can start
+// with '{' or '[': Brotli at quality 0 with lgwin 21 writes 09 5b. Such a stream is decoded and split as
+// the plain body, never refused as already plain and then dropped as undecodable; only a body that is a
+// whole valid JSON object counts as plain.
+func TestBrotliStartingLikeJSON(t *testing.T) {
+	e := newEnv(t)
+	plain := []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("synthetic ", 14) + `"}]}`)
+	var buf bytes.Buffer
+	w := brotli.NewWriterOptions(&buf, brotli.WriterOptions{Quality: 0, LGWin: 21})
+	w.Write(plain)
+	w.Close()
+	br := buf.Bytes()
+	if t0 := bytes.TrimLeft(br, " \t\r\n"); len(t0) == 0 || (t0[0] != '{' && t0[0] != '[') {
+		t.Fatalf("fixture: the stream starts % x, want a byte that opens JSON after whitespace", br[:4])
+	}
+	if isJSONObject(br) {
+		t.Fatal("a compressed stream counted as a JSON object")
+	}
+	a := e.request(Input{Format: FormatClaude, Body: plain}, Options{})
+	sp := e.request(Input{Format: FormatClaude, Body: br, ContentEncoding: "br"}, Options{})
+	if !slices.Equal(ItemIDs(a.Items), ItemIDs(sp.Items)) || !slices.Contains(sp.Flags, wire.FlagContentDecoded) || slices.Contains(sp.Flags, wire.FlagEncodingIgnored) {
+		t.Fatalf("decoded body split differently: flags %v", sp.Flags)
+	}
+	checkInvariants(t, sp)
+	for _, b := range [][]byte{plain, []byte(" \n" + string(plain) + "\n")} {
+		if !isJSONObject(b) {
+			t.Fatalf("plain object %q not recognized", b[:4])
+		}
+	}
+	for _, b := range []string{`[1,2]`, `{"a":`, `{"a":1}x`, ``, `   `} {
+		if isJSONObject([]byte(b)) {
+			t.Fatalf("%q counted as a JSON object", b)
+		}
+	}
+}
+
 // TestLabelledPlainBody: CPA decodes an upstream body itself but hands the hooks the upstream
 // Content-Encoding unchanged. A labelled body that parses as a JSON object is plain already: it
 // splits exactly as the unlabelled body, flag encoding_ignored and not gunzipped. A labelled body

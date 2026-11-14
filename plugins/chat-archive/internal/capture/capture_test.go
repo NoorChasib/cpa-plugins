@@ -588,6 +588,21 @@ func TestBeginCompressedRequestBody(t *testing.T) {
 	b := brotli.NewWriter(&br)
 	b.Write(body)
 	b.Close()
+	// Brotli has no magic bytes, and at quality 0 with lgwin 21 a stream can start with 09 5b ("\t[").
+	// Pad the text until it does: such a body must still be decoded, not refused as plain JSON.
+	var brJSONish []byte
+	for pad := 0; pad < 4096 && brJSONish == nil; pad++ {
+		var q bytes.Buffer
+		w := brotli.NewWriterOptions(&q, brotli.WriterOptions{Quality: 0, LGWin: 21})
+		w.Write(plugintest.ClaudeBody("Reply only OK. " + marker + " " + secret + " " + strings.Repeat("s", pad)))
+		w.Close()
+		if t0 := bytes.TrimLeft(q.Bytes(), " \t\r\n"); len(t0) > 0 && (t0[0] == '{' || t0[0] == '[') {
+			brJSONish = q.Bytes()
+		}
+	}
+	if brJSONish == nil {
+		t.Fatal("fixture: no padding made a Brotli stream that starts like JSON")
+	}
 	cases := []struct {
 		rid, ce      string
 		body         []byte
@@ -595,6 +610,7 @@ func TestBeginCompressedRequestBody(t *testing.T) {
 	}{
 		{"req-zstd", "zstd", zw.EncodeAll(body, nil), "", wire.FlagContentDecoded},
 		{"req-br", "br", br.Bytes(), "", wire.FlagContentDecoded},
+		{"req-br-jsonish", "br", brJSONish, "", wire.FlagContentDecoded},
 		{"req-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped},
 		{"req-bad-zstd", "zstd", []byte("\x28\xb5\x2f\xfd not a frame"), wire.DroppedParseError, ""},
 	}
