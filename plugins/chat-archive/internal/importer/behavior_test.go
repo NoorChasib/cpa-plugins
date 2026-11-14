@@ -3,6 +3,7 @@ package importer
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -1237,5 +1238,37 @@ func TestHeartbeatsDuringLongRun(t *testing.T) {
 	x.mustRun()
 	if got := len(x.srv.Heartbeats(x.sourceID)) - len(hbs); got != 1 {
 		t.Errorf("short run sent %d heartbeats, want 1", got)
+	}
+}
+
+// TestImportFileKeyMasked: a whole file whose path holds a segment the masker treats as a secret (a
+// project directory named like an xAI key) is sent with that segment masked in the import.file body,
+// as every other envelope string is, so the archive's re-check accepts it; its key still hashes the raw
+// path, so a file dead-lettered before this fix requeues under the same key. Before the fix the raw path
+// was in the body and the archive rejected the file as mask_violation (ca-xai).
+func TestImportFileKeyMasked(t *testing.T) {
+	x := newH(t)
+	x.enroll()
+	project := "-home-synth-xai-" + strings.Repeat("q", 24) + "-tools"
+	data := []byte("saved output " + x.g.Words(8) + "\n")
+	x.writeRaw(filepath.Join(x.projects(), project, gSession, "tool-results", "out.txt"), data)
+	x.mustRun()
+	all := x.envelopes()
+	if len(all) != 1 || all[0].Envelope.Kind != wire.KindImportFile || all[0].Status != wire.StatusOK {
+		t.Fatalf("%d envelopes, want one import.file ok", len(all))
+	}
+	raw := "claude-projects/" + project + "/" + gSession + "/tool-results/out.txt"
+	var f wire.ImportFile
+	if err := json.Unmarshal(all[0].Envelope.Body, &f); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.FileKey, "xai-") || !strings.Contains(f.FileKey, "[masked:") || !strings.HasSuffix(f.FileKey, "/tool-results/out.txt") {
+		t.Fatalf("file_key %q: the secret-like segment is not masked", f.FileKey)
+	}
+	if all[0].Envelope.Key != wire.ImportFileKey(ClientClaudeCode, raw, f.Content) {
+		t.Fatal("the key no longer hashes the raw path")
+	}
+	if fs := testBuilder(t).m.Detect(string(all[0].Envelope.Body)); len(fs) != 0 {
+		t.Fatalf("the body still holds %d findings", len(fs))
 	}
 }
