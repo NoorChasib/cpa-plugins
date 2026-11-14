@@ -210,7 +210,7 @@ func (e *Engine) Response(raw []byte) []byte {
 		Stream: req.Stream, Headers: req.ResponseHeaders, ObservedAt: start, Meta: req.Meta, RawLen: int64(req.BodyLen)}
 	if req.ResponseHeaders != nil {
 		r.ContentType = req.ResponseHeaders.Get("Content-Type")
-		r.ContentEncoding = req.ResponseHeaders.Get("Content-Encoding")
+		r.ContentEncoding = strings.Join(req.ResponseHeaders.Values("Content-Encoding"), ", ") // every field line: RFC 9110 5.3
 	}
 	e.With(req.RequestID, true, func(en *Entry) { r.Index = en.NextResponse; en.NextResponse++ })
 	if cfg.Capture != "full" {

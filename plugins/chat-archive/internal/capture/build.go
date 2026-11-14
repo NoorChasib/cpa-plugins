@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -68,6 +69,23 @@ func headerGet(h http.Header, name string) string {
 		}
 	}
 	return ""
+}
+
+// headerList returns every value of a list header (any key case), joined with ", " as RFC 9110 5.3
+// combines repeated field lines: a body sent with Content-Encoding twice ("gzip" then "br") names both
+// codings, and decoding only the first would leave it still encoded.
+func headerList(h http.Header, name string) string {
+	var keys, vs []string
+	for k := range h {
+		if strings.EqualFold(k, name) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys) // one key in practice; a fixed order if a map holds two spellings
+	for _, k := range keys {
+		vs = append(vs, h[k]...)
+	}
+	return strings.Join(vs, ", ")
 }
 
 // splitResult is what a split contributes to an envelope.
