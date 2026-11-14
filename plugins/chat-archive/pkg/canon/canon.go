@@ -23,9 +23,11 @@ var errNoMasker = errors.New("canon: a Masker is required")
 // Errors a split returns instead of a Split, so the producer stores metadata only.
 var (
 	// ErrUndecodableBody: the body is still content-encoded, so no piece may be made of it (its
-	// plaintext would sit unmasked inside a stored blob). That is a gzip body that does not decode
-	// (bad header, truncated or corrupt stream) or a Content-Encoding other than empty, identity or
-	// gzip. The producer records Dropped parse_error.
+	// plaintext would sit unmasked inside a stored blob). That is a gzip stream that does not decode
+	// (truncated or corrupt), or a body labelled with any other Content-Encoding (or labelled gzip
+	// without the gzip magic) that does not parse as a JSON object. A labelled body that does is
+	// plain already (CPA decodes upstream bodies but keeps their Content-Encoding header) and is
+	// split as is, flag encoding_ignored. The producer records Dropped parse_error.
 	ErrUndecodableBody = errors.New("canon: body is still content-encoded")
 	// ErrBodyBudget: the body is over the split's budget, Options.MaxDecoded decoded bytes of a gzip
 	// body or Options.MaxNodes parsed JSON values. The producer records Dropped body_budget.

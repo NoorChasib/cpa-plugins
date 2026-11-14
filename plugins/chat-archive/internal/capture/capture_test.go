@@ -1,10 +1,15 @@
 package capture_test
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -456,4 +461,109 @@ func TestNonStreamTerminalStatus(t *testing.T) {
 	if r := run(m, 1)["ns-meta"]; r.Stream || r.TerminalStatus != "completed" || r.Body.N != 0 {
 		t.Fatalf("metadata-only non-stream response: stream %v terminal_status %q n %d", r.Stream, r.TerminalStatus, r.Body.N)
 	}
+}
+
+// TestNonStreamDecodedBodyWithUpstreamContentEncoding: CPA decodes a compressed upstream non-stream
+// body itself but hands response.intercept_after the upstream headers unchanged, so plain JSON
+// arrives with Content-Encoding gzip, deflate, br or zstd (the host warm-up's model callbacks and
+// Claude Code's non-stream /v1/messages). The plugin stores it like an unlabelled body, masked, with
+// flag encoding_ignored and its response id. A body still in its coding stays metadata only
+// (parse_error), and a real gzip body is still gunzipped.
+func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
+	h := plugintest.New(t, nil, "")
+	secret := "ghp_" + randomAlnum(36)
+	marker := "decoded-marker-" + randomAlnum(8)
+	msg := func(id string) []byte {
+		return []byte(`{"id":"` + id + `","type":"message","role":"assistant","model":"claude-test-model","content":[{"type":"text","text":"OK ` +
+			marker + ` ` + secret + `"}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":4}}`)
+	}
+	var gz, fl bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write(msg("msg_real_gzip"))
+	zw.Close()
+	fw, _ := flate.NewWriter(&fl, flate.DefaultCompression)
+	fw.Write(msg("msg_still_deflate"))
+	fw.Close()
+	cases := []struct {
+		rid, ce               string
+		body                  []byte
+		dropped, flag, respID string
+	}{
+		{"dec-gzip", "gzip", msg("msg_dec_gzip"), "", wire.FlagEncodingIgnored, "msg_dec_gzip"},
+		{"dec-br", "br", msg("msg_dec_br"), "", wire.FlagEncodingIgnored, "msg_dec_br"},
+		{"dec-zstd", "zstd", msg("msg_dec_zstd"), "", wire.FlagEncodingIgnored, "msg_dec_zstd"},
+		{"dec-deflate", "deflate", msg("msg_dec_deflate"), "", wire.FlagEncodingIgnored, "msg_dec_deflate"},
+		{"real-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped, ""},
+		{"still-deflate", "deflate", fl.Bytes(), wire.DroppedParseError, "", ""},
+	}
+	meta := plugintest.Meta("/v1/messages")
+	for _, c := range cases {
+		hdr := http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {c.ce}, "Request-Id": {"req_synthetic"},
+			"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.1"}}
+		h.Plugin.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(c.rid, "claude", plugintest.ClaudeBody("Reply only OK."), nil, meta))
+		h.Plugin.Hook(protocol.MethodResponseInterceptAfter, plugintest.ResponseWithHeaders(c.rid, "claude", c.body, hdr, meta))
+		h.Plugin.Hook(protocol.MethodRequestComplete, plugintest.Complete(c.rid, "succeeded", meta))
+	}
+	type got struct {
+		r   wire.ExchangeResponse
+		env wire.Envelope
+	}
+	var resp map[string]got
+	plugintest.WaitFor(t, "non-stream responses", func() bool {
+		resp = map[string]got{}
+		for _, r := range h.Srv.Envelopes(h.SourceID) {
+			if r.Envelope.Kind == wire.KindExchangeResponse {
+				var x wire.ExchangeResponse
+				json.Unmarshal(r.Envelope.Body, &x)
+				resp[x.RequestID] = got{x, r.Envelope}
+			}
+		}
+		return len(resp) == len(cases)
+	})
+	piecesHave := func(env wire.Envelope, s string) bool {
+		for _, ref := range env.Refs {
+			if _, raw, ok := h.Srv.Piece(ref); ok && strings.Contains(string(raw), s) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range cases {
+		g := resp[c.rid]
+		b := g.r.Body
+		if b.Dropped != c.dropped || (c.flag != "" && !slices.Contains(b.Flags, c.flag)) || g.r.ResponseID != c.respID {
+			t.Errorf("%s (Content-Encoding %s): dropped %q flags %v response_id %q; want dropped %q flag %q response_id %q",
+				c.rid, c.ce, b.Dropped, b.Flags, g.r.ResponseID, c.dropped, c.flag, c.respID)
+			continue
+		}
+		if c.dropped != "" {
+			if b.N != 0 || len(g.env.Refs) != 0 || slices.Contains(b.Flags, wire.FlagEncodingIgnored) {
+				t.Errorf("%s: a body still content-encoded made pieces: n %d refs %d flags %v", c.rid, b.N, len(g.env.Refs), b.Flags)
+			}
+			continue
+		}
+		if b.N == 0 || !piecesHave(g.env, marker) || !piecesHave(g.env, "[masked:") {
+			t.Errorf("%s: n %d; reply text or mask placeholder missing from its pieces", c.rid, b.N)
+		}
+	}
+	for _, r := range h.Srv.Envelopes(h.SourceID) {
+		if strings.Contains(string(r.Raw), secret) {
+			t.Errorf("secret reached envelope %s", r.Envelope.Kind)
+		}
+		for _, ref := range r.Envelope.Refs {
+			if _, raw, ok := h.Srv.Piece(ref); ok && strings.Contains(string(raw), secret) {
+				t.Errorf("secret reached a piece of %s", r.Envelope.Kind)
+			}
+		}
+	}
+}
+
+func randomAlnum(n int) string {
+	const al = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	rand.Read(b)
+	for i := range b {
+		b[i] = al[int(b[i])%len(al)]
+	}
+	return string(b)
 }

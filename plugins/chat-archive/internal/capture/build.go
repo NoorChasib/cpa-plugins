@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -302,7 +303,9 @@ func (rt *Runtime) buildResponse(r *hooks.Response, sr splitResult) (outbox.NewE
 		body := sp.Body()
 		body.Flags = append(body.Flags, r.Flags...)
 		er.Body = body
-		if er.ResponseID == "" && !r.Stream && r.ContentEncoding == "" {
+		// A body the split read as is despite its Content-Encoding (flag encoding_ignored) is
+		// plain JSON like an unlabelled one, so its id is read the same way.
+		if er.ResponseID == "" && !r.Stream && (r.ContentEncoding == "" || slices.Contains(sp.Flags, wire.FlagEncodingIgnored)) {
 			er.ResponseID = topString(r.Body, "id")
 			if er.ResponseID == "" {
 				er.ResponseID = topString(r.Body, "responseId")

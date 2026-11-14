@@ -412,7 +412,7 @@ func TestGzipSamePieces(t *testing.T) {
 		t.Errorf("flags %v raw_len %d", b.Flags, b.RawLen)
 	}
 	// A body still content-encoded never becomes a piece: not gzip at all, a truncated stream, a corrupt
-	// stream, or an encoding other than gzip is ErrUndecodableBody; past MaxDecoded is ErrBodyBudget.
+	// stream, or another encoding's stream is ErrUndecodableBody; past MaxDecoded is ErrBodyBudget.
 	gz := gzipBytes(plain)
 	corrupt := append([]byte(nil), gz...)
 	corrupt[len(corrupt)/2] ^= 0xff
@@ -430,7 +430,8 @@ func TestGzipSamePieces(t *testing.T) {
 		{"truncated", "gzip", gz[:len(gz)-8], 0, ErrUndecodableBody},
 		{"corrupt", "gzip", corrupt, 0, ErrUndecodableBody},
 		{"deflate", "deflate", flated.Bytes(), 0, ErrUndecodableBody},
-		{"br", "br", plain, 0, ErrUndecodableBody},
+		{"br", "br", flated.Bytes(), 0, ErrUndecodableBody},
+		{"zstd", "zstd", []byte("\x28\xb5\x2f\xfd\x00\x58\x00\x00"), 0, ErrUndecodableBody},
 		{"over MaxDecoded", "gzip", gz, int64(len(plain) - 1), ErrBodyBudget},
 	} {
 		sp, err := e.splitter(Options{MaxDecoded: c.max}).split(Input{Format: FormatClaude, Body: c.body, ContentEncoding: c.ce}, true)
@@ -445,6 +446,55 @@ func TestGzipSamePieces(t *testing.T) {
 	}
 	if sp := e.response(Input{Format: FormatClaude, Body: gz, ContentEncoding: "gzip"}, Options{MaxDecoded: int64(len(plain))}); !slices.Equal(ItemIDs(a.Items), ItemIDs(sp.Items)) {
 		t.Error("gzip at exactly MaxDecoded split differently")
+	}
+}
+
+// TestLabelledPlainBody: CPA decodes an upstream body itself but hands the hooks the upstream
+// Content-Encoding unchanged. A labelled body that parses as a JSON object is plain already: it
+// splits exactly as the unlabelled body, flag encoding_ignored and not gunzipped. A labelled body
+// that is not a JSON object (another JSON value, text, multipart, raw media) may still be encoded
+// and is ErrUndecodableBody; the node budget still applies.
+func TestLabelledPlainBody(t *testing.T) {
+	e := newEnv(t)
+	plain := e.readInput("claude-response.in.json")
+	a := e.response(Input{Format: FormatClaude, Body: plain}, Options{})
+	for _, ce := range []string{"gzip", "x-gzip", " GZIP ", "deflate", "br", "zstd", "gzip, br", "x-synthetic"} {
+		sp := e.response(Input{Format: FormatClaude, Body: plain, ContentEncoding: ce}, Options{})
+		if !slices.Equal(ItemIDs(a.Items), ItemIDs(sp.Items)) || !slices.Equal(a.Refs(0), sp.Refs(0)) || sp.RawLen != a.RawLen {
+			t.Errorf("Content-Encoding %q: plain body split differently", ce)
+		}
+		if !slices.Contains(sp.Flags, wire.FlagEncodingIgnored) || slices.Contains(sp.Flags, wire.FlagGunzipped) {
+			t.Errorf("Content-Encoding %q: flags %v", ce, sp.Flags)
+		}
+		checkInvariants(t, sp)
+	}
+	if sp := e.response(Input{Format: FormatClaude, Body: plain}, Options{}); slices.Contains(sp.Flags, wire.FlagEncodingIgnored) {
+		t.Errorf("unlabelled body flagged: %v", sp.Flags)
+	}
+	req := e.readInput("claude-request-text.in.json")
+	ra := e.request(Input{Format: FormatClaude, Body: req}, Options{})
+	if rb := e.request(Input{Format: FormatClaude, Body: req, ContentEncoding: "zstd"}, Options{}); !slices.Equal(ItemIDs(ra.Items), ItemIDs(rb.Items)) ||
+		!slices.Contains(rb.Flags, wire.FlagEncodingIgnored) {
+		t.Errorf("labelled plain request split differently: flags %v", rb.Flags)
+	}
+	for _, c := range []struct {
+		name, format, ct, ce string
+		body                 []byte
+		opts                 Options
+		want                 error
+	}{
+		{"array", FormatClaude, "", "br", []byte(`[1, 2, 3]`), Options{}, ErrUndecodableBody},
+		{"string", FormatClaude, "", "zstd", []byte(`"synthetic"`), Options{}, ErrUndecodableBody},
+		{"text", FormatOpaque, "", "deflate", []byte("plain synthetic text body\n"), Options{}, ErrUndecodableBody},
+		{"bad json", FormatClaude, "", "gzip", []byte(`{"model": "claude-test-model",`), Options{}, ErrUndecodableBody},
+		{"multipart", FormatMediaPrefix + "images", "multipart/form-data; boundary=synthboundary", "br", multipartBody(e), Options{}, ErrUndecodableBody},
+		{"speech", FormatMediaPrefix + "speech", "audio/mpeg", "br", e.synth("audio", 3000), Options{}, ErrUndecodableBody},
+		{"over MaxNodes", FormatClaude, "", "br", plain, Options{MaxNodes: 3}, ErrBodyBudget},
+	} {
+		sp, err := e.splitter(c.opts).split(Input{Format: c.format, Body: c.body, ContentType: c.ct, ContentEncoding: c.ce}, true)
+		if !errors.Is(err, c.want) || sp != nil {
+			t.Errorf("%s: err %v, want %v", c.name, err, c.want)
+		}
 	}
 }
 

@@ -25,7 +25,7 @@ type Input struct {
 	Format          string // a Format* value
 	Body            []byte
 	ContentType     string // Content-Type of the body: multipart boundary, speech mime
-	ContentEncoding string // Content-Encoding of the body: "gzip" is decoded first, capped at Options.MaxDecoded (flag gunzipped); "" and "identity" mean none; anything else is ErrUndecodableBody
+	ContentEncoding string // Content-Encoding of the body: "" and "identity" mean none; a "gzip" body that starts with the gzip magic is decoded first, capped at Options.MaxDecoded (flag gunzipped); any other labelled body is read as is only when it parses as a JSON object (flag encoding_ignored), else ErrUndecodableBody
 }
 
 // Memo caches Masker.String results across bodies: the plugin's masking memo LRU and the
@@ -151,9 +151,14 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	}
 	sp := &Split{Format: in.Format, RawLen: int64(len(in.Body))}
 	body := in.Body
-	switch enc := strings.ToLower(strings.TrimSpace(in.ContentEncoding)); enc {
-	case "", "identity":
-	case "gzip", "x-gzip":
+	// labelled: Content-Encoding names a coding the split does not undo here. CPA decodes an
+	// upstream body itself but hands the hooks the upstream Content-Encoding unchanged, so such a
+	// body is usually plain already. It is read as is only when it parses as a JSON object, which
+	// no compressed stream does; anything else is still encoded and never becomes a piece.
+	labelled := false
+	switch enc := strings.ToLower(strings.TrimSpace(in.ContentEncoding)); {
+	case enc == "" || enc == "identity":
+	case (enc == "gzip" || enc == "x-gzip") && isGzip(body):
 		b, err := gunzip(body, s.maxDec)
 		if err != nil {
 			return nil, err
@@ -161,9 +166,9 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 		body = b
 		s.flag(wire.FlagGunzipped)
 	default:
-		return nil, fmt.Errorf("%w: unsupported Content-Encoding", ErrUndecodableBody)
+		labelled = true
 	}
-	if boundary, ok := multipartBoundary(in.ContentType); ok {
+	if boundary, ok := multipartBoundary(in.ContentType); ok && !labelled {
 		if parts, err := readMultipart(body, boundary); err == nil {
 			sp.Format = FormatMultipart
 			s.multipart(parts)
@@ -177,6 +182,12 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	n, p, err := s.parse(body)
 	if errors.Is(err, ErrBodyBudget) {
 		return nil, err
+	}
+	if labelled {
+		if err != nil || !n.isObject() {
+			return nil, fmt.Errorf("%w: Content-Encoding on a body that is not a JSON object", ErrUndecodableBody)
+		}
+		s.flag(wire.FlagEncodingIgnored)
 	}
 	if err != nil {
 		if media && response { // speech audio and other raw media bodies: one attachment
@@ -241,6 +252,9 @@ func knownJSONFormat(f string) bool {
 	}
 	return false
 }
+
+// isGzip reports whether b starts with the gzip magic bytes 1f 8b (RFC 1952).
+func isGzip(b []byte) bool { return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b }
 
 // gunzip decodes a gzip body of at most maxOut decoded bytes. A stream
 // that does not decode is ErrUndecodableBody (its bytes are never stored, so no compressed plaintext

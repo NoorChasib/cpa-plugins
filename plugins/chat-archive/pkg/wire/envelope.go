@@ -113,6 +113,10 @@ const (
 	FlagGunzipped         = "gunzipped"
 	FlagLegacyCompletions = "legacy_completions"
 	FlagInputParseError   = "input_parse_error"
+	// FlagEncodingIgnored: the body came with a Content-Encoding but was already plain JSON (CPA
+	// decodes an upstream body itself and still hands the hook the upstream Content-Encoding), so
+	// the split read it as is.
+	FlagEncodingIgnored = "encoding_ignored"
 )
 
 // Body.Dropped values.

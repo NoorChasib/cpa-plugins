@@ -87,9 +87,14 @@ func AfterAuth(rid string) []byte {
 
 // Response builds response.intercept_after; the executed RequestHeaders carry a canary.
 func Response(rid, format string, body []byte, meta map[string]any) []byte {
+	return ResponseWithHeaders(rid, format, body, http.Header{"Content-Type": {"application/json"}, "Request-Id": {"req_synthetic"}}, meta)
+}
+
+// ResponseWithHeaders is Response with the given ResponseHeaders.
+func ResponseWithHeaders(rid, format string, body []byte, headers http.Header, meta map[string]any) []byte {
 	return enc(map[string]any{"RequestID": rid, "SourceFormat": format, "Model": "model-x", "RequestedModel": "model-x", "Stream": false,
 		"RequestHeaders":  map[string][]string{"X-Api-Key": {"upstream-request-header-canary"}},
-		"ResponseHeaders": map[string][]string{"Content-Type": {"application/json"}, "Request-Id": {"req_synthetic"}},
+		"ResponseHeaders": headers,
 		"OriginalRequest": []byte("{}"), "RequestBody": []byte("{}"), "Body": body, "StatusCode": 200, "Metadata": meta})
 }
 
