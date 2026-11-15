@@ -112,11 +112,16 @@ func (r *runner) requeue(o requeueOpts) error {
 
 // printCheck prints, for requeue --dry-run, the rule ids the archive's re-check would find in the rebuilt
 // envelope and where (body, pieces), or rules=none when it would pass; too_large alone when it is still
-// over the limits. Ids and the key only, never content: this names the rule that blocks a dead letter whose row
-// has none (an archive that sent no rules), and says whether a requeue would now pass.
+// over the limits, key_migration alone while it would be held for its prior key. Ids and the key only,
+// never content: this names the rule that blocks a dead letter whose row has none (an archive that sent
+// no rules), and says whether a requeue would now pass.
 func (r *runner) printCheck(u *unitRec) error {
 	if u.b.tooLarge { // never sent, so never re-checked: it stays a local dead letter
 		fmt.Fprintf(r.env.Stdout, "check %s too_large\n", u.requeue.Key)
+		return nil
+	}
+	if r.heldForPriorKey(u.b) { // never sent while the archive cannot reconcile its prior key
+		fmt.Fprintf(r.env.Stdout, "check %s %s\n", u.requeue.Key, deadKeyMigration)
 		return nil
 	}
 	rules, parts, err := recheck(r.b.m, u.b, r.locator(u))

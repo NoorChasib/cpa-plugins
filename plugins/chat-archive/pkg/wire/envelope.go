@@ -9,8 +9,8 @@ import (
 // Envelope is the unit of idempotency, ordering and acknowledgement.
 //
 // body_sha256 (server receipts, duplicate/conflict decisions) = sha256 of the Body bytes exactly as
-// sent. Nothing outside Body (v, seq, epoch_seen, exact_rev, refs, loc) is part of it, so replays and
-// re-reads of the same content at another position are `duplicate`, never `conflict`.
+// sent. Nothing outside Body (v, seq, epoch_seen, exact_rev, refs, loc, prior_key_sha256) is part of it,
+// so replays and re-reads of the same content at another position are `duplicate`, never `conflict`.
 type Envelope struct {
 	V            int             `json:"v"` // 1
 	Kind         Kind            `json:"kind"`
@@ -25,6 +25,15 @@ type Envelope struct {
 	Refs         []Hash          `json:"refs,omitempty"` // every piece and attachment the body references
 	Loc          *Locator        `json:"loc,omitempty"`  // import kinds only (required there); never part of Body
 	Body         json.RawMessage `json:"body"`           // canon/v1 of the kind's struct
+	// PriorKeySHA256 lists KeySHA256 of each key an earlier producer version gave this same envelope,
+	// never the key itself: an earlier key can hold a value the producer now hashes. Like loc it is
+	// outside Body and never part of body_sha256. A server that advertises accepted.prior_key_sha256
+	// judges an envelope whose key has no receipt against a stored record whose key's sha256 is listed
+	// (duplicate or conflict by body_sha256, as for its own key), moves that record to the envelope's key,
+	// and keeps the earlier key's sha256 so an envelope still sent under it is judged against the same
+	// record. DecodeEnvelope ignores the field, so a server without the capability stores a second record;
+	// a producer holds such an envelope back until the server advertises it.
+	PriorKeySHA256 []Hash `json:"prior_key_sha256,omitempty"`
 }
 
 // BodySHA256 is body_sha256: sha256 of e.Body exactly as sent. Nothing outside Body (v, seq,

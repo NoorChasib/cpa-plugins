@@ -27,6 +27,12 @@ func ValidKey(key string) bool {
 	return true
 }
 
+// KeySHA256 returns the sha256 of a key's bytes, the form in which Envelope.PriorKeySHA256 names an
+// earlier key.
+func KeySHA256(key string) Hash {
+	return sha256.Sum256([]byte(key))
+}
+
 // The key builders below return the envelope key layouts. They do not validate their arguments;
 // callers check the result with ValidKey.
 

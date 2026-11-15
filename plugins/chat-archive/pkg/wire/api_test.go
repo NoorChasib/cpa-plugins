@@ -94,6 +94,9 @@ var (
 	_                                        = wire.HeartbeatRow{EpochSeen: uint32(0), ComponentVersion: "", HostVersion: "",
 		LastHookAt: time.Time{}, LastUsageAt: time.Time{}, OutboxDepth: uint32(0), OutboxBytes: uint64(0),
 		OldestPendingS: uint32(0), Counters: map[string]uint64(nil), BootID: ""}
+	_ func(string) wire.Hash = wire.KeySHA256
+	_                        = wire.Envelope{PriorKeySHA256: []wire.Hash(nil)}
+	_                        = wire.Accepted{PriorKeySHA256: false}
 
 	// Every named type exists.
 	_ = []any{

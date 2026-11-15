@@ -27,15 +27,17 @@ func joinedKeys(t *testing.T, b *builder) (k1, k2 string) {
 // agent id that looks like a secret) leaves the machine hashed in the record's key, deterministically and
 // distinctly, and the key importer 0.1.1 gave the same bytes is kept as an alias for requeue. Keys of
 // records whose ids are real ids are byte-identical to that legacy key. Clean segments that complete a
-// secret across a "/" hash every id segment.
+// secret across a "/" hash every id segment. prior names the legacy key only when the body masks no id
+// (0.1.1 sent that same body, so the archive may hold it): a run id or a joined key, not an id the body
+// also carries.
 func TestKeySegmentsHashed(t *testing.T) {
 	b := testBuilder(t)
 	const sid = "11111111-2222-4333-8444-555555555555"
 	main := mustClassify(t, RootClaudeProjects, "-home-synth-proj/"+sid+".jsonl")
 	clean := buildFor(t, b, main, jsonLine(t, map[string]any{"type": "user", "uuid": "u-1", "sessionId": sid}))
 	sha := clean.key[strings.LastIndex(clean.key, "/")+1:]
-	if clean.key != wire.ClaudeUUIDKey(sid, "u-1", sha) || len(clean.aliases) != 0 {
-		t.Fatalf("clean record: key %q aliases %q, want the 0.1.1 key", clean.key, clean.aliases)
+	if clean.key != wire.ClaudeUUIDKey(sid, "u-1", sha) || len(clean.aliases) != 0 || clean.prior != "" {
+		t.Fatalf("clean record: key %q aliases %q prior %q, want the 0.1.1 key", clean.key, clean.aliases, clean.prior)
 	}
 	seen := map[string]string{}
 	for name, sec := range recheckSecrets {
@@ -48,6 +50,10 @@ func TestKeySegmentsHashed(t *testing.T) {
 		if !bl.keyedAs(legacy) || b.changes(bl.key) || !wire.ValidKey(bl.key) {
 			t.Errorf("%s: key %q aliases %q: legacy key not kept, or the key is not clean", name, bl.key, bl.aliases)
 		}
+		// 0.1.1 sent this id raw in the body, so the archive refused it: no archived record to reconcile.
+		if bl.prior != "" {
+			t.Errorf("%s: prior %q for a record whose body masks an id", name, bl.prior)
+		}
 		if again := buildFor(t, b, main, jsonLine(t, map[string]any{"type": "user", "uuid": "u-1", "sessionId": sec})); again.key != bl.key {
 			t.Errorf("%s: two builds keyed %q and %q", name, bl.key, again.key)
 		}
@@ -59,13 +65,20 @@ func TestKeySegmentsHashed(t *testing.T) {
 	sec := recheckSecrets["gitlab"]
 	codex := mustClassify(t, RootCodexSessions, "2026/10/01/rollout-x.jsonl")
 	cx, err := b.codexRecord(codex, &codexFile{threadID: sec, sessionID: sec, histStart: -1}, jsonLine(t, map[string]any{"type": "event_msg", "payload": map[string]any{"type": "x"}}), 3)
-	if err != nil || !strings.HasPrefix(cx.key, "cx/"+hashSeg(sec)+"/2/") || len(cx.aliases) != 1 || !strings.HasPrefix(cx.aliases[0], "cx/"+sec+"/2/") {
+	if err != nil || !strings.HasPrefix(cx.key, "cx/"+hashSeg(sec)+"/2/") || len(cx.aliases) != 1 || !strings.HasPrefix(cx.aliases[0], "cx/"+sec+"/2/") || cx.prior != "" {
 		t.Fatalf("codex key %q aliases %q (%v)", cx.key, cx.aliases, err)
 	}
 	wf := mustClassify(t, RootClaudeProjects, "-home-synth-proj/"+sid+"/subagents/workflows/wf_"+sec+"/journal.jsonl")
 	j := buildFor(t, b, wf, jsonLine(t, map[string]any{"type": "result", "agentId": sec}))
-	if !strings.HasPrefix(j.key, "cc/j/"+hashSeg("wf_"+sec)+"/"+hashSeg(sec)+"/result/") {
-		t.Fatalf("journal key %q", j.key)
+	if !strings.HasPrefix(j.key, "cc/j/"+hashSeg("wf_"+sec)+"/"+hashSeg(sec)+"/result/") || j.prior != "" {
+		t.Fatalf("journal key %q prior %q", j.key, j.prior)
+	}
+	// A run id appears only in the key and the path: 0.1.1's body held nothing masked, so the archive may
+	// hold the record under the legacy key, which prior names.
+	run := buildFor(t, b, wf, jsonLine(t, map[string]any{"type": "result", "agentId": "a-1"}))
+	sha = run.key[strings.LastIndex(run.key, "/")+1:]
+	if want := wire.JournalKey(hashSeg("wf_"+sec), "a-1", "result", sha); run.key != want || run.prior != wire.JournalKey("wf_"+sec, "a-1", "result", sha) {
+		t.Fatalf("run-id journal key %q prior %q, want %q and the raw form", run.key, run.prior, want)
 	}
 	// Clean alone, a secret joined: "cc/n/secret_key:/<39 characters>-x/<sha>" matches ca-aws-secret.
 	typ := strings.Repeat("Ab3D", 10)[:39] + "-x"
@@ -77,8 +90,9 @@ func TestKeySegmentsHashed(t *testing.T) {
 	if !b.changes(wire.ClaudeNoUUIDKey("secret_key:", typ, sha)) {
 		t.Fatal("fixture: the joined key must be detected")
 	}
-	if want := wire.ClaudeNoUUIDKey(hashSeg("secret_key:"), hashSeg(typ), sha); cross.key != want || !cross.keyedAs(wire.ClaudeNoUUIDKey("secret_key:", typ, sha)) {
-		t.Fatalf("joined key %q, want %q with the raw form as alias", cross.key, want)
+	legacy := wire.ClaudeNoUUIDKey("secret_key:", typ, sha)
+	if want := wire.ClaudeNoUUIDKey(hashSeg("secret_key:"), hashSeg(typ), sha); cross.key != want || !cross.keyedAs(legacy) || cross.prior != legacy {
+		t.Fatalf("joined key %q prior %q, want %q with the raw form as alias and prior", cross.key, cross.prior, want)
 	}
 }
 

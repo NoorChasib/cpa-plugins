@@ -61,6 +61,12 @@ type built struct {
 	// keys as importer 0.1.1 and earlier built it, with an id segment kept raw that the masker would
 	// change (recordKey). A dead row may carry any of them.
 	aliases []string
+	// prior is the key importer 0.1.1 gave this same envelope, set only when it differs from key and the
+	// body masks no id, so 0.1.1 sent this very body under it and the archive, which re-checked only bodies
+	// and pieces, may hold the record there (encodeRecord). It never leaves the machine: the envelope
+	// carries only its wire.KeySHA256 (Envelope.PriorKeySHA256), and an archive that cannot reconcile it
+	// never gets the record (deadKeyMigration).
+	prior string
 }
 
 // keyedAs reports whether k is the record's key or one of its aliases: either proves the record was
@@ -390,7 +396,8 @@ func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key keyFunc, creat
 // encodeRecord returns rec with a's items as a built: its key and canon/v1 body.
 func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key keyFunc, createdAt time.Time) (*built, error) {
 	rec.Items = a.items
-	if err := b.maskIDs(&rec); err != nil {
+	masked, err := b.maskIDs(&rec)
+	if err != nil {
 		return nil, err
 	}
 	sha := wire.RecordKeyHash(rec.Frame, canon.ItemIDs(rec.Items), rec.Extra)
@@ -402,6 +409,9 @@ func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key keyFunc, creat
 	out := &built{kind: wire.KindImportRecord, key: k, body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}
 	if legacy != k {
 		out.aliases = []string{legacy}
+		if !masked {
+			out.prior = legacy
+		}
 	}
 	return out, nil
 }
@@ -415,9 +425,14 @@ type keyFunc func(seg func(string) string, sha string) string
 // change becomes hashSeg of it (keySeg), and when the joined key would still change (clean segments that
 // complete a secret across a "/"), every id segment is hashed. Real ids (uuids, kebab-case types) are
 // fixed points of the masker, so their keys are byte-identical to importer 0.1.1's; only a record whose
-// ids the masker changes gets a new key. Its body carried those ids raw in 0.1.1, so the archive refused
-// it as mask_violation: nothing archived under the old key is orphaned. legacy is the key with every
-// segment as keyPart left it, the key importer 0.1.1 gave the same bytes.
+// ids or joined key the masker changes gets a new key. legacy is the key with every segment as keyPart
+// left it, the key importer 0.1.1 gave the same bytes.
+//
+// When an id the masker changes is also in the body (maskIDs), 0.1.1 sent it raw there and the archive
+// refused the record as mask_violation, so nothing is archived under legacy. When the body masks nothing
+// (a workflow run id, only in the key and path; clean segments that join into a secret; a segment keyPart
+// turns into one), 0.1.1 sent this very body and the archive may hold it under legacy: encodeRecord then
+// sets built.prior, so a rescan reconciles with that record instead of storing a second one.
 func (b *builder) recordKey(key keyFunc, sha string) (k, legacy string) {
 	legacy = key(keyPart, sha)
 	k = key(b.keySeg, sha)
@@ -490,25 +505,26 @@ func (b *builder) cleanKey(key string) string {
 	return hashSeg(key)
 }
 
-// maskIDs masks the record's ids and type in the body. They are copied as written from the record or its
-// path (a session or agent id from a file name, a Codex "type/payload.type"), and the archive re-checks
-// every string of a body: an unmasked one that looks like a secret made the whole record a mask_violation
-// dead letter that no requeue --remask could recover, since the remask left it as written. The key hashes
-// such an id instead (recordKey), and real ids (uuids, kebab-case types) match no rule, so they are
-// unchanged in both.
-func (b *builder) maskIDs(rec *wire.ImportRecord) error {
+// maskIDs masks the record's ids and type in the body and reports whether it changed one. They are copied
+// as written from the record or its path (a session or agent id from a file name, a Codex
+// "type/payload.type"), and the archive re-checks every string of a body: an unmasked one that looks like
+// a secret made the whole record a mask_violation dead letter that no requeue --remask could recover,
+// since the remask left it as written. The key hashes such an id instead (recordKey), and real ids
+// (uuids, kebab-case types) match no rule, so they are unchanged in both.
+func (b *builder) maskIDs(rec *wire.ImportRecord) (changed bool, err error) {
 	for _, p := range []*string{&rec.SessionID, &rec.ThreadID, &rec.AgentID, &rec.RecordUUID, &rec.RecordType} {
 		if *p == "" {
 			continue
 		}
 		out, hits, err := b.m.StringContext(b.ctx, *p)
 		if err != nil {
-			return err
+			return false, err
 		}
 		b.stats.addHits(hits)
+		changed = changed || out != *p
 		*p = out
 	}
-	return nil
+	return changed, nil
 }
 
 // fitAllowed: every import record but a Codex response_item. Its frame holds no content (the Responses

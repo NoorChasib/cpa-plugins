@@ -7,7 +7,9 @@
 // differ from the current state; receipts by (key_ns, key) with body_sha256 = sha256(Envelope.Body)
 // (ok, duplicate, conflict); retry/missing_ref for refs neither in the batch nor stored; tombstones as
 // receipts; hw per (source, outbox) over contiguous receipts; enrollment codes; media-fetch idempotent
-// by (request_id, ordinal); staged lists for hashes marked with MarkStaged. Not modelled: staging
+// by (request_id, ordinal); staged lists for hashes marked with MarkStaged; with SetPriorKeys, the
+// reconciliation of Envelope.PriorKeySHA256 (a record stored under a listed prior key is moved to the
+// envelope's key and judged as if stored there). Not modelled: staging
 // ages (the 3-day rule) and promotion, token rotation and revocation, enrollment-code expiry, mask
 // detection (use RejectKey), admin and read routes.
 //
@@ -84,6 +86,9 @@ type Server struct {
 	pieces   map[wire.Hash]piece
 	staged   map[wire.Hash]bool
 	receipts map[nsKey]receipt
+	byDigest map[nsHash]string // KeySHA256 of every receipt key -> the key
+	moved    map[nsHash]string // KeySHA256 of a key a record was moved off -> the key it was moved to
+	prior    bool              // SetPriorKeys
 	seqs     map[outboxKey]map[uint64]bool
 	hw       map[outboxKey]uint64
 	callers  map[string]wire.CallerRequest
@@ -112,6 +117,11 @@ type piece struct {
 
 type nsKey struct{ ns, key string }
 
+type nsHash struct {
+	ns string
+	h  wire.Hash
+}
+
 type receipt struct {
 	bodySHA wire.Hash
 }
@@ -136,6 +146,8 @@ func NewServer(opts Options) *Server {
 		pieces:    map[wire.Hash]piece{},
 		staged:    map[wire.Hash]bool{},
 		receipts:  map[nsKey]receipt{},
+		byDigest:  map[nsHash]string{},
+		moved:     map[nsHash]string{},
 		seqs:      map[outboxKey]map[uint64]bool{},
 		hw:        map[outboxKey]uint64{},
 		callers:   map[string]wire.CallerRequest{},
@@ -207,6 +219,29 @@ func (s *Server) SetLimits(lim wire.Limits) {
 		lim = wire.DefaultLimits
 	}
 	s.limits = lim
+}
+
+// SetPriorKeys makes GET /v1/sources/self advertise accepted.prior_key_sha256 (on) or not (off, the
+// default, as an archive that predates it), and commit reconcile Envelope.PriorKeySHA256 from the next
+// request on. With it on, an envelope whose key has no receipt but lists the KeySHA256 of a key that has
+// one is judged against that receipt (duplicate or conflict by body_sha256), and the receipt moves to
+// the envelope's key; an envelope still sent under the old key is judged against it too.
+func (s *Server) SetPriorKeys(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prior = on
+}
+
+// Keys returns every key that holds a receipt (one stored record each), of every kind and source, sorted.
+func (s *Server) Keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.receipts))
+	for k := range s.receipts {
+		out = append(out, k.key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetArchiveID sets the archive id.
@@ -601,6 +636,8 @@ func (s *Server) sourcesSelf(w http.ResponseWriter, src *source) {
 			Protocol: []int{wire.ProtocolV1},
 			Canon:    []string{wire.CanonV1},
 			Mask:     map[string]wire.MaskAcceptance{wire.MaskV1: {CreatedBefore: nil}},
+
+			PriorKeySHA256: s.prior,
 		},
 		Exact:      s.exact,
 		Limits:     s.limits,
@@ -836,14 +873,42 @@ func (s *Server) judge(src *source, it commitItem, inBatch map[wire.Hash]bool) (
 	k := nsKey{ns, e.Key}
 	sum := e.BodySHA256()
 	prev, ok := s.receipts[k]
+	if !ok && s.prior {
+		prev, ok = s.reconcile(ns, e)
+	}
 	switch {
 	case !ok:
 		s.receipts[k] = receipt{bodySHA: sum}
+		s.byDigest[nsHash{ns, wire.KeySHA256(e.Key)}] = e.Key
 		return wire.StatusOK, "", nil
 	case prev.bodySHA == sum:
 		return wire.StatusDuplicate, "", nil
 	}
 	return wire.StatusConflict, "", nil
+}
+
+// reconcile finds the receipt of the record stored under an earlier key of e: a key e lists in
+// PriorKeySHA256, which then moves to e.Key, or a key the record was moved off, when e is still sent
+// under it (an older producer). ok is false when there is none.
+func (s *Server) reconcile(ns string, e wire.Envelope) (receipt, bool) {
+	if cur, ok := s.moved[nsHash{ns, wire.KeySHA256(e.Key)}]; ok {
+		r, ok := s.receipts[nsKey{ns, cur}]
+		return r, ok
+	}
+	for _, d := range e.PriorKeySHA256 {
+		old, ok := s.byDigest[nsHash{ns, d}]
+		if !ok || old == e.Key {
+			continue
+		}
+		r := s.receipts[nsKey{ns, old}]
+		delete(s.receipts, nsKey{ns, old})
+		delete(s.byDigest, nsHash{ns, d})
+		s.receipts[nsKey{ns, e.Key}] = r
+		s.byDigest[nsHash{ns, wire.KeySHA256(e.Key)}] = e.Key
+		s.moved[nsHash{ns, d}] = e.Key
+		return r, true
+	}
+	return receipt{}, false
 }
 
 func acked(st wire.Status) bool {

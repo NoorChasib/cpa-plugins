@@ -87,6 +87,9 @@ type Accepted struct {
 	Protocol []int                     `json:"protocol"` // [1]
 	Canon    []string                  `json:"canon"`    // ["canon/v1"]
 	Mask     map[string]MaskAcceptance `json:"mask"`     // {"mask/v1":{"created_before":null}}
+	// PriorKeySHA256: the server reconciles Envelope.PriorKeySHA256 (see there). Absent (false) on a
+	// server that ignores that field.
+	PriorKeySHA256 bool `json:"prior_key_sha256,omitempty"`
 }
 
 // MaskAcceptance is one accepted mask version. An envelope is accepted when CreatedBefore is nil or its

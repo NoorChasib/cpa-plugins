@@ -40,4 +40,6 @@ var (
 	_ func(*clienttest.Server, ...wire.Hash)  = (*clienttest.Server).MarkStaged
 	_ func(*clienttest.Server, string) func() = (*clienttest.Server).Hold
 	_ func(*clienttest.Server, wire.Limits)   = (*clienttest.Server).SetLimits
+	_ func(*clienttest.Server, bool)          = (*clienttest.Server).SetPriorKeys
+	_ func(*clienttest.Server) []string       = (*clienttest.Server).Keys
 )

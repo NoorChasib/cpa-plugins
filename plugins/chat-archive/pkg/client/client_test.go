@@ -321,6 +321,79 @@ func TestCommitTombstones(t *testing.T) {
 	}
 }
 
+// priorEnv is env with Envelope.PriorKeySHA256 set to the sha256 of each prior key.
+func priorEnv(t *testing.T, seq uint64, key, body string, prior ...string) []byte {
+	t.Helper()
+	var e wire.Envelope
+	if err := json.Unmarshal(env(t, seq, key, body), &e); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range prior {
+		e.PriorKeySHA256 = append(e.PriorKeySHA256, wire.KeySHA256(p))
+	}
+	return mustJSON(t, e)
+}
+
+// TestPriorKeyReconciliation: an archive that advertises accepted.prior_key_sha256 judges an envelope
+// whose key is new against the record stored under a prior key it lists by digest, moves that record to
+// the new key, and still answers an envelope sent under the prior key against it. An archive without
+// the capability (the default) stores the same record a second time.
+func TestPriorKeyReconciliation(t *testing.T) {
+	const oldKey, newKey = "ex/req-old/completion", "ex/req-new/completion"
+	t.Run("advertised", func(t *testing.T) {
+		srv, _, c, log := newPair(t, clienttest.Options{})
+		srv.SetPriorKeys(true)
+		self, err := c.SourcesSelf(ctx)
+		if err != nil || !self.Accepted.PriorKeySHA256 {
+			t.Fatalf("accepted %+v %v", self.Accepted, err)
+		}
+		arch := log.last().ArchiveID
+		commit := func(raw []byte) wire.CommitResult {
+			t.Helper()
+			resp, err := c.Commit(ctx, 1, arch, nil, [][]byte{raw}, nil)
+			if err != nil || len(resp.Results) != 1 {
+				t.Fatalf("commit %+v %v", resp, err)
+			}
+			return resp.Results[0]
+		}
+		if r := commit(env(t, 1, oldKey, `{"request_id":"r"}`)); r.Status != wire.StatusOK {
+			t.Fatalf("first commit %+v", r)
+		}
+		if r := commit(priorEnv(t, 2, newKey, `{"request_id":"r"}`, "ex/req-other/completion", oldKey)); r.Status != wire.StatusDuplicate {
+			t.Fatalf("new key with the prior digest: %+v, want duplicate", r)
+		}
+		if got := srv.Keys(); !reflect.DeepEqual(got, []string{newKey}) {
+			t.Fatalf("keys %q, want the record moved to %q", got, newKey)
+		}
+		if r := commit(env(t, 3, oldKey, `{"request_id":"r"}`)); r.Status != wire.StatusDuplicate {
+			t.Fatalf("an older producer's replay under the prior key: %+v, want duplicate", r)
+		}
+		if r := commit(env(t, 4, newKey, `{"request_id":"r","outcome":"failed"}`)); r.Status != wire.StatusConflict {
+			t.Fatalf("new key, other body: %+v, want conflict", r)
+		}
+		if r := commit(priorEnv(t, 5, "ex/req-third/completion", `{}`, "ex/req-never/completion")); r.Status != wire.StatusOK {
+			t.Fatalf("a prior key the archive never stored: %+v, want ok", r)
+		}
+		if got := srv.Keys(); !reflect.DeepEqual(got, []string{newKey, "ex/req-third/completion"}) {
+			t.Fatalf("keys %q", got)
+		}
+	})
+	t.Run("not advertised", func(t *testing.T) {
+		srv, _, c, log := newPair(t, clienttest.Options{})
+		self, err := c.SourcesSelf(ctx)
+		if err != nil || self.Accepted.PriorKeySHA256 {
+			t.Fatalf("accepted %+v %v", self.Accepted, err)
+		}
+		resp, err := c.Commit(ctx, 1, log.last().ArchiveID, nil, [][]byte{env(t, 1, oldKey, `{}`), priorEnv(t, 2, newKey, `{}`, oldKey)}, nil)
+		if err != nil || resp.Results[0].Status != wire.StatusOK || resp.Results[1].Status != wire.StatusOK {
+			t.Fatalf("commit %+v %v", resp, err)
+		}
+		if got := srv.Keys(); !reflect.DeepEqual(got, []string{newKey, oldKey}) {
+			t.Fatalf("keys %q: the archive without the capability ignores prior_key_sha256", got)
+		}
+	})
+}
+
 func TestEpochChanged(t *testing.T) {
 	srv, _, c, log := newPair(t, clienttest.Options{ArchiveID: "00000000-0000-4000-8000-0000000000b1"})
 	e := env(t, 1, "ex/r/completion", `{}`)

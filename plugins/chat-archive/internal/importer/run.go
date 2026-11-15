@@ -802,6 +802,10 @@ func (r *runner) flush(bt *batch) error {
 			r.localDead(u, wire.TombRejectedTooLarge, wire.TombRejectedTooLarge, nil)
 			continue
 		}
+		if r.heldForPriorKey(u.b) {
+			r.localDead(u, deadKeyMigration, wire.TombRejectedLocal, nil)
+			continue
+		}
 		raw, err := r.envelope(u)
 		if err != nil {
 			return err
@@ -838,12 +842,29 @@ func (r *runner) flush(bt *batch) error {
 	return nil
 }
 
-// envelope encodes u's envelope with its seq and locator.
+// deadKeyMigration is the dead reason of a record held back because the archive cannot reconcile its
+// prior key (heldForPriorKey). Its tombstone is rejected_local.
+const deadKeyMigration = "key_migration"
+
+// heldForPriorKey reports whether a record must not be sent: importer 0.1.1 sent the same body under
+// another key (built.prior) that the archive may hold, and the archive does not advertise
+// accepted.prior_key_sha256. Sent under its key, the record would be stored a second time; sent under
+// the 0.1.1 key, a raw secret-shaped value would leave the machine. It becomes a key_migration dead
+// letter instead, which a plain requeue sends once the archive reconciles prior keys.
+func (r *runner) heldForPriorKey(b *built) bool {
+	return b.prior != "" && !r.self.Accepted.PriorKeySHA256
+}
+
+// envelope encodes u's envelope with its seq and locator, and the sha256 of its prior key, never the key.
 func (r *runner) envelope(u *unitRec) ([]byte, error) {
+	var prior []wire.Hash
+	if u.b.prior != "" {
+		prior = []wire.Hash{wire.KeySHA256(u.b.prior)}
+	}
 	return canon.Marshal(wire.Envelope{
 		V: wire.ProtocolV1, Kind: u.b.kind, OutboxID: r.meta.OutboxID, Seq: u.seq, EpochSeen: r.meta.EpochSeen,
 		Key: u.b.key, MaskVersion: mask.Version, CanonVersion: canon.Version, ExactRev: r.b.m.ExactRev(),
-		CreatedAt: u.b.createdAt, Refs: u.b.refs, Loc: r.locator(u), Body: u.b.body,
+		CreatedAt: u.b.createdAt, Refs: u.b.refs, Loc: r.locator(u), Body: u.b.body, PriorKeySHA256: prior,
 	})
 }
 
