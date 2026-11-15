@@ -78,6 +78,7 @@ type Server struct {
 	codes    map[string]bool // unused enrollment codes
 	coverage map[string]wire.Coverage
 	rejects  map[string]wire.Reason
+	rules    map[string][]string      // RejectKeyRules: rule ids a rejected commit of the key carries
 	fails    map[string][]failure     // by route, FIFO
 	holds    map[string]chan struct{} // by route: closed on release
 	pieces   map[wire.Hash]piece
@@ -129,6 +130,7 @@ func NewServer(opts Options) *Server {
 		codes:     map[string]bool{},
 		coverage:  map[string]wire.Coverage{},
 		rejects:   map[string]wire.Reason{},
+		rules:     map[string][]string{},
 		fails:     map[string][]failure{},
 		holds:     map[string]chan struct{}{},
 		pieces:    map[wire.Hash]piece{},
@@ -238,11 +240,21 @@ func (s *Server) RejectKey(key string, reason wire.Reason) {
 	s.rejects[key] = reason
 }
 
-// AcceptKey undoes RejectKey.
+// RejectKeyRules is RejectKey whose rejected results also carry rules (CommitResult.Rules), as an
+// archive that names the rules of a mask_violation answers.
+func (s *Server) RejectKeyRules(key string, reason wire.Reason, rules []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rejects[key] = reason
+	s.rules[key] = append([]string(nil), rules...)
+}
+
+// AcceptKey undoes RejectKey and RejectKeyRules.
 func (s *Server) AcceptKey(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.rejects, key)
+	delete(s.rules, key)
 }
 
 // MarkStaged declares hashes present only in the staging tier: need answers
@@ -750,6 +762,9 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request, src *source, bod
 			continue
 		}
 		res.Status, res.Reason, res.Missing = s.judge(src, it, inBatch)
+		if res.Status == wire.StatusRejected && it.err == nil {
+			res.Rules = s.rules[it.env.Key]
+		}
 		if res.Status != wire.StatusRetry {
 			s.addReceipt(src.id, it.obx, it.seq)
 		}

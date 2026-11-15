@@ -1144,7 +1144,10 @@ func (r *runner) commitOnce(units []*unitRec) ([]*unitRec, error) {
 				}
 			}
 		case wire.StatusRejected:
-			u.done, u.deadReason = true, string(x.Reason)
+			u.done, u.deadReason, u.rules = true, string(x.Reason), x.Rules
+			if x.Reason == wire.ReasonMaskViolation && len(u.rules) == 0 {
+				u.rules = r.localRules(u)
+			}
 		default: // retry
 			if x.Reason == wire.ReasonMissingRef {
 				for _, h := range x.Missing {
@@ -1163,6 +1166,17 @@ func (r *runner) commitOnce(units []*unitRec) ([]*unitRec, error) {
 		return retry, errEpoch
 	}
 	return retry, nil
+}
+
+// localRules names the rules of a mask_violation the archive answered without rule ids (an archive older
+// than CommitResult.Rules): the archive's re-check run locally over the unit's body and pieces (recheck).
+// Rule ids only; nil when the local re-check finds nothing (the archive's exact set or masker differs).
+func (r *runner) localRules(u *unitRec) []string {
+	rules, _, err := recheck(r.b.m, u.b)
+	if err != nil {
+		return nil
+	}
+	return rules
 }
 
 func (r *runner) addHave(h wire.Hash) {

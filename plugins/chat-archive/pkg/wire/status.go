@@ -47,6 +47,10 @@ type CommitResult struct {
 	Status  Status `json:"status"`
 	Reason  Reason `json:"reason,omitempty"`
 	Missing []Hash `json:"missing,omitempty"` // unresolved refs of a retry/missing_ref
+	// Rules are the rule ids of a rejected/mask_violation (ids only, as a 422 piece's ErrorBody.Rules), so
+	// a producer's dead letter can name what blocks it. Optional: an archive that omits them leaves the
+	// producer to re-check locally.
+	Rules []string `json:"rules,omitempty"`
 }
 
 // ErrorBody is the JSON body of a non-2xx answer: {"error":"epoch_changed","epoch":N,"archive_id":"…"}

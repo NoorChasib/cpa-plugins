@@ -24,6 +24,7 @@ var (
 	_ func(*clienttest.Server, uint32, []wire.Hash, []wire.Hash)         = (*clienttest.Server).SetExact
 	_ func(*clienttest.Server, string, wire.Coverage)                    = (*clienttest.Server).SetCoverage
 	_ func(*clienttest.Server, string, wire.Reason)                      = (*clienttest.Server).RejectKey
+	_ func(*clienttest.Server, string, wire.Reason, []string)            = (*clienttest.Server).RejectKeyRules
 	_ func(*clienttest.Server, string)                                   = (*clienttest.Server).AcceptKey
 	_ func(*clienttest.Server, string, int, time.Duration)               = (*clienttest.Server).FailNext
 	_ func(*clienttest.Server, string) []clienttest.Received             = (*clienttest.Server).Envelopes

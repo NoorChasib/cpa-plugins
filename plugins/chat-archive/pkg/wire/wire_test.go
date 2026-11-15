@@ -496,6 +496,10 @@ func TestStatusAndReasonValues(t *testing.T) {
 	if string(b) != `{"seq":4,"status":"retry","reason":"missing_ref","missing":["`+h.String()+`"]}` {
 		t.Errorf("retry result %s", b)
 	}
+	b, _ = json.Marshal(wire.CommitResult{Seq: 5, Status: wire.StatusRejected, Reason: wire.ReasonMaskViolation, Rules: []string{"ca-xai"}})
+	if string(b) != `{"seq":5,"status":"rejected","reason":"mask_violation","rules":["ca-xai"]}` {
+		t.Errorf("mask_violation result %s", b)
+	}
 	for s, want := range map[wire.Status]string{wire.StatusOK: "ok", wire.StatusDuplicate: "duplicate",
 		wire.StatusConflict: "conflict", wire.StatusRejected: "rejected", wire.StatusRetry: "retry"} {
 		if string(s) != want {

@@ -846,8 +846,11 @@ func TestMaskGrowthOverTextPieceRequeued(t *testing.T) {
 			t.Fatalf("requeue %v rc=%d: %s", args, rc, x.out.String())
 		}
 	}
-	// A dry run counts rows only: it cannot show whether the archive's limit is raised yet.
+	// A dry run sends nothing; its check line says the row is still over the archive's current limit.
 	requeue("--dry-run")
+	if !strings.Contains(x.out.String(), "check "+want+" too_large\n") {
+		t.Fatalf("dry run at the old limit: %s", x.out.String())
+	}
 	stillDead("dry-run requeue", 1)
 	// A real requeue at the same limit sends only its new seq's tombstone.
 	requeue()
@@ -855,6 +858,10 @@ func TestMaskGrowthOverTextPieceRequeued(t *testing.T) {
 
 	lim.TextPiece = 72 << 10
 	x.srv.SetLimits(lim)
+	requeue("--dry-run")
+	if !strings.Contains(x.out.String(), "check "+want+" rules=none\n") {
+		t.Fatalf("dry run after the raise: %s", x.out.String())
+	}
 	requeue()
 	all := x.envelopes()
 	if len(all) != 1 || all[0].Envelope.Kind != wire.KindImportFile || all[0].Envelope.Key != want || all[0].Status != wire.StatusOK {

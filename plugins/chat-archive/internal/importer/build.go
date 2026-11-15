@@ -146,7 +146,18 @@ func (b *builder) frame(v any) (json.RawMessage, error) {
 
 // pathItem appends an item for a piece taken out of the frame: F = {"path":"<JSON pointer>"} into the
 // record (RFC 6901, keys as masked in the frame), P = the piece.
+//
+// The pointer joins keys that were masked one by one, and the "/" between two clean keys can complete a
+// secret (ca-aws-secret's 40-character class holds "/"). The archive re-checks the pointer as one string,
+// so it is masked as one too: a pointer the join made secret-shaped carries the placeholder and no longer
+// resolves into the frame, where an unmasked one would have dead-lettered the whole record. Any other
+// pointer is a fixed point of the masker and stays exact.
 func (a *acc) pathItem(ptr string, p canon.Piece) error {
+	ptr, hits, err := a.b.m.StringContext(a.b.ctx, ptr)
+	if err != nil {
+		return err
+	}
+	a.b.stats.addHits(hits)
 	f, err := canon.Marshal(map[string]string{"path": ptr})
 	if err != nil {
 		return err
@@ -351,12 +362,35 @@ func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key func(sha strin
 // encodeRecord returns rec with a's items as a built: its key and canon/v1 body.
 func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time) (*built, error) {
 	rec.Items = a.items
+	if err := b.maskIDs(&rec); err != nil {
+		return nil, err
+	}
 	sha := wire.RecordKeyHash(rec.Frame, canon.ItemIDs(rec.Items), rec.Extra)
 	body, err := canon.Marshal(rec)
 	if err != nil {
 		return nil, err
 	}
 	return &built{kind: wire.KindImportRecord, key: key(sha), body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}, nil
+}
+
+// maskIDs masks the record's ids and type in the body. They are copied as written from the record or its
+// path (a session or agent id from a file name, a Codex "type/payload.type"), and the archive re-checks
+// every string of a body: an unmasked one that looks like a secret made the whole record a mask_violation
+// dead letter that no requeue --remask could recover, since the remask left it as written. The key keeps
+// the raw values (keyPart), and real ids (uuids, kebab-case types) match no rule, so they are unchanged.
+func (b *builder) maskIDs(rec *wire.ImportRecord) error {
+	for _, p := range []*string{&rec.SessionID, &rec.ThreadID, &rec.AgentID, &rec.RecordUUID, &rec.RecordType} {
+		if *p == "" {
+			continue
+		}
+		out, hits, err := b.m.StringContext(b.ctx, *p)
+		if err != nil {
+			return err
+		}
+		b.stats.addHits(hits)
+		*p = out
+	}
+	return nil
 }
 
 // fitAllowed: every import record but a Codex response_item. Its frame holds no content (the Responses

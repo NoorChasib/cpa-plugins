@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/canon"
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/mask"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
 )
 
@@ -72,10 +75,16 @@ func (r *runner) requeue(o requeueOpts) error {
 		}
 		if u == nil {
 			gone = append(gone, d.Key)
+			if r.opts.dryRun {
+				fmt.Fprintf(r.env.Stdout, "check %s gone\n", d.Key)
+			}
 			continue
 		}
 		r.countRecord(u.b)
 		if r.opts.dryRun {
+			if err := r.printCheck(u); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := r.add(bt, u); err != nil {
@@ -99,6 +108,27 @@ func (r *runner) requeue(o requeueOpts) error {
 		return err
 	}
 	return r.flushTombstones()
+}
+
+// printCheck prints, for requeue --dry-run, the rule ids the archive's re-check would find in the rebuilt
+// envelope and where (body, pieces), or rules=none when it would pass; too_large alone when it is still
+// over the limits. Ids and the key only, never content: this names the rule that blocks a dead letter whose row
+// has none (an archive that sent no rules), and says whether a requeue would now pass.
+func (r *runner) printCheck(u *unitRec) error {
+	if u.b.tooLarge { // never sent, so never re-checked: it stays a local dead letter
+		fmt.Fprintf(r.env.Stdout, "check %s too_large\n", u.requeue.Key)
+		return nil
+	}
+	rules, parts, err := recheck(r.b.m, u.b)
+	if err != nil {
+		return err
+	}
+	line := "check " + u.requeue.Key + " rules=none"
+	if len(rules) > 0 {
+		line = "check " + u.requeue.Key + " rules=" + strings.Join(rules, ",") + " in=" + strings.Join(parts, ",")
+	}
+	fmt.Fprintln(r.env.Stdout, line)
+	return nil
 }
 
 // rebuildDead rebuilds one dead row's envelope from its source, or returns nil when it is gone.
@@ -173,4 +203,44 @@ func (r *runner) rebuildDead(d Dead, o requeueOpts) (*unitRec, error) {
 	}
 	u.b = bl
 	return u, nil
+}
+
+// recheck runs the archive's mask re-check over one built envelope, as its commit and piece routes do:
+// canon.DetectPiece over the body (kind json) and over every piece by its kind. It returns the sorted,
+// distinct rule ids found and the parts that hold them ("body", "pieces"): ids and part names only, never
+// content. Nothing found means the archive's re-check, with the exact set the masker was built from, passes
+// the envelope.
+func recheck(m *mask.Masker, b *built) (rules, parts []string, err error) {
+	ids := map[string]bool{}
+	if len(b.body) == 0 {
+		return nil, nil, nil // a too-large unit (markTooLarge): never sent
+	}
+	fs, err := canon.DetectPiece(wire.PieceJSON, "", b.body, m)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(fs) > 0 {
+		parts = append(parts, "body")
+	}
+	for _, f := range fs {
+		ids[f.RuleID] = true
+	}
+	inPieces := false
+	for _, p := range b.pieces {
+		fs, err := canon.DetectPiece(p.Kind, p.ContentType, p.Bytes, m)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range fs {
+			ids[f.RuleID], inPieces = true, true
+		}
+	}
+	if inPieces {
+		parts = append(parts, "pieces")
+	}
+	for id := range ids {
+		rules = append(rules, id)
+	}
+	sort.Strings(rules)
+	return rules, parts, nil
 }
