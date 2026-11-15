@@ -18,7 +18,7 @@ patch -d "$WORK/source" -p1 --forward --batch < "$ROOT/scripts/native/fuse-v8.0.
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
   -ldflags "-X main.Version=v8.0.60-fuse -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
-  -ldflags '-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin.Version=0.1.1' \
+  -ldflags '-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin.Version=0.1.2' \
   -o "$WORK/chat-archive-production.so" .
 CGO_ENABLED=0 go -C "$ROOT" build -trimpath -o "$WORK/fakearchive" ./scripts/native/fakearchive
 docker run --rm --name "ca-test-fuse-$(basename "$WORK" | tr 'A-Z.' 'a-z-')" --platform linux/amd64 \
