@@ -83,6 +83,7 @@ type Uploader struct {
 	lastN      atomic.Uint64 // n of the last heartbeat built
 	saveMu     sync.Mutex
 	savedTotal uint64                // dropped total of the last saved record (saveMu)
+	savedN     uint64                // n of the last saved record (saveMu)
 	boots      []outbox.BootCounters // other boots' records still to report (heartbeat loop)
 	bootsRead  bool                  // boots was loaded (heartbeat loop)
 
@@ -144,7 +145,9 @@ func (u *Uploader) Stop() {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), FinalHeartbeat)
 			defer cancel()
-			_, _ = u.cl.Heartbeat(ctx, u.heartbeat("stopping"))
+			hb := u.heartbeat("stopping")
+			_ = u.SaveDrops(ctx) // the saved n covers this heartbeat before it goes out (heartbeats)
+			_, _ = u.cl.Heartbeat(ctx, hb)
 		})
 	})
 }
@@ -612,6 +615,13 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 
 // heartbeats sends a heartbeat every HeartbeatEvery, directly over HTTP, after reporting any other
 // boot's saved counters (reportBoots). A changed exact_rev makes the upload loop refresh the exact set.
+//
+// Once this boot has a saved record, each heartbeat re-saves it with its n and the counters read after
+// it was built, before it is sent (SaveDrops). So the record's n is at least every n this boot sent, and
+// its counters at least every sent heartbeat's: the next boot's recovered heartbeat (n+1) never repeats
+// an n, never carries fewer drops than the archive already has for this boot, and a drop counted just
+// before a heartbeat (inside DropSaveGap) is never missing from the record. That is one write a minute
+// at most, and none while the boot has counted no drop.
 func (u *Uploader) heartbeats(ctx context.Context) {
 	if u.opts.Heartbeat == nil {
 		select {
@@ -626,6 +636,7 @@ func (u *Uploader) heartbeats(ctx context.Context) {
 		safego.Checkpoint("heartbeat")
 		if !u.authPaused() {
 			hb := u.heartbeat("")
+			_ = u.SaveDrops(ctx) // a failed save is retried by the next drop or heartbeat
 			u.reportBoots(ctx, hb)
 			if !u.authPaused() {
 				hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -660,7 +671,11 @@ func (u *Uploader) heartbeat(state string) wire.Heartbeat {
 
 // reportBoots sends, before cur (this boot's heartbeat of the same tick, so the archive's newest
 // heartbeat stays this boot's), one heartbeat per other boot whose counters the outbox holds, and
-// deletes each record once the archive took it. A record that fails to send stays for the next tick.
+// deletes each record once the archive took it. A record that fails to send stays for the next tick,
+// and the records after it wait with it (the archive is unreachable or busy). A record the archive
+// refuses for good (refusedForGood: a 4xx other than 401, 403 and 429, such as an archive that does
+// not take state recovered) is deleted and counted in recovered_refused, and the next record goes, so
+// one such record never holds the others back or is sent every minute forever.
 // The recovered heartbeat carries that boot's id, start, version and dropped counters; its outbox,
 // uploader and mask fields are cur's (they describe the outbox and the sender, which the archive's
 // checks read from a source's newest heartbeat), and every other per-boot counter is empty.
@@ -699,14 +714,34 @@ func (u *Uploader) reportBoots(ctx context.Context, cur wire.Heartbeat) {
 		if err != nil {
 			if errors.Is(err, client.ErrUnauthorized) {
 				u.fail(err)
+				return
 			}
-			return
+			if !refusedForGood(err) {
+				return
+			}
+			if err = ob.DeleteBootCounters(ctx, r.BootID); err != nil {
+				return
+			}
+			u.opts.Stats.Count("recovered_refused", 1)
+			u.boots = u.boots[1:]
+			continue
 		}
 		if err = ob.DeleteBootCounters(ctx, r.BootID); err != nil {
 			return // reported again next tick: the archive takes the same total twice as no new drops
 		}
 		u.boots = u.boots[1:]
 	}
+}
+
+// refusedForGood reports whether a heartbeat error is the archive's final answer for that heartbeat: a
+// 400 (other than unsupported_protocol, which a newer archive fixes), a 413, or another 4xx answer that
+// is not a timeout. 401 and 403 (ErrUnauthorized), 429 and 503 (busy), 5xx and network errors are not.
+func refusedForGood(err error) bool {
+	if errors.Is(err, client.ErrMalformed) || errors.Is(err, client.ErrTooLarge) {
+		return true
+	}
+	var se *client.StatusError
+	return errors.As(err, &se) && se.StatusCode >= 400 && se.StatusCode < 500 && se.StatusCode != http.StatusRequestTimeout
 }
 
 // saveDrops saves the dropped counters whenever a drop signals, a burst in one write.
@@ -730,8 +765,9 @@ func (u *Uploader) saveDrops(ctx context.Context) {
 	}
 }
 
-// SaveDrops saves this boot's dropped counters to the outbox (outbox.BootCounters) unless none were
-// counted or they did not change since the last save. Without Options.Boot it does nothing.
+// SaveDrops saves this boot's dropped counters, with the n of the last heartbeat built, to the outbox
+// (outbox.BootCounters) unless none were counted or neither they nor that n changed since the last
+// save. Without Options.Boot it does nothing.
 func (u *Uploader) SaveDrops(ctx context.Context) error {
 	if u.opts.Boot.BootID == "" {
 		return nil
@@ -743,15 +779,16 @@ func (u *Uploader) SaveDrops(ctx context.Context) error {
 	for _, v := range d {
 		total += v
 	}
-	if total == 0 || total == u.savedTotal {
+	n := u.lastN.Load()
+	if total == 0 || total == u.savedTotal && n == u.savedN {
 		return nil
 	}
 	b := u.opts.Boot
-	b.N, b.Dropped = u.lastN.Load(), d
+	b.N, b.Dropped = n, d
 	if err := u.opts.Outbox.SaveBootCounters(ctx, b); err != nil {
 		return err
 	}
-	u.savedTotal = total
+	u.savedTotal, u.savedN = total, n
 	return nil
 }
 

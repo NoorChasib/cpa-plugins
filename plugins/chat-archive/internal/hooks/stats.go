@@ -33,8 +33,9 @@ var DroppedNames = []string{"body_budget", "handoff_full", "control_full", "usag
 	"mask_timeout", "oversize", "oversize_rpc", "parse_error", "disk_guard", "outbox_cap", "disk_hard",
 	"encode_error", "stopped", "media_fetch"}
 
-// OtherNames are plugin counters that are not drops.
-var OtherNames = []string{"duplicate_key", "state_evicted", "ignored_model_list"}
+// OtherNames are plugin counters that are not drops. recovered_refused counts the saved counters of an
+// earlier boot that the archive refused for good, so they were deleted unreported (uploader).
+var OtherNames = []string{"duplicate_key", "state_evicted", "ignored_model_list", "recovered_refused"}
 
 // Stats holds every counter the plugin reports. Counters are cumulative for the plugin instance
 // (one boot_id). Hook-side updates are atomics only, plus, for a drop, a non-blocking send on a

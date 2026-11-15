@@ -198,3 +198,102 @@ func TestSaveDropsOnlyOnChange(t *testing.T) {
 		t.Fatalf("unchanged counters saved again: %+v", recs)
 	}
 }
+
+func setDropSaveGap(t *testing.T, d time.Duration) {
+	old := DropSaveGap
+	DropSaveGap = d
+	t.Cleanup(func() { DropSaveGap = old })
+}
+
+// TestRecoveredHeartbeatAfterLaterHeartbeats: a boot that keeps sending heartbeats after it saved its
+// counters, then crashes, is recovered with an n past every n it sent and with counters at least its
+// last heartbeat's. Each heartbeat re-saves the record before it goes out; without that, the record kept
+// the n of the drop's save and the recovered heartbeat repeated an n the archive already had. A drop a
+// heartbeat carries before the drop's own save (inside DropSaveGap) is in the record too.
+func TestRecoveredHeartbeatAfterLaterHeartbeats(t *testing.T) {
+	for _, gap := range []time.Duration{time.Millisecond, time.Hour} {
+		t.Run(gap.String(), func(t *testing.T) {
+			setHeartbeatEvery(t, 30*time.Millisecond)
+			setDropSaveGap(t, gap)
+			srv := clienttest.NewServer(clienttest.Options{})
+			t.Cleanup(srv.Close)
+			src, token := srv.AddSource("cpa-plugin", "test")
+			dir := filepath.Join(t.TempDir(), "d")
+			a := startBoot(t, srv, token, dir, bootA)
+			waitFor(t, "boot A heartbeat", func() bool { return len(heartbeatsOf(srv, src, bootA)) >= 1 })
+			a.stats.Drop("parse_error")
+			a.stats.Drop("parse_error")
+			sentWithDrops := func() int {
+				n := 0
+				for _, hb := range heartbeatsOf(srv, src, bootA) {
+					if hb.Dropped["parse_error"] == 2 {
+						n++
+					}
+				}
+				return n
+			}
+			waitFor(t, "two boot A heartbeats with the drops", func() bool { return sentWithDrops() >= 2 })
+			a.crash()
+			sent := heartbeatsOf(srv, src, bootA)
+			var maxN uint64
+			for _, hb := range sent {
+				maxN = max(maxN, hb.N)
+			}
+
+			startBoot(t, srv, token, dir, bootB)
+			var rec *wire.Heartbeat
+			waitFor(t, "recovered heartbeat", func() bool {
+				for _, hb := range heartbeatsOf(srv, src, bootA) {
+					if hb.State == StateRecovered {
+						rec = &hb
+						return true
+					}
+				}
+				return false
+			})
+			if rec.N <= maxN {
+				t.Fatalf("recovered n %d, but boot A already sent n up to %d", rec.N, maxN)
+			}
+			if rec.Dropped["parse_error"] != 2 {
+				t.Fatalf("recovered dropped %v, behind boot A's last heartbeat", rec.Dropped)
+			}
+		})
+	}
+}
+
+// TestRecoveredRefusedForGood: a recovered record the archive refuses with a final answer (here 400) is
+// deleted and counted in recovered_refused instead of being sent every minute forever, and the records
+// after it are still reported.
+func TestRecoveredRefusedForGood(t *testing.T) {
+	setHeartbeatEvery(t, 50*time.Millisecond)
+	const bootC = "cccccccccccccccccccccccccccccccc"
+	srv := clienttest.NewServer(clienttest.Options{})
+	t.Cleanup(srv.Close)
+	src, token := srv.AddSource("cpa-plugin", "test")
+	dir := filepath.Join(t.TempDir(), "d")
+	ob, err := outbox.Open(outbox.Options{Dir: dir, CapBytes: 1 << 40, Retention: 168 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{bootA, bootC} {
+		if err := ob.SaveBootCounters(context.Background(), outbox.BootCounters{BootID: id, Dropped: map[string]uint64{"oversize": 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ob.Close()
+	srv.FailNext("POST "+wire.PathHeartbeat, 400, 0) // A's recovered heartbeat
+
+	b := startBoot(t, srv, token, dir, bootB)
+	waitFor(t, "C reported", func() bool { return len(heartbeatsOf(srv, src, bootC)) == 1 })
+	n := len(heartbeatsOf(srv, src, bootB))
+	waitFor(t, "three more B heartbeats", func() bool { return len(heartbeatsOf(srv, src, bootB)) >= n+3 })
+	if hbs := heartbeatsOf(srv, src, bootA); len(hbs) != 0 {
+		t.Fatalf("the refused record was sent again: %+v", hbs)
+	}
+	if recs, err := b.ob.BootCounters(context.Background()); err != nil || len(recs) != 0 {
+		t.Fatalf("records left: %+v (%v)", recs, err)
+	}
+	if got := b.stats.Other()["recovered_refused"]; got != 1 {
+		t.Fatalf("recovered_refused = %d", got)
+	}
+}
