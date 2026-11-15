@@ -232,7 +232,7 @@ func (b *builder) codexRecord(f fileRef, cf *codexFile, line []byte, lineNo int6
 	if cf.metadata(lineNo) && a.metadataOnly() {
 		rec.Mode = ModeMetadata
 	}
-	key := func(sha string) string { return wire.CodexKey(keyPart(cf.threadID), ordinal, sha) }
+	key := func(seg func(string) string, sha string) string { return wire.CodexKey(seg(cf.threadID), ordinal, sha) }
 	return b.finishRecord(rec, a, key, createdAt(ts, f))
 }
 

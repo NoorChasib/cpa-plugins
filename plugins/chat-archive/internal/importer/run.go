@@ -75,6 +75,7 @@ type fileState struct {
 	ackSeq   uint64
 	ackObx   string
 	prefix   []byte // the file's first bytes (up to headBytes) as read at open, for head_sha256
+	outKey   string // the file key as it leaves the machine (runner.locator); empty until needed
 	pending  int    // units in the unflushed batch
 	complete bool   // read to the end of its complete lines
 }
@@ -839,19 +840,28 @@ func (r *runner) flush(bt *batch) error {
 
 // envelope encodes u's envelope with its seq and locator.
 func (r *runner) envelope(u *unitRec) ([]byte, error) {
+	return canon.Marshal(wire.Envelope{
+		V: wire.ProtocolV1, Kind: u.b.kind, OutboxID: r.meta.OutboxID, Seq: u.seq, EpochSeen: r.meta.EpochSeen,
+		Key: u.b.key, MaskVersion: mask.Version, CanonVersion: canon.Version, ExactRev: r.b.m.ExactRev(),
+		CreatedAt: u.b.createdAt, Refs: u.b.refs, Loc: r.locator(u), Body: u.b.body,
+	})
+}
+
+// locator is u's Envelope.Loc. Its file key is the path as it may leave the machine (outPath), worked out
+// once per file; dead rows and cursors keep the raw path locally.
+func (r *runner) locator(u *unitRec) *wire.Locator {
 	f := u.fs.ref
-	loc := &wire.Locator{MachineID: r.cfg.MachineID, FileKey: f.Key, ScanGen: u.fs.scanGen}
+	if u.fs.outKey == "" {
+		u.fs.outKey = r.b.outPath(f.Key)
+	}
+	loc := &wire.Locator{MachineID: r.cfg.MachineID, FileKey: u.fs.outKey, ScanGen: u.fs.scanGen}
 	if f.Whole {
 		mt := mtimeOf(f)
 		loc.Size, loc.ModTime = u.length, &mt
 	} else {
 		loc.LineOrdinal, loc.ByteOffset, loc.ByteLen, loc.EndOffset = u.ordinal, u.offset, u.length, u.end
 	}
-	return canon.Marshal(wire.Envelope{
-		V: wire.ProtocolV1, Kind: u.b.kind, OutboxID: r.meta.OutboxID, Seq: u.seq, EpochSeen: r.meta.EpochSeen,
-		Key: u.b.key, MaskVersion: mask.Version, CanonVersion: canon.Version, ExactRev: r.b.m.ExactRev(),
-		CreatedAt: u.b.createdAt, Refs: u.b.refs, Loc: loc, Body: u.b.body,
-	})
+	return loc
 }
 
 // localDead dead-letters u locally: it never reaches the server as an envelope, and a tombstone for its
@@ -1096,7 +1106,7 @@ func (r *runner) commitOnce(units []*unitRec) ([]*unitRec, error) {
 	for _, t := range r.tombs {
 		if !t.acked && !inCommit[t.Seq] {
 			inCommit[t.Seq] = true
-			tombs = append(tombs, wire.Tombstone{V: wire.ProtocolV1, OutboxID: r.meta.OutboxID, Seq: t.Seq, Key: t.Key, Reason: t.Reason})
+			tombs = append(tombs, wire.Tombstone{V: wire.ProtocolV1, OutboxID: r.meta.OutboxID, Seq: t.Seq, Key: r.b.cleanKey(t.Key), Reason: t.Reason})
 			tsent = append(tsent, t)
 		}
 	}
@@ -1169,10 +1179,11 @@ func (r *runner) commitOnce(units []*unitRec) ([]*unitRec, error) {
 }
 
 // localRules names the rules of a mask_violation the archive answered without rule ids (an archive older
-// than CommitResult.Rules): the archive's re-check run locally over the unit's body and pieces (recheck).
-// Rule ids only; nil when the local re-check finds nothing (the archive's exact set or masker differs).
+// than CommitResult.Rules): the archive's re-check run locally over the unit's key, locator, body and
+// pieces (recheck). Rule ids only; nil when the local re-check finds nothing (the archive's exact set or
+// masker differs).
 func (r *runner) localRules(u *unitRec) []string {
-	rules, _, err := recheck(r.b.m, u.b)
+	rules, _, err := recheck(r.b.m, u.b, r.locator(u))
 	if err != nil {
 		return nil
 	}

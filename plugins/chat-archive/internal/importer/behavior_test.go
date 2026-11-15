@@ -1249,10 +1249,12 @@ func TestHeartbeatsDuringLongRun(t *testing.T) {
 }
 
 // TestImportFileKeyMasked: a whole file whose path holds a segment the masker treats as a secret (a
-// project directory named like an xAI key) is sent with that segment masked in the import.file body,
-// as every other envelope string is, so the archive's re-check accepts it; its key still hashes the raw
+// project directory named like an xAI key) is sent with that segment hashed in the import.file body and
+// in the envelope's locator, so the archive's re-check accepts it and no part of the path leaves the
+// machine as written; the path keeps its shape and the other segments. Its key still hashes the raw
 // path, so a file dead-lettered before this fix requeues under the same key. Before the fix the raw path
-// was in the body and the archive rejected the file as mask_violation (ca-xai).
+// was in the body and the archive rejected the file as mask_violation (ca-xai), and the locator carried
+// it in every case.
 func TestImportFileKeyMasked(t *testing.T) {
 	x := newH(t)
 	x.enroll()
@@ -1269,8 +1271,15 @@ func TestImportFileKeyMasked(t *testing.T) {
 	if err := json.Unmarshal(all[0].Envelope.Body, &f); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(f.FileKey, "xai-") || !strings.Contains(f.FileKey, "[masked:") || !strings.HasSuffix(f.FileKey, "/tool-results/out.txt") {
-		t.Fatalf("file_key %q: the secret-like segment is not masked", f.FileKey)
+	want := "claude-projects/" + hashSeg(project) + "/" + gSession + "/tool-results/out.txt"
+	if f.FileKey != want || strings.Contains(f.FileKey, "xai-") {
+		t.Fatalf("file_key %q, want %q: the secret-like segment is not hashed", f.FileKey, want)
+	}
+	if loc := all[0].Envelope.Loc; loc == nil || loc.FileKey != want {
+		t.Fatalf("locator %+v, want file_key %q", loc, want)
+	}
+	if strings.Contains(string(all[0].Raw), "xai-") {
+		t.Fatal("the envelope still holds the secret-like segment")
 	}
 	if all[0].Envelope.Key != wire.ImportFileKey(ClientClaudeCode, raw, f.Content) {
 		t.Fatal("the key no longer hashes the raw path")

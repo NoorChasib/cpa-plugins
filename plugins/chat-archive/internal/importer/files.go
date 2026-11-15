@@ -64,13 +64,11 @@ func (b *builder) fileBody(f fileRef, data []byte, embedded func(fileRef) map[[3
 	}
 	// The file key is a path, and a path segment can look like a secret (a project directory named
 	// xai-<20+ characters> matches ca-xai). Every other string of an envelope body is masked, so the
-	// archive's re-check rejected such a file as mask_violation and its content was never stored. The key
-	// keeps hashing the raw path (ImportFileKey), so a dead-lettered file requeues under its old key.
-	fk, err := b.maskString(f.Key)
-	if err != nil {
-		return nil, err
-	}
-	body, err := canon.Marshal(wire.ImportFile{Client: f.Client, FileKey: fk, Content: p.Hash, Kind: f.Role})
+	// archive's re-check rejected such a file as mask_violation and its content was never stored. Such a
+	// segment is hashed (outPath, as in the envelope's locator), so the path keeps its shape and stays
+	// distinct. The key keeps hashing the raw path (ImportFileKey), so a dead-lettered file requeues under
+	// its old key.
+	body, err := canon.Marshal(wire.ImportFile{Client: f.Client, FileKey: b.outPath(f.Key), Content: p.Hash, Kind: f.Role})
 	if err != nil {
 		return nil, err
 	}

@@ -37,7 +37,7 @@ func (e Envelope) BodySHA256() Hash {
 // many.
 type Locator struct {
 	MachineID   string     `json:"machine_id"`
-	FileKey     string     `json:"file_key"`               // "<root>/<relative path>", root in {claude-projects, codex-sessions, claude-skills}
+	FileKey     string     `json:"file_key"`               // "<root>/<relative path>", root in {claude-projects, codex-sessions, claude-skills}; a segment the masker would change is hashed
 	ScanGen     uint32     `json:"scan_gen"`               // the importer's per-file rescan counter (0 = first scan)
 	LineOrdinal int64      `json:"line_ordinal,omitempty"` // records
 	ByteOffset  int64      `json:"byte_offset,omitempty"`  // records

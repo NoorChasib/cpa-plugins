@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"sort"
@@ -57,12 +57,16 @@ type built struct {
 	// fitFrom is the key the record had before fitRecord moved frame subtrees into pieces (empty when
 	// nothing moved). A dead row written when the record could not be fitted carries that key.
 	fitFrom string
+	// aliases are the other keys an importer gave the same bytes: fitFrom, and each of the record's
+	// keys as importer 0.1.1 and earlier built it, with an id segment kept raw that the masker would
+	// change (recordKey). A dead row may carry any of them.
+	aliases []string
 }
 
-// keyedAs reports whether k is the record's key, or its key from before the fit: either proves the
-// record was built from the same bytes.
+// keyedAs reports whether k is the record's key or one of its aliases: either proves the record was
+// built from the same bytes.
 func (o *built) keyedAs(k string) bool {
-	return o.key == k || o.fitFrom != "" && o.fitFrom == k
+	return o.key == k || slices.Contains(o.aliases, k)
 }
 
 // acc collects the items, pieces and refs of one record.
@@ -144,20 +148,23 @@ func (b *builder) frame(v any) (json.RawMessage, error) {
 	return out, nil
 }
 
+// errPointer: a path item's pointer is one the masker would change. The callers that build pointers from
+// a record's keys check cleanPointer first, so this is never returned for a record.
+var errPointer = errors.New("importer: a path item pointer would be masked")
+
 // pathItem appends an item for a piece taken out of the frame: F = {"path":"<JSON pointer>"} into the
 // record (RFC 6901, keys as masked in the frame), P = the piece.
 //
 // The pointer joins keys that were masked one by one, and the "/" between two clean keys can complete a
 // secret (ca-aws-secret's 40-character class holds "/"). The archive re-checks the pointer as one string,
-// so it is masked as one too: a pointer the join made secret-shaped carries the placeholder and no longer
-// resolves into the frame, where an unmasked one would have dead-lettered the whole record. Any other
-// pointer is a fixed point of the masker and stays exact.
+// and a masked pointer would no longer resolve into the frame. So a pointer must be one the masker leaves
+// as it is (cleanPointer): extractLeaves keeps a leaf whose pointer is not clean in the frame, and
+// fitRecord moves only subtrees whose pointer is clean, so a node under a secret-shaped pointer moves
+// with a larger subtree at a clean ancestor. Fixed pointers (/content, /shape/system/0) are always clean.
 func (a *acc) pathItem(ptr string, p canon.Piece) error {
-	ptr, hits, err := a.b.m.StringContext(a.b.ctx, ptr)
-	if err != nil {
-		return err
+	if !a.b.cleanPointer(ptr) {
+		return errPointer
 	}
-	a.b.stats.addHits(hits)
 	f, err := canon.Marshal(map[string]string{"path": ptr})
 	if err != nil {
 		return err
@@ -184,6 +191,18 @@ func (a *acc) pathJSON(ptr string, raw []byte) error {
 	return a.pathItem(ptr, p)
 }
 
+// cleanPointer reports whether the masker leaves the joined pointer ptr as it is.
+func (b *builder) cleanPointer(ptr string) bool {
+	return !b.changes(ptr)
+}
+
+// changes reports whether the masker would change s. Ids, key segments, paths and pointers are short,
+// so this masks without the build's deadline.
+func (b *builder) changes(s string) bool {
+	out, _ := b.m.String(s)
+	return out != s
+}
+
 // pointer builds a JSON pointer from segments; keys are masked like the frame's keys.
 func (b *builder) pointer(segs ...string) string {
 	masked := make([]string, len(segs))
@@ -207,12 +226,18 @@ func escapePointer(segs ...string) string {
 
 // extractLeaves walks a decoded value and moves every string of at least leafMin bytes into a text
 // piece: an object member is deleted, an array element becomes null, and a path item records where it
-// was. Object keys are visited in sorted order, so the item order is deterministic.
+// was. Object keys are visited in sorted order, so the item order is deterministic. A string whose
+// pointer the masker would change (the join of clean keys completes a secret) stays in the frame, where
+// it is masked like every frame string; if the record is then over limits.envelope_json, the fit moves
+// a subtree holding it at a clean ancestor.
 func (a *acc) extractLeaves(v any, path []string) (any, error) {
 	switch x := v.(type) {
 	case string:
-		if len(x) >= leafMin {
-			if err := a.pathText(a.b.pointer(path...), x); err != nil {
+		if len(x) < leafMin {
+			return x, nil
+		}
+		if ptr := a.b.pointer(path...); a.b.cleanPointer(ptr) {
+			if err := a.pathText(ptr, x); err != nil {
 				return nil, err
 			}
 			return nil, nil
@@ -226,10 +251,12 @@ func (a *acc) extractLeaves(v any, path []string) (any, error) {
 		sort.Strings(keys)
 		for _, k := range keys {
 			if s, ok := x[k].(string); ok && len(s) >= leafMin {
-				if err := a.pathText(a.b.pointer(append(path, k)...), s); err != nil {
-					return nil, err
+				if ptr := a.b.pointer(append(path, k)...); a.b.cleanPointer(ptr) {
+					if err := a.pathText(ptr, s); err != nil {
+						return nil, err
+					}
+					delete(x, k)
 				}
-				delete(x, k)
 				continue
 			}
 			nv, err := a.extractLeaves(x[k], append(path, k))
@@ -340,7 +367,7 @@ func attRefs(raw []byte) []wire.Hash {
 // over limits.envelope_json while its pieces are within theirs is fitted (fitRecord) when fitAllowed;
 // a record that cannot be fitted keeps the key computed here and becomes a too-large dead letter.
 // Records under the limits never reach the fit, so they are built exactly as before it existed.
-func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time) (*built, error) {
+func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key keyFunc, createdAt time.Time) (*built, error) {
 	out, err := b.encodeRecord(rec, a, key, createdAt)
 	if err != nil {
 		return nil, err
@@ -352,6 +379,7 @@ func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key func(sha strin
 		}
 		if fit != nil {
 			fit.fitFrom = out.key
+			fit.aliases = append(append(fit.aliases, out.key), out.aliases...)
 			return fit, nil
 		}
 	}
@@ -360,7 +388,7 @@ func (b *builder) finishRecord(rec wire.ImportRecord, a *acc, key func(sha strin
 }
 
 // encodeRecord returns rec with a's items as a built: its key and canon/v1 body.
-func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time) (*built, error) {
+func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key keyFunc, createdAt time.Time) (*built, error) {
 	rec.Items = a.items
 	if err := b.maskIDs(&rec); err != nil {
 		return nil, err
@@ -370,14 +398,104 @@ func (b *builder) encodeRecord(rec wire.ImportRecord, a *acc, key func(sha strin
 	if err != nil {
 		return nil, err
 	}
-	return &built{kind: wire.KindImportRecord, key: key(sha), body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}, nil
+	k, legacy := b.recordKey(key, sha)
+	out := &built{kind: wire.KindImportRecord, key: k, body: body, refs: a.refs, pieces: a.pieces, createdAt: createdAt}
+	if legacy != k {
+		out.aliases = []string{legacy}
+	}
+	return out, nil
+}
+
+// keyFunc builds a record's key from its RecordKeyHash, passing each id segment (session, uuid, type,
+// thread, run or agent id) through seg.
+type keyFunc func(seg func(string) string, sha string) string
+
+// recordKey returns a record's key and its legacy form. The key leaves the machine as written, in the
+// envelope and in a tombstone, so no part of it may be secret-shaped: an id segment the masker would
+// change becomes hashSeg of it (keySeg), and when the joined key would still change (clean segments that
+// complete a secret across a "/"), every id segment is hashed. Real ids (uuids, kebab-case types) are
+// fixed points of the masker, so their keys are byte-identical to importer 0.1.1's; only a record whose
+// ids the masker changes gets a new key. Its body carried those ids raw in 0.1.1, so the archive refused
+// it as mask_violation: nothing archived under the old key is orphaned. legacy is the key with every
+// segment as keyPart left it, the key importer 0.1.1 gave the same bytes.
+func (b *builder) recordKey(key keyFunc, sha string) (k, legacy string) {
+	legacy = key(keyPart, sha)
+	k = key(b.keySeg, sha)
+	if b.changes(k) {
+		k = key(hashSeg, sha)
+	}
+	return k, legacy
+}
+
+// keySeg is keyPart(s), or hashSeg(s) when the masker would change s or keyPart(s).
+func (b *builder) keySeg(s string) string {
+	p := keyPart(s)
+	if len(s) <= 64 && (b.changes(s) || b.changes(p)) {
+		return hashSeg(s)
+	}
+	return p
+}
+
+// hashSeg is the key alphabet's form of an identifying segment that may not leave the machine as it is:
+// 'h' plus 32 hex of its sha256 (keyPart's form of a segment over 64 bytes). Distinct segments stay
+// distinct. An empty segment stays "-".
+func hashSeg(s string) string {
+	if s == "" {
+		return "-"
+	}
+	sum := sha256.Sum256([]byte(s))
+	return "h" + hex.EncodeToString(sum[:16])
+}
+
+// outPath returns a file key ("<root>/<relative path>") as it leaves the machine, in Envelope.Loc and in
+// an import.file body: each "/"-separated segment the masker would change becomes hashSeg of it, so the
+// path keeps its shape and two files never share one. A path whose clean segments still complete a
+// secret across a "/" keeps only its root as written. Real paths match no rule and are unchanged.
+func (b *builder) outPath(p string) string {
+	if !b.changes(p) {
+		return p
+	}
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		if b.changes(s) {
+			segs[i] = hashSeg(s)
+		}
+	}
+	if out := strings.Join(segs, "/"); !b.changes(out) {
+		return out
+	}
+	for i := 1; i < len(segs); i++ {
+		segs[i] = hashSeg(segs[i])
+	}
+	return strings.Join(segs, "/")
+}
+
+// cleanKey returns a key as it may leave the machine: key itself when the masker leaves it as it is, else
+// each "/"-separated segment the masker would change as hashSeg of it, or the whole key as hashSeg of it
+// when that is not enough. Keys built here are clean already; this covers a tombstone queued by importer
+// 0.1.1 and not yet sent.
+func (b *builder) cleanKey(key string) string {
+	if !b.changes(key) {
+		return key
+	}
+	segs := strings.Split(key, "/")
+	for i, s := range segs {
+		if b.changes(s) {
+			segs[i] = hashSeg(s)
+		}
+	}
+	if out := strings.Join(segs, "/"); !b.changes(out) {
+		return out
+	}
+	return hashSeg(key)
 }
 
 // maskIDs masks the record's ids and type in the body. They are copied as written from the record or its
 // path (a session or agent id from a file name, a Codex "type/payload.type"), and the archive re-checks
 // every string of a body: an unmasked one that looks like a secret made the whole record a mask_violation
-// dead letter that no requeue --remask could recover, since the remask left it as written. The key keeps
-// the raw values (keyPart), and real ids (uuids, kebab-case types) match no rule, so they are unchanged.
+// dead letter that no requeue --remask could recover, since the remask left it as written. The key hashes
+// such an id instead (recordKey), and real ids (uuids, kebab-case types) match no rule, so they are
+// unchanged in both.
 func (b *builder) maskIDs(rec *wire.ImportRecord) error {
 	for _, p := range []*string{&rec.SessionID, &rec.ThreadID, &rec.AgentID, &rec.RecordUUID, &rec.RecordType} {
 		if *p == "" {
@@ -411,15 +529,16 @@ func fitAllowed(rec wire.ImportRecord) bool {
 // It works on copies of a's items, pieces and refs, so first (the record as built) is untouched. It
 // returns nil when no object or array of at least leafMin bytes is left to move, or when a piece would
 // be over its limit.
-func (b *builder) fitRecord(rec wire.ImportRecord, a *acc, key func(sha string) string, createdAt time.Time, first *built) (*built, error) {
+func (b *builder) fitRecord(rec wire.ImportRecord, a *acc, key keyFunc, createdAt time.Time, first *built) (*built, error) {
 	root, err := decodeAny(rec.Frame)
 	if err != nil {
 		return nil, err
 	}
 	fa := &acc{b: b, items: slices.Clone(a.items), pieces: slices.Clone(a.pieces), refs: slices.Clone(a.refs), seen: maps.Clone(a.seen)}
 	cur := first
+	clean := func(segs []string) bool { return b.cleanPointer(escapePointer(segs...)) }
 	for b.overEnvelope(cur) {
-		segs, v, err := takeSubtree(root, envelopeSize(cur)-b.limits.EnvelopeJSON+leafMin)
+		segs, v, err := takeSubtree(root, envelopeSize(cur)-b.limits.EnvelopeJSON+leafMin, clean)
 		if err != nil || segs == nil {
 			return nil, err
 		}
@@ -449,15 +568,17 @@ func (b *builder) fitRecord(rec wire.ImportRecord, a *acc, key func(sha string) 
 // ref. From the root it steps into the heaviest child (heaviest) while that child alone covers need,
 // and the node where it stops moves: the deepest node that is enough, which keeps small fields such as
 // type and ids in the frame. When no child of the root covers need, the root's heaviest child moves
-// and the next pass measures again.
-func takeSubtree(root any, need int64) ([]string, any, error) {
-	seg, node, size, err := heaviest(root)
+// and the next pass measures again. Only a child whose pointer segments pass clean is considered, so
+// the node that moves always has a pointer the masker leaves as it is (pathItem); a node under a
+// secret-shaped pointer moves inside its nearest clean ancestor.
+func takeSubtree(root any, need int64, clean func([]string) bool) ([]string, any, error) {
+	seg, node, size, err := heaviest(root, nil, clean)
 	if err != nil || node == nil {
 		return nil, nil, err
 	}
 	segs, parent := []string{seg}, root
 	for size >= need {
-		s, c, n, err := heaviest(node)
+		s, c, n, err := heaviest(node, segs, clean)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -480,13 +601,17 @@ func takeSubtree(root any, need int64) ([]string, any, error) {
 }
 
 // heaviest returns n's object or array child with the longest canon/v1 encoding of at least leafMin
-// bytes: its pointer segment, value and size. Keys are visited in byte order and elements by index,
-// and a tie keeps the first, so the choice never depends on map iteration order.
-func heaviest(n any) (seg string, child any, size int64, err error) {
+// bytes whose pointer segments (n's segments at, then the child's) pass clean: its pointer segment, value
+// and size. Keys are visited in byte order and elements by index, and a tie keeps the first, so the
+// choice never depends on map iteration order.
+func heaviest(n any, at []string, clean func([]string) bool) (seg string, child any, size int64, err error) {
 	consider := func(s string, c any) error {
 		switch c.(type) {
 		case map[string]any, []any:
 		default:
+			return nil
+		}
+		if !clean(append(slices.Clip(at), s)) {
 			return nil
 		}
 		raw, err := canon.Marshal(c)
@@ -562,8 +687,8 @@ func (b *builder) overPieces(o *built) bool {
 }
 
 // keyPart keeps a key segment inside the key alphabet (wire.ValidKey): any other byte becomes '_', and a
-// segment over 64 bytes becomes 'h' plus 32 hex of its sha256. Real ids (uuids, kebab-case types) pass
-// unchanged.
+// segment over 64 bytes becomes hashSeg of it. Real ids (uuids, kebab-case types) pass unchanged. It is
+// the key segment of importer 0.1.1; keySeg also hashes a segment the masker would change.
 func keyPart(s string) string {
 	if s == "" {
 		return "-"
@@ -577,8 +702,7 @@ func keyPart(s string) string {
 		return s
 	}
 	if len(s) > 64 {
-		sum := sha256.Sum256([]byte(s))
-		return "h" + fmt.Sprintf("%x", sum[:16])
+		return hashSeg(s)
 	}
 	bs := []byte(s)
 	for i, c := range bs {

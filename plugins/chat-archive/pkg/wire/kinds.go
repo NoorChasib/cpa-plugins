@@ -179,7 +179,7 @@ type ImportRecord struct {
 // ImportFile is the body of an import.file envelope.
 type ImportFile struct {
 	Client  string `json:"client"`
-	FileKey string `json:"file_key"` // also hashed into the key, so a same key always has the same file_key
+	FileKey string `json:"file_key"` // the path as it leaves the machine (a segment the masker would change is hashed); the key hashes the raw path
 	Content Hash   `json:"content"`  // text piece (masked) or attachment
 	Kind    string `json:"kind"`     // tool_result_file | workflow_run | workflow_script | agent_meta | skill
 }

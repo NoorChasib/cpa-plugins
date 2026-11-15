@@ -104,11 +104,11 @@ func (b *builder) claudeRecord(f fileRef, line []byte) (*built, error) {
 		return nil, err
 	}
 	rec.Frame = frame
-	key := func(sha string) string {
+	key := func(seg func(string) string, sha string) string {
 		if uuid != "" {
-			return wire.ClaudeUUIDKey(keyPart(sid), keyPart(uuid), sha)
+			return wire.ClaudeUUIDKey(seg(sid), seg(uuid), sha)
 		}
-		return wire.ClaudeNoUUIDKey(keyPart(sid), keyPart(typ), sha)
+		return wire.ClaudeNoUUIDKey(seg(sid), seg(typ), sha)
 	}
 	return b.finishRecord(rec, a, key, createdAt(ts, f))
 }
@@ -317,12 +317,12 @@ func (b *builder) journalRecord(f fileRef, top map[string]json.RawMessage) (*bui
 		return nil, err
 	}
 	rec.Frame = frame
-	key := func(sha string) string {
+	key := func(seg func(string) string, sha string) string {
 		ag := agent
 		if ag != "" {
-			ag = keyPart(ag)
+			ag = seg(ag)
 		}
-		return wire.JournalKey(keyPart(f.RunID), ag, keyPart(typ), sha)
+		return wire.JournalKey(seg(f.RunID), ag, seg(typ), sha)
 	}
 	return b.finishRecord(rec, a, key, createdAt(ts, f))
 }

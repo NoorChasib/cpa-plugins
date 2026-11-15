@@ -119,7 +119,7 @@ func (r *runner) printCheck(u *unitRec) error {
 		fmt.Fprintf(r.env.Stdout, "check %s too_large\n", u.requeue.Key)
 		return nil
 	}
-	rules, parts, err := recheck(r.b.m, u.b)
+	rules, parts, err := recheck(r.b.m, u.b, r.locator(u))
 	if err != nil {
 		return err
 	}
@@ -206,25 +206,41 @@ func (r *runner) rebuildDead(d Dead, o requeueOpts) (*unitRec, error) {
 }
 
 // recheck runs the archive's mask re-check over one built envelope, as its commit and piece routes do:
-// canon.DetectPiece over the body (kind json) and over every piece by its kind. It returns the sorted,
-// distinct rule ids found and the parts that hold them ("body", "pieces"): ids and part names only, never
-// content. Nothing found means the archive's re-check, with the exact set the masker was built from, passes
-// the envelope.
-func recheck(m *mask.Masker, b *built) (rules, parts []string, err error) {
+// canon.DetectPiece over the body (kind json) and over every piece by its kind, and the same detection
+// over the other strings that leave the machine with it, its key (also a tombstone's) and its locator
+// (loc; nil for none). It returns the sorted, distinct rule ids found and the parts that hold them
+// ("key", "loc", "body", "pieces"): ids and part names only, never content. Nothing found means the
+// archive's re-check, with the exact set the masker was built from, passes the envelope.
+func recheck(m *mask.Masker, b *built, loc *wire.Locator) (rules, parts []string, err error) {
 	ids := map[string]bool{}
 	if len(b.body) == 0 {
 		return nil, nil, nil // a too-large unit (markTooLarge): never sent
+	}
+	found := func(part string, fs []mask.Finding) {
+		if len(fs) > 0 {
+			parts = append(parts, part)
+		}
+		for _, f := range fs {
+			ids[f.RuleID] = true
+		}
+	}
+	found("key", m.Detect(b.key))
+	if loc != nil {
+		raw, err := canon.Marshal(loc)
+		if err != nil {
+			return nil, nil, err
+		}
+		fs, err := canon.DetectPiece(wire.PieceJSON, "", raw, m)
+		if err != nil {
+			return nil, nil, err
+		}
+		found("loc", fs)
 	}
 	fs, err := canon.DetectPiece(wire.PieceJSON, "", b.body, m)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(fs) > 0 {
-		parts = append(parts, "body")
-	}
-	for _, f := range fs {
-		ids[f.RuleID] = true
-	}
+	found("body", fs)
 	inPieces := false
 	for _, p := range b.pieces {
 		fs, err := canon.DetectPiece(p.Kind, p.ContentType, p.Bytes, m)
