@@ -339,6 +339,11 @@ type ResetCredits struct {
 	// the credential is disabled in CPA, or redemption is switched off in
 	// configuration. The count still shows; only the button goes. Clients must
 	// not offer redemption without it.
+	//
+	// Always false on Claude, whose press must name a kind: there it is each
+	// entry of Kinds that says whether that kind may be spent, and a client
+	// offering one button for the whole count would be offering to spend a
+	// reset of whichever kind the provider picked.
 	Redeemable bool `json:"redeemable"`
 	// Hold is the provider's reason, at the last poll, that none can be spent
 	// right now: "notLimited", "cooldown", "paused" or "ineligible". Empty when
@@ -347,6 +352,41 @@ type ResetCredits struct {
 	// old, and the plugin checks the provider afresh before spending anything.
 	Hold string `json:"hold"`
 	// HoldUntilEpoch is when a "cooldown" hold lifts, and null otherwise.
+	HoldUntilEpoch *int64 `json:"holdUntilEpoch"`
+	// Kinds breaks the count down by what spending one does, one entry per
+	// kind the account holds, full first, then Fable, weekly, 5-hour and any
+	// the build cannot name (qc.ResetKindRank). Claude's resets are not all
+	// alike — a full reset clears the 5-hour and weekly limits, a Fable reset
+	// gives back to the weekly limit only what Fable used — and a press names
+	// the kind it spends, so the kinds are what a client puts its buttons on.
+	//
+	// Always an array, never null: empty for Codex, whose credits are all one
+	// sort, and empty for a Claude account whose Quota Cache is too old to say
+	// which kind each reset is. A client must read that as "the kinds are not
+	// known", never as "every reset is a full one", and offer no button for it.
+	Kinds []ResetKind `json:"kinds"`
+}
+
+// ResetKind is the part of a credential's banked resets that are of one kind.
+// Each field means what the ResetCredits field of the same name means,
+// restricted to that kind: the count and soonest expiry of this kind's, the
+// reason none of this kind can be spent right now, and whether this dashboard
+// may spend one of this kind.
+type ResetKind struct {
+	// Kind is "full", "fable", "weekly" or "session", or "unknown" for a
+	// reset this build cannot classify. Read any other value as unknown.
+	Kind string `json:"kind"`
+	// AvailableCount is at least 1 whenever this entry exists.
+	AvailableCount   int    `json:"availableCount"`
+	ExpiresAtEpoch   *int64 `json:"expiresAtEpoch"`
+	ExpiresInSeconds *int64 `json:"expiresInSeconds"`
+	// Redeemable is the credential's own condition — redemption on, the
+	// credential not disabled — and a kind a press may name. An "unknown"
+	// entry is never redeemable: spending it would be a guess at what it
+	// refills. It is counted so the account's total stays true, and the reader
+	// is pointed at Claude Code, which can say what it is.
+	Redeemable     bool   `json:"redeemable"`
+	Hold           string `json:"hold"`
 	HoldUntilEpoch *int64 `json:"holdUntilEpoch"`
 }
 

@@ -30,10 +30,25 @@
 // page cannot read — a gateway's error page, CPA's own plain-text 502 — proves
 // only that the answer was lost, and the plugin may have finished the spend
 // after it was.
+//
+// A Claude press names the kind of reset it spends — full, Fable, weekly or
+// 5-hour — and the plugin spends a grant of that kind or nothing. The kind is
+// the group the button was pressed in, never inferred here, and every
+// sentence below that tells the reader to press again names that kind's
+// button, so a repeat of a Fable press is never made with the full button.
 
 import { type RefusalCode, spendThrough } from "./access"
 import { managementPath, resourcePath } from "./cpa-auth"
-import { fromEarlier, nameOf, opening, type RedeemResult } from "./outcome"
+import {
+  fromEarlier,
+  KIND_REFUSALS,
+  kindRefusal,
+  kindWords,
+  nameOf,
+  opening,
+  pressName,
+  type RedeemResult,
+} from "./outcome"
 import { accessContext, openDoors } from "./session"
 import { formatClock } from "./time"
 
@@ -73,6 +88,11 @@ export class RedeemError extends Error {
     readonly refreshRequested: boolean = false,
     /** As RedeemResult.refreshRequestedAtEpoch. */
     readonly refreshRequestedAtEpoch: number | null = null,
+    /**
+     * With `other_kind_unresolved`: the kind of the earlier press whose
+     * outcome is unknown, whose own button settles it. Null otherwise.
+     */
+    readonly pendingKind: string | null = null,
   ) {
     super(code)
     this.name = "RedeemError"
@@ -104,11 +124,20 @@ function devEnding(url: string): string {
   return ending === null ? url : `${url}?redeem=${encodeURIComponent(ending)}`
 }
 
-export async function redeemReset(credentialId: string): Promise<RedeemResult> {
-  const answer = await spendThrough(accessContext(), credentialId, {
-    tokenURL: devEnding(resourcePath("/spend")),
-    consoleURL: devEnding(managementPath("/redeem")),
-  })
+/**
+ * Spends one banked reset on the credential: of `kind` on Claude, which the
+ * plugin requires, and with no kind on Codex, which it refuses one.
+ */
+export async function redeemReset(credentialId: string, kind?: string): Promise<RedeemResult> {
+  const answer = await spendThrough(
+    accessContext(),
+    credentialId,
+    {
+      tokenURL: devEnding(resourcePath("/spend")),
+      consoleURL: devEnding(managementPath("/redeem")),
+    },
+    kind ?? "",
+  )
   if (!answer.sent) throw new RedeemError(answer.code, answer.status)
   // The request never completed. Whether it landed is genuinely unknown, and
   // the caller says so rather than inviting a second press.
@@ -122,7 +151,9 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
     error?: unknown
     retryUntilEpoch?: unknown
     refreshRequestedAtEpoch?: unknown
-  } & Omit<Partial<RedeemResult>, "refreshRequestedAtEpoch">
+    pendingKind?: unknown
+    kind?: unknown
+  } & Omit<Partial<RedeemResult>, "refreshRequestedAtEpoch" | "kind">
   // Only a plugin that asked says so; an older one asked nothing. The instant
   // is read only beside a yes, and a yes without one starts no check.
   const refreshRequested = body.refreshRequested === true
@@ -131,7 +162,8 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
   if (!answer.ok) {
     if (typeof body.error === "string" && body.error !== "") {
       const until = typeof body.retryUntilEpoch === "number" ? body.retryUntilEpoch : null
-      throw new RedeemError(body.error, status, until, replayed, kept, refreshRequested, refreshRequestedAtEpoch)
+      const pendingKind = typeof body.pendingKind === "string" ? body.pendingKind : null
+      throw new RedeemError(body.error, status, until, replayed, kept, refreshRequested, refreshRequestedAtEpoch, pendingKind)
     }
     throw new RedeemError("unknown", status, null, replayed, kept)
   }
@@ -147,6 +179,10 @@ export async function redeemReset(credentialId: string): Promise<RedeemResult> {
     refreshRequested,
     refreshRequestedAtEpoch,
     provider: typeof body.provider === "string" ? body.provider : "",
+    // Null for Codex, and from a plugin older than the kinds: the sentence
+    // then names no kind rather than the one this page asked for, which an
+    // older plugin would not have honoured.
+    kind: typeof body.kind === "string" && body.kind !== "" ? body.kind : null,
     replayed,
     cooldown: typeof body.cooldown === "string" ? body.cooldown : "",
   }
@@ -165,12 +201,13 @@ function lostAnswer(lead: string, name: string): string {
 
 /**
  * What to tell the reader when it failed, per the plugin's own codes and the
- * refusals access.ts names.
+ * refusals access.ts names. `kind` is the kind of Claude reset pressed, "" on
+ * Codex: the sentences that send the reader back to a button name that one.
  */
-export function describeError(error: unknown, provider: string): string {
+export function describeError(error: unknown, provider: string, kind = ""): string {
   const name = nameOf(provider)
   if (!(error instanceof RedeemError)) return lostAnswer("Something went wrong", name)
-  const text = fromEarlier(error.replayed, errorSentence(error, name))
+  const text = fromEarlier(error.replayed, errorSentence(error, name, kind))
   // A repeat of a press whose answer was lost, turned away before the plugin
   // ran. Its own sentence is true of this request, and says nothing of the
   // press it repeated, which may still have spent the reset — and it is the
@@ -180,8 +217,19 @@ export function describeError(error: unknown, provider: string): string {
     : text
 }
 
-function errorSentence(error: RedeemError, name: string): string {
+function errorSentence(error: RedeemError, name: string, kind: string): string {
   const who = opening(name)
+  // The kind pressed, in the words its group uses; "reset" on Codex.
+  const reset = kind === "" ? "reset" : kindWords(kind).one
+  const button = pressName(kind)
+  const refusal = kindRefusal(error.code, {
+    kind,
+    pendingKind: error.pendingKind,
+    retryUntilEpoch: error.retryUntilEpoch,
+    nowSeconds: Date.now() / 1000,
+    clock: formatClock,
+  })
+  if (refusal !== null) return refusal
   switch (error.code) {
     case "no_session":
       return "This browser is not signed in, so nothing was sent. Sign in, then try again."
@@ -203,7 +251,7 @@ function errorSentence(error: RedeemError, name: string): string {
     case "cross_site":
       return "The plugin refused this request because it did not come from this page. Nothing was spent."
     case "too_early":
-      return "The request arrived before the secure connection was confirmed. Nothing was spent; press Use one again."
+      return `The request arrived before the secure connection was confirmed. Nothing was spent; press ${button} again.`
     case "route_missing":
       return "This server did not offer the reset route, so nothing was spent. Reload the page; if this persists, check that Quota Glance 0.5.0 or newer is loaded."
     case "not_found":
@@ -225,15 +273,15 @@ function errorSentence(error: RedeemError, name: string): string {
       const until = error.retryUntilEpoch
       const repeat =
         until !== null && until > Date.now() / 1000
-          ? ` Until ${formatClock(until)}, pressing Use one again retries this same claim and cannot spend a second reset. After that, or if CPA or Quota Glance restarts or is updated first, a press is a new claim.`
-          : " Pressing Use one again may make a new claim, which spends a second reset if this one went through."
-      return `${who} did not confirm the reset, so it may have been applied. Check this account’s usage first.${repeat}`
+          ? ` Until ${formatClock(until)}, pressing ${button} again retries this same claim and cannot spend a second reset. After that, or if CPA or Quota Glance restarts or is updated first, a press is a new claim.`
+          : ` Pressing ${button} again may make a new claim, which spends a second reset if this one went through.`
+      return `${who} did not confirm the ${reset}, so it may have been applied. Check this account’s usage first.${repeat}`
     }
     case "retry_window_closed":
       // An earlier press left a claim unresolved and its window has closed —
       // possibly while this press was repeating it, so this does not say
       // nothing was sent. The next press is a new claim.
-      return `Whether ${name} applied an earlier reset is still unknown, and that claim can no longer be retried. Check this account’s usage before pressing again: the next press is a new claim, and spends a second reset if the earlier one went through.`
+      return `Whether ${name} applied an earlier ${reset} is still unknown, and that claim can no longer be retried. Check this account’s usage before pressing again: the next press is a new claim, and spends a second reset if the earlier one went through.`
     case "provider_rate_limited":
       return `${who} is rate-limiting requests right now. Nothing was spent — wait a few minutes before trying again.`
     case "provider_refused":
@@ -251,7 +299,12 @@ function errorSentence(error: RedeemError, name: string): string {
       // holds one.
       return "The plugin is still busy with an earlier press on this account, from here or another device — or with so many in the last ten minutes that it is taking no new ones yet. This request spent nothing itself, but an earlier press may still spend a reset, and the card will not show it until the next quota-cache poll. Check this account’s usage before pressing again."
     case "not_redeemable":
-      return "This credential has nothing to redeem right now."
+      // On Claude, also the answer when the account no longer holds the kind
+      // pressed — spent elsewhere since the poll — which is worth saying in
+      // the kind's own words.
+      return kind === ""
+        ? "This credential has nothing to redeem right now."
+        : `This account holds no ${kindWords(kind).one} this page can spend right now — the card may be out of date. Nothing was spent.`
     case "credential_unusable":
       // Two causes share the code: a credential with no usable sign-in, and the
       // press after an unknown outcome finding the credential now signed in to
@@ -301,7 +354,10 @@ export function mayHaveSpent(error: unknown): boolean {
 
 /** mayHaveSpent by the answer's own code and status alone. */
 function codeMayHaveSpent(error: RedeemError): boolean {
-  if (REFUSALS.has(error.code)) return false
+  // The kind refusals each say "Nothing was spent", other_kind_unresolved
+  // included: its notice carries the kind just pressed, which it proves is
+  // still banked (outcome.ts KIND_REFUSALS).
+  if (REFUSALS.has(error.code) || KIND_REFUSALS.has(error.code)) return false
   switch (error.code) {
     case "unreachable":
     case "outcome_unknown":

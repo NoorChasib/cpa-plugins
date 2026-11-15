@@ -39,10 +39,16 @@ type pendingClaim struct {
 	// authenticates as anyone else.
 	account   string
 	createdAt time.Time
-	// others and grantLeft split what the account held when the claim was
-	// chosen — every other reset, and those left on the credit or grant the
-	// claim names — so a repeat can still say what remains without re-reading
-	// the inventory it deliberately skips.
+	// kind is the kind of reset the claim spends: a qc.ResetKind value on
+	// Claude, and "" on Codex. A press for another kind is refused while this
+	// claim is unresolved (OtherKindUnresolvedError), because it can neither
+	// repeat this claim nor safely make a second one beside it.
+	kind string
+	// others and grantLeft split what the account held of this kind when the
+	// claim was chosen — every other reset of the kind, and those left on the
+	// credit or grant the claim names — so a repeat can still say what remains
+	// without re-reading the inventory it deliberately skips. On Codex every
+	// credit is the one kind.
 	others    int
 	grantLeft int
 }
@@ -50,7 +56,9 @@ type pendingClaim struct {
 // unresolved returns the credential's unresolved claim, if one is still inside
 // its retry window. An entry past the window, or one made for a different
 // provider than the credential now reports, is dropped on the way out: neither
-// can be repeated, and leaving it would only refuse a press later.
+// can be repeated, and leaving it would only refuse a press later. An entry
+// for another kind of reset is returned like any other, and kept: Redeem
+// refuses the press, not the claim.
 func (r *Redeemer) unresolved(authIndex, provider string) (pendingClaim, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

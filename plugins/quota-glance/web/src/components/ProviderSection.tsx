@@ -60,7 +60,7 @@ export function ProviderSection({
   // One name per account for the whole section, so every card and the
   // recovery lines all call an account the same thing.
   const names = accountNames(held)
-  const resets = useBankedResets(held, onRedeemed)
+  const resets = useBankedResets(provider.id, held, onRedeemed)
   const headingID = useId()
 
   // Read once at mount rather than per render: this is a preference the reader

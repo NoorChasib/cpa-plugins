@@ -267,8 +267,10 @@ earlier version is no longer loaded. Settings opens at launch with that address
 in the field and the reason it was refused below it, and the address stays
 saved until a valid one replaces it.
 
-Once signed in with `web-token`, **Use one** spends a banked reset from the
-popover as it does on the page, with Quota Glance 0.5.0 or newer. The page
+Once signed in with `web-token`, a reset's button spends a banked reset from
+the popover as it does on the page, with Quota Glance 0.5.0 or newer: **Use
+one** for Codex, or, with Quota Glance 0.10.0 or newer, a kind's own button
+such as **Use full reset** or **Use Fable reset** for Claude. The page
 sends that press itself, as a GET to its `/spend` route; the bridge passes it
 through untouched and never repeats it, and credentials still never cross the
 native boundary. Which sign-in the page uses, and how it avoids costing CPA

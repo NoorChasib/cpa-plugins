@@ -14,8 +14,8 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 
 | File | What it shows |
 | --- | --- |
-| `summary.json` | Seven healthy credentials, an OpenRouter balance, and five Claude API credit organizations as Quota Cache 0.2.0 publishes them for this snapshot (its committed `seven-credentials.credits.json`, computed from `seven-credentials.meter.json` and the settings it keeps, every credit and refill date entered on its page): on the monthly credit, on a Console reading, low, one with a cache-write difference worth showing, and one on Haiku 5.5's long-prompt tier refilled at midnight, plus an organization the meter saw that nothing names. Every one is read-only here (`editing.reason: "quotaCache"`). A Claude credential under a CPA-style auth index carries a renewal date entered on Quota Cache's page equal to the build's own day, so it reads next month's. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding them with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a Grok product window folded into its credits, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its reset with a dated `cooldown` hold, a cooldown already over, a disabled account's count without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state but `ok`, against a meter that has gone stale after a `shutdown` gap: out after a refusal, a lower bound because counting began after the cycle did, needing settings (one missing only its refill date, one missing its credit with an unpriced model), pending, an unlinked organization nothing names, an orphaned API credit setting and an orphaned renewal date, all as Quota Cache publishes them for this snapshot and read-only here. Beside them are values only the items of Quota Cache 0.1.x's `claude-api-credits` gave rise to, which 0.2.0 never publishes (Where the figures come from, below): misconfigured (`organization_id_invalid`), written by Quota Cache 0.1.13, an `item-<n>` for each reason one cannot be edited anywhere, and an over-limit unlinked organization. They stay so that the golden covers the whole contract. |
+| `summary.json` | Seven healthy credentials, an OpenRouter balance, and five Claude API credit organizations as Quota Cache 0.2.0 publishes them for this snapshot (its committed `seven-credentials.credits.json`, computed from `seven-credentials.meter.json` and the settings it keeps, every credit and refill date entered on its page): on the monthly credit, on a Console reading, low, one with a cache-write difference worth showing, and one on Haiku 5.5's long-prompt tier refilled at midnight, plus an organization the meter saw that nothing names. Every one is read-only here (`editing.reason: "quotaCache"`). A Claude credential under a CPA-style auth index carries a renewal date entered on Quota Cache's page equal to the build's own day, so it reads next month's. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding a full reset and two Fable resets, the Fable kind with its own `notLimited` hold, and one whose grants predate kinds, so a single full entry, with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a Grok product window folded into its credits, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its full reset with a dated `cooldown` hold on every kind, beside a reset of a kind this build cannot name (`unknown`, counted and never offered), a cooldown already over on an entry from a Quota Cache too old to say which kind each reset is (`kinds: []`, the count with no button), a disabled account's Fable reset without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state but `ok`, against a meter that has gone stale after a `shutdown` gap: out after a refusal, a lower bound because counting began after the cycle did, needing settings (one missing only its refill date, one missing its credit with an unpriced model), pending, an unlinked organization nothing names, an orphaned API credit setting and an orphaned renewal date, all as Quota Cache publishes them for this snapshot and read-only here. Beside them are values only the items of Quota Cache 0.1.x's `claude-api-credits` gave rise to, which 0.2.0 never publishes (Where the figures come from, below): misconfigured (`organization_id_invalid`), written by Quota Cache 0.1.13, an `item-<n>` for each reason one cannot be edited anywhere, and an over-limit unlinked organization. They stay so that the golden covers the whole contract. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -236,10 +236,12 @@ losing.
 Codex and Claude both bank **rate-limit resets**: entitlements already granted
 to the account that clear its current windows when one is spent — Codex calls
 them rate-limit reset credits, Claude calls them reset grants. It is not extra
-allowance. Spending one restores that account's session and weekly windows,
-which is why it hangs off the **credential** rather than off any of the windows
-it would reset — showing it once per card would put three controls on screen
-for one irreversible action.
+allowance. Spending one restores that account's windows — a Codex credit its
+session and weekly windows, a Claude grant those its kind refills
+([`kinds`](#kinds--which-kind-each-claude-reset-is)) — which is why it hangs off
+the **credential** rather than off any of the windows it would reset — showing
+it once per card would put three controls on screen for one irreversible
+action.
 
 `null` means there is nothing to show, and the correct rendering is **nothing at
 all** — no badge, no zero. That covers every credential on a provider with no
@@ -248,22 +250,64 @@ which is the ordinary case.
 
 ```json
 "resetCredits": {
-  "availableCount": 2,
-  "expiresAtEpoch": 1790251200,
-  "expiresInSeconds": 1238400,
-  "redeemable": true,
-  "hold": "cooldown",
-  "holdUntilEpoch": 1789020000
+  "availableCount": 3,
+  "expiresAtEpoch": 1789981200,
+  "expiresInSeconds": 968400,
+  "redeemable": false,
+  "hold": "",
+  "holdUntilEpoch": null,
+  "kinds": [
+    { "kind": "full", "availableCount": 1, "expiresAtEpoch": 1790586000, "expiresInSeconds": 1573200,
+      "redeemable": true, "hold": "", "holdUntilEpoch": null },
+    { "kind": "fable", "availableCount": 2, "expiresAtEpoch": 1789981200, "expiresInSeconds": 968400,
+      "redeemable": true, "hold": "notLimited", "holdUntilEpoch": null }
+  ]
 }
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `availableCount` | At least 1 whenever this object exists. |
+| `availableCount` | At least 1 whenever this object exists. Every kind's together. |
 | `expiresAtEpoch` / `expiresInSeconds` | The soonest credit that can still be spent. **`null` when the provider did not date it** — render that differently from a distant deadline rather than implying safety. |
-| `redeemable` | Whether this dashboard may spend it. |
+| `redeemable` | Whether this dashboard may spend it with one press on the count. **Always `false` for Claude**, whose press must name a kind: there each entry of `kinds` says so for its kind. |
 | `hold` | The provider's reason, at the last poll, that none can be spent right now: `notLimited` (Claude only resets an account that is at a limit), `cooldown` (one was spent recently), `paused`, `ineligible`. `""` when one can be, and always `""` for Codex, which gives no such reason. |
 | `holdUntilEpoch` | When a `cooldown` hold lifts, and `null` otherwise. A cooldown whose end has already passed arrives as `hold: ""` with this `null`. |
+| `kinds` | Claude's resets broken down by what spending one does, below. Always an array: `[]` for Codex, whose credits are all one sort. |
+
+#### `kinds` — which kind each Claude reset is
+
+Claude's banked resets are not all alike, and the kind spent is decided by
+which grant is claimed, so a Claude button is per kind, never per account.
+Quota Cache classifies each grant by Claude Code's own rule, and these are the
+kinds in the order they come, one entry per kind the account holds:
+
+| `kind` | What spending one does |
+| --- | --- |
+| `full` | Clears the 5-hour and weekly limits. A grant that predates kinds is one. |
+| `fable` | Gives back to the weekly limit what Fable used this week. Not a full reset. |
+| `weekly` | Clears the weekly limits, not the 5-hour limit. |
+| `session` | Clears the 5-hour limit, not the weekly limits. |
+| `unknown` | A kind this build cannot classify. Counted, **never redeemable**. Read any other value as this. |
+
+Each entry has the same fields as `resetCredits` — `availableCount`,
+`expiresAtEpoch`, `expiresInSeconds`, `redeemable`, `hold`, `holdUntilEpoch` —
+meaning the same, restricted to that kind: its count, its soonest expiry, and
+why none of that kind can be spent right now. An expiry or a cooldown already
+past is dropped exactly as the account's is. An account-wide reason, `ineligible`
+or a running `cooldown`, holds for every kind; otherwise a kind's hold is its
+own, so one kind can be spendable while another is `notLimited`. Entries are
+never empty and never repeat a kind; their counts sum to `availableCount`.
+
+A kind's `redeemable` is the credential's own condition below and a kind a
+press may name: `full`, `fable`, `weekly` or `session`. An `unknown` entry is
+never redeemable — spending it would be a guess at what it refills; the
+dashboard points the reader at `/limit-reset` in Claude Code instead.
+
+`kinds` is `[]` on a Claude credential when Quota Cache is older than 0.5.0 and
+so cannot say which kind each reset is. **Read that as "the kinds are not known", never as "every
+reset is full".** The count still shows, with no button: this plugin will not
+spend a Claude reset it cannot tell apart from the others. Quota Glance older
+than 0.10.0 omits it; read a missing `kinds` as `[]`.
 
 **A banked reset lapses** — a Codex credit thirty days after it is granted, a
 Claude grant on its own end date — which is the documented way operators lose
@@ -273,15 +317,17 @@ when the count is non-zero. A Claude grant carries its end date in the same
 usage response as the count, so dating it costs no request. A credit or grant
 it could not date still reports its count.
 
-**Every account holding a reset gets its own button**, so the operator chooses
-which account to spend on. **Never offer redemption without `redeemable`.** It
-is false when redeeming is switched off in configuration
-(`allow-redeem: false`), when the credential is disabled in CPA, and on any
-provider other than Codex and Claude. The count still shows in every one of
-those cases; only the control goes.
+**Every account holding a reset gets its own button** — a Codex account one on
+its count, a Claude account one per kind it holds — so the operator chooses
+which account, and on Claude which kind, to spend. **Never offer redemption
+without `redeemable`** — the count's on Codex, the kind's on Claude. It is
+false when redeeming is switched off in configuration (`allow-redeem: false`),
+when the credential is disabled in CPA, on any provider other than Codex and
+Claude, and for a Claude kind that is `unknown`. The count still shows in every
+one of those cases; only the control goes.
 
-`redeemable` says the plugin would accept a press. Whether this client can send
-one is its own question: a dashboard left with no way in — no password saved
+`redeemable` says the plugin would accept a press — for a Claude kind, a press
+naming that kind. Whether this client can send one is its own question: a dashboard left with no way in — no password saved
 and no usable console session, or each of them refused — shows the count
 without the button, because a press could only be refused, and on the console
 door each refusal is a failed CPA management sign-in. See [access.md](access.md).
@@ -292,7 +338,8 @@ nothing about the account: CPA still hands its token to the plugin, quota-cache
 still polls with it, and a cooldown is exactly when an operator reaches for a
 reset.
 
-**`hold` is a hint, never a gate.** Print it beside the button — the
+**`hold` is a hint, never a gate.** Print it beside the button — a Claude
+kind's own `hold` beside that kind's button — the
 dashboard says "usable once at a limit", "cooling down · 1h 45m", "paused" and
 "not eligible right now" — but do not hide or disable the button over it:
 the reading is a poll old, and the plugin asks the provider afresh before it
@@ -435,7 +482,7 @@ answer with the same bytes.
 The press is the same JSON object on every route:
 
 ```json
-{ "credentialId": "codex-noor@example.com.json", "confirmed": true, "pressId": "dGhpcyBpcyBhIHByZXNzIQ" }
+{ "credentialId": "claude-sierra@example.com.json", "confirmed": true, "pressId": "dGhpcyBpcyBhIHByZXNzIQ", "kind": "fable" }
 ```
 
 `confirmed` must be `true`. The dialog belongs in the client, but a request that
@@ -445,6 +492,21 @@ form-encoded content type is rejected, because a form post is the one a
 cross-site page can make without script. The credential must be one the served
 document already reports as `redeemable`, so a caller cannot nominate a
 credential the dashboard is not offering.
+
+`kind` is the kind of reset to spend, and it is what makes a Claude press a
+press for one kind and no other. It is optional in the JSON, and absent or
+`null` is no kind; present, it must be `full`, `fable`, `weekly` or `session`,
+or the press is `400 invalid_request` — `unknown` included. Then the document
+decides, per credential:
+
+- **Claude** must name a kind. Without one the press is
+  `400 kind_required`: nothing here may pick a kind for the reader, and a page
+  from before kinds must be reloaded. The kind must be in the credential's
+  `resetCredits.kinds` with `redeemable` true and `availableCount` at least 1,
+  or the press is `409 not_redeemable`. The top-level `redeemable` is not
+  consulted; on Claude it is always false.
+- **Codex** names none. A Codex press naming any kind is `409 not_redeemable`;
+  without one it is checked against the top-level `redeemable` as always.
 
 `pressId` names this one press: 16 to 64 characters from `A-Z`, `a-z`, `0-9`,
 `_` and `-`. The dashboard draws 16 random bytes for each new press and sends
@@ -489,7 +551,8 @@ run in this order, and the first that fails answers:
 6. **The header.** Missing, repeated, longer than 4096 characters, not unpadded
    base64url, not a JSON object, or a field of the wrong type:
    `400 invalid_request`. `confirmed` not `true`:
-   `400 confirmation_required`. Then a `pressId` missing or malformed:
+   `400 confirmation_required`. Then a `pressId` missing or malformed, or a
+   `kind` that is present and not one a press may name:
    `400 invalid_request`.
 7. **The press**, exactly as on the POST routes, starting with the ledger
    below.
@@ -509,8 +572,11 @@ press ledger before anything else — the `redeemable` check included:
 - The lookup comes first because a second copy is owed the first copy's answer
   even after the document stops offering the account, which is exactly what
   happens after a press that spent its last reset.
-- The same id naming a different credential is `400 invalid_request`: one press
-  is one decision about one account.
+- The same id naming a different credential, or a different `kind` (no kind
+  included), is `400 invalid_request`: one press is one decision about one kind
+  of reset on one account, and answering a full press with a Fable press's
+  answer would tell the reader the wrong reset was spent. A client keeping a
+  press's id after a lost answer keeps it per credential and kind.
 - An id is remembered for ten minutes after its answer, the same window as the
   claim journal under `outcome_unknown` below. The ledger holds 256; when every
   one is still under way or inside its ten minutes, a new press gets
@@ -551,29 +617,40 @@ it asks the provider what is spendable before it spends anything:
 - **Codex** reads the account's credits and consumes the one closest to
   lapsing.
 - **Claude** reads the account's organization and its grant status, and claims
-  the grant the provider recommends — or, without a usable recommendation, the
-  one closest to lapsing. When the status already says no grant can be spent
-  (not at a limit, in a cooldown, paused, ineligible) nothing is claimed, and
-  that reason is the outcome.
+  a grant **of the kind the press names, and never of another**: the grant the
+  provider recommends when it is of that kind and spendable, or else the one
+  of that kind closest to lapsing. A recommendation of another kind is passed
+  over, and a grant this build classifies `unknown` is never claimed. When the
+  status already says no grant of that kind can be spent (not at a limit, in a
+  cooldown, paused, ineligible) nothing is claimed, and that reason is the
+  outcome — whatever the account's other kinds could do; holding none of the
+  kind at all is `noCredit`. The kind is read from the same fields Quota Cache
+  reads it from, by the same function, so the card and the spend cannot
+  disagree; a grant whose `gives_back_weekly` or `type` is present in the wrong
+  shape makes the whole status unreadable, and nothing is claimed
+  (`provider_refused`).
 
 ```json
-{ "provider": "claude", "outcome": "reset", "windowsReset": 2, "remainingCount": 1, "snapshotPending": true, "refreshRequested": true, "refreshRequestedAtEpoch": 1789012800 }
+{ "provider": "claude", "kind": "fable", "outcome": "reset", "windowsReset": 2, "remainingCount": 1, "snapshotPending": true, "refreshRequested": true, "refreshRequestedAtEpoch": 1789012800 }
 ```
 
 `provider` is `codex` or `claude`, so the client can word the outcome in that
-provider's terms. `remainingCount` is what the account holds now, counted from
-the inventory read during this press — less one when one was spent. It is a
-floor rather than a fresh reading, and the next poll replaces it.
+provider's terms. `kind` is the kind the press named — what was, or would have
+been, spent — and `null` for Codex. `remainingCount` is what the account holds
+now **of that kind**, counted from the inventory read during this press — less
+one when one was spent; on Claude the account's other kinds are not in it, so
+"1 left" after a Fable reset is one Fable reset. It is a floor rather than a
+fresh reading, and the next poll replaces it.
 
 | `outcome` | Spent? | Meaning |
 | --- | --- | --- |
 | `reset` | yes | A reset was spent and windows were cleared. |
 | `nothingToReset` | yes | Codex accepted it but no window needed clearing. **The credit is still gone** — Codex consumes it on acceptance, and saying otherwise invites a second press. |
 | `alreadyUsed` | earlier | The provider says the reset this claim names was already consumed. On the press after an `outcome_unknown`, this means **the earlier attempt went through**. |
-| `noCredit` | no | Nothing could be spent: the count on the card was out of date, or Claude reports a grant that cannot be used right now without naming why. |
-| `notLimited` | no | Claude only resets an account that is at a limit, and this one is not. |
+| `noCredit` | no | Nothing could be spent: the count on the card was out of date, the account holds none of the kind pressed for, or Claude reports a grant of that kind that cannot be used right now without naming why. |
+| `notLimited` | no | Claude only spends a reset once the account has reached a limit it refills, and for this kind it has not. |
 | `cooldown` | no | Claude spent a reset on this account recently and will not spend another yet. |
-| `paused` | no | Claude has paused the account's grant. |
+| `paused` | no | Claude has paused the account's grant of this kind. |
 | `ineligible` | no | Claude says the account is not eligible for reset grants. |
 | `failed` | no | The provider refused for a reason this vocabulary has no better word for — today, Claude saying resets are unavailable. |
 
@@ -675,26 +752,31 @@ CPA is still finishing the clear, and whatever CPA says later is discarded. The
 next press is a fresh claim either way, which checks the provider's inventory
 before it spends. A clear that did not happen is never retried by the plugin.
 The remedy for `failed` and `unsupported` is **Clear cooldown** on the credential
-in the CPA console; pressing **Use one** again would spend another reset and is
-not one.
+in the CPA console; pressing the button again (**Use one** on Codex, or the
+kind's own button on Claude, such as **Use full reset**) would spend another
+reset and is not one.
 
 Failures carry a fixed code and never provider text. Those from the press
-itself — `not_redeemable`, `credential_unusable`, every 502, and
+itself — `kind_required`, `not_redeemable`, `invalid_kind`,
+`other_kind_unresolved`, `credential_unusable`, every 502, and
 `already_in_flight` when the redeemer rather than the press ledger sends it —
 also carry `refreshRequested`, as above: `true` only after an
 `outcome_unknown` or `retry_window_closed` whose spend went out, when Quota
 Cache could be asked, and then with `refreshRequestedAtEpoch`. A refusal
-before the press ran — the 400s, 401, 403,
+before the press ran — the other 400s, 401, 403,
 404, 415, 425, 429, and the ledger's `already_in_flight` — carries none.
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
-| 400 | `confirmation_required`, `invalid_request` | The press was refused before anything else happened: no confirmation, a malformed body or header, a malformed `pressId`, or a `pressId` first used for another credential. |
+| 400 | `confirmation_required`, `invalid_request` | The press was refused before anything else happened: no confirmation, a malformed body or header, a malformed `pressId`, a `kind` that is present and not `full`, `fable`, `weekly` or `session`, or a `pressId` first used for another credential or another kind. |
+| 400 | `kind_required` | A Claude press named no `kind`. Claude's resets refill different limits and the plugin will not pick one; a page from before kinds must be reloaded. Nothing was spent. |
+| 400 | `invalid_kind` | The redeemer's own guard: the kind does not fit the provider — any kind on Codex, none or an unknown one on Claude. The document check refuses the same first, so a client should never see it. Nothing was sent. |
 | 401 | — (no body) | Token routes only: the token was missing or wrong. Nothing was spent. |
 | 403 | `cross_site` | `/spend` only: the browser marked the request as not made by a script on this page. Nothing was spent, and the token limiter was not charged. |
 | 425 | `too_early` | `/spend` only: the request may have arrived as TLS early data. Nothing was spent; send it again. |
 | 429 | — (no body) | Token routes only: more than 20 failed token attempts this minute, with `Retry-After: 60`. Never sent to the right token. |
-| 409 | `not_redeemable` | The document does not offer this credential, or its provider has no banked resets. |
+| 409 | `not_redeemable` | The document does not offer this credential, or its provider has no banked resets; on Claude, it does not offer the kind named (not held, none left, not redeemable, or kinds unread); on Codex, the press named a kind. |
+| 409 | `other_kind_unresolved` | An earlier press on this account, for **another kind**, left its claim with an unknown outcome, and its retry window is still open. Carries `pendingKind`, that kind, and `retryUntilEpoch`, when its window closes, both `null` if the plugin cannot say. **Nothing was sent.** Press that kind again to settle it — it repeats the same claim — or wait until `retryUntilEpoch`; only then can this kind be spent. |
 | 409 | `already_in_flight` | A press on this credential is still under way; or a second copy of a press outwaited the first; or the press ledger is full. Nothing new was started, but the earlier press may still spend a reset, and the card will not show it until quota-cache polls — so do not invite another press: one made once the earlier finishes is a new press, and spends a second reset if the account holds one. |
 | 409 | `credential_unusable` | The credential cannot authenticate the request — an API-key login has none of this — or, on the press after an unknown outcome, it now signs in as a different account than the claim was made for. Nothing was sent. |
 | 415 | `unsupported_media_type` | Not JSON. |
@@ -757,6 +839,16 @@ the promise must name all of these, not CPA's restart alone. A press whose
 repeat cannot be sent before the window closes sends nothing and answers
 `retry_window_closed`, not `outcome_unknown`, because there is no longer a
 repeat to promise.
+
+**On Claude the unresolved claim is for one kind.** Only a press naming that
+same kind repeats it; on the card that is the same kind's button, which needs
+that kind's entry still in `kinds`. A press for **another kind** while it is
+unresolved sends nothing and answers `409 other_kind_unresolved`, naming the
+pending kind and the same `retryUntilEpoch`, and the claim stays on record. It
+cannot repeat a claim for a different grant, and it must not claim beside it:
+if the earlier claim did spend, the reader is owed that answer before a second
+reset of any kind is spent. Once the pending kind's press settles the claim, or
+its window closes, the other kind can be spent as usual.
 
 A client must not print "nothing was spent" for an answer it cannot read. A
 code it does not recognise, or no readable code at all, proves nothing was

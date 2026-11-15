@@ -249,7 +249,7 @@ func TestAnUnknownOutcomeWritesOneRefreshRequest(t *testing.T) {
 func TestARefreshThatCannotBeWrittenLeavesTheAnswerAndLogsOnce(t *testing.T) {
 	spent := protocol.HostHTTPResponse{StatusCode: 200, Body: []byte(`{"code":"reset","windows_reset":2}`)}
 	want := map[string]any{
-		"provider": "codex", "outcome": "reset", "windowsReset": 2.0, "remainingCount": 0.0,
+		"provider": "codex", "kind": nil, "outcome": "reset", "windowsReset": 2.0, "remainingCount": 0.0,
 		"snapshotPending": true, "cooldown": "cleared", "refreshRequested": false,
 	}
 	for name, setup := range map[string]struct {

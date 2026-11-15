@@ -65,7 +65,7 @@ func TestMayHaveSpentMeansThisPressSentASpendThatMayHaveLanded(t *testing.T) {
 		{"claude throttled", "claude", claude(reply{status: 429}), false},
 		{"claude held before the claim", "claude", claudeHost(statusWith(`{"eligible":true,"at_limit":false,"grants":[`+spendableGrant+`]}`), `{"result":"reset"}`), false},
 	} {
-		result, _ := redeemerOn(one.host, newClock()).Redeem(context.Background(), one.provider, "c")
+		result, _ := redeemerOn(one.host, newClock()).Redeem(context.Background(), one.provider, "c", kindFor(one.provider))
 		if result.MayHaveSpent != one.want {
 			t.Errorf("%s: MayHaveSpent = %v, want %v (result %+v)", one.name, result.MayHaveSpent, one.want, result)
 		}
@@ -79,7 +79,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 	first := func(t *testing.T, host *fakeHost, clock *stepClock, provider string) *Redeemer {
 		t.Helper()
 		redeemer := redeemerOn(host, clock)
-		result, err := redeemer.Redeem(context.Background(), provider, "c")
+		result, err := redeemer.Redeem(context.Background(), provider, "c", kindFor(provider))
 		if !errors.Is(err, ErrOutcomeUnknown) || !result.MayHaveSpent {
 			t.Fatalf("first press = %+v, %v; want an unknown outcome that may have spent", result, err)
 		}
@@ -90,13 +90,13 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 		host := claudeHost(spendableStatus(), "")
 		host.queue(claudeClaimURL, reply{status: 502}, reply{body: `{"result":"already_used","resets_left":1}`})
 		redeemer := first(t, host, newClock(), "claude")
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || !result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || !result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v", result, err)
 		}
 		codexHost := hostWith(map[string]string{codexCreditsURL: oneAvailable})
 		codexHost.queue(codexConsumeURL, reply{status: 502}, reply{body: `{"code":"already_redeemed"}`})
 		redeemer = first(t, codexHost, newClock(), "codex")
-		if result, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || !result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || !result.MayHaveSpent {
 			t.Fatalf("codex repeat = %+v, %v", result, err)
 		}
 	})
@@ -105,7 +105,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 		host := claudeHost(spendableStatus(), "")
 		host.queue(claudeClaimURL, reply{status: 502}, reply{status: 504})
 		redeemer := first(t, host, newClock(), "claude")
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) || !result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) || !result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v", result, err)
 		}
 	})
@@ -114,7 +114,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 		host := claudeHost(spendableStatus(), "")
 		host.queue(claudeClaimURL, reply{status: 502}, reply{body: `{"result":"cooldown"}`})
 		redeemer := first(t, host, newClock(), "claude")
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) || result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) || result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v; want still unknown, and nothing sent by it that could spend", result, err)
 		}
 	})
@@ -126,7 +126,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 		host.mu.Lock()
 		host.status[claudeProfileURL] = 503
 		host.mu.Unlock()
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) || result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) || result.MayHaveSpent {
 			t.Fatalf("repeat with a failed read = %+v, %v", result, err)
 		}
 		if host.postCount() != 1 {
@@ -139,7 +139,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 		host.queue(codexConsumeURL, reply{status: 502})
 		redeemer := first(t, host, newClock(), "codex")
 		host.setAuth(`{"access_token":"synthetic-token","account_id":"another-account"}`)
-		if result, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrIdentityChanged) || result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrIdentityChanged) || result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v", result, err)
 		}
 	})
@@ -155,7 +155,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 				clock.advance(2 * time.Second)
 			}
 		}
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrRetryWindowClosed) || result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrRetryWindowClosed) || result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v", result, err)
 		}
 	})
@@ -171,7 +171,7 @@ func TestMayHaveSpentOnARepeatIsAboutTheRepeat(t *testing.T) {
 				clock.advance(20 * time.Second)
 			}
 		}
-		if result, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRetryWindowClosed) || !result.MayHaveSpent {
+		if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrRetryWindowClosed) || !result.MayHaveSpent {
 			t.Fatalf("repeat = %+v, %v", result, err)
 		}
 	})

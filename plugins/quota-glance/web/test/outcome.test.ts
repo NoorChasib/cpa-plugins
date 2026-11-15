@@ -1,12 +1,30 @@
 // What the page says once the plugin has answered a press: the provider's
-// outcome, and what became of CPA's cooldown on the credential after a reset.
+// outcome, and what became of CPA's cooldown on the credential after a reset —
+// and, on Claude, which kind of reset each sentence is about.
 //
 // src/lib/outcome.ts imports nothing, so node loads it directly.
 
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 
-import { describeOutcome, fellShort, partlyApplied, type RedeemResult } from "../src/lib/outcome.ts"
+import {
+  CLAUDE_RULE,
+  countOf,
+  describeOutcome,
+  fellShort,
+  KIND_REFUSALS,
+  KIND_WORDS,
+  kindRefusal,
+  kindWords,
+  KINDS_UNREPORTED,
+  othersSentence,
+  partlyApplied,
+  pressName,
+  type RedeemResult,
+  spendsSentence,
+  UNRECOGNISED_WORDS,
+} from "../src/lib/outcome.ts"
+import { SPENDABLE_KINDS } from "../src/lib/resetKinds.ts"
 
 function result(fields: Partial<RedeemResult>): RedeemResult {
   return {
@@ -17,6 +35,7 @@ function result(fields: Partial<RedeemResult>): RedeemResult {
     refreshRequested: false,
     refreshRequestedAtEpoch: null,
     provider: "claude",
+    kind: null,
     replayed: false,
     cooldown: "",
     ...fields,
@@ -129,5 +148,220 @@ describe("after Quota Cache was asked to refresh", () => {
       "From your earlier press: Reset applied. 1 banked reset left. Quota Cache was asked then to check this account, then every other one.",
     )
     assert.ok(!text.includes(REFRESHING), text)
+  })
+})
+
+describe("a Claude outcome names the kind it spent", () => {
+  test("a full reset, in Claude Code's own done line, counted by kind", () => {
+    assert.equal(
+      describeOutcome(result({ kind: "full", snapshotPending: false }), "claude"),
+      "Full reset used — limits reset. 1 full reset left.",
+    )
+  })
+
+  test("a Fable reset says what it gave back, and never that it reset the limits", () => {
+    const text = describeOutcome(result({ kind: "fable", remainingCount: 0, snapshotPending: false }), "claude")
+    assert.equal(text, "Fable reset used — what Fable used is back in the weekly limit. No Fable resets left.")
+    assert.doesNotMatch(text, /limits reset|5-hour/)
+  })
+
+  test("a weekly and a 5-hour reset, each in its own words", () => {
+    assert.equal(
+      describeOutcome(result({ kind: "weekly", remainingCount: 2, snapshotPending: false }), "claude"),
+      "Weekly reset used — weekly limits reset. 2 weekly resets left.",
+    )
+    assert.equal(
+      describeOutcome(result({ kind: "session", snapshotPending: false }), "claude"),
+      "5-hour reset used — 5-hour limit reset. 1 5-hour reset left.",
+    )
+  })
+
+  test("every outcome names the kind, and none names another", () => {
+    for (const outcome of ["reset", "nothingToReset", "noCredit", "alreadyUsed", "notLimited", "paused", "failed"]) {
+      const text = describeOutcome(result({ outcome, kind: "fable" }), "claude")
+      assert.match(text, /Fable reset/, outcome)
+      assert.doesNotMatch(text, /full reset|weekly reset|5-hour reset/, outcome)
+    }
+  })
+
+  test("a refusal under Claude's rule says it per kind", () => {
+    assert.equal(
+      describeOutcome(result({ outcome: "notLimited", kind: "weekly" }), "claude"),
+      "Claude allows a weekly reset only once the account has reached a limit it refills, and this one has not. Nothing was spent.",
+    )
+  })
+
+  test("the remedy after a spend points at the kind's own button, not at Use one", () => {
+    const text = describeOutcome(result({ kind: "fable", cooldown: "failed" }), "claude")
+    assert.match(text, /Don’t press “Use Fable reset” again — that would spend another Fable reset\./)
+    assert.doesNotMatch(text, /Use one/)
+    const unconfirmed = describeOutcome(result({ kind: "full", cooldown: "unconfirmed" }), "claude")
+    assert.match(unconfirmed, /^Claude took the full reset but did not confirm what it cleared/)
+    assert.match(unconfirmed, /don’t press “Use full reset” again/)
+  })
+
+  test("Codex, and a plugin too old to name a kind, read exactly as before", () => {
+    const codex = result({ provider: "codex", kind: null, snapshotPending: false })
+    assert.equal(describeOutcome(codex, "codex"), "Reset applied. 1 banked reset left.")
+    assert.match(describeOutcome(result({ provider: "codex", cooldown: "failed" }), "codex"), REMEDY)
+    assert.equal(describeOutcome(result({ kind: null, snapshotPending: false }), "claude"), "Reset applied. 1 banked reset left.")
+  })
+
+  test("a kind the page cannot name is not guessed at", () => {
+    for (const kind of ["unknown", "monthly", ""]) {
+      assert.equal(
+        describeOutcome(result({ kind, snapshotPending: false }), "claude"),
+        "Reset applied. 1 banked reset left.",
+        kind,
+      )
+    }
+  })
+})
+
+describe("the plugin's refusals about a kind", () => {
+  const clock = (epoch: number) => `@${epoch}`
+  const detail = (fields: Partial<Parameters<typeof kindRefusal>[1]> = {}) => ({
+    kind: "full",
+    pendingKind: null,
+    retryUntilEpoch: null,
+    nowSeconds: 1000,
+    clock,
+    ...fields,
+  })
+
+  test("kind_required and invalid_kind each say nothing was spent", () => {
+    for (const code of ["kind_required", "invalid_kind"]) {
+      const text = kindRefusal(code, detail())
+      assert.ok(text, code)
+      assert.match(text, /Nothing was spent\./, code)
+    }
+  })
+
+  test("other_kind_unresolved names the earlier kind, its button, the kind pressed, and the deadline", () => {
+    assert.equal(
+      kindRefusal("other_kind_unresolved", detail({ pendingKind: "fable", retryUntilEpoch: 1600 })),
+      "An earlier Fable reset on this account has an unknown outcome. Press “Use Fable reset” again to settle it before using a full reset, or wait until @1600. Nothing was spent.",
+    )
+  })
+
+  test("the other way round, too", () => {
+    assert.equal(
+      kindRefusal("other_kind_unresolved", detail({ kind: "fable", pendingKind: "full", retryUntilEpoch: 1600 })),
+      "An earlier full reset on this account has an unknown outcome. Press “Use full reset” again to settle it before using a Fable reset, or wait until @1600. Nothing was spent.",
+    )
+  })
+
+  test("a deadline already past, or none, is not offered as a wait", () => {
+    for (const retryUntilEpoch of [null, 900]) {
+      const text = kindRefusal("other_kind_unresolved", detail({ pendingKind: "fable", retryUntilEpoch }))!
+      assert.doesNotMatch(text, /wait until/)
+      assert.match(text, /Press “Use Fable reset” again to settle it before using a full reset\. Nothing was spent\.$/)
+    }
+  })
+
+  test("an earlier kind this page cannot name is not given a button", () => {
+    const text = kindRefusal("other_kind_unresolved", detail({ pendingKind: "monthly", retryUntilEpoch: 1600 }))!
+    assert.doesNotMatch(text, /Press “/)
+    assert.match(text, /^An earlier reset of another kind on this account has an unknown outcome\./)
+  })
+
+  test("any other code is not this function's", () => {
+    for (const code of ["not_redeemable", "outcome_unknown", ""]) assert.equal(kindRefusal(code, detail()), null)
+  })
+
+  // KIND_REFUSALS is what redeem.ts mayHaveSpent reads to give a notice the
+  // refusal's tone rather than the unknown's. other_kind_unresolved among
+  // them: the notice is tagged with the kind just pressed, and an amber
+  // "may be spent" on that tag would say the full reset may be gone when it
+  // is the Fable one that is unknown.
+  test("every kind refusal spent nothing, and is toned as a refusal", () => {
+    assert.deepEqual([...KIND_REFUSALS].sort(), ["invalid_kind", "kind_required", "other_kind_unresolved"])
+    for (const code of KIND_REFUSALS) {
+      for (const pendingKind of [null, "fable"]) {
+        const text = kindRefusal(code, detail({ pendingKind, retryUntilEpoch: 1600 }))
+        assert.ok(text, code)
+        assert.match(text, /Nothing was spent\./, code)
+      }
+    }
+  })
+})
+
+describe("the words for each kind", () => {
+  test("every kind a press can name has words, and nothing else does", () => {
+    assert.deepEqual(Object.keys(KIND_WORDS).sort(), [...SPENDABLE_KINDS].sort())
+    for (const kind of SPENDABLE_KINDS) {
+      const words = kindWords(kind)
+      assert.notEqual(words, UNRECOGNISED_WORDS, kind)
+      assert.match(words.button, /^Use .+ reset$/, kind)
+      assert.ok(words.heading.endsWith("resets"), kind)
+    }
+    assert.equal(kindWords("unknown"), UNRECOGNISED_WORDS)
+    assert.equal(kindWords("monthly"), UNRECOGNISED_WORDS)
+    assert.equal(UNRECOGNISED_WORDS.button, "")
+  })
+
+  test("the buttons and headings are the ones the card uses", () => {
+    assert.deepEqual(
+      SPENDABLE_KINDS.map((kind) => [kindWords(kind).button, kindWords(kind).heading]),
+      [
+        ["Use full reset", "Full resets"],
+        ["Use Fable reset", "Fable resets"],
+        ["Use weekly reset", "Weekly resets"],
+        ["Use 5-hour reset", "5-hour resets"],
+      ],
+    )
+    assert.equal(UNRECOGNISED_WORDS.heading, "Unrecognised resets")
+    assert.match(UNRECOGNISED_WORDS.effect, /\/limit-reset/)
+  })
+
+  test("Fable's effect says it is not a full reset, and claims nothing about the 5-hour limit", () => {
+    const { effect } = kindWords("fable")
+    assert.equal(effect, "Gives back to the weekly limit what Fable used this week. Not a full reset.")
+    assert.doesNotMatch(effect, /5-hour/)
+  })
+
+  test("the rule and the note for a Quota Cache older than the kinds", () => {
+    assert.match(CLAUDE_RULE, /reached a limit it refills/)
+    assert.match(KINDS_UNREPORTED, /^Update Quota Cache/)
+    assert.match(KINDS_UNREPORTED, /won’t spend one until it can tell full and Fable resets apart/)
+  })
+
+  test("a press is named by its kind's button, and Codex's by Use one", () => {
+    assert.equal(pressName("fable"), "“Use Fable reset”")
+    assert.equal(pressName(""), "Use one")
+    assert.equal(pressName(null), "Use one")
+    assert.equal(pressName("unknown"), "Use one")
+  })
+
+  test("counts, with none said as none", () => {
+    assert.equal(countOf(1, "full"), "1 full reset")
+    assert.equal(countOf(2, "fable"), "2 Fable resets")
+    assert.equal(countOf(0, "fable"), "No Fable resets")
+    assert.equal(countOf(1, "unknown"), "1 unrecognised reset")
+  })
+})
+
+describe("the dialog's sentences", () => {
+  test("it spends one of the kind pressed, from the account named", () => {
+    assert.equal(spendsSentence("fable", 1, "a@example.com"), "This spends the only Fable reset that a@example.com holds, straight away.")
+    assert.equal(spendsSentence("full", 3, "a@example.com"), "This spends one of the 3 full resets that a@example.com holds, straight away.")
+  })
+
+  test("what else the account holds stays banked", () => {
+    assert.equal(othersSentence([{ kind: "full", count: 1 }]), "Its 1 full reset stays banked — this is not one of them.")
+    assert.equal(othersSentence([{ kind: "full", count: 2 }]), "Its 2 full resets stay banked — this is not one of them.")
+    assert.equal(
+      othersSentence([
+        { kind: "full", count: 1 },
+        { kind: "weekly", count: 1 },
+        { kind: "unknown", count: 2 },
+      ]),
+      "Its 1 full reset, 1 weekly reset and 2 unrecognised resets stay banked — this is not one of them.",
+    )
+  })
+
+  test("nothing at all when it holds no other kind", () => {
+    assert.equal(othersSentence([]), "")
+    assert.equal(othersSentence([{ kind: "full", count: 0 }]), "")
   })
 })

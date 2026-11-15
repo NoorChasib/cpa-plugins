@@ -48,9 +48,9 @@ const (
 // grants.
 //
 // A banked reset is not extra allowance. Spending one restores the account's
-// session and weekly windows, so it is a thing the account holds rather than a
-// thing it has used, and it belongs here beside the balances rather than among
-// the windows.
+// session and weekly windows, or for some Claude kinds less (see Kinds), so it
+// is a thing the account holds rather than a thing it has used, and it belongs
+// here beside the balances rather than among the windows.
 //
 // Nil for every provider that has no such concept, and nil for an account that
 // has none banked, so a reader may treat presence as "there is at least one to
@@ -74,6 +74,31 @@ type ResetCredits struct {
 	Hold string `json:"hold,omitempty"`
 	// HoldUntil is when a "cooldown" hold lifts, when the provider says.
 	HoldUntil *time.Time `json:"hold_until,omitempty"`
+	// Kinds breaks the count down by what spending one does, for a provider
+	// whose banked resets are not all alike. Claude's are not: a full reset
+	// clears the 5-hour and weekly limits, while a Fable reset only gives back
+	// to the weekly limit what Fable used, and spending the wrong one is the
+	// mistake this exists to prevent.
+	//
+	// One entry per kind the account holds, never two for the same kind, in
+	// ResetKindRank order, and the counts sum to AvailableCount. Nil for Codex,
+	// whose credits are all one sort. Nil too from a Quota Cache older than
+	// this field, which a reader must take as "the kinds were not read" and
+	// never as "every one is a full reset".
+	Kinds []ResetKindCredits `json:"kinds,omitempty"`
+}
+
+// ResetKindCredits is the part of an account's banked resets that are of one
+// kind. Its fields mean what ResetCredits' do, restricted to that kind: the
+// expiry is the soonest of this kind's, and the hold is why none of this kind
+// can be spent right now.
+type ResetKindCredits struct {
+	// Kind is one of the ResetKind values.
+	Kind           string     `json:"kind"`
+	AvailableCount int        `json:"available_count"`
+	SoonestExpiry  *time.Time `json:"soonest_expiry,omitempty"`
+	Hold           string     `json:"hold,omitempty"`
+	HoldUntil      *time.Time `json:"hold_until,omitempty"`
 }
 
 // The values ResetCredits.Hold takes. Readers must treat any other value as
@@ -84,6 +109,123 @@ const (
 	HoldPaused     = "paused"
 	HoldIneligible = "ineligible"
 )
+
+// The kinds of Claude reset grant, as Claude Code 2.1.322 names them.
+//
+// A grant is a full reset unless the provider says otherwise; the other kinds
+// each refill less. ResetKindUnknown is a grant this build cannot classify
+// with confidence: it is counted, so the account's total stays true, but it
+// is never something a reader may offer to spend, because a reset labelled
+// as the wrong kind is exactly the mix-up the kinds are there to prevent.
+const (
+	// ResetKindFull clears the 5-hour and the weekly limits.
+	ResetKindFull = "full"
+	// ResetKindFable gives back to the weekly limit what Fable used this week.
+	ResetKindFable = "fable"
+	// ResetKindWeekly clears the weekly limits and not the 5-hour one.
+	ResetKindWeekly = "weekly"
+	// ResetKindSession clears the 5-hour limit and not the weekly one.
+	ResetKindSession = "session"
+	// ResetKindUnknown is a grant this build cannot classify.
+	ResetKindUnknown = "unknown"
+)
+
+// ResetKindRank is where a kind sorts in ResetCredits.Kinds: full first, then
+// Fable, weekly, session, and anything unknown last. A kind outside the
+// vocabulary sorts with the unknown.
+func ResetKindRank(kind string) int {
+	switch kind {
+	case ResetKindFull:
+		return 0
+	case ResetKindFable:
+		return 1
+	case ResetKindWeekly:
+		return 2
+	case ResetKindSession:
+		return 3
+	}
+	return 4
+}
+
+// ClaudeResetKind classifies one grant object of the usage response's
+// cedar_ember block by what spending it does, by Claude Code 2.1.322's rule:
+//
+//  1. gives_back_weekly true is a Fable reset, whatever else the grant says;
+//  2. otherwise the grant's own type, when it is "session", "weekly" or "full";
+//  3. otherwise what clears names, counting only the usage windows Claude Code
+//     knows: the 5-hour window alone is a session reset, other windows
+//     without the 5-hour one a weekly reset, and both, or none at all, a full
+//     reset — the grants that predate kinds named none and cleared everything.
+//
+// Where Claude Code falls back silently this does not. A gives_back_weekly,
+// type or clears that is present and malformed, or a type this build does not
+// know, is ResetKindUnknown rather than a guess: a Fable reset misread as a
+// full one is the mistake both the dashboard and the spend must not make, and
+// both classify through this one function so they cannot disagree.
+//
+// The grant is the decoded JSON object; numbers may be json.Number or
+// float64, since nothing here reads one.
+func ClaudeResetKind(grant map[string]any) string {
+	switch v := grant["gives_back_weekly"].(type) {
+	case nil:
+	case bool:
+		if v {
+			return ResetKindFable
+		}
+	default:
+		return ResetKindUnknown
+	}
+	switch v := grant["type"].(type) {
+	case nil:
+	case string:
+		switch v {
+		case ResetKindSession, ResetKindWeekly, ResetKindFull:
+			return v
+		}
+		return ResetKindUnknown
+	default:
+		return ResetKindUnknown
+	}
+	var clears []any
+	switch v := grant["clears"].(type) {
+	case nil:
+	case []any:
+		clears = v
+	default:
+		return ResetKindUnknown
+	}
+	session, other := false, false
+	for _, item := range clears {
+		window, _ := item.(string)
+		switch {
+		case window == "five_hour":
+			session = true
+		case claudeGrantWindows[window]:
+			other = true
+		}
+	}
+	switch {
+	case session && !other:
+		return ResetKindSession
+	case other && !session:
+		return ResetKindWeekly
+	}
+	return ResetKindFull
+}
+
+// claudeGrantWindows are the usage windows Claude Code 2.1.322 keeps from a
+// grant's clears; it drops any other name before classifying, and so does
+// ClaudeResetKind.
+var claudeGrantWindows = map[string]bool{
+	"five_hour":                  true,
+	"seven_day":                  true,
+	"seven_day_overage_included": true,
+	"seven_day_opus":             true,
+	"seven_day_sonnet":           true,
+	"seven_day_cowork":           true,
+	"seven_day_omelette":         true,
+	"seven_day_oauth_apps":       true,
+}
 
 type Window struct {
 	UsedPercent     *float64   `json:"used_percent,omitempty"`

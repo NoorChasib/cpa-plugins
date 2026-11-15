@@ -18,7 +18,7 @@ func TestRedeemSpendsOneCreditAndReportsTheOutcome(t *testing.T) {
 			`{"id":"credit-b","status":"available","expires_at":"2026-11-01T00:00:00Z"}]}`,
 		codexConsumeURL: `{"code":"reset","windows_reset":2,"credit":{"id":"credit-a","status":"redeemed"}}`,
 	})
-	result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
+	result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestRedeemMakesNoRequestWhenNothingIsAvailable(t *testing.T) {
 		"no credits key": `{"available_count":3}`,
 	} {
 		host := hostWith(map[string]string{codexCreditsURL: inventory})
-		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
+		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json", "")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -72,7 +72,7 @@ func TestRedeemTreatsAnyAcceptedPostAsSpent(t *testing.T) {
 		"empty object":    `{}`,
 	} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: body})
-		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
+		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json", "")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -93,7 +93,7 @@ func TestRedeemMapsProviderCodes(t *testing.T) {
 			codexCreditsURL: oneAvailable,
 			codexConsumeURL: `{"code":"` + code + `"}`,
 		})
-		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json")
+		result, err := New(host).Redeem(context.Background(), "codex", "codex-noor@example.com.json", "")
 		if err != nil {
 			t.Fatalf("%s: %v", code, err)
 		}
@@ -108,7 +108,7 @@ func TestRedeemMapsProviderCodes(t *testing.T) {
 func TestRedeemRefusesEveryOtherProvider(t *testing.T) {
 	for _, provider := range []string{"xai", "gemini", "openrouter", ""} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
-		if _, err := New(host).Redeem(context.Background(), provider, "some-credential"); !errors.Is(err, ErrUnsupportedProvider) {
+		if _, err := New(host).Redeem(context.Background(), provider, "some-credential", kindFor(provider)); !errors.Is(err, ErrUnsupportedProvider) {
 			t.Fatalf("provider %q: err = %v, want ErrUnsupportedProvider", provider, err)
 		}
 		if len(host.requests) != 0 {
@@ -122,7 +122,7 @@ func TestRedeemRefusesEveryOtherProvider(t *testing.T) {
 func TestRedeemStopsAtARefusedInventory(t *testing.T) {
 	host := hostWith(map[string]string{codexConsumeURL: `{"code":"reset"}`})
 	host.status[codexCreditsURL] = 401
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRefused) {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrRefused) {
 		t.Fatalf("err = %v, want ErrRefused", err)
 	}
 	if host.posted() {
@@ -133,7 +133,7 @@ func TestRedeemStopsAtARefusedInventory(t *testing.T) {
 func TestRedeemReportsAnUnreachableProvider(t *testing.T) {
 	host := hostWith(map[string]string{})
 	host.errs[codexCreditsURL] = errors.New("dial failed")
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrUnavailable) {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }
@@ -165,7 +165,7 @@ func TestRedeemSortsAFailedConsumeByWhatItProves(t *testing.T) {
 	} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable})
 		host.queue(codexConsumeURL, reply{status: want.status, err: want.err})
-		if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, want.want) {
+		if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, want.want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, want.want)
 		}
 	}
@@ -184,7 +184,7 @@ func TestRedeemRefusesACredentialItCannotAuthenticate(t *testing.T) {
 	} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 		host.auth = doc.auth
-		if _, err := New(host).Redeem(context.Background(), "codex", "c"); !errors.Is(err, doc.want) {
+		if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, doc.want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, doc.want)
 		}
 		if len(host.requests) != 0 {
@@ -200,7 +200,7 @@ func TestRedeemResolvesTheAccountFromTheIDToken(t *testing.T) {
 	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-from-token"}}`))
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	host.auth = `{"tokens":{"access_token":"tok","id_token":"header.` + claims + `.sig"}}`
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, request := range host.requests {
@@ -214,7 +214,7 @@ func TestRedeemResolvesTheAccountFromTheIDToken(t *testing.T) {
 // rejects it — the same finding quota-cache made on the usage endpoint.
 func TestRedeemRequestsCarryTheProviderContract(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(host.requests) != 2 {
@@ -247,7 +247,7 @@ func TestRedeemBoundsEveryRequest(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	if _, err := New(host).Redeem(ctx, "codex", "c"); err != nil {
+	if _, err := New(host).Redeem(ctx, "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	if read := host.budgets[0]; read <= 0 || read > readTimeout {
@@ -264,7 +264,7 @@ func TestRedeemSendsNoSpendItCannotWaitFor(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	ctx, cancel := context.WithTimeout(context.Background(), spendTimeout-time.Second)
 	defer cancel()
-	if _, err := New(host).Redeem(ctx, "codex", "c"); !errors.Is(err, ErrUnavailable) {
+	if _, err := New(host).Redeem(ctx, "codex", "c", ""); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 	if host.posted() {
@@ -295,7 +295,7 @@ func TestRedeemIgnoresMalformedCreditIDs(t *testing.T) {
 			`{"id":"credit-good","status":"available","expires_at":"2026-12-01T00:00:00Z"}]}`,
 		codexConsumeURL: `{"code":"reset"}`,
 	})
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := host.postBody(t)["credit_id"]; got != "credit-good" {
@@ -312,7 +312,7 @@ func TestRedeemPrefersADatedCreditOverAnUndatedOne(t *testing.T) {
 			`{"id":"dated","status":"available","expires_at":"2026-12-01T00:00:00Z"}]}`,
 		codexConsumeURL: `{"code":"reset"}`,
 	})
-	if _, err := New(host).Redeem(context.Background(), "codex", "c"); err != nil {
+	if _, err := New(host).Redeem(context.Background(), "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := host.postBody(t)["credit_id"]; got != "dated" {
@@ -335,13 +335,13 @@ func TestRedeemRefusesASecondConcurrentAttempt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		close(started)
-		_, err := redeemer.Redeem(context.Background(), "codex", "same-credential")
+		_, err := redeemer.Redeem(context.Background(), "codex", "same-credential", "")
 		done <- err
 	}()
 	<-started
 	host.waitUntilEntered()
 
-	if _, err := redeemer.Redeem(context.Background(), "codex", "same-credential"); !errors.Is(err, ErrInFlight) {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "same-credential", ""); !errors.Is(err, ErrInFlight) {
 		t.Fatalf("second attempt err = %v, want ErrInFlight", err)
 	}
 	close(release)
@@ -349,7 +349,7 @@ func TestRedeemRefusesASecondConcurrentAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	// And the credential is spendable again once the first attempt finishes.
-	if _, err := redeemer.Redeem(context.Background(), "codex", "same-credential"); err != nil {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "same-credential", ""); err != nil {
 		t.Fatalf("the credential stayed locked after the attempt finished: %v", err)
 	}
 }
@@ -364,12 +364,12 @@ func TestRedeemLocksOneCredentialNotAllOfThem(t *testing.T) {
 		codexConsumeURL: `{"code":"reset"}`,
 	}), gate: release}
 	redeemer := New(host)
-	go func() { _, _ = redeemer.Redeem(context.Background(), "codex", "credential-one") }()
+	go func() { _, _ = redeemer.Redeem(context.Background(), "codex", "credential-one", "") }()
 	host.waitUntilEntered()
 
 	// The second credential proceeds; it blocks on the gate rather than on the
 	// first credential's claim, so reaching the host at all is the assertion.
-	go func() { _, _ = redeemer.Redeem(context.Background(), "codex", "credential-two") }()
+	go func() { _, _ = redeemer.Redeem(context.Background(), "codex", "credential-two", "") }()
 	host.waitForRequests(2)
 }
 
@@ -381,7 +381,7 @@ func TestRedeemerWithoutAHostIsInert(t *testing.T) {
 		t.Fatal("a redeemer with no host reports itself enabled")
 	}
 	for _, provider := range []string{"codex", "claude"} {
-		if _, err := redeemer.Redeem(context.Background(), provider, "c"); !errors.Is(err, ErrUnavailable) {
+		if _, err := redeemer.Redeem(context.Background(), provider, "c", kindFor(provider)); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("%s: err = %v", provider, err)
 		}
 	}

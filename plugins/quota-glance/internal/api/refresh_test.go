@@ -50,10 +50,13 @@ func refreshingAPI(t *testing.T) (*API, *fakeRedeemer, *fakeRefresher) {
 // A press that spent a reset asks Quota Cache to poll that account, once,
 // naming its provider and auth index, and says so in the answer.
 func TestASpendAsksQuotaCacheToRefreshTheAccount(t *testing.T) {
-	for _, one := range []struct{ id, provider string }{{codexID, "codex"}, {claudeID, "claude"}} {
+	for _, one := range []struct {
+		id, provider string
+		kind         any
+	}{{codexID, "codex", nil}, {claudeID, "claude", "full"}} {
 		a, redeemer, refresher := refreshingAPI(t)
 		redeemer.result = redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 1, MayHaveSpent: true}
-		res := post(a, redeemPath, nil, map[string]any{"credentialId": one.id, "confirmed": true})
+		res := post(a, redeemPath, nil, map[string]any{"credentialId": one.id, "kind": one.kind, "confirmed": true})
 		body := decodeBody(t, res)
 		if res.StatusCode != http.StatusOK || body["refreshRequested"] != true {
 			t.Fatalf("%s: %d %s, want 200 with refreshRequested true", one.provider, res.StatusCode, res.Body)
@@ -125,7 +128,7 @@ func TestAnUnknownOutcomeAsksForARefresh(t *testing.T) {
 	} {
 		a, redeemer, refresher := refreshingAPI(t)
 		redeemer.result, redeemer.err = redeem.Result{MayHaveSpent: true}, err
-		res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true})
+		res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true})
 		body := decodeBody(t, res)
 		if res.StatusCode != http.StatusBadGateway || body["refreshRequested"] != true || body["refreshRequestedAtEpoch"] != float64(refreshedAt.Unix()) {
 			t.Fatalf("%s: %d %s, want 502 with refreshRequested true, and when", name, res.StatusCode, res.Body)
@@ -191,7 +194,7 @@ func TestACopyOfAPressAsksForNoSecondRefresh(t *testing.T) {
 	first := post(a, redeemPath, nil, body)
 	// Another press between the two copies makes a request of its own, so
 	// a copy that asked again would name a later instant.
-	post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true, "pressId": pressID(2)})
+	post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true, "pressId": pressID(2)})
 	second := post(a, redeemPath, nil, body)
 	if string(second.Body) != string(first.Body) || second.Headers.Get(replayedHeader) != "1" {
 		t.Fatalf("first %s, second %s", first.Body, second.Body)

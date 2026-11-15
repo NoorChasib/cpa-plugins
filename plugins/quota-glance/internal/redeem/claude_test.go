@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 )
 
 // A fictional organization. The profile sends it upper-cased, so every test
@@ -42,7 +44,7 @@ func claudeHost(status, claim string) *fakeHost {
 
 func TestClaudeRedeemClaimsTheRecommendedGrant(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset","resets_left":1,"cleared":["five_hour","seven_day","seven_day","not_a_window"]}`)
-	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "claude-northwind@example.com.json")
+	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "claude-northwind@example.com.json", "full")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func TestClaudeRedeemClaimsTheRecommendedGrant(t *testing.T) {
 // the OAuth beta header; a request without either is throttled or refused.
 func TestClaudeRequestsCarryTheProviderContract(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
-	if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c"); err != nil {
+	if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full"); err != nil {
 		t.Fatal(err)
 	}
 	for _, request := range host.requests {
@@ -137,7 +139,7 @@ func TestClaudeChoosesTheGrantToClaim(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: fixture did not parse", name)
 		}
-		got, blocked := chooseGrant(status, newClock().Now())
+		got, blocked := chooseGrant(status, qc.ResetKindFull, newClock().Now())
 		if blocked != "" || got.id != one.want {
 			t.Fatalf("%s: chose %q (blocked %q), want %q", name, got.id, blocked, one.want)
 		}
@@ -206,7 +208,7 @@ func TestClaudeSendsNothingWhenNoGrantCanBeSpent(t *testing.T) {
 		},
 	} {
 		host := claudeHost(statusWith(one.block), `{"result":"reset"}`)
-		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c")
+		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -228,7 +230,7 @@ func TestClaudeClaimsWhenTheStatusAllowsIt(t *testing.T) {
 			`{"id":"grant-a","resets_total":1,"resets_left":1,"usable_now":true,"use_requires_limit":false}]}`,
 	} {
 		host := claudeHost(statusWith(block), `{"result":"reset"}`)
-		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c"); err != nil {
+		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full"); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if !host.posted() {
@@ -262,7 +264,7 @@ func TestClaudeRejectsAMalformedStatusWhole(t *testing.T) {
 		"reason not a string":  `{"eligible":true,"ineligible_reason":7,"at_limit":true,"grants":[` + spendableGrant + `]}`,
 	} {
 		host := claudeHost(statusWith(block), `{"result":"reset"}`)
-		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrRefused) {
+		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrRefused) {
 			t.Fatalf("%s: err = %v, want ErrRefused", name, err)
 		}
 		if host.posted() {
@@ -276,7 +278,7 @@ func TestClaudeRejectsAMalformedStatusWhole(t *testing.T) {
 func TestClaudeAcceptsAGrantWithoutATotal(t *testing.T) {
 	host := claudeHost(statusWith(`{"eligible":true,"at_limit":true,"grants":[`+
 		`{"id":"grant-a","resets_left":1,"usable_now":true}]}`), `{"result":"reset"}`)
-	if result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c"); err != nil || result.Outcome != OutcomeReset {
+	if result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full"); err != nil || result.Outcome != OutcomeReset {
 		t.Fatalf("result = %+v, err = %v", result, err)
 	}
 }
@@ -289,7 +291,7 @@ func TestClaudeCountsWhatTheAccountStillHolds(t *testing.T) {
 		`{"id":"grant-lapsed","resets_total":4,"resets_left":4,"ends_at":"2026-10-01T00:00:00Z","usable_now":true},`+
 		`{"id":"grant-later","resets_total":3,"resets_left":3,"starts_at":"2026-11-01T00:00:00Z","usable_now":true}]}`),
 		`{"result":"reset"}`)
-	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c")
+	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full")
 	// Two on the claimed grant, less the one spent, and three not yet started.
 	if err != nil || result.RemainingCount != 4 {
 		t.Fatalf("result = %+v, err = %v; want 4 left", result, err)
@@ -329,7 +331,7 @@ func TestClaudeStopsAtAFailedRead(t *testing.T) {
 	} {
 		host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 		one.setup(host)
-		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c"); !errors.Is(err, one.want) {
+		if _, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, one.want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, one.want)
 		}
 		if host.posted() {
@@ -369,7 +371,7 @@ func TestClaudeReadsEveryClaimAnswer(t *testing.T) {
 	} {
 		host := claudeHost(spendableStatus(), "")
 		host.queue(claudeClaimURL, one.reply)
-		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c")
+		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "claude", "c", "full")
 		if one.err != nil {
 			if !errors.Is(err, one.err) {
 				t.Fatalf("%s: err = %v, want %v", name, err, one.err)
@@ -413,7 +415,7 @@ func TestClaudeBoundsEveryRequest(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	if _, err := redeemerOn(host, newClock()).Redeem(ctx, "claude", "c"); err != nil {
+	if _, err := redeemerOn(host, newClock()).Redeem(ctx, "claude", "c", "full"); err != nil {
 		t.Fatal(err)
 	}
 	for i, budget := range host.budgets {

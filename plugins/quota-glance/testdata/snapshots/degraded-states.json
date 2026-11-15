@@ -195,7 +195,14 @@
         "observed_at": "2026-09-10T03:55:00Z",
         "reset_credits": {
           "available_count": 1,
-          "soonest_expiry": "2026-09-30T00:00:00Z"
+          "soonest_expiry": "2026-09-30T00:00:00Z",
+          "kinds": [
+            {
+              "kind": "fable",
+              "available_count": 1,
+              "soonest_expiry": "2026-09-30T00:00:00Z"
+            }
+          ]
         }
       }
     },
@@ -232,7 +239,23 @@
           "available_count": 2,
           "soonest_expiry": "2026-09-12T00:00:00Z",
           "hold": "cooldown",
-          "hold_until": "2026-09-10T06:00:00Z"
+          "hold_until": "2026-09-10T06:00:00Z",
+          "kinds": [
+            {
+              "kind": "full",
+              "available_count": 1,
+              "soonest_expiry": "2026-09-12T00:00:00Z",
+              "hold": "cooldown",
+              "hold_until": "2026-09-10T06:00:00Z"
+            },
+            {
+              "kind": "unknown",
+              "available_count": 1,
+              "soonest_expiry": "2026-09-20T00:00:00Z",
+              "hold": "cooldown",
+              "hold_until": "2026-09-10T06:00:00Z"
+            }
+          ]
         }
       }
     },

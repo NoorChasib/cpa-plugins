@@ -166,7 +166,22 @@ const HOUR = 3600
 const DAY = 86400
 
 /** A banked-reset inventory, with its instants relative to the document's build. */
-type Resets = { count: number; expiresIn: number | null; redeemable: boolean; hold: string; holdIn: number | null }
+type Resets = {
+  count: number
+  expiresIn: number | null
+  redeemable: boolean
+  hold: string
+  holdIn: number | null
+  /**
+   * A Claude account's resets by kind, each as the plugin would publish it.
+   * With these the top level is their sum and never redeemable, as on any
+   * Claude credential: a Claude press must name a kind.
+   */
+  kinds?: KindResets[]
+}
+
+/** One kind of a Claude account's resets. */
+type KindResets = { kind: string } & Omit<Resets, "kinds">
 
 /** What one fixture credential is given when the golden documents do not say. */
 type Extras = { renewalIn?: number; credits?: Doc; resets?: Resets }
@@ -179,10 +194,13 @@ type Extras = { renewalIn?: number; credits?: Doc; resets?: Resets }
  * Chosen to put every shape on screen at once. In the ordinary fixture: a Codex
  * account with both a renewal and a balance, a Grok account with prepaid
  * credit, and three Claude accounts holding resets — one at a limit and
- * spendable, one not at a limit, one cooling down. In the degraded fixture: a
- * Claude account CPA has parked in cooldown that still gets its button (the
- * case this dashboard used to hide), a disabled one that shows its count and
- * no button, an unlimited Codex balance and a renewal date already passed.
+ * spendable, one not at a limit, one cooling down — of which one holds both a
+ * full and a Fable reset, so the two groups and the dialog's "stays banked"
+ * line can be reviewed together, and another holds a kind this bundle does
+ * not recognise. In the degraded fixture: a Claude account CPA has parked in
+ * cooldown that still gets its button (the case this dashboard used to hide),
+ * a disabled one that shows its count and no button, an unlimited Codex
+ * balance and a renewal date already passed.
  *
  * Keyed by fixture id, and each matters only where the fixture itself has
  * nothing to say: an absent field, or a null on a credential picked here. Once
@@ -198,7 +216,31 @@ const EXTRAS: Record<string, Extras> = {
     credits: { display: "$12.40", unlimited: false, amount: "12.40", unit: "usd" },
   },
   "claude-charlie@example.com.json": {
-    resets: { count: 1, expiresIn: 5 * DAY + 2 * HOUR, redeemable: true, hold: "", holdIn: null },
+    resets: {
+      count: 2,
+      expiresIn: 5 * DAY + 2 * HOUR,
+      redeemable: true,
+      hold: "",
+      holdIn: null,
+      kinds: [
+        { kind: "full", count: 1, expiresIn: 18 * DAY, redeemable: true, hold: "", holdIn: null },
+        { kind: "fable", count: 1, expiresIn: 5 * DAY + 2 * HOUR, redeemable: true, hold: "", holdIn: null },
+      ],
+    },
+  },
+  "claude-noor@example.com.json": {
+    resets: {
+      count: 2,
+      expiresIn: 9 * DAY,
+      redeemable: true,
+      hold: "",
+      holdIn: null,
+      kinds: [
+        { kind: "fable", count: 1, expiresIn: 21 * DAY, redeemable: true, hold: "notLimited", holdIn: null },
+        // A kind Quota Cache could not classify: counted, never offered.
+        { kind: "unknown", count: 1, expiresIn: 9 * DAY, redeemable: false, hold: "", holdIn: null },
+      ],
+    },
   },
   "claude-sierra@example.com.json": {
     resets: { count: 1, expiresIn: 12 * DAY + 5 * HOUR, redeemable: true, hold: "notLimited", holdIn: null },
@@ -223,13 +265,39 @@ const EXTRAS: Record<string, Extras> = {
 }
 
 function resetsAt(built: number, resets: Resets): Doc {
+  const one = (part: Omit<Resets, "kinds">): Doc => ({
+    availableCount: part.count,
+    expiresAtEpoch: part.expiresIn === null ? null : built + part.expiresIn,
+    expiresInSeconds: part.expiresIn,
+    redeemable: part.redeemable,
+    hold: part.hold,
+    holdUntilEpoch: part.holdIn === null ? null : built + part.holdIn,
+  })
+  if (resets.kinds === undefined) return one(resets)
   return {
-    availableCount: resets.count,
-    expiresAtEpoch: resets.expiresIn === null ? null : built + resets.expiresIn,
-    expiresInSeconds: resets.expiresIn,
-    redeemable: resets.redeemable,
-    hold: resets.hold,
-    holdUntilEpoch: resets.holdIn === null ? null : built + resets.holdIn,
+    ...one(resets),
+    redeemable: false,
+    kinds: resets.kinds.map(({ kind, ...part }) => ({ kind, ...one(part) })),
+  }
+}
+
+/**
+ * A credential's resets as the plugin publishes them now, for a golden
+ * document or an extra built before there were kinds. Codex gets the empty
+ * list it always carries. Claude gets one full entry carrying the whole
+ * inventory — what Quota Cache makes of grants that predate kinds — and a top
+ * level never redeemable. Left alone when the document already says something
+ * about kinds, even an empty list, which on Claude is a Quota Cache older than
+ * them and a state worth seeing.
+ */
+function withFullKind(credential: Doc, credits: Doc): Doc {
+  if (credits.kinds !== undefined) return credits
+  if (credential.provider !== "claude") return { ...credits, kinds: [] }
+  const { availableCount, expiresAtEpoch, expiresInSeconds, redeemable, hold, holdUntilEpoch } = credits
+  return {
+    ...credits,
+    redeemable: false,
+    kinds: [{ kind: "full", availableCount, expiresAtEpoch, expiresInSeconds, redeemable, hold, holdUntilEpoch }],
   }
 }
 
@@ -241,9 +309,55 @@ function withAccountExtras(doc: Doc): Doc {
     const next: Doc = { ...credential }
     if (next.renewalAtEpoch == null) next.renewalAtEpoch = extra.renewalIn === undefined ? null : built + extra.renewalIn
     if (next.credits == null) next.credits = extra.credits ?? null
-    if (next.resetCredits == null) next.resetCredits = extra.resets ? resetsAt(built, extra.resets) : null
-    else next.resetCredits = { hold: "", holdUntilEpoch: null, ...(next.resetCredits as Doc) }
+    if (next.resetCredits == null) next.resetCredits = extra.resets ? withFullKind(next, resetsAt(built, extra.resets)) : null
+    else next.resetCredits = withFullKind(next, { hold: "", holdUntilEpoch: null, ...(next.resetCredits as Doc) })
     return next
+  })
+  return { ...doc, credentials }
+}
+
+/**
+ * Every Claude account's resets with no kinds at all: the plugin reading a
+ * Quota Cache older than the kinds. Each shows its count and no button.
+ */
+function withKindsUnreported(doc: Doc): Doc {
+  const credentials = (doc.credentials as Doc[]).map((credential) =>
+    credential.provider === "claude" && credential.resetCredits
+      ? { ...credential, resetCredits: { ...(credential.resetCredits as Doc), redeemable: false, kinds: [] } }
+      : credential,
+  )
+  return { ...doc, credentials }
+}
+
+/**
+ * One Claude account holding every kind there is, so every group's mark,
+ * heading, effect and button can be read side by side; and a second holding a
+ * full reset and two Fable resets, for the dialog's plural lines.
+ */
+function withEveryKind(doc: Doc): Doc {
+  const built = doc.generatedAtEpoch as number
+  const kind = (name: string, count: number, expiresIn: number, hold = ""): KindResets => ({
+    kind: name,
+    count,
+    expiresIn,
+    redeemable: name !== "unknown",
+    hold,
+    holdIn: null,
+  })
+  const inventories: KindResets[][] = [
+    [kind("full", 1, 20 * DAY), kind("fable", 1, 6 * DAY), kind("weekly", 1, 11 * DAY), kind("session", 2, 3 * DAY), kind("unknown", 1, 14 * DAY)],
+    [kind("full", 1, 25 * DAY, "notLimited"), kind("fable", 2, 4 * DAY)],
+  ]
+  let next = 0
+  const credentials = (doc.credentials as Doc[]).map((credential) => {
+    if (credential.provider !== "claude") return credential
+    const kinds = inventories[next++]
+    if (!kinds) return credential
+    const count = kinds.reduce((sum, one) => sum + one.count, 0)
+    return {
+      ...credential,
+      resetCredits: resetsAt(built, { count, expiresIn: 3 * DAY, redeemable: false, hold: "", holdIn: null, kinds }),
+    }
   })
   return { ...doc, credentials }
 }
@@ -251,7 +365,7 @@ function withAccountExtras(doc: Doc): Doc {
 /**
  * Every Claude account holding a reset, each under a different hold, so all
  * four hints can be read side by side. Accounts beyond the fourth are left
- * spendable.
+ * spendable. The kinds alternate, full and Fable, so each group shows holds.
  */
 function withEveryHold(doc: Doc): Doc {
   const built = doc.generatedAtEpoch as number
@@ -264,10 +378,12 @@ function withEveryHold(doc: Doc): Doc {
   let next = 0
   const credentials = (doc.credentials as Doc[]).map((credential) => {
     if (credential.provider !== "claude") return credential
-    const [hold, holdIn] = holds[next++] ?? ["", null]
+    const at = next++
+    const [hold, holdIn] = holds[at] ?? ["", null]
+    const part = { count: 1, expiresIn: 14 * DAY, redeemable: true, hold, holdIn }
     return {
       ...credential,
-      resetCredits: resetsAt(built, { count: 1, expiresIn: 14 * DAY, redeemable: true, hold, holdIn }),
+      resetCredits: resetsAt(built, { ...part, kinds: [{ kind: at % 2 === 0 ? "full" : "fable", ...part }] }),
     }
   })
   return { ...doc, credentials }
@@ -956,6 +1072,11 @@ function scenarios(): Record<string, () => Outcome> {
     // Every hint a Claude reset can carry beside its button, at once.
     holds: () => withEveryHold(golden()),
 
+    // Every kind of Claude reset, each in its group, at once.
+    kinds: () => withEveryKind(golden()),
+    // A Quota Cache older than the kinds: counts, a note, and no Claude button.
+    "kinds-unreported": () => withKindsUnreported(golden()),
+
     // Every Claude account has burned its weekly: the session card's face
     // when every reporting account is held out of its mean.
     "weekly-spent": () => withEveryWeeklySpent(golden()),
@@ -1179,11 +1300,20 @@ function crossSite(headers: IncomingMessage["headers"]): boolean {
 const PRESS_ID = /^[A-Za-z0-9_-]{16,64}$/
 const MAX_PRESS_BYTES = 4096
 
-type Press = { credentialId: string; pressId: string | null }
+/** The kinds of Claude reset a press may name. */
+export const PRESS_KINDS: ReadonlySet<string> = new Set(["full", "fable", "weekly", "session"])
+
+/** A press. `kind` is "" when it named none. */
+type Press = { credentialId: string; pressId: string | null; kind: string }
 
 /**
  * A press, from the POST body or the decoded spend header — the same object
  * either way — or the error code the plugin answers with when it is not one.
+ *
+ * A kind is optional; when present it must be one of the four a press may
+ * name, or the press is malformed. Whether the credential needs one, or may
+ * have one, is the document's question, asked once the press is past the
+ * ledger.
  */
 function parsePress(raw: string, pressRequired: boolean): Press | string {
   let body: unknown
@@ -1193,15 +1323,17 @@ function parsePress(raw: string, pressRequired: boolean): Press | string {
     return "invalid_request"
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) return "invalid_request"
-  const { credentialId, confirmed, pressId } = body as Record<string, unknown>
+  const { credentialId, confirmed, pressId, kind } = body as Record<string, unknown>
   if (credentialId !== undefined && typeof credentialId !== "string") return "invalid_request"
   if (confirmed !== undefined && typeof confirmed !== "boolean") return "invalid_request"
+  if (kind !== undefined && kind !== null && (typeof kind !== "string" || !PRESS_KINDS.has(kind))) return "invalid_request"
   if (confirmed !== true) return "confirmation_required"
+  const named = typeof kind === "string" ? kind : ""
   if (pressId === undefined || pressId === null) {
-    return pressRequired ? "invalid_request" : { credentialId: credentialId ?? "", pressId: null }
+    return pressRequired ? "invalid_request" : { credentialId: credentialId ?? "", pressId: null, kind: named }
   }
   if (typeof pressId !== "string" || !PRESS_ID.test(pressId)) return "invalid_request"
-  return { credentialId: credentialId ?? "", pressId }
+  return { credentialId: credentialId ?? "", pressId, kind: named }
 }
 
 /**
@@ -1239,13 +1371,18 @@ function pressFromHeader(value: string | string[] | undefined): Press | string {
  * do: yes after each that spent or may have, with the instant it was asked,
  * no after the rest, and no after `refresh-failed`, a reset whose request
  * could not be written or that no running Quota Cache would read.
+ *
+ * Every outcome names the kind it spent, as the plugin's do: the press's own
+ * on Claude, null on Codex. `other-kind-unresolved` names an earlier press of
+ * the other kind of the two a Claude account most often holds.
  */
-function pressReply(ending: string, provider: string): Reply {
+function pressReply(ending: string, provider: string, kind: string): Reply {
   const refresh = (refreshRequested: boolean) =>
     refreshRequested ? { refreshRequested, refreshRequestedAtEpoch: nowSeconds() } : { refreshRequested }
   const outcome = (name: string, windowsReset: number, remainingCount: number, cooldown = "", refreshRequested = false) =>
     pluginJSON(200, {
       provider,
+      kind: kind === "" ? null : kind,
       outcome: name,
       windowsReset,
       remainingCount,
@@ -1305,6 +1442,20 @@ function pressReply(ending: string, provider: string): Reply {
       return failure(409, "already_in_flight")
     case "not-redeemable":
       return failure(409, "not_redeemable")
+    // The plugin's answers about kinds, each before anything was sent. The
+    // first two also come of a press that names no kind on Claude, or one on
+    // Codex (see kindCheck); these endings put them on any press.
+    case "kind-required":
+      return failure(400, "kind_required")
+    case "invalid-kind":
+      return failure(400, "invalid_kind")
+    // An earlier press of the other kind on this account has an unknown
+    // outcome, and its window closes ten minutes on.
+    case "other-kind-unresolved":
+      return failure(409, "other_kind_unresolved", {
+        pendingKind: kind === "fable" ? "full" : "fable",
+        retryUntilEpoch: nowSeconds() + 600,
+      })
     default:
       return outcome("reset", 2, 1, "cleared", true)
   }
@@ -1333,6 +1484,9 @@ const ENDINGS = [
   "unusable",
   "in-flight",
   "not-redeemable",
+  "kind-required",
+  "invalid-kind",
+  "other-kind-unresolved",
   "switched-off",
   // The transport, after the plugin answered.
   "gateway",
@@ -1345,6 +1499,18 @@ const ENDINGS = [
 
 /** How long the press ledger remembers a finished press, as the plugin's does. */
 const LEDGER_TTL_MS = 10 * 60 * 1000
+
+/**
+ * The plugin's document check on the kind, or null when the press passes it:
+ * a Claude press must name a kind, and a Codex press must not. The fixture
+ * knows a credential's provider by its id, as press() does; the plugin reads
+ * it from the document.
+ */
+function kindCheck(provider: string, kind: string): Reply | null {
+  if (provider === "claude" && kind === "") return pluginJSON(400, { error: "kind_required", refreshRequested: false })
+  if (provider !== "claude" && kind !== "") return pluginJSON(409, { error: "not_redeemable", refreshRequested: false })
+  return null
+}
 
 export interface FixtureOptions {
   /**
@@ -1420,7 +1586,10 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
       // The press ledger: each press id's answer, so a second copy of a press
       // is answered with the first copy's bytes and X-Quota-Glance-Replayed,
       // and spends nothing — as internal/api/ledger.go does.
-      const ledger = new Map<string, { credentialId: string; reply: Promise<Reply>; finishedAt: number | null }>()
+      const ledger = new Map<
+        string,
+        { credentialId: string; kind: string; reply: Promise<Reply>; finishedAt: number | null }
+      >()
 
       /**
        * Answers a press that got past every gate. Spends nothing: replies with
@@ -1428,7 +1597,7 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
        * outcome line and every failure message can be reviewed without a
        * Codex or Claude account.
        */
-      const press = (res: ServerResponse, { credentialId, pressId }: Press, ending: string): void => {
+      const press = (res: ServerResponse, { credentialId, pressId, kind }: Press, ending: string): void => {
         // The plugin names the provider it spoke to, and the outcome line is
         // worded from it, so the answer has to match the credential pressed.
         const provider = credentialId.startsWith("claude-") ? "claude" : "codex"
@@ -1440,14 +1609,17 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
         if (pressId !== null) {
           const held = ledger.get(pressId)
           if (held) {
-            // The same press id naming another credential is a broken client
-            // or a forgery, and either way not a spend.
-            if (held.credentialId !== credentialId) return json(res, 400, { error: "invalid_request" })
+            // The same press id naming another credential, or another kind,
+            // is a broken client or a forgery, and either way not a spend.
+            if (held.credentialId !== credentialId || held.kind !== kind) {
+              return json(res, 400, { error: "invalid_request" })
+            }
             void held.reply.then((reply) => send(res, reply, { "X-Quota-Glance-Replayed": "1" }))
             return
           }
           const entry = {
             credentialId,
+            kind,
             reply: new Promise<Reply>((resolve) => (settle = resolve)),
             finishedAt: null as number | null,
           }
@@ -1459,8 +1631,15 @@ export function goldenFixtureRoute(options: FixtureOptions = {}): Plugin {
           }
         }
         if (!ENDINGS.includes(ending)) warn(`unknown ending ${ending}, answering reset; try one of: ${ENDINGS.join(", ")}`)
+        // Refused by the document check before the redeemer runs, and
+        // recorded against the press id like any other answer.
+        const refused = kindCheck(provider, kind)
+        if (refused !== null) {
+          settle(refused)
+          return send(res, refused)
+        }
         setTimeout(() => {
-          const reply = pressReply(ending, provider)
+          const reply = pressReply(ending, provider, kind)
           settle(reply)
           if (ending === "dropped") {
             // The connection drops with no answer at all, which the page has

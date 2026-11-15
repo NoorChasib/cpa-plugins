@@ -37,7 +37,7 @@ func pressID(n int) string { return fmt.Sprintf("press-%016d", n) }
 // ledgerSpend stands in for spend: the first copy of a press does the work and
 // records an answer, every later copy is handed it.
 func ledgerSpend(l *ledger, id, credential string, calls *atomic.Int32, hold time.Duration) protocol.ManagementResponse {
-	entry, fresh, err := l.begin(id, credential)
+	entry, fresh, err := l.begin(id, credential, "")
 	if err != nil {
 		return protocol.ManagementResponse{StatusCode: http.StatusConflict}
 	}
@@ -93,7 +93,7 @@ func TestLedgerBindsAPressToItsCredential(t *testing.T) {
 	l := newLedger()
 	var calls atomic.Int32
 	ledgerSpend(l, pressID(1), "c1", &calls, 0)
-	if _, _, err := l.begin(pressID(1), "c2"); !errors.Is(err, errPressMismatch) {
+	if _, _, err := l.begin(pressID(1), "c2", ""); !errors.Is(err, errPressMismatch) {
 		t.Fatalf("err = %v, want errPressMismatch", err)
 	}
 	if calls.Load() != 1 {
@@ -106,16 +106,16 @@ func TestLedgerBindsAPressToItsCredential(t *testing.T) {
 func TestLedgerNeverEvictsAPressInFlight(t *testing.T) {
 	l := newLedger()
 	for i := range ledgerCapacity {
-		if _, _, err := l.begin(pressID(i), "c"); err != nil {
+		if _, _, err := l.begin(pressID(i), "c", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := l.begin(pressID(ledgerCapacity), "c"); !errors.Is(err, errLedgerFull) {
+	if _, _, err := l.begin(pressID(ledgerCapacity), "c", ""); !errors.Is(err, errLedgerFull) {
 		t.Fatalf("err = %v, want errLedgerFull with every entry in flight", err)
 	}
 	// Every one of them is still remembered.
 	for i := range ledgerCapacity {
-		if _, fresh, err := l.begin(pressID(i), "c"); err != nil || fresh {
+		if _, fresh, err := l.begin(pressID(i), "c", ""); err != nil || fresh {
 			t.Fatalf("press %d was forgotten (fresh=%v, err=%v)", i, fresh, err)
 		}
 	}
@@ -131,7 +131,7 @@ func TestLedgerKeepsEveryFinishedPressForItsTenMinutesEvenWhenFull(t *testing.T)
 	l.clock = clock.read
 	entries := make([]*pressEntry, ledgerCapacity)
 	for i := range ledgerCapacity {
-		entry, _, err := l.begin(pressID(i), "c")
+		entry, _, err := l.begin(pressID(i), "c", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,17 +143,17 @@ func TestLedgerKeepsEveryFinishedPressForItsTenMinutesEvenWhenFull(t *testing.T)
 		clock.advance(time.Second)
 		l.finish(entries[i], jsonResponse(http.StatusOK, map[string]int{"press": i}))
 	}
-	if _, _, err := l.begin(pressID(ledgerCapacity), "c"); !errors.Is(err, errLedgerFull) {
+	if _, _, err := l.begin(pressID(ledgerCapacity), "c", ""); !errors.Is(err, errLedgerFull) {
 		t.Fatalf("err = %v, want errLedgerFull while every press is inside its ten minutes", err)
 	}
 	for i := range ledgerCapacity {
-		if _, fresh, err := l.begin(pressID(i), "c"); err != nil || fresh {
+		if _, fresh, err := l.begin(pressID(i), "c", ""); err != nil || fresh {
 			t.Fatalf("press %d was forgotten inside its ten minutes (fresh=%v, err=%v)", i, fresh, err)
 		}
 	}
 
 	clock.advance(ledgerTTL - time.Duration(ledgerCapacity-2)*time.Second)
-	if _, fresh, err := l.begin(pressID(ledgerCapacity), "c"); err != nil || !fresh {
+	if _, fresh, err := l.begin(pressID(ledgerCapacity), "c", ""); err != nil || !fresh {
 		t.Fatalf("a new press was not admitted once one aged out: fresh=%v err=%v", fresh, err)
 	}
 	if _, ok := l.entries[pressID(0)]; !ok {
@@ -182,7 +182,7 @@ func TestLedgerNeverSpendsAnIdTwiceUnderPressure(t *testing.T) {
 			defer wg.Done()
 			for i := range 400 {
 				n := (g*400 + i) % ids
-				entry, fresh, err := l.begin(pressID(n), "c")
+				entry, fresh, err := l.begin(pressID(n), "c", "")
 				if err != nil {
 					continue
 				}
@@ -211,16 +211,16 @@ func TestLedgerForgetsAPressTenMinutesAfterItsAnswer(t *testing.T) {
 	clock := newFakeClock()
 	l := newLedger()
 	l.clock = clock.read
-	entry, _, _ := l.begin(pressID(1), "c")
+	entry, _, _ := l.begin(pressID(1), "c", "")
 	clock.advance(5 * time.Minute)
 	l.finish(entry, jsonResponse(http.StatusOK, map[string]string{"outcome": "reset"}))
 
 	clock.advance(ledgerTTL - time.Second)
-	if _, fresh, _ := l.begin(pressID(1), "c"); fresh {
+	if _, fresh, _ := l.begin(pressID(1), "c", ""); fresh {
 		t.Fatal("the press was forgotten before ten minutes had passed since its answer")
 	}
 	clock.advance(time.Second)
-	if _, fresh, _ := l.begin(pressID(1), "c"); !fresh {
+	if _, fresh, _ := l.begin(pressID(1), "c", ""); !fresh {
 		t.Fatal("the press was still remembered ten minutes after its answer")
 	}
 }
@@ -229,7 +229,7 @@ func TestLedgerForgetsAPressTenMinutesAfterItsAnswer(t *testing.T) {
 // stored answer, or another copy's.
 func TestLedgerReplaysCopiesAndNeverTheStoredAnswer(t *testing.T) {
 	l := newLedger()
-	entry, _, _ := l.begin(pressID(1), "c")
+	entry, _, _ := l.begin(pressID(1), "c", "")
 	stored := jsonResponse(http.StatusOK, map[string]string{"outcome": "reset"})
 	l.finish(entry, stored)
 	first, ok := l.replay(entry)
@@ -255,7 +255,7 @@ func TestLedgerReplaysCopiesAndNeverTheStoredAnswer(t *testing.T) {
 func TestLedgerReplayGivesUpAfterTheWait(t *testing.T) {
 	l := newLedger()
 	l.wait = 20 * time.Millisecond
-	entry, _, _ := l.begin(pressID(1), "c")
+	entry, _, _ := l.begin(pressID(1), "c", "")
 	if _, ok := l.replay(entry); ok {
 		t.Fatal("a press still in flight was replayed")
 	}

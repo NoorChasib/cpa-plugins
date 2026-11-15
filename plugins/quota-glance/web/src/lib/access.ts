@@ -162,6 +162,12 @@ export const PLUGIN_ERRORS: ReadonlySet<string> = new Set([
   "provider_rate_limited",
   "provider_refused",
   "provider_unavailable",
+  // A Claude press must name a kind of reset, and one the account holds; a
+  // press of one kind is held back while a claim of another kind on the same
+  // credential is still unresolved.
+  "kind_required",
+  "invalid_kind",
+  "other_kind_unresolved",
   // quota-glance 0.7's two settings routes, retired: they answer 410
   // settings_moved, saying where saving moved to. This page sends them nothing.
   "settings_moved",
@@ -644,6 +650,21 @@ export interface SpendBody {
   credentialId: string
   confirmed: true
   pressId: string
+  /**
+   * The kind of Claude reset to spend: "full", "fable", "weekly" or
+   * "session". Present only when set. The plugin spends a grant of this kind
+   * and no other, and refuses a Claude press without one; a Codex press never
+   * carries one.
+   */
+  kind?: string
+}
+
+/**
+ * The press as both doors send it, with `kind` only when there is one: a
+ * Codex press reads exactly as it did before there were kinds.
+ */
+export function spendBody(credentialId: string, pressId: string, kind: string): SpendBody {
+  return kind === "" ? { credentialId, confirmed: true, pressId } : { credentialId, confirmed: true, pressId, kind }
 }
 
 /** The token door's spend header: the POST body's JSON, as unpadded base64url. */
@@ -652,7 +673,7 @@ export function encodeSpendHeader(body: SpendBody): string {
 }
 
 /**
- * Press ids awaiting an answer, per credential.
+ * Press ids awaiting an answer, per credential and kind.
  *
  * A press whose answer was lost keeps its id, so pressing again within ten
  * minutes sends the same id and the plugin's ledger answers it with whatever
@@ -661,29 +682,39 @@ export function encodeSpendHeader(body: SpendBody): string {
  * the next press is then a new one. A repeat turned away keeps the id, because
  * it says nothing about the press it repeated. Memory only: a reload forgets,
  * which is no worse than the plugin restarting.
+ *
+ * Kept per kind as well as per credential, because the id is the press: a
+ * lost Fable press's id sent again with a full reset's button would be a
+ * second press under the first one's name, which the plugin refuses as a
+ * mismatch rather than answering — leaving the reader with neither the Fable
+ * outcome nor the full reset. The Fable button repeats the Fable press; the
+ * full button makes a press of its own. Codex presses have kind "".
  */
 export interface PressBook {
   /**
    * The id to send now — the pending one, if it is recent, else a new one —
    * and whether it is the pending one, sent again.
    */
-  take(credentialId: string, now: number): { id: string; reused: boolean }
+  take(credentialId: string, now: number, kind?: string): { id: string; reused: boolean }
   /** The answer was read; the next press is a new one. */
-  settle(credentialId: string): void
+  settle(credentialId: string, kind?: string): void
 }
 
 export function createPressBook(fill: (bytes: Uint8Array<ArrayBuffer>) => unknown): PressBook {
   const pending = new Map<string, { id: string; at: number }>()
+  // A pair as one key that no two pairs share, whatever either half holds.
+  const keyOf = (credentialId: string, kind: string) => JSON.stringify([credentialId, kind])
   return {
-    take(credentialId, now) {
-      const held = pending.get(credentialId)
+    take(credentialId, now, kind = "") {
+      const key = keyOf(credentialId, kind)
+      const held = pending.get(key)
       if (held && now - held.at < PRESS_REUSE_SECONDS) return { id: held.id, reused: true }
       const id = newPressId(fill)
-      pending.set(credentialId, { id, at: now })
+      pending.set(key, { id, at: now })
       return { id, reused: false }
     },
-    settle(credentialId) {
-      pending.delete(credentialId)
+    settle(credentialId, kind = "") {
+      pending.delete(keyOf(credentialId, kind))
     },
   }
 }
@@ -935,8 +966,17 @@ export type SpendAnswer =
  * unreadable — and after a repeat of such a press that was turned away before
  * the plugin ran, which says nothing about the press it repeated. The
  * plugin's own answer settles it, and so does a new press turned away.
+ *
+ * `kind` is the kind of Claude reset the press spends, "" for Codex. It
+ * travels in the press and picks the press id, so it is fixed with the press
+ * like the door is.
  */
-export async function spendThrough(access: Access, credentialId: string, targets: SpendTargets): Promise<SpendAnswer> {
+export async function spendThrough(
+  access: Access,
+  credentialId: string,
+  targets: SpendTargets,
+  kind = "",
+): Promise<SpendAnswer> {
   const door = openDoors(access)[0]
   if (door === undefined) return unsent(access)
 
@@ -954,7 +994,7 @@ export async function spendThrough(access: Access, credentialId: string, targets
     // lost, and the plugin may have finished the spend after it.
     const turnedAway = !fromPlugin && (refusal !== null || (response.status >= 400 && response.status < 500))
     const kept = !fromPlugin && (!turnedAway || reused)
-    if (!kept) access.presses.settle(credentialId)
+    if (!kept) access.presses.settle(credentialId, kind)
     return {
       sent: true,
       door: door.kind,
@@ -970,11 +1010,11 @@ export async function spendThrough(access: Access, credentialId: string, targets
   }
 
   if (door.kind === "token") {
-    const { id: pressId, reused } = access.presses.take(credentialId, access.env.now())
+    const { id: pressId, reused } = access.presses.take(credentialId, access.env.now(), kind)
     const headers = {
       Accept: "application/json",
       Authorization: bearer(door.token),
-      [SPEND_HEADER]: encodeSpendHeader({ credentialId, confirmed: true, pressId }),
+      [SPEND_HEADER]: encodeSpendHeader(spendBody(credentialId, pressId, kind)),
     }
     let response: ResponseLike
     try {
@@ -998,13 +1038,13 @@ export async function spendThrough(access: Access, credentialId: string, targets
     const key = usableConsoleKey(access.env)
     if (key === null) return unsent(access)
     const fp = fingerprint(access.env, key)
-    const { id: pressId, reused } = access.presses.take(credentialId, access.env.now())
+    const { id: pressId, reused } = access.presses.take(credentialId, access.env.now(), kind)
     const headers = { "Content-Type": "application/json", Accept: "application/json", Authorization: bearer(key) }
     let response: ResponseLike
     try {
       response = await access.fetch(
         targets.consoleURL,
-        request("POST", headers, AbortSignal.timeout(SPEND_TIMEOUT_MS), JSON.stringify({ credentialId, confirmed: true, pressId })),
+        request("POST", headers, AbortSignal.timeout(SPEND_TIMEOUT_MS), JSON.stringify(spendBody(credentialId, pressId, kind))),
       )
     } catch {
       // As for a read: CPA may have counted it, so reads leave the key alone
@@ -1019,7 +1059,7 @@ export async function spendThrough(access: Access, credentialId: string, targets
       const refusal = await refuseConsole(access.env, key, response)
       // Turned away before the plugin ran: a new press is settled, and a
       // repeat keeps its id, as in answer() above.
-      if (!reused) access.presses.settle(credentialId)
+      if (!reused) access.presses.settle(credentialId, kind)
       return {
         sent: true,
         door: "console",

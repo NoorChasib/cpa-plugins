@@ -127,8 +127,12 @@ type API struct {
 // Redeemer is the one action this API can take on the world. It is an interface
 // so the serving layer keeps no dependency on the provider client, and so a
 // test can assert what was and was not attempted.
+//
+// kind is the kind of reset the press asked for: one of full, fable, weekly
+// and session on Claude, which the document has already offered for that
+// credential, and "" on Codex.
 type Redeemer interface {
-	Redeem(ctx context.Context, provider, credentialID string) (redeem.Result, error)
+	Redeem(ctx context.Context, provider, credentialID, kind string) (redeem.Result, error)
 }
 
 // SetRedeemer installs, or removes, the ability to spend a banked reset. Nil
@@ -353,10 +357,12 @@ func (a *API) Handle(req protocol.ManagementRequest, now time.Time) protocol.Man
 //     browser, where it belongs, but a request that arrives without one — a
 //     stray fetch, a replayed URL, a script — must not spend a credit merely
 //     because it was well formed.
-//  3. The served document says this credential has a redeemable credit. That is
-//     what stops a POST naming an arbitrary credential from turning into a
-//     provider request, and it is why the check reads the document rather than
-//     asking the provider. spend makes this check.
+//  3. The served document says this credential has a redeemable credit — on
+//     Claude, a redeemable credit of the kind the press names. That is what
+//     stops a POST naming an arbitrary credential, or a kind the card does not
+//     offer, from turning into a provider request, and it is why the check
+//     reads the document rather than asking the provider. spend makes this
+//     check.
 //
 // A press id is optional here. With one, a second copy of the same press is
 // answered from the ledger rather than spent; without one, the route behaves
@@ -485,6 +491,10 @@ type press struct {
 	credentialID string
 	// id is empty only on the POST door, where it is optional.
 	id string
+	// kind is the kind of reset the press is for, and empty when it named
+	// none. A Claude press must name one (redeemableCredential); a Codex press
+	// must not.
+	kind string
 }
 
 // parsePress reads a press from JSON, returning the error code to answer with
@@ -495,6 +505,7 @@ func parsePress(raw []byte) (press, string) {
 		CredentialID string  `json:"credentialId"`
 		Confirmed    bool    `json:"confirmed"`
 		PressID      *string `json:"pressId"`
+		Kind         *string `json:"kind"`
 	}
 	if json.Unmarshal(raw, &body) != nil {
 		return press{}, "invalid_request"
@@ -510,6 +521,15 @@ func parsePress(raw []byte) (press, string) {
 			return press{}, "invalid_request"
 		}
 		p.id = *body.PressID
+	}
+	// Optional, as pressId is, so a page from before kinds keeps working on
+	// Codex; present, it must be a kind a press can spend. "unknown" is not
+	// one: the card counts such a reset and offers no button for it.
+	if body.Kind != nil {
+		if !aggregate.SpendableResetKind(*body.Kind) {
+			return press{}, "invalid_request"
+		}
+		p.kind = *body.Kind
 	}
 	return p, ""
 }
@@ -544,9 +564,9 @@ func crossSite(headers http.Header) bool {
 // reset, is exactly what happens.
 func (a *API) spend(redeemer Redeemer, p press) protocol.ManagementResponse {
 	if p.id == "" {
-		return a.redeemOnce(redeemer, p.credentialID)
+		return a.redeemOnce(redeemer, p)
 	}
-	entry, fresh, err := a.ledger.begin(p.id, p.credentialID)
+	entry, fresh, err := a.ledger.begin(p.id, p.credentialID, p.kind)
 	switch {
 	case errors.Is(err, errPressMismatch):
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
@@ -572,16 +592,26 @@ func (a *API) spend(redeemer Redeemer, p press) protocol.ManagementResponse {
 		}
 		a.ledger.finish(entry, answer)
 	}()
-	answer = a.redeemOnce(redeemer, p.credentialID)
+	answer = a.redeemOnce(redeemer, p)
 	return answer
 }
 
 // redeemOnce checks the document and asks the redeemer, once. Every answer it
 // gives carries refreshRequested.
-func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.ManagementResponse {
-	credential, ok := redeemableCredential(a.Document(), credentialID)
-	if !ok {
-		return jsonResponse(http.StatusConflict, map[string]any{"error": "not_redeemable", "refreshRequested": false})
+func (a *API) redeemOnce(redeemer Redeemer, p press) protocol.ManagementResponse {
+	credential, refusal := redeemableCredential(a.Document(), p.credentialID, p.kind)
+	switch refusal {
+	case "":
+	case "kind_required":
+		// A 400, as a malformed press is: this press could never be spent as
+		// sent, whatever the account holds, and the remedy is the page's — a
+		// page from before kinds, which must be reloaded to name one. Spelled
+		// out rather than passed through: the page's tests read this file for
+		// every code it can answer with, and a code only in a variable would
+		// be one they never see.
+		return jsonResponse(http.StatusBadRequest, map[string]any{"error": "kind_required", "refreshRequested": false})
+	default:
+		return jsonResponse(http.StatusConflict, map[string]any{"error": refusal, "refreshRequested": false})
 	}
 
 	// The redeemer's own bound, which CPA does not shorten: it imposes no
@@ -590,7 +620,7 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 	// it is.
 	ctx, cancel := context.WithTimeout(context.Background(), redeem.Timeout)
 	defer cancel()
-	result, err := redeemer.Redeem(ctx, credential.Provider, credential.ID)
+	result, err := redeemer.Redeem(ctx, credential.Provider, credential.ID, p.kind)
 	// Asked once the provider has answered, and only when this press sent a
 	// spend that may have landed: the account's limits may have changed, and
 	// Quota Cache would otherwise not read them until its next poll, up to a
@@ -607,7 +637,13 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 		// Which provider answered, so the client can word the outcome in that
 		// provider's terms — a Codex credit and a Claude grant are not the
 		// same thing, and "cooldown" is only ever Claude's word.
-		"provider":       credential.Provider,
+		"provider": credential.Provider,
+		// Which kind of reset the press was for, so the client can say what
+		// was spent and what the count beside it counts: a Claude kind, and
+		// null on Codex, whose credits are all one sort. It is the kind the
+		// press named and the document offered, which is the only kind the
+		// redeemer claims for it.
+		"kind":           nil,
 		"outcome":        result.Outcome,
 		"windowsReset":   result.WindowsReset,
 		"remainingCount": result.RemainingCount,
@@ -616,6 +652,9 @@ func (a *API) redeemOnce(redeemer Redeemer, credentialID string) protocol.Manage
 		// poll, and a dashboard that silently disagreed with itself for ten
 		// minutes is worse than one that says why.
 		"snapshotPending": true,
+	}
+	if p.kind != "" {
+		answer["kind"] = p.kind
 	}
 	// Whether Quota Cache was asked to poll this account now, so the page can
 	// say the card updates within a minute rather than at that next poll.
@@ -665,23 +704,51 @@ func (a *API) requestRefresh(provider, authIndex string) refresh {
 	return refresh{requested: ok, at: at}
 }
 
-// redeemableCredential finds the credential the document says can be redeemed
-// against. Reading the served document rather than the request is the point: a
-// caller cannot nominate a credential the dashboard is not already offering.
-func redeemableCredential(doc aggregate.Document, id string) (aggregate.Credential, bool) {
+// redeemableCredential finds the credential the document says a press for kind
+// can be redeemed against, or names the code to refuse it with. Reading the
+// served document rather than the request is the point: a caller cannot
+// nominate a credential, or a kind, the dashboard is not already offering.
+//
+// On Claude the offer is per kind, and the top-level redeemable is always
+// false: a press must name a kind, and the kind must be one the card offers a
+// button for. A Claude press naming none is "kind_required" — a page from
+// before kinds, or one built by hand — rather than not_redeemable, because the
+// account may well hold resets, and the remedy is to say which. A Codex press
+// naming any kind is not_redeemable: Codex's credits have none, and a page
+// that thinks otherwise is offering something the card is not.
+func redeemableCredential(doc aggregate.Document, id, kind string) (aggregate.Credential, string) {
+	const refused = "not_redeemable"
 	if id == "" {
-		return aggregate.Credential{}, false
+		return aggregate.Credential{}, refused
 	}
 	for _, credential := range doc.Credentials {
 		if credential.ID != id {
 			continue
 		}
-		if credential.ResetCredits == nil || !credential.ResetCredits.Redeemable || credential.ResetCredits.AvailableCount < 1 {
-			return aggregate.Credential{}, false
+		credits := credential.ResetCredits
+		if credits == nil || credits.AvailableCount < 1 {
+			return aggregate.Credential{}, refused
 		}
-		return credential, true
+		if credential.Provider != "claude" {
+			if kind != "" || !credits.Redeemable {
+				return aggregate.Credential{}, refused
+			}
+			return credential, ""
+		}
+		if kind == "" {
+			return aggregate.Credential{}, "kind_required"
+		}
+		for _, offered := range credits.Kinds {
+			if offered.Kind == kind {
+				if !offered.Redeemable || offered.AvailableCount < 1 {
+					return aggregate.Credential{}, refused
+				}
+				return credential, ""
+			}
+		}
+		return aggregate.Credential{}, refused
 	}
-	return aggregate.Credential{}, false
+	return aggregate.Credential{}, refused
 }
 
 // redeemError maps a redemption failure onto a status and a fixed code.
@@ -701,12 +768,35 @@ func redeemableCredential(doc aggregate.Document, id string) (aggregate.Credenti
 // retry_window_closed is the same uncertainty with that window gone: the next
 // press is a new claim.
 //
+// other_kind_unresolved is a 409, not a 502: this press sent nothing. It is the
+// earlier press, of another kind, whose outcome is still unknown, and the
+// answer names that kind and the instant its window closes, so the reader can
+// settle it — by pressing that kind again — before spending a reset of this
+// one, or wait the window out.
+//
 // refreshed is whether Quota Cache was asked to poll the account, which only a
 // press that may have spent does, and every answer here says.
 func redeemError(err error, refreshed refresh) protocol.ManagementResponse {
 	status, body := http.StatusBadGateway, map[string]any{}
 	refreshed.addTo(body)
 	switch {
+	case errors.Is(err, redeem.ErrInvalidKind):
+		// The document check already refuses a press whose kind does not fit
+		// its provider; this is the redeemer's own guard saying the same.
+		status, body["error"] = http.StatusBadRequest, "invalid_kind"
+	case errors.Is(err, redeem.ErrOtherKindUnresolved):
+		var pendingKind, until any
+		var other *redeem.OtherKindUnresolvedError
+		if errors.As(err, &other) {
+			if other.Kind != "" {
+				pendingKind = other.Kind
+			}
+			if !other.RetryUntil.IsZero() {
+				until = other.RetryUntil.Unix()
+			}
+		}
+		status, body["error"] = http.StatusConflict, "other_kind_unresolved"
+		body["pendingKind"], body["retryUntilEpoch"] = pendingKind, until
 	case errors.Is(err, redeem.ErrInFlight):
 		status, body["error"] = http.StatusConflict, "already_in_flight"
 	case errors.Is(err, redeem.ErrUnsupportedProvider):

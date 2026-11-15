@@ -250,8 +250,8 @@ management `/redeem` with the same press as its body. Both carry a press id.
 
 **Press ids.** Each new press gets 16 random bytes from
 `crypto.getRandomValues`, which, unlike `crypto.randomUUID`, works on an
-insecure origin. The page keeps the id, for at most ten minutes per account,
-only while it does not know what the plugin did with it:
+insecure origin. The page keeps the id, for at most ten minutes per account
+and kind of reset, only while it does not know what the plugin did with it:
 
 - **The answer was not the plugin's.** The request failed; a response at 500
   or above did not carry one of the plugin's own error codes — a gateway's
@@ -263,7 +263,9 @@ only while it does not know what the plugin did with it:
   so the notice says that press is still unknown, and the press after it still
   sends the same id.
 
-Pressing again in that time sends the same id, and the plugin's press ledger
+Pressing the same button again in that time sends the same id — a Claude
+account's Fable button never reuses its full button's id, nor the other way
+round, and the plugin refuses an id reused for another kind — and the plugin's press ledger
 answers it with whatever the first copy came to, marked with
 `X-Quota-Glance-Replayed: 1`, rather than spending again; the page prefixes
 that answer with "From your earlier press:". The plugin's own answer settles
@@ -417,7 +419,8 @@ Each of these is held by a test, named after its number where it can be.
     never repeats a press, and drops its copy on `401`, `403` or `429`.
 12. On the plugin: `/spend` never passes CPA's management middleware. It
     spends only with a valid token, a confirmation, a press id and a
-    credential the document offers, and a press id spends at most once per
+    credential the document offers — on Claude, a kind of reset the document
+    offers for it — and a press id spends at most once per
     plugin process within its ten minutes. Its fetch-metadata, early-data and
     validation refusals change nothing and cost no CPA budget. The retired
     `/save-settings` and `POST .../settings` answer `410 settings_moved` before
@@ -429,8 +432,8 @@ Each of these is held by a test, named after its number where it can be.
 1 to 10 are in `web/test/access.test.ts`, which also checks 1 after every test
 in the file. 11 is the menu bar app's
 `plugins/quota-glance-menubar/scripts/tests/readout.test.mjs`. 12 is
-`internal/api/spend_test.go`, `ledger_test.go`, `redeem_test.go` and
-`retired_test.go`, and `make smoke` against a real CPA. 13 is
+`internal/api/spend_test.go`, `ledger_test.go`, `redeem_test.go`,
+`kind_test.go` and `retired_test.go`, and `make smoke` against a real CPA. 13 is
 `web/test/fixture-route.test.ts`.
 
 ## Threats, and what bounds them
@@ -495,7 +498,7 @@ On the Mac, with this repository checked out:
 2. In the app's **Settings**, set the URL to
    `http://127.0.0.1:8787/v0/resource/plugins/quota-glance/app`.
 3. Sign in with `dev-token`.
-4. Press **Use one** on any row of a **Banked resets** card and confirm. The outcome line should start
+4. Press **Use one** on a row of the Codex **Banked resets** card and confirm. The outcome line should start
    "Reset applied".
 5. Choose a quota under **Menu bar quota** and check the readout keeps
    updating.

@@ -624,32 +624,89 @@ func resetCreditsOf(r record, redeemable bool, now time.Time) *ResetCredits {
 	if source.AvailableCount < 1 {
 		return nil
 	}
+	// Every account holding a reset gets its own button, so the operator
+	// chooses which account to spend on. Two things take it away. A disabled
+	// credential is one the operator switched off, and spending on it would be
+	// acting against that. And a provider this plugin cannot redeem on has
+	// nothing to press.
+	//
+	// CPA's routing state deliberately does not. A credential CPA has parked
+	// in a cooldown is reported unavailable, but that is a statement about
+	// routing, not about the account: CPA still hands its token to
+	// host.auth.get, quota-cache polls it with that same token, and the
+	// provider still answers. A cooldown is also exactly when an operator
+	// reaches for a reset — hiding the button then removed it from the one
+	// account that needed it.
+	offered := redeemable && redeemableProvider(r.identity.Provider) && !r.identity.Disabled
 	credits := &ResetCredits{
 		AvailableCount: source.AvailableCount,
-		// Every account holding a reset gets its own button, so the operator
-		// chooses which account to spend on. Two things take it away. A
-		// disabled credential is one the operator switched off, and spending on
-		// it would be acting against that. And a provider this plugin cannot
-		// redeem on has nothing to press.
-		//
-		// CPA's routing state deliberately does not. A credential CPA has
-		// parked in a cooldown is reported unavailable, but that is a statement
-		// about routing, not about the account: CPA still hands its token to
-		// host.auth.get, quota-cache polls it with that same token, and the
-		// provider still answers. A cooldown is also exactly when an operator
-		// reaches for a reset — hiding the button then removed it from the one
-		// account that needed it.
-		Redeemable: redeemable && redeemableProvider(r.identity.Provider) && !r.identity.Disabled,
+		Redeemable:     offered,
+		Kinds:          []ResetKind{},
 	}
-	// An expiry already behind us is dropped rather than counted down past
-	// zero: quota-cache filters the same way at the poll, and this covers the
-	// gap between that poll and this build.
-	if at := source.SoonestExpiry; at != nil && at.After(now) {
-		epoch, seconds := at.Unix(), int64(at.Sub(now)/time.Second)
-		credits.ExpiresAtEpoch, credits.ExpiresInSeconds = &epoch, &seconds
+	credits.ExpiresAtEpoch, credits.ExpiresInSeconds = expiryOf(source.SoonestExpiry, now)
+	credits.Hold, credits.HoldUntilEpoch = holdOf(source.Hold, source.HoldUntil, now)
+	if r.identity.Provider == "claude" {
+		// A Claude press names the kind it spends, so the buttons go on the
+		// kinds and none on the count: one button for the whole count would
+		// spend whichever kind the provider recommended, which is how a full
+		// reset gets spent by someone who meant a Fable one. An account whose
+		// Quota Cache gave no kinds keeps its count with no button anywhere,
+		// until Quota Cache is updated and can say which kind each one is.
+		credits.Redeemable = false
+		credits.Kinds = resetKindsOf(source.Kinds, offered, now)
 	}
-	credits.Hold, credits.HoldUntilEpoch = holdOf(source, now)
 	return credits
+}
+
+// resetKindsOf carries Quota Cache's per-kind breakdown onto the credential:
+// an entry with nothing in it is dropped, as the whole object is at a zero
+// count, and the rest keep qc.ResetKindRank's order whatever order they
+// arrived in. Each entry's expiry and hold are read exactly as the account's
+// are. offered is the credential's own condition for a button; a kind adds
+// only that it must be one a press may name.
+func resetKindsOf(source []qc.ResetKindCredits, offered bool, now time.Time) []ResetKind {
+	kinds := []ResetKind{}
+	for _, one := range source {
+		if one.AvailableCount < 1 {
+			continue
+		}
+		kind := ResetKind{
+			Kind:           one.Kind,
+			AvailableCount: one.AvailableCount,
+			Redeemable:     offered && SpendableResetKind(one.Kind),
+		}
+		kind.ExpiresAtEpoch, kind.ExpiresInSeconds = expiryOf(one.SoonestExpiry, now)
+		kind.Hold, kind.HoldUntilEpoch = holdOf(one.Hold, one.HoldUntil, now)
+		kinds = append(kinds, kind)
+	}
+	slices.SortStableFunc(kinds, func(a, b ResetKind) int {
+		return qc.ResetKindRank(a.Kind) - qc.ResetKindRank(b.Kind)
+	})
+	return kinds
+}
+
+// SpendableResetKind reports whether kind is one a Claude press may name:
+// full, Fable, weekly or 5-hour. Not "unknown", and not a kind this build has
+// no name for: the redeemer refuses both, and a button that could only be
+// refused is not offered. The API reads a press's kind against the same list.
+func SpendableResetKind(kind string) bool {
+	switch kind {
+	case qc.ResetKindFull, qc.ResetKindFable, qc.ResetKindWeekly, qc.ResetKindSession:
+		return true
+	}
+	return false
+}
+
+// expiryOf dates a banked reset's soonest expiry against the build. An expiry
+// already behind us is dropped rather than counted down past zero:
+// quota-cache filters the same way at the poll, and this covers the gap
+// between that poll and this build.
+func expiryOf(at *time.Time, now time.Time) (*int64, *int64) {
+	if at == nil || !at.After(now) {
+		return nil, nil
+	}
+	epoch, seconds := at.Unix(), int64(at.Sub(now)/time.Second)
+	return &epoch, &seconds
 }
 
 // redeemableProvider reports whether this plugin knows how to spend a banked
@@ -661,7 +718,8 @@ func redeemableProvider(provider string) bool {
 }
 
 // holdOf translates quota-cache's reading of why no reset can be spent right
-// now into this document's vocabulary.
+// now into this document's vocabulary, for the account as a whole or for one
+// kind of its resets alike.
 //
 // A hold this build does not know is dropped rather than passed through: it is
 // a provider string, and an unrecognised one has no wording a client could put
@@ -670,23 +728,23 @@ func redeemableProvider(provider string) bool {
 // true at the poll and is not now, and a hint that contradicts the clock is
 // worse than none. The hint never hides the button; the plugin asks the
 // provider afresh before spending anything.
-func holdOf(source *qc.ResetCredits, now time.Time) (string, *int64) {
+func holdOf(source string, until *time.Time, now time.Time) (string, *int64) {
 	hold := ""
-	switch source.Hold {
+	switch source {
 	case "not_limited":
 		hold = "notLimited"
 	case "cooldown", "paused", "ineligible":
-		hold = source.Hold
+		hold = source
 	default:
 		return "", nil
 	}
-	if hold != "cooldown" || source.HoldUntil == nil {
+	if hold != "cooldown" || until == nil {
 		return hold, nil
 	}
-	if !source.HoldUntil.After(now) {
+	if !until.After(now) {
 		return "", nil
 	}
-	epoch := source.HoldUntil.Unix()
+	epoch := until.Unix()
 	return hold, &epoch
 }
 

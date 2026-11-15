@@ -49,7 +49,8 @@ func main() {
 	ending := flag.String("redeem", "", "answer every confirmed redeem with this ending and offer the button: "+
 		"an outcome (reset, nothingToReset, noCredit, failed, notLimited, cooldown, paused, ineligible, alreadyUsed), "+
 		"a reset whose CPA cooldown was not cleared (cooldownFailed, cooldownUnsupported, cooldownUnconfirmed) "+
-		"or an error (outcome_unknown, retry_window_closed, provider_rate_limited, provider_refused, provider_unavailable, already_in_flight, credential_unusable). "+
+		"or an error (outcome_unknown, retry_window_closed, provider_rate_limited, provider_refused, provider_unavailable, already_in_flight, credential_unusable, "+
+		"other_kind_unresolved, invalid_kind). "+
 		"Empty leaves redemption off")
 	creditsPath := flag.String("credits", "", "Quota Cache's published credit state. Defaults to the file beside the snapshot, "+
 		"else Quota Cache's committed state for the fixture of the same name, when there is one")
@@ -148,14 +149,26 @@ type standIn struct {
 	err    error
 }
 
-func (s standIn) Redeem(context.Context, string, string) (redeem.Result, error) {
+func (s standIn) Redeem(_ context.Context, _, _, kind string) (redeem.Result, error) {
 	// The real redeemer names the instant its unresolved claim stops being
 	// repeated. Ten minutes from the press is what a first unknown answer
 	// would say.
-	if s.err == redeem.ErrOutcomeUnknown {
-		return redeem.Result{MayHaveSpent: true}, &redeem.OutcomeUnknownError{RetryUntil: time.Now().Add(10 * time.Minute)}
+	switch s.err {
+	case redeem.ErrOutcomeUnknown:
+		return redeem.Result{MayHaveSpent: true, Kind: kind}, &redeem.OutcomeUnknownError{RetryUntil: time.Now().Add(10 * time.Minute)}
+	case redeem.ErrOtherKindUnresolved:
+		// An earlier press of another kind, still unknown, with most of its
+		// window left: a Fable one, unless this press is itself for Fable.
+		pending := qc.ResetKindFable
+		if kind == qc.ResetKindFable {
+			pending = qc.ResetKindFull
+		}
+		return redeem.Result{}, &redeem.OtherKindUnresolvedError{Kind: pending, RetryUntil: time.Now().Add(8 * time.Minute)}
 	}
-	return s.result, s.err
+	// The kind the press named is the kind the real redeemer spends.
+	result := s.result
+	result.Kind = kind
+	return result, s.err
 }
 
 // refreshStandIn says Quota Cache was asked to refresh, now, and writes
@@ -196,6 +209,10 @@ func standInFor(ending string) (*standIn, error) {
 		"provider_unavailable":  redeem.ErrUnavailable,
 		"already_in_flight":     redeem.ErrInFlight,
 		"credential_unusable":   redeem.ErrNoAccessToken,
+		"other_kind_unresolved": redeem.ErrOtherKindUnresolved,
+		// The redeemer's own guard; the document check answers a press
+		// whose kind does not fit before it would ever get here.
+		"invalid_kind": redeem.ErrInvalidKind,
 	} {
 		if code == ending {
 			return &standIn{err: err}, nil

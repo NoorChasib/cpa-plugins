@@ -129,12 +129,32 @@
         "live": false
       },
       "resetCredits": {
-        "availableCount": 1,
-        "expiresAtEpoch": 1790586000,
-        "expiresInSeconds": 1573200,
-        "redeemable": true,
+        "availableCount": 3,
+        "expiresAtEpoch": 1789981200,
+        "expiresInSeconds": 968400,
+        "redeemable": false,
         "hold": "",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": [
+          {
+            "kind": "full",
+            "availableCount": 1,
+            "expiresAtEpoch": 1790586000,
+            "expiresInSeconds": 1573200,
+            "redeemable": true,
+            "hold": "",
+            "holdUntilEpoch": null
+          },
+          {
+            "kind": "fable",
+            "availableCount": 2,
+            "expiresAtEpoch": 1789981200,
+            "expiresInSeconds": 968400,
+            "redeemable": true,
+            "hold": "notLimited",
+            "holdUntilEpoch": null
+          }
+        ]
       },
       "renewalAtEpoch": 1790759700,
       "renewalEstimated": true,
@@ -265,9 +285,20 @@
         "availableCount": 3,
         "expiresAtEpoch": 1789495200,
         "expiresInSeconds": 482400,
-        "redeemable": true,
+        "redeemable": false,
         "hold": "notLimited",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": [
+          {
+            "kind": "full",
+            "availableCount": 3,
+            "expiresAtEpoch": 1789495200,
+            "expiresInSeconds": 482400,
+            "redeemable": true,
+            "hold": "notLimited",
+            "holdUntilEpoch": null
+          }
+        ]
       },
       "renewalAtEpoch": 1804873200,
       "renewalEstimated": true,
@@ -782,7 +813,8 @@
         "expiresInSeconds": 1238400,
         "redeemable": true,
         "hold": "",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": []
       },
       "renewalAtEpoch": 1791604800,
       "renewalEstimated": false,

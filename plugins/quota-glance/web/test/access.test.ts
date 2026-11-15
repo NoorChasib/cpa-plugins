@@ -45,6 +45,7 @@ import {
   type ResponseLike,
   retryBlocked,
   SPEND_HEADER,
+  spendBody,
   spendThrough,
   type StorageLike,
   TOKEN_KEY,
@@ -242,7 +243,8 @@ const SPEND = {
   tokenURL: "/v0/resource/plugins/quota-glance/spend",
   consoleURL: "/v0/management/plugins/quota-glance/redeem",
 }
-const spend = (access: Access, credentialId = "codex-a.json") => spendThrough(access, credentialId, SPEND)
+const spend = (access: Access, credentialId = "codex-a.json", kind?: string) =>
+  spendThrough(access, credentialId, SPEND, kind)
 
 /** Settles every promise already queued, and the ones they queue. */
 const drain = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -1119,7 +1121,12 @@ describe("no answer", () => {
 
 describe("spends", () => {
   const decodeSpend = (value: string | undefined) =>
-    JSON.parse(Buffer.from(value ?? "", "base64url").toString("utf8")) as { credentialId: string; confirmed: boolean; pressId: string }
+    JSON.parse(Buffer.from(value ?? "", "base64url").toString("utf8")) as {
+      credentialId: string
+      confirmed: boolean
+      pressId: string
+      kind?: string
+    }
   const reset = () => json(200, { provider: "codex", outcome: "reset", windowsReset: 2, remainingCount: 1, snapshotPending: true })
 
   test("the token door: one GET, the press in a header, nothing in the URL", async () => {
@@ -1376,10 +1383,22 @@ describe("spends", () => {
     // api.go is the plugin's side of this; a code added there and not here
     // would read as a lost answer, and keep an id the plugin had settled.
     const source = readFileSync(new URL("../../internal/api/api.go", import.meta.url), "utf8")
-    const codes = new Set([...source.matchAll(/"error":\s*"([a-z_]+)"/g)].map((match) => match[1]!))
+    // Both ways api.go writes one: a map literal, `"error": "code"`, and an
+    // assignment into the answer's map, `status, body["error"] = …, "code"`.
+    const codes = new Set(
+      [
+        ...source.matchAll(/"error":\s*"([a-z_]+)"/g),
+        ...source.matchAll(/body\["error"\][^=\n]*=[^"\n]*"([a-z_]+)"/g),
+      ].map((match) => match[1]!),
+    )
     assert.ok(codes.size >= 10, `found ${[...codes].join(", ")}`)
     // The retired settings routes' answer, settings_moved, is among them.
     assert.ok(codes.has("settings_moved"))
+    // So are the three about a press's kind, which a page that misread them
+    // would take for a lost answer and keep the press id the plugin settled.
+    for (const code of ["kind_required", "invalid_kind", "other_kind_unresolved"]) {
+      assert.ok(codes.has(code), `the scan no longer sees ${code}`)
+    }
     for (const code of codes) assert.equal(PLUGIN_ERRORS.has(code), true, code)
   })
 
@@ -1413,6 +1432,92 @@ describe("spends", () => {
     assert.notEqual(book.take("b", 10).id, a.id)
     book.settle("a")
     assert.deepEqual(book.take("a", 20).reused, false)
+  })
+
+  test("press ids are per kind as well: a lost Fable press's id is never a full press's", () => {
+    const book = createPressBook((bytes) => crypto.getRandomValues(bytes))
+    const fable = book.take("claude-a.json", 0, "fable")
+    const full = book.take("claude-a.json", 10, "full")
+    assert.equal(full.reused, false)
+    assert.notEqual(full.id, fable.id)
+    // Each kind's own button repeats its own press.
+    assert.deepEqual(book.take("claude-a.json", 20, "fable"), { id: fable.id, reused: true })
+    assert.deepEqual(book.take("claude-a.json", 20, "full"), { id: full.id, reused: true })
+    // Settling one kind leaves the other pending.
+    book.settle("claude-a.json", "full")
+    assert.deepEqual(book.take("claude-a.json", 30, "fable"), { id: fable.id, reused: true })
+    assert.equal(book.take("claude-a.json", 30, "full").reused, false)
+    // Codex presses, with no kind, are their own and unchanged.
+    const codex = book.take("claude-a.json", 30)
+    assert.notEqual(codex.id, fable.id)
+    assert.deepEqual(book.take("claude-a.json", 40, ""), { id: codex.id, reused: true })
+  })
+
+  test("no credential and kind pair can stand in for another, whatever the id holds", () => {
+    const book = createPressBook((bytes) => crypto.getRandomValues(bytes))
+    const one = book.take("a,fable", 0, "")
+    assert.equal(book.take("a", 0, "fable").reused, false)
+    assert.equal(book.take('a","fable', 0, "").reused, false)
+    assert.deepEqual(book.take("a,fable", 0, ""), { id: one.id, reused: true })
+  })
+
+  test("after a lost Fable answer, a full press goes as a new press, and the Fable button still repeats", async () => {
+    const env = makeEnv()
+    let turn = 0
+    const net = makeFetch(() => {
+      if (turn++ === 0) throw new TypeError("dropped")
+      return json(200, { provider: "claude", kind: "full", outcome: "reset" })
+    })
+    const access = makeAccess(env, net.fetch, new TokenSlot("tok"))
+    await spend(access, "claude-a.json", "fable")
+    await spend(access, "claude-a.json", "full")
+    await spend(access, "claude-a.json", "fable")
+    const [lost, full, again] = net.calls.map((call) => decodeSpend(call.init.headers[SPEND_HEADER]))
+    assert.equal(lost!.kind, "fable")
+    assert.equal(full!.kind, "full")
+    assert.notEqual(full!.pressId, lost!.pressId)
+    assert.equal(again!.kind, "fable")
+    assert.equal(again!.pressId, lost!.pressId)
+  })
+
+  test("the kind travels in the press on both doors, and only when there is one", async () => {
+    const env = makeEnv()
+    remember(env)
+    const ok = () => json(200, { provider: "claude", kind: "fable", outcome: "reset" })
+    const token = makeFetch(ok)
+    await spend(makeAccess(env, token.fetch, new TokenSlot("tok")), "claude-a.json", "fable")
+    await spend(makeAccess(env, token.fetch, new TokenSlot("tok")), "codex-a.json")
+    await spend(makeAccess(env, token.fetch, new TokenSlot("tok")), "codex-a.json", "")
+    const [named, bare, empty] = token.calls.map((call) => decodeSpend(call.init.headers[SPEND_HEADER]))
+    assert.deepEqual(Object.keys(named!), ["credentialId", "confirmed", "pressId", "kind"])
+    assert.equal(named!.kind, "fable")
+    assert.deepEqual(Object.keys(bare!), ["credentialId", "confirmed", "pressId"])
+    assert.deepEqual(Object.keys(empty!), ["credentialId", "confirmed", "pressId"])
+
+    const console = makeFetch(ok)
+    await spend(makeAccess(env, console.fetch), "claude-a.json", "full")
+    await spend(makeAccess(env, console.fetch), "codex-a.json")
+    const [post, codex] = console.calls.map((call) => JSON.parse(call.init.body ?? "{}") as Record<string, unknown>)
+    assert.equal(post!.kind, "full")
+    assert.equal("kind" in codex!, false)
+  })
+
+  test("the plugin's answers about kinds are its own, and settle the press", async () => {
+    for (const [status, error] of [
+      [400, "kind_required"],
+      [400, "invalid_kind"],
+      [409, "other_kind_unresolved"],
+    ] as const) {
+      assert.equal(PLUGIN_ERRORS.has(error), true, error)
+      const env = makeEnv()
+      const net = makeFetch(() => json(status, { error, refreshRequested: false }))
+      const access = makeAccess(env, net.fetch, new TokenSlot("tok"))
+      const answer = await spend(access, "claude-a.json", "full")
+      assert.equal(answer.sent && answer.answered && answer.kept, false, error)
+      await spend(access, "claude-a.json", "full")
+      const [first, second] = net.calls.map((call) => decodeSpend(call.init.headers[SPEND_HEADER]).pressId)
+      assert.notEqual(first, second, error)
+    }
   })
 })
 
@@ -1464,6 +1569,22 @@ describe("encodings", () => {
       assert.match(header, /^[A-Za-z0-9_-]+$/)
       assert.deepEqual(JSON.parse(Buffer.from(header, "base64url").toString("utf8")), body)
     }
+  })
+
+  test("a press carries its kind only when it has one", () => {
+    assert.deepEqual(spendBody("claude-a.json", "AAAAAAAAAAAAAAAAAAAAAA", "fable"), {
+      credentialId: "claude-a.json",
+      confirmed: true,
+      pressId: "AAAAAAAAAAAAAAAAAAAAAA",
+      kind: "fable",
+    })
+    assert.deepEqual(spendBody("codex-a.json", "AAAAAAAAAAAAAAAAAAAAAA", ""), {
+      credentialId: "codex-a.json",
+      confirmed: true,
+      pressId: "AAAAAAAAAAAAAAAAAAAAAA",
+    })
+    const header = encodeSpendHeader(spendBody("claude-a.json", "AAAAAAAAAAAAAAAAAAAAAA", "full"))
+    assert.equal(JSON.parse(Buffer.from(header, "base64url").toString("utf8")).kind, "full")
   })
 
   test("press ids are 22 base64url characters, and differ", () => {

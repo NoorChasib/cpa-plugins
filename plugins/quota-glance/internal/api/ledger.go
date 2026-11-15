@@ -30,8 +30,9 @@ import (
 // again without a second provider call, while a new press goes through the
 // journal and repeats the same claim.
 //
-// An entry holds the credential id the press named and the answer it got.
-// Nothing in it authenticates anything: no header, and never the token.
+// An entry holds the credential id and the kind of reset the press named, and
+// the answer it got. Nothing in it authenticates anything: no header, and
+// never the token.
 //
 // It is in memory, like the journal, so anything that ends this copy of the
 // plugin forgets every press. The next copy of an old press is then a fresh
@@ -48,6 +49,11 @@ type ledger struct {
 
 type pressEntry struct {
 	credentialID string
+	// kind is the kind of reset the press named, "" when it named none. A
+	// copy of a Fable press is owed the Fable press's answer; the same id
+	// arriving for a full reset is another decision, and answering it with
+	// the Fable answer would tell the reader a full reset was spent.
+	kind string
 	// done is closed once answer is final. A replay waits on it rather than
 	// on the lock, so a slow provider holds up its own press and nobody
 	// else's.
@@ -82,9 +88,10 @@ const (
 
 var (
 	// errPressMismatch means the press id was first used for a different
-	// credential. One press is one decision about one account; reusing its id
-	// for another is a broken client or a forgery, and either way not a spend.
-	errPressMismatch = errors.New("the press id was first used for another credential")
+	// credential, or for a different kind of reset. One press is one decision
+	// about one kind of reset on one account; reusing its id for another is a
+	// broken client or a forgery, and either way not a spend.
+	errPressMismatch = errors.New("the press id was first used for another credential or kind")
 	// errLedgerFull means the ledger holds as many presses as it may, each
 	// still in flight or inside its ten minutes, so none can be forgotten
 	// safely to make room. Room returns as they age out.
@@ -95,10 +102,11 @@ func newLedger() *ledger {
 	return &ledger{entries: map[string]*pressEntry{}, clock: time.Now, wait: replayWait}
 }
 
-// begin reserves pressID for credentialID. Fresh means this is the first copy
-// of the press: the caller spends, and must call finish whatever happens.
-// Otherwise the entry is the earlier copy's, and replay hands out its answer.
-func (l *ledger) begin(pressID, credentialID string) (entry *pressEntry, fresh bool, err error) {
+// begin reserves pressID for credentialID and kind. Fresh means this is the
+// first copy of the press: the caller spends, and must call finish whatever
+// happens. Otherwise the entry is the earlier copy's, and replay hands out its
+// answer.
+func (l *ledger) begin(pressID, credentialID, kind string) (entry *pressEntry, fresh bool, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock()
@@ -108,7 +116,7 @@ func (l *ledger) begin(pressID, credentialID string) (entry *pressEntry, fresh b
 		}
 	}
 	if earlier, ok := l.entries[pressID]; ok {
-		if earlier.credentialID != credentialID {
+		if earlier.credentialID != credentialID || earlier.kind != kind {
 			return nil, false, errPressMismatch
 		}
 		return earlier, false, nil
@@ -118,7 +126,7 @@ func (l *ledger) begin(pressID, credentialID string) (entry *pressEntry, fresh b
 	if len(l.entries) >= ledgerCapacity {
 		return nil, false, errLedgerFull
 	}
-	entry = &pressEntry{credentialID: credentialID, done: make(chan struct{})}
+	entry = &pressEntry{credentialID: credentialID, kind: kind, done: make(chan struct{})}
 	l.entries[pressID] = entry
 	return entry, true, nil
 }

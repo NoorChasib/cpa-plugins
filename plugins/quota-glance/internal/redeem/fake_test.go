@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 )
 
@@ -230,6 +231,16 @@ func redeemerOn(host Host, clock *stepClock) *Redeemer {
 }
 
 func newClock() *stepClock { return &stepClock{now: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)} }
+
+// kindFor is the kind a test written for either provider presses for: a full
+// reset on Claude, which is what every grant without a kind of its own is,
+// and none on Codex.
+func kindFor(provider string) string {
+	if provider == providerClaude {
+		return qc.ResetKindFull
+	}
+	return ""
+}
 
 // mustDecode reads a fixture the way a response is read, numbers and all.
 func mustDecode(t *testing.T, text string) map[string]any {

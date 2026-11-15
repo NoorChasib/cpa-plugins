@@ -17,9 +17,10 @@ import { createServer, type IncomingMessage, request, type Server, type ServerRe
 import type { AddressInfo } from "node:net"
 import { after, before, describe, test } from "node:test"
 
-import { EPOCH_FIELDS, goldenFixtureRoute, PRESS_PATHS, SETTINGS_PATHS } from "../dev/fixture-route.ts"
+import { EPOCH_FIELDS, goldenFixtureRoute, PRESS_KINDS, PRESS_PATHS, SETTINGS_PATHS } from "../dev/fixture-route.ts"
 import { classifyRefusal, encodeSpendHeader, PLUGIN_ERRORS } from "../src/lib/access.ts"
-import type { APICredits, RowEntry, Summary } from "../src/lib/types.ts"
+import { SPENDABLE_KINDS } from "../src/lib/resetKinds.ts"
+import type { APICredits, Credential, RowEntry, Summary } from "../src/lib/types.ts"
 
 type Middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void
 
@@ -95,7 +96,11 @@ const spendHeaders = (body: Record<string, unknown>): Record<string, string> => 
   ...TOKEN,
   "X-Quota-Glance-Spend": encodeSpendHeader(body as never),
 })
-const press = (credentialId = "codex-a.json", pressId = freshId()) => ({ credentialId, confirmed: true as const, pressId })
+/** A press: a Codex one by default; a Claude one names its kind, as the plugin requires. */
+const press = (credentialId = "codex-a.json", pressId = freshId(), kind?: string) =>
+  kind === undefined
+    ? { credentialId, confirmed: true as const, pressId }
+    : { credentialId, confirmed: true as const, pressId, kind }
 const errorOf = (reply: Reply) => (JSON.parse(reply.body) as { error: string }).error
 
 describe("I13: every press path is answered here", () => {
@@ -232,12 +237,13 @@ describe("the token door's spend route", () => {
 
   test("spends with the password and a well-formed press", async () => {
     const before = Math.floor(Date.now() / 1000)
-    const reply = await call("GET", SPEND, spendHeaders(press("claude-a.json")))
+    const reply = await call("GET", SPEND, spendHeaders(press("claude-a.json", freshId(), "fable")))
     assert.equal(reply.status, 200)
     assert.equal(reply.headers["cache-control"], "no-store")
     const { refreshRequestedAtEpoch, ...rest } = JSON.parse(reply.body) as { refreshRequestedAtEpoch?: unknown }
     assert.deepEqual(rest, {
       provider: "claude",
+      kind: "fable",
       outcome: "reset",
       windowsReset: 2,
       remainingCount: 1,
@@ -300,6 +306,58 @@ describe("the token door's spend route", () => {
     const other = await call("GET", SPEND, spendHeaders(press("codex-b.json", id)))
     assert.equal(other.status, 400)
     assert.equal(errorOf(other), "invalid_request")
+  })
+
+  test("refuses a press id reused for another kind, and answers its own kind from the ledger", async () => {
+    const id = freshId()
+    const fable = await call("GET", SPEND, spendHeaders(press("claude-a.json", id, "fable")))
+    assert.equal(fable.status, 200)
+    const full = await call("GET", SPEND, spendHeaders(press("claude-a.json", id, "full")))
+    assert.equal(full.status, 400)
+    assert.equal(errorOf(full), "invalid_request")
+    const again = await call("GET", SPEND, spendHeaders(press("claude-a.json", id, "fable")))
+    assert.equal(again.headers["x-quota-glance-replayed"], "1")
+    assert.equal(again.body, fable.body)
+  })
+
+  test("a kind, when present, must be one a press can name", async () => {
+    assert.deepEqual([...PRESS_KINDS].sort(), [...SPENDABLE_KINDS].sort())
+    for (const kind of ["unknown", "monthly", "", "Full", 3, true, [], {}]) {
+      const reply = await call("GET", SPEND, spendHeaders({ ...press("claude-a.json"), kind }))
+      assert.equal(reply.status, 400, JSON.stringify(kind))
+      assert.equal(errorOf(reply), "invalid_request", JSON.stringify(kind))
+    }
+    for (const kind of SPENDABLE_KINDS) {
+      const reply = await call("GET", SPEND, spendHeaders(press("claude-a.json", freshId(), kind)))
+      assert.equal(reply.status, 200, kind)
+      assert.equal((JSON.parse(reply.body) as { kind: string }).kind, kind)
+    }
+  })
+
+  test("a Claude press must name a kind, and a Codex press must not", async () => {
+    const claude = await call("GET", SPEND, spendHeaders(press("claude-a.json")))
+    assert.equal(claude.status, 400)
+    assert.deepEqual(JSON.parse(claude.body), { error: "kind_required", refreshRequested: false })
+    const codex = await call("GET", SPEND, spendHeaders(press("codex-a.json", freshId(), "full")))
+    assert.equal(codex.status, 409)
+    assert.deepEqual(JSON.parse(codex.body), { error: "not_redeemable", refreshRequested: false })
+    // A Codex press with no kind spends as it always did, and says so.
+    const plain = await call("GET", SPEND, spendHeaders(press("codex-a.json")))
+    assert.equal(plain.status, 200)
+    assert.equal((JSON.parse(plain.body) as { kind: unknown }).kind, null)
+  })
+
+  test("an earlier press of the other kind, unresolved, names its kind and its deadline", async () => {
+    const before = Math.floor(Date.now() / 1000)
+    for (const [kind, pending] of [["full", "fable"], ["fable", "full"]] as const) {
+      const reply = await call("GET", `${SPEND}?redeem=other-kind-unresolved`, spendHeaders(press("claude-a.json", freshId(), kind)))
+      assert.equal(reply.status, 409)
+      const body = JSON.parse(reply.body) as { error: string; pendingKind: string; retryUntilEpoch: number; refreshRequested: boolean }
+      assert.equal(body.error, "other_kind_unresolved")
+      assert.equal(body.pendingKind, pending)
+      assert.ok(body.retryUntilEpoch >= before + 600)
+      assert.equal(body.refreshRequested, false)
+    }
   })
 
   test("refuses a wrong or missing password with a bare 401", async () => {
@@ -376,11 +434,15 @@ describe("the token door's spend route", () => {
       ["rate-limited", 502, "provider_rate_limited"],
       ["in-flight", 409, "already_in_flight"],
       ["not-redeemable", 409, "not_redeemable"],
+      ["kind-required", 400, "kind_required"],
+      ["invalid-kind", 400, "invalid_kind"],
+      ["other-kind-unresolved", 409, "other_kind_unresolved"],
     ]
     for (const [ending, status, code] of endings) {
-      const reply = await call("GET", `${SPEND}?redeem=${ending}`, spendHeaders(press()))
+      const reply = await call("GET", `${SPEND}?redeem=${ending}`, spendHeaders(press("claude-a.json", freshId(), "full")))
       assert.equal(reply.status, status, ending)
       assert.equal(errorOf(reply), code, ending)
+      assert.equal(PLUGIN_ERRORS.has(code), true, code)
     }
     const gateway = await call("GET", `${SPEND}?redeem=gateway`, spendHeaders(press()))
     assert.equal(gateway.status, 504)
@@ -430,9 +492,18 @@ describe("the console door, behind CPA's sign-in", () => {
 
   test("a press with a key spends, and a press id is optional on this door", async () => {
     const headers = { Authorization: "Bearer dev", "Content-Type": "application/json" }
-    const withId = await call("POST", REDEEM, headers, JSON.stringify(press("claude-x.json")))
+    const withId = await call("POST", REDEEM, headers, JSON.stringify(press("claude-x.json", freshId(), "full")))
     assert.equal(withId.status, 200)
-    assert.equal((JSON.parse(withId.body) as { provider: string }).provider, "claude")
+    assert.deepEqual(
+      (({ provider, kind }) => ({ provider, kind }))(JSON.parse(withId.body) as { provider: string; kind: string }),
+      { provider: "claude", kind: "full" },
+    )
+    // The console door reads the same press, kind and all.
+    const unnamed = await call("POST", REDEEM, headers, JSON.stringify({ credentialId: "claude-x.json", confirmed: true }))
+    assert.equal(errorOf(unnamed), "kind_required")
+    const odd = await call("POST", REDEEM, headers, JSON.stringify({ credentialId: "claude-x.json", confirmed: true, kind: "unknown" }))
+    assert.equal(odd.status, 400)
+    assert.equal(errorOf(odd), "invalid_request")
     const without = await call("POST", REDEEM, headers, JSON.stringify({ credentialId: "codex-a.json", confirmed: true }))
     assert.equal(without.status, 200)
     const form = await call("POST", REDEEM, { ...headers, "Content-Type": "application/x-www-form-urlencoded" }, "a=b")
@@ -532,6 +603,9 @@ describe("rebasing", () => {
       "quota-cache-unreadable",
       "fallback",
       "single-claude",
+      "holds",
+      "kinds",
+      "kinds-unreported",
     ]) {
       const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)
       assert.equal(reply.status, 200, scenario)
@@ -555,6 +629,89 @@ describe("rebasing", () => {
       assert.ok(nextRefill && fullAtEpoch !== null, scenario)
       assert.equal(now + nextRefill.refillInSeconds, nextRefill.refillAtEpoch)
       assert.equal(now + (fullInSeconds ?? 0), fullAtEpoch)
+    }
+  })
+})
+
+describe("banked resets by kind, in the scenarios", () => {
+  const { call } = serve()
+  const summary = async (scenario: string) => {
+    const reply = await call("GET", `${RESOURCE_SUMMARY}?scenario=${scenario}`, TOKEN)
+    assert.equal(reply.status, 200, scenario)
+    return JSON.parse(reply.body) as Summary
+  }
+  const claudeHolding = (doc: Summary): Credential[] =>
+    doc.credentials.filter((one) => one.provider === "claude" && one.resetCredits !== null)
+
+  test("the golden scenario has an account holding a full and a Fable reset, and one holding a kind the page cannot name", async () => {
+    const doc = await summary("golden")
+    const kindsOf = (one: Credential) => (one.resetCredits?.kinds ?? []).map((entry) => entry.kind)
+    assert.ok(claudeHolding(doc).some((one) => kindsOf(one).includes("full") && kindsOf(one).includes("fable")))
+    assert.ok(claudeHolding(doc).some((one) => kindsOf(one).includes("unknown")))
+  })
+
+  // The golden documents are the plugin's, and may hold a Claude account
+  // whose kinds Quota Cache did not report — an empty list — which is a state
+  // the page has to show too. Anything else must add up.
+  test("every Claude inventory is as the plugin publishes it: kinds summing to the total, a top level never redeemable", async () => {
+    for (const scenario of ["golden", "degraded", "holds", "kinds"]) {
+      const doc = await summary(scenario)
+      for (const one of claudeHolding(doc)) {
+        const credits = one.resetCredits!
+        assert.equal(credits.redeemable, false, `${scenario}: ${one.id}`)
+        assert.ok(Array.isArray(credits.kinds), `${scenario}: ${one.id}`)
+        const kinds = credits.kinds ?? []
+        if (kinds.length === 0) continue
+        assert.equal(
+          kinds.reduce((sum, entry) => sum + entry.availableCount, 0),
+          credits.availableCount,
+          `${scenario}: ${one.id}`,
+        )
+        assert.deepEqual(
+          kinds.map((entry) => entry.kind),
+          [...new Set(kinds.map((entry) => entry.kind))],
+          `${scenario}: ${one.id}`,
+        )
+        for (const entry of kinds) {
+          if (entry.kind === "unknown") assert.equal(entry.redeemable, false, `${scenario}: ${one.id}`)
+        }
+      }
+    }
+  })
+
+  test("the scenarios built here always say which kind each reset is", async () => {
+    for (const scenario of ["holds", "kinds"]) {
+      for (const one of claudeHolding(await summary(scenario))) {
+        assert.ok((one.resetCredits!.kinds ?? []).length > 0, `${scenario}: ${one.id}`)
+      }
+    }
+  })
+
+  test("Codex carries no kinds", async () => {
+    for (const scenario of ["golden", "degraded"]) {
+      const doc = await summary(scenario)
+      for (const one of doc.credentials.filter((c) => c.provider === "codex" && c.resetCredits)) {
+        assert.deepEqual(one.resetCredits!.kinds, [], `${scenario}: ${one.id}`)
+      }
+    }
+  })
+
+  test("the kinds scenario holds every kind, and a dialog's plural", async () => {
+    const doc = await summary("kinds")
+    const held = new Set(claudeHolding(doc).flatMap((one) => (one.resetCredits!.kinds ?? []).map((entry) => entry.kind)))
+    for (const kind of [...SPENDABLE_KINDS, "unknown"]) assert.ok(held.has(kind), kind)
+    assert.ok(
+      claudeHolding(doc).some((one) => (one.resetCredits!.kinds ?? []).some((entry) => entry.kind === "fable" && entry.availableCount > 1)),
+    )
+  })
+
+  test("the kinds-unreported scenario is a Quota Cache older than the kinds: counts and nothing to spend", async () => {
+    const doc = await summary("kinds-unreported")
+    assert.ok(claudeHolding(doc).length > 0)
+    for (const one of claudeHolding(doc)) {
+      assert.deepEqual(one.resetCredits!.kinds, [], one.id)
+      assert.equal(one.resetCredits!.redeemable, false, one.id)
+      assert.ok(one.resetCredits!.availableCount >= 1, one.id)
     }
   })
 })

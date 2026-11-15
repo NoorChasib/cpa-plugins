@@ -17,7 +17,7 @@ import (
 // as the cooldown it recorded at the limit still runs.
 func TestAConfirmedResetClearsThatCredentialsCooldown(t *testing.T) {
 	codex := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset","windows_reset":2}`})
-	result, err := redeemerOn(codex, newClock()).Redeem(context.Background(), "codex", "codex-a")
+	result, err := redeemerOn(codex, newClock()).Redeem(context.Background(), "codex", "codex-a", "")
 	if err != nil || result.Outcome != OutcomeReset || result.Cooldown != CooldownCleared {
 		t.Fatalf("codex = %+v, %v; want a reset with its cooldown cleared", result, err)
 	}
@@ -29,7 +29,7 @@ func TestAConfirmedResetClearsThatCredentialsCooldown(t *testing.T) {
 	}
 
 	claude := claudeHost(spendableStatus(), `{"result":"reset","resets_left":1,"cleared":["five_hour"]}`)
-	result, err = redeemerOn(claude, newClock()).Redeem(context.Background(), "claude", "claude-a")
+	result, err = redeemerOn(claude, newClock()).Redeem(context.Background(), "claude", "claude-a", "full")
 	if err != nil || result.Outcome != OutcomeReset || result.Cooldown != CooldownCleared {
 		t.Fatalf("claude = %+v, %v; want a reset with its cooldown cleared", result, err)
 	}
@@ -70,13 +70,13 @@ func TestARepeatThatConfirmsTheEarlierResetClearsTheCooldown(t *testing.T) {
 	for name, tc := range cases {
 		tc.host.queue(tc.url, tc.answers...)
 		redeemer := redeemerOn(tc.host, newClock())
-		if _, err := redeemer.Redeem(context.Background(), tc.provider, "c"); !errors.Is(err, ErrOutcomeUnknown) {
+		if _, err := redeemer.Redeem(context.Background(), tc.provider, "c", kindFor(tc.provider)); !errors.Is(err, ErrOutcomeUnknown) {
 			t.Fatalf("%s: first press err = %v, want ErrOutcomeUnknown", name, err)
 		}
 		if got := tc.host.cleared(); len(got) != 0 {
 			t.Fatalf("%s: an unknown outcome cleared the cooldown on %v", name, got)
 		}
-		result, err := redeemer.Redeem(context.Background(), tc.provider, "c")
+		result, err := redeemer.Redeem(context.Background(), tc.provider, "c", kindFor(tc.provider))
 		if err != nil || result.Outcome != tc.outcome || result.Cooldown != CooldownCleared {
 			t.Fatalf("%s: repeat = %+v, %v; want %s with the cooldown cleared", name, result, err, tc.outcome)
 		}
@@ -136,7 +136,7 @@ func TestNothingButAConfirmedResetTouchesTheCooldown(t *testing.T) {
 		"claude not at limit": blockedClaude(`{"eligible":true,"at_limit":false,"grants":[` + spendableGrant + `]}`),
 	}
 	for name, p := range cases {
-		result, _ := redeemerOn(p.host, newClock()).Redeem(context.Background(), p.provider, "c")
+		result, _ := redeemerOn(p.host, newClock()).Redeem(context.Background(), p.provider, "c", kindFor(p.provider))
 		if got := p.host.cleared(); len(got) != 0 {
 			t.Fatalf("%s: outcome %q cleared the cooldown on %v", name, result.Outcome, got)
 		}
@@ -157,7 +157,7 @@ func TestAnUnconfirmedResetLeavesTheCooldownAndSaysSo(t *testing.T) {
 		"empty object": `{}`,
 	} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: body})
-		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "codex", "c")
+		result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "codex", "c", "")
 		if err != nil || result.Outcome != OutcomeReset || result.Cooldown != CooldownUnconfirmed {
 			t.Fatalf("%s: result = %+v, %v; want a reset reported with its cooldown unconfirmed", name, result, err)
 		}
@@ -191,7 +191,7 @@ func TestAFailedClearIsAPartialSuccessAndNeverAnotherSpend(t *testing.T) {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset","windows_reset":1}`})
 		host.cooldownErr, host.cooldownEcho = tc.err, tc.echo
 		redeemer := redeemerOn(host, newClock())
-		result, err := redeemer.Redeem(context.Background(), "codex", "c")
+		result, err := redeemer.Redeem(context.Background(), "codex", "c", "")
 		if err != nil || result.Outcome != OutcomeReset || result.WindowsReset != 1 || result.Cooldown != tc.want {
 			t.Fatalf("%s: result = %+v, %v; want a reset with cooldown %q", name, result, err, tc.want)
 		}
@@ -203,7 +203,7 @@ func TestAFailedClearIsAPartialSuccessAndNeverAnotherSpend(t *testing.T) {
 		}
 		// The next press is a new press: a fresh inventory read and a fresh
 		// idempotency key, which is what an operator pressing again gets.
-		if _, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil {
+		if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil {
 			t.Fatalf("%s: next press: %v", name, err)
 		}
 		bodies := host.postBodies(t)
@@ -224,7 +224,7 @@ func TestTheClearSurvivesThePressContextEnding(t *testing.T) {
 			cancel()
 		}
 	}
-	result, err := redeemerOn(host, newClock()).Redeem(ctx, "claude", "c")
+	result, err := redeemerOn(host, newClock()).Redeem(ctx, "claude", "c", "full")
 	if err != nil || result.Cooldown != CooldownCleared {
 		t.Fatalf("result = %+v, %v; want the cooldown cleared", result, err)
 	}
@@ -238,11 +238,11 @@ func TestTheClearSurvivesThePressContextEnding(t *testing.T) {
 func TestTheClearIsPerCredential(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	redeemer := redeemerOn(host, newClock())
-	if result, err := redeemer.Redeem(context.Background(), "codex", "codex-a"); err != nil || result.Cooldown != CooldownCleared {
+	if result, err := redeemer.Redeem(context.Background(), "codex", "codex-a", ""); err != nil || result.Cooldown != CooldownCleared {
 		t.Fatalf("a = %+v, %v", result, err)
 	}
 	host.queue(codexConsumeURL, reply{body: `{"code":"nothing_to_reset"}`})
-	if result, err := redeemer.Redeem(context.Background(), "codex", "codex-b"); err != nil || result.Cooldown != "" {
+	if result, err := redeemer.Redeem(context.Background(), "codex", "codex-b", ""); err != nil || result.Cooldown != "" {
 		t.Fatalf("b = %+v, %v; want nothing to reset and no clear", result, err)
 	}
 	if got := host.cleared(); !slices.Equal(got, []string{"codex-a"}) {
@@ -258,9 +258,9 @@ func TestAPressDuringTheClearIsRefused(t *testing.T) {
 	redeemer := redeemerOn(host, newClock())
 	var during error
 	host.onCooldown = func() {
-		_, during = redeemer.Redeem(context.Background(), "codex", "c")
+		_, during = redeemer.Redeem(context.Background(), "codex", "c", "")
 	}
-	if result, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || result.Cooldown != CooldownCleared {
+	if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || result.Cooldown != CooldownCleared {
 		t.Fatalf("first press = %+v, %v", result, err)
 	}
 	if !errors.Is(during, ErrInFlight) {
@@ -286,7 +286,7 @@ func TestAStalledClearDoesNotHoldThePress(t *testing.T) {
 
 	answered := make(chan Result, 1)
 	go func() {
-		result, err := redeemer.Redeem(context.Background(), "codex", "c")
+		result, err := redeemer.Redeem(context.Background(), "codex", "c", "")
 		if err != nil {
 			t.Errorf("press: %v", err)
 		}
@@ -307,7 +307,7 @@ func TestAStalledClearDoesNotHoldThePress(t *testing.T) {
 	host.mu.Lock()
 	host.onCooldown = nil
 	host.mu.Unlock()
-	if result, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || result.Cooldown != CooldownCleared {
+	if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || result.Cooldown != CooldownCleared {
 		t.Fatalf("next press = %+v, %v; want the credential free and a fresh claim", result, err)
 	}
 	close(release)
@@ -323,7 +323,7 @@ func TestAStalledClearDoesNotHoldThePress(t *testing.T) {
 func TestAClearThatPanicsIsAFailedClear(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset","windows_reset":1}`})
 	host.onCooldown = func() { panic("auth manager holds a token") }
-	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "codex", "c")
+	result, err := redeemerOn(host, newClock()).Redeem(context.Background(), "codex", "c", "")
 	if err != nil || result.Outcome != OutcomeReset || result.Cooldown != CooldownFailed {
 		t.Fatalf("result = %+v, %v; want a reset with its clear failed", result, err)
 	}

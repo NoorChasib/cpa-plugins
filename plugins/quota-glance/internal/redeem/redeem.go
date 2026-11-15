@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 )
 
@@ -186,7 +187,63 @@ var (
 	// claim against another account would be a different claim, so nothing is
 	// sent until the retry window closes.
 	ErrIdentityChanged = errors.New("the credential belongs to a different account than the unresolved claim")
+	// ErrInvalidKind means the press named a kind of reset its provider does
+	// not have: a Codex press naming any kind, since Codex's credits are all
+	// one sort, or a Claude press naming none, or one outside full, Fable,
+	// weekly and 5-hour. Claude's kinds refill different limits, and which
+	// grant is claimed is what decides the kind spent, so a Claude press that
+	// does not say which it means has no grant this package may pick for it.
+	// The API checks the same before it gets here; this is the guard that
+	// holds whatever the caller. Nothing was sent.
+	ErrInvalidKind = errors.New("the press names no kind of reset this provider has")
+	// ErrOtherKindUnresolved means the credential has an unresolved claim on
+	// record for a different kind of reset than this press asks for. Redeem
+	// returns it as an *OtherKindUnresolvedError, which names that kind and
+	// when its window closes. Nothing was sent.
+	ErrOtherKindUnresolved = errors.New("an unresolved claim for another kind of reset is on record for this credential")
 )
+
+// The kinds a Claude press may name. qc.ResetKindUnknown is deliberately not
+// one: a grant this build cannot classify is counted on the card and never
+// spent from here, because spending it would be a guess at what it refills.
+var claudeKinds = map[string]bool{
+	qc.ResetKindFull:    true,
+	qc.ResetKindFable:   true,
+	qc.ResetKindWeekly:  true,
+	qc.ResetKindSession: true,
+}
+
+// kindFits reports whether kind is one a press on provider may name: none for
+// Codex, and exactly one of claudeKinds for Claude.
+func kindFits(provider, kind string) bool {
+	if provider == providerClaude {
+		return claudeKinds[kind]
+	}
+	return kind == ""
+}
+
+// OtherKindUnresolvedError is ErrOtherKindUnresolved together with the kind
+// the unresolved claim was for and the instant its window closes.
+//
+// The press after an unknown outcome repeats that claim exactly, and the
+// claim names one grant, of one kind. A press for another kind cannot repeat
+// it, and must not make a fresh claim beside it either: if the earlier claim
+// did spend, the account has had its reset, and the reader is owed that answer
+// before a second reset of any kind is spent. So nothing is sent and the claim
+// stays on record, for a press of its own kind to settle or for the window to
+// close on.
+type OtherKindUnresolvedError struct {
+	// Kind is the kind of reset the unresolved claim was for.
+	Kind string
+	// RetryUntil is when that claim stops being repeated, the same instant its
+	// own outcome_unknown named.
+	RetryUntil time.Time
+}
+
+func (e *OtherKindUnresolvedError) Error() string { return ErrOtherKindUnresolved.Error() }
+
+// Unwrap lets errors.Is(err, ErrOtherKindUnresolved) hold.
+func (e *OtherKindUnresolvedError) Unwrap() error { return ErrOtherKindUnresolved }
 
 // OutcomeUnknownError is ErrOutcomeUnknown together with the deadline that
 // makes pressing again safe.
@@ -237,7 +294,14 @@ type Result struct {
 	// spent when one was. It is a floor rather than a fresh reading: it costs
 	// no further request, and the next quota-cache poll replaces it with the
 	// truth.
+	//
+	// On Claude it counts only resets of Kind. A reader told "1 left" after
+	// spending a Fable reset would otherwise take it for a full reset left,
+	// which is the mix-up the kinds exist to prevent.
 	RemainingCount int
+	// Kind is the kind of reset this press was for: one of the qc.ResetKind
+	// values on Claude, and "" on Codex, whose credits are all one sort.
+	Kind string
 	// Cooldown is what became of CPA's routing cooldown on the credential:
 	// one of the Cooldown values on a reset the provider confirmed, or on the
 	// repeat of a claim the provider says was already spent, and
@@ -315,7 +379,14 @@ func (r *Redeemer) Enabled() bool { return r != nil && r.host != nil }
 // The one exception is the press after an unknown outcome. That press repeats
 // the earlier claim exactly, and skips the check, because the check would see
 // the reset the earlier claim may have spent as gone and could pick another.
-func (r *Redeemer) Redeem(ctx context.Context, provider, authIndex string) (Result, error) {
+//
+// kind is the kind of reset to spend. Claude's banked resets are not all
+// alike — a full reset clears the 5-hour and weekly limits, a Fable reset only
+// gives back to the weekly limit what Fable used — and the grant claimed is
+// what decides which is spent, so a Claude press must name one, and only a
+// grant of that kind is ever claimed for it. A Codex press names none. Either
+// mismatch is ErrInvalidKind, before anything is sent.
+func (r *Redeemer) Redeem(ctx context.Context, provider, authIndex, kind string) (Result, error) {
 	if !r.Enabled() {
 		return Result{}, ErrUnavailable
 	}
@@ -323,15 +394,31 @@ func (r *Redeemer) Redeem(ctx context.Context, provider, authIndex string) (Resu
 	if provider != providerCodex && provider != providerClaude {
 		return Result{}, ErrUnsupportedProvider
 	}
+	if !kindFits(provider, kind) {
+		return Result{}, ErrInvalidKind
+	}
 	if !r.claim(authIndex) {
 		return Result{}, ErrInFlight
 	}
 	defer r.release(authIndex)
 	retry, isRetry := r.unresolved(authIndex, provider)
-	if provider == providerClaude {
-		return r.redeemClaude(ctx, authIndex, retry, isRetry)
+	if isRetry && retry.kind != kind {
+		// The claim on record is for another kind, so this press can neither
+		// repeat it nor make a claim beside it. The claim stays for a press of
+		// its own kind; see OtherKindUnresolvedError.
+		return Result{}, &OtherKindUnresolvedError{Kind: retry.kind, RetryUntil: retry.createdAt.Add(retryWindow)}
 	}
-	return r.redeemCodex(ctx, authIndex, retry, isRetry)
+	var result Result
+	var err error
+	if provider == providerClaude {
+		result, err = r.redeemClaude(ctx, authIndex, kind, retry, isRetry)
+	} else {
+		result, err = r.redeemCodex(ctx, authIndex, retry, isRetry)
+	}
+	// The kind asked for, which on a repeat is the claim's own as well: a
+	// claim of any other kind was refused above.
+	result.Kind = kind
+	return result, err
 }
 
 // answer is what one spend request's response proves.

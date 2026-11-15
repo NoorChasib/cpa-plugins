@@ -11,7 +11,9 @@ rate limits it exists to protect.
 
 There is one exception, and it is a write rather than a poll: **using a banked
 Codex or Claude rate-limit reset**. That cannot come out of a snapshot, so when
-you press **Use one** and confirm, this plugin spends the reset itself — from
+you press a reset's button — **Use one** for Codex, or a kind's own button such
+as **Use full reset** or **Use Fable reset** for Claude — and confirm, this
+plugin spends the reset itself — from
 the CPA sidebar, a browser tab, a phone or the menu bar app alike. It happens on
 that one request and on no timer — see [Banked resets](#banked-resets), or set
 `allow-redeem: false` to show the count without the button.
@@ -44,7 +46,9 @@ Spending the API credit that refills soonest first is Reset Priority's
   Against an older snapshot Claude's resets are absent and its plan badge reads
   "—", Grok shows the tier its usage response names, and Codex shows the
   spend-control reset as its renewal; each fills in on its own once Quota Cache
-  is updated.
+  is updated. Spending a Claude reset also needs Quota Cache **0.5.0 or
+  newer**, which reports which kind each one is; against an older one the count
+  shows with no button and asks you to update Quota Cache.
 - Quota Cache **0.1.9 or newer**, with an OpenRouter management key, for the
   [OpenRouter balance](#openrouter-balance). Without either, the card is simply
   absent and nothing else changes.
@@ -113,7 +117,7 @@ empty and one is generated and printed **once** in the CPA log at startup, then
 persisted under `data-dir` so restarts keep it. Either way it is typed in once
 per browser and saved there, and a browser that has both uses the password.
 
-It also spends banked resets (**Use one**) unless `allow-redeem: false`. Treat
+It also spends banked resets (the reset buttons) unless `allow-redeem: false`. Treat
 it as a password: anyone holding it can view the dashboard and use a reset. If
 it was ever shared with someone who should not have it, set `web-token` to a
 new value, or set `allow-redeem: false`, which removes the button everywhere.
@@ -251,22 +255,39 @@ people lose: a Codex reset expires thirty days after it is granted, a Claude
 grant on its own end date, and a count with no date beside it is the shape in
 which they quietly lapse.
 
-**Every account holding one gets its own Use one button**, on its row, so you
-choose which account to spend on, including an account CPA has put in a
-cooldown, which is usually exactly when you want one. Claude only spends a reset
-on an account that is at a limit and not in its own cooldown after the last
-one; where the last poll saw either, the reason is printed on the row, but the
-button stays, because the plugin checks with Claude afresh before spending
-anything.
+**Every account holding one gets its own button**, on its row, so you choose
+which account to spend on, including an account CPA has put in a cooldown,
+which is usually exactly when you want one. A Codex row has one **Use one**
+button: Codex's credits are all one sort.
+
+**Claude's resets come in kinds, and each kind has its own button.** The
+Claude card groups its rows by kind, and a button spends only its own kind:
+
+| Button | What it does |
+| --- | --- |
+| **Use full reset** | Clears the 5-hour and weekly limits. |
+| **Use Fable reset** | Gives back to the weekly limit what Fable used this week. Not a full reset. |
+| **Use weekly reset** | Clears the weekly limits, not the 5-hour limit. |
+| **Use 5-hour reset** | Clears the 5-hour limit, not the weekly limits. |
+
+An account holding a full reset and a Fable reset has a row under each, and
+pressing one never spends the other. A reset of a kind this version doesn't
+recognise is counted with no button; use it from Claude Code with
+`/limit-reset`. Claude allows a reset only once the account has reached a limit
+it refills, and makes it wait out a cooldown between resets; where the last
+poll saw either, the reason is printed on the row, but the button stays,
+because the plugin checks with Claude afresh before spending anything.
 
 **Using one** opens a confirmation first, and the sentence it leads with is the
 one that matters: a banked reset is not extra allowance. Spending it restores
-that account's session and weekly windows, it brings your existing allowance
-forward rather than adding to it, and **it cannot be undone**. Confirm and the
-plugin asks the provider what can be spent — for Codex, the credit closest to
-expiring; for Claude, the grant Claude recommends — spends it, and reports what
-happened. If Claude says no reset can be spent right now, nothing is spent and
-the dashboard says why.
+what that reset refills, it brings your existing allowance forward rather than
+adding to it, and **it cannot be undone**. For a Claude reset the dialog names
+the kind, says what it does, and says when the account's other kinds stay
+banked. Confirm and the plugin asks the provider what can be spent — for Codex,
+the credit closest to expiring; for Claude, a grant of the kind you pressed,
+the one Claude recommends when it is of that kind — spends it, and reports what
+happened. If Claude says no reset of that kind can be spent right now, nothing
+is spent and the dashboard says why.
 
 A few things the design refuses to guess about:
 
@@ -287,7 +308,8 @@ A few things the design refuses to guess about:
   usage before pressing again. For ten minutes, pressing again repeats the
   same claim, or asks what the first press came to, rather than spending a
   second reset; restarting or updating CPA or Quota Glance, or reloading the
-  page, ends that early.
+  page, ends that early. On Claude, a press for another kind of reset on that
+  account sends nothing until then, and says which kind to press to settle it.
   [One press, one spend](docs/summary-contract.md#one-press-one-spend) has the
   details.
 - **Two presses cannot become two credits.** A second attempt against the same
@@ -300,7 +322,7 @@ A few things the design refuses to guess about:
   keep skipping the account for as long as the cooldown it recorded at the limit
   still runs. If that clear fails, or CPA is older than v8.0.12, the message says
   the reset is spent and asks you to use **Clear cooldown** in the console — not
-  to press **Use one** again, which would spend another reset.
+  to press the button again, which would spend another reset.
   [CPA's cooldown after a reset](docs/summary-contract.md#cpas-cooldown-after-a-reset)
   has the details.
 
@@ -309,7 +331,7 @@ The button is absent — not greyed out — whenever it cannot work: with
 browser whose every way in was refused, where the card says to sign in again
 instead. The count still shows in each case. A press takes at most 55 seconds.
 
-**Use one works wherever the page loads** — the CPA sidebar, a browser tab, a
+**The buttons work wherever the page loads** — the CPA sidebar, a browser tab, a
 phone, the menu bar app — with the dashboard password or a console session.
 On the password's door the press is a GET to `/spend`, because CPA dispatches
 nothing else to a resource route, and nothing that can spend is in its URL.
@@ -573,4 +595,4 @@ fixture, or from `-credits <file>`. Add `-redeem reset` (or any ending its
 `-help` lists) to offer the button and answer every press with a stand-in that
 contacts no provider, then open
 `http://127.0.0.1:8787/v0/resource/plugins/quota-glance/app?token=dev-token` to
-press **Use one** through the real handler.
+press a reset's button through the real handler.

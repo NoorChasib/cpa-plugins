@@ -30,16 +30,17 @@ type fakeRedeemer struct {
 	mu       sync.Mutex
 	calls    int
 	provider string
+	kind     string
 	deadline time.Duration
 	result   redeem.Result
 	err      error
 }
 
-func (f *fakeRedeemer) Redeem(ctx context.Context, provider, _ string) (redeem.Result, error) {
+func (f *fakeRedeemer) Redeem(ctx context.Context, provider, _, kind string) (redeem.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	f.provider = provider
+	f.provider, f.kind = provider, kind
 	if deadline, ok := ctx.Deadline(); ok {
 		f.deadline = time.Until(deadline)
 	}
@@ -52,19 +53,44 @@ func (f *fakeRedeemer) called() int {
 	return f.calls
 }
 
+func (f *fakeRedeemer) askedFor() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.kind
+}
+
+// Claude credentials beside claudeID, each holding resets the document offers
+// no press for: one disabled, so its kinds carry no button, and one whose
+// Quota Cache is too old to say which kind its resets are.
+const (
+	claudeParkedID = "claude-parked@example.com.json"
+	claudeOldID    = "claude-old@example.com.json"
+)
+
 // redeemableAPI serves a document with one spendable Codex credential, one
-// spendable Claude credential, one Codex credential whose credit the document
-// says is not redeemable, and one Claude credential with nothing banked at all.
+// Claude credential offering full and Fable resets (and holding one it cannot
+// name, and an emptied 5-hour entry), one Codex credential whose credit the
+// document says is not redeemable, one Claude credential with nothing banked at
+// all, and the two Claude credentials above.
 func redeemableAPI(t *testing.T) (*API, *fakeRedeemer) {
 	t.Helper()
 	a := New("quota-glance", testToken)
 	a.Publish(aggregate.Document{
 		SchemaVersion: 1, GeneratedAtEpoch: 1789012800,
 		Credentials: []aggregate.Credential{
-			{ID: codexID, Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 2, Redeemable: true}},
-			{ID: claudeID, Provider: "claude", ResetCredits: &aggregate.ResetCredits{AvailableCount: 3, Redeemable: true, Hold: "cooldown"}},
-			{ID: "codex-parked@example.com.json", Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 1}},
+			{ID: codexID, Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 2, Redeemable: true, Kinds: []aggregate.ResetKind{}}},
+			{ID: claudeID, Provider: "claude", ResetCredits: &aggregate.ResetCredits{AvailableCount: 4, Hold: "cooldown", Kinds: []aggregate.ResetKind{
+				{Kind: "full", AvailableCount: 1, Redeemable: true, Hold: "cooldown"},
+				{Kind: "fable", AvailableCount: 2, Redeemable: true, Hold: "cooldown"},
+				{Kind: "session", AvailableCount: 0, Redeemable: true},
+				{Kind: "unknown", AvailableCount: 1},
+			}}},
+			{ID: "codex-parked@example.com.json", Provider: "codex", ResetCredits: &aggregate.ResetCredits{AvailableCount: 1, Kinds: []aggregate.ResetKind{}}},
 			{ID: "claude-a@example.com.json", Provider: "claude"},
+			{ID: claudeParkedID, Provider: "claude", ResetCredits: &aggregate.ResetCredits{AvailableCount: 1, Kinds: []aggregate.ResetKind{
+				{Kind: "full", AvailableCount: 1},
+			}}},
+			{ID: claudeOldID, Provider: "claude", ResetCredits: &aggregate.ResetCredits{AvailableCount: 2, Kinds: []aggregate.ResetKind{}}},
 		},
 		Providers: []aggregate.Provider{},
 	}, Health{Version: "test"})
@@ -248,6 +274,9 @@ func TestRedeemForwardsNoProviderText(t *testing.T) {
 		redeem.ErrIdentityChanged,
 		redeem.ErrRetryWindowClosed,
 		&redeem.OutcomeUnknownError{RetryUntil: time.Unix(1789013400, 0)},
+		redeem.ErrInvalidKind,
+		redeem.ErrOtherKindUnresolved,
+		&redeem.OtherKindUnresolvedError{Kind: "fable", RetryUntil: time.Unix(1789013400, 0)},
 	} {
 		a, redeemer := redeemableAPI(t)
 		redeemer.err = err
@@ -274,9 +303,15 @@ func TestRedeemForwardsNoProviderText(t *testing.T) {
 				if _, number := value.(float64); !number {
 					t.Fatalf("%v: refreshRequestedAtEpoch = %v", err, value)
 				}
-			case key == "retryUntilEpoch" && code == "outcome_unknown":
+			case key == "retryUntilEpoch" && (code == "outcome_unknown" || code == "other_kind_unresolved"):
 				if _, number := value.(float64); value != nil && !number {
 					t.Fatalf("%v: retryUntilEpoch = %v", err, value)
+				}
+			// The kind the earlier claim was for, which is this plugin's own
+			// vocabulary, never the provider's text.
+			case key == "pendingKind" && code == "other_kind_unresolved":
+				if value != nil && value != "fable" {
+					t.Fatalf("%v: pendingKind = %v", err, value)
 				}
 			default:
 				t.Fatalf("%v: the failure carried more than a code: %v", err, body)
@@ -329,6 +364,11 @@ func TestRedeemMapsFailuresToStatuses(t *testing.T) {
 		// Still unknown, but no longer repeatable: a 5xx, so a client that does
 		// not know the code still reads it as "may have been spent".
 		{redeem.ErrRetryWindowClosed, http.StatusBadGateway, "retry_window_closed"},
+		// Both sent nothing, so neither is a 5xx: one is a press that could
+		// never be spent as sent, the other waits on an earlier press.
+		{redeem.ErrInvalidKind, http.StatusBadRequest, "invalid_kind"},
+		{&redeem.OtherKindUnresolvedError{Kind: "fable", RetryUntil: time.Unix(1789013400, 0)}, http.StatusConflict, "other_kind_unresolved"},
+		{fmt.Errorf("press: %w", redeem.ErrOtherKindUnresolved), http.StatusConflict, "other_kind_unresolved"},
 	} {
 		a, redeemer := redeemableAPI(t)
 		redeemer.err = one.err
@@ -428,7 +468,7 @@ func TestRedeemThrottlesFailedTokenAttempts(t *testing.T) {
 func TestRedeemSpendsAClaudeReset(t *testing.T) {
 	a, redeemer := redeemableAPI(t)
 	redeemer.result = redeem.Result{Outcome: redeem.OutcomeReset, WindowsReset: 2, RemainingCount: 2}
-	res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true})
+	res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true})
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", res.StatusCode, res.Body)
 	}
@@ -445,7 +485,7 @@ func TestRedeemSpendsAClaudeReset(t *testing.T) {
 // a credential the last poll saw in cooldown still reaches the redeemer.
 func TestAHoldDoesNotStopAPress(t *testing.T) {
 	a, redeemer := redeemableAPI(t)
-	if res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}); res.StatusCode != http.StatusOK {
+	if res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true}); res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
 	}
 	if redeemer.called() != 1 {
@@ -463,7 +503,7 @@ func TestRedeemPassesEveryOutcomeThrough(t *testing.T) {
 	} {
 		a, redeemer := redeemableAPI(t)
 		redeemer.result = redeem.Result{Outcome: outcome, RemainingCount: 3}
-		res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true})
+		res := post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true})
 		if res.StatusCode != http.StatusOK {
 			t.Fatalf("%s: status = %d", outcome, res.StatusCode)
 		}
@@ -513,29 +553,33 @@ func TestEveryPressAnswerReadsTheSameEscapedOrNot(t *testing.T) {
 		for _, cooldown := range []string{"", redeem.CooldownCleared, redeem.CooldownFailed, redeem.CooldownUnsupported, redeem.CooldownUnconfirmed} {
 			a, redeemer := redeemableAPI(t)
 			redeemer.result = redeem.Result{Outcome: outcome, Cooldown: cooldown, MayHaveSpent: true}
-			answer(outcome+"/"+cooldown, post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+			answer(outcome+"/"+cooldown, post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true}))
 		}
 	}
 	// Every failure the redeemer can return.
 	for _, err := range []error{
 		redeem.ErrInFlight, redeem.ErrUnsupportedProvider, redeem.ErrNoAccessToken, redeem.ErrNoAccountID,
 		redeem.ErrIdentityChanged, redeem.ErrRefused, redeem.ErrUnavailable, redeem.ErrRateLimited,
-		redeem.ErrOutcomeUnknown, redeem.ErrRetryWindowClosed,
+		redeem.ErrOutcomeUnknown, redeem.ErrRetryWindowClosed, redeem.ErrInvalidKind,
+		&redeem.OtherKindUnresolvedError{Kind: "fable", RetryUntil: time.Now()},
 	} {
 		answer(err.Error(), redeemError(err, refresh{requested: true, at: time.Now()}))
 	}
 	// And every refusal before one.
 	a, _ := redeemableAPI(t)
 	answer("not redeemable", post(a, redeemPath, nil, map[string]any{"credentialId": "claude-a@example.com.json", "confirmed": true}))
+	answer("kind required", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+	answer("kind not offered", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "weekly", "confirmed": true}))
+	answer("kind malformed", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "unknown", "confirmed": true}))
 	answer("unconfirmed", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID}))
 	answer("malformed", post(a, redeemPath, nil, "not an object"))
 	answer("form-encoded", post(a, redeemPath, http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}, nil))
 	answer("retired settings", post(a, "/v0/management/plugins/quota-glance/settings", nil, map[string]any{}))
 	answer("unknown path", get(a, "/v0/management/plugins/quota-glance/nope", nil))
 	a.SetRedeemer(nil)
-	answer("redemption off", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+	answer("redemption off", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true}))
 	a.Disable()
-	answer("disabled", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "confirmed": true}))
+	answer("disabled", post(a, redeemPath, nil, map[string]any{"credentialId": claudeID, "kind": "full", "confirmed": true}))
 }
 
 // The press is bounded by the redeemer's own bound, which sits under the

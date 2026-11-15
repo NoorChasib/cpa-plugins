@@ -119,11 +119,47 @@ export interface Credits {
 }
 
 /**
+ * Why a banked reset cannot be spent right now, by the provider's word at the
+ * last poll: not at a limit, cooling down, paused, ineligible. Empty when one
+ * can be or the provider does not say.
+ */
+export type ResetHold = "" | "notLimited" | "cooldown" | "paused" | "ineligible" | (string & {})
+
+/**
+ * What spending a Claude banked reset does, as Claude Code names it: a full
+ * reset clears the 5-hour and weekly limits; a Fable reset gives back to the
+ * weekly limit what Fable used; a weekly or a 5-hour reset clears that one.
+ * "unknown" is a grant Quota Cache could not classify with confidence, which
+ * is counted and never offered. Open like every enum here, because Claude may
+ * name a kind this bundle has never seen.
+ */
+export type ResetKind = "full" | "fable" | "weekly" | "session" | "unknown" | (string & {})
+
+/**
+ * The part of an account's banked resets that are of one kind. Each field
+ * means what ResetCredits' does, restricted to that kind.
+ */
+export interface ResetKindCredits {
+  kind: ResetKind
+  /** At least 1: a kind the account holds none of is not listed. */
+  availableCount: number
+  expiresAtEpoch: number | null
+  expiresInSeconds: number | null
+  /**
+   * Whether this dashboard may spend one of this kind. Never true for
+   * "unknown", nor for a kind the plugin cannot name in a press.
+   */
+  redeemable: boolean
+  hold: ResetHold
+  holdUntilEpoch: number | null
+}
+
+/**
  * Entitlements that clear this account's windows when one is spent. Not
  * capacity, and never drawn as a bar. On Codex, spending one resets the
- * session and weekly windows outright and moves the weekly reset date; on
- * Claude it clears the 5-hour and weekly limits, and only once the account is
- * at one.
+ * session and weekly windows outright and moves the weekly reset date. On
+ * Claude what it clears depends on its kind — see `kinds` — and it can be
+ * spent only once the account is at a limit it refills.
  */
 export interface ResetCredits {
   /** At least 1 whenever this object exists. */
@@ -141,6 +177,9 @@ export interface ResetCredits {
    * when the credential is parked, or when it is not one this plugin can
    * authenticate. The count still shows; only the button goes. Never offer
    * redemption without this.
+   *
+   * Always false on Claude, whose press has to name a kind: there it is each
+   * entry of `kinds` that says.
    */
   redeemable: boolean
   /**
@@ -149,9 +188,18 @@ export interface ResetCredits {
    * beside the button, never a reason to hide it: the plugin checks the
    * provider afresh before spending anything.
    */
-  hold: "" | "notLimited" | "cooldown" | "paused" | "ineligible" | (string & {})
+  hold: ResetHold
   /** When a "cooldown" hold lifts, or null. */
   holdUntilEpoch: number | null
+  /**
+   * The same resets by kind, one entry per kind held, in the order they are
+   * shown: full, Fable, weekly, 5-hour, then anything unrecognised. Always
+   * empty on Codex, whose resets are all one sort. Empty on Claude too when
+   * Quota Cache is older than the kinds, which means "not known" and never
+   * "all full": nothing is offered until it is known. Optional because an
+   * older plugin sends no such field; read it with resetKinds.ts's kindsOf.
+   */
+  kinds?: ResetKindCredits[]
 }
 
 /** One bucket of the ring. Empty buckets are present, and are half the shape. */

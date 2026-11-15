@@ -19,11 +19,11 @@ func TestAnUnknownCodexClaimIsRepeatedNotReplaced(t *testing.T) {
 	host.queue(codexConsumeURL, reply{err: errors.New("context deadline exceeded")})
 	redeemer := redeemerOn(host, clock)
 
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("first press err = %v, want ErrOutcomeUnknown", err)
 	}
 	clock.advance(3 * time.Minute)
-	result, err := redeemer.Redeem(context.Background(), "codex", "c")
+	result, err := redeemer.Redeem(context.Background(), "codex", "c", "")
 	if err != nil || result.Outcome != OutcomeReset || result.WindowsReset != 2 {
 		t.Fatalf("repeat = %+v, %v", result, err)
 	}
@@ -36,7 +36,7 @@ func TestAnUnknownCodexClaimIsRepeatedNotReplaced(t *testing.T) {
 	}
 
 	// Settled, so the next press is a fresh claim with a fresh key.
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	bodies = host.postBodies(t)
@@ -53,11 +53,11 @@ func TestAnUnknownClaudeClaimIsRepeatedNotReplaced(t *testing.T) {
 	host.queue(claudeClaimURL, reply{status: 504})
 	redeemer := redeemerOn(host, clock)
 
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("first press err = %v, want ErrOutcomeUnknown", err)
 	}
 	clock.advance(9 * time.Minute)
-	result, err := redeemer.Redeem(context.Background(), "claude", "c")
+	result, err := redeemer.Redeem(context.Background(), "claude", "c", "full")
 	if err != nil || result.Outcome != OutcomeReset || result.RemainingCount != 1 {
 		t.Fatalf("repeat = %+v, %v", result, err)
 	}
@@ -88,14 +88,14 @@ func TestARefusalOnARepeatDoesNotSettleTheClaim(t *testing.T) {
 		host.queue(claudeClaimURL, reply{err: errors.New("connection reset")}, refusal)
 		redeemer := redeemerOn(host, newClock())
 
-		if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+		if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) {
 			t.Fatalf("%s: first press err = %v", name, err)
 		}
-		if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+		if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) {
 			t.Fatalf("%s: a refused repeat reported %v, as if it settled the first claim", name, err)
 		}
 		// Still the same claim on the third press.
-		if result, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || result.Outcome != OutcomeReset {
+		if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || result.Outcome != OutcomeReset {
 			t.Fatalf("%s: third press = %+v, %v", name, result, err)
 		}
 		bodies := host.postBodies(t)
@@ -116,13 +116,13 @@ func TestARefusalOnACodexRepeatDoesNotSettleTheClaim(t *testing.T) {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 		host.queue(codexConsumeURL, reply{status: 502}, refusal)
 		redeemer := redeemerOn(host, newClock())
-		if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+		if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrOutcomeUnknown) {
 			t.Fatalf("%s: first press err = %v", name, err)
 		}
-		if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+		if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrOutcomeUnknown) {
 			t.Fatalf("%s: a refused repeat reported %v", name, err)
 		}
-		if _, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || host.calls(codexCreditsURL) != 1 {
+		if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || host.calls(codexCreditsURL) != 1 {
 			t.Fatalf("%s: the claim was not repeated a third time: err = %v, reads = %d", name, err, host.calls(codexCreditsURL))
 		}
 	}
@@ -134,20 +134,20 @@ func TestAlreadyUsedOnARepeatSettlesTheClaim(t *testing.T) {
 	claude := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	claude.queue(claudeClaimURL, reply{status: 500}, reply{body: `{"result":"already_used","resets_left":1}`})
 	redeemer := redeemerOn(claude, newClock())
-	_, _ = redeemer.Redeem(context.Background(), "claude", "c")
-	result, err := redeemer.Redeem(context.Background(), "claude", "c")
+	_, _ = redeemer.Redeem(context.Background(), "claude", "c", "full")
+	result, err := redeemer.Redeem(context.Background(), "claude", "c", "full")
 	if err != nil || result.Outcome != OutcomeAlreadyUsed || result.RemainingCount != 1 {
 		t.Fatalf("claude repeat = %+v, %v", result, err)
 	}
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || claude.calls(claudeStatusURL) != 2 {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || claude.calls(claudeStatusURL) != 2 {
 		t.Fatalf("the settled claim was repeated: err = %v, status reads = %d", err, claude.calls(claudeStatusURL))
 	}
 
 	codex := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	codex.queue(codexConsumeURL, reply{status: 500}, reply{body: `{"code":"already_redeemed"}`})
 	redeemer = redeemerOn(codex, newClock())
-	_, _ = redeemer.Redeem(context.Background(), "codex", "c")
-	if result, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || result.Outcome != OutcomeAlreadyUsed {
+	_, _ = redeemer.Redeem(context.Background(), "codex", "c", "")
+	if result, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || result.Outcome != OutcomeAlreadyUsed {
 		t.Fatalf("codex repeat = %+v, %v", result, err)
 	}
 }
@@ -159,12 +159,12 @@ func TestAClaimIsRepeatedOnlyForTheSameAccount(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	host.queue(claudeClaimURL, reply{status: 502})
 	redeemer := redeemerOn(host, newClock())
-	_, _ = redeemer.Redeem(context.Background(), "claude", "c")
+	_, _ = redeemer.Redeem(context.Background(), "claude", "c", "full")
 
 	host.mu.Lock()
 	host.bodies[claudeProfileURL] = `{"organization":{"uuid":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}}`
 	host.mu.Unlock()
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrIdentityChanged) {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrIdentityChanged) {
 		t.Fatalf("err = %v, want ErrIdentityChanged", err)
 	}
 	if host.postCount() != 1 {
@@ -174,7 +174,7 @@ func TestAClaimIsRepeatedOnlyForTheSameAccount(t *testing.T) {
 	host.mu.Lock()
 	host.bodies[claudeProfileURL] = claudeProfile
 	host.mu.Unlock()
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil {
 		t.Fatal(err)
 	}
 	if bodies := host.postBodies(t); len(bodies) != 2 || bodies[1]["request_id"] != bodies[0]["request_id"] {
@@ -185,9 +185,9 @@ func TestAClaimIsRepeatedOnlyForTheSameAccount(t *testing.T) {
 	codex := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	codex.queue(codexConsumeURL, reply{status: 502})
 	redeemer = redeemerOn(codex, newClock())
-	_, _ = redeemer.Redeem(context.Background(), "codex", "c")
+	_, _ = redeemer.Redeem(context.Background(), "codex", "c", "")
 	codex.setAuth(`{"access_token":"synthetic-token","account_id":"another-account"}`)
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrIdentityChanged) {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrIdentityChanged) {
 		t.Fatalf("codex err = %v, want ErrIdentityChanged", err)
 	}
 	if codex.postCount() != 1 {
@@ -203,10 +203,10 @@ func TestTheRetryWindowCloses(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	host.queue(claudeClaimURL, reply{status: 502}, reply{status: 502})
 	redeemer := redeemerOn(host, clock)
-	_, _ = redeemer.Redeem(context.Background(), "claude", "c")
+	_, _ = redeemer.Redeem(context.Background(), "claude", "c", "full")
 
 	clock.advance(retryWindow - time.Second)
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrOutcomeUnknown) {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("inside the window err = %v", err)
 	}
 	if host.calls(claudeStatusURL) != 1 {
@@ -214,7 +214,7 @@ func TestTheRetryWindowCloses(t *testing.T) {
 	}
 
 	clock.advance(time.Second)
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil {
 		t.Fatal(err)
 	}
 	bodies := host.postBodies(t)
@@ -232,7 +232,7 @@ func TestTheWindowClosingMidRepeatSendsNothing(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	host.queue(claudeClaimURL, reply{status: 502})
 	redeemer := redeemerOn(host, clock)
-	_, _ = redeemer.Redeem(context.Background(), "claude", "c")
+	_, _ = redeemer.Redeem(context.Background(), "claude", "c", "full")
 
 	clock.advance(retryWindow - time.Second)
 	host.onRequest = func(request protocol.HostHTTPRequest) {
@@ -240,7 +240,7 @@ func TestTheWindowClosingMidRepeatSendsNothing(t *testing.T) {
 			clock.advance(2 * time.Second)
 		}
 	}
-	_, err := redeemer.Redeem(context.Background(), "claude", "c")
+	_, err := redeemer.Redeem(context.Background(), "claude", "c", "full")
 	if !errors.Is(err, ErrRetryWindowClosed) || errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("err = %v, want ErrRetryWindowClosed and nothing that promises a repeat", err)
 	}
@@ -248,7 +248,7 @@ func TestTheWindowClosingMidRepeatSendsNothing(t *testing.T) {
 		t.Fatal("a repeat was sent after its window had closed")
 	}
 	host.onRequest = nil
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || host.calls(claudeStatusURL) != 2 {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || host.calls(claudeStatusURL) != 2 {
 		t.Fatalf("the next press did not start fresh: err = %v, status reads = %d", err, host.calls(claudeStatusURL))
 	}
 }
@@ -278,14 +278,14 @@ func TestEveryUnknownAnswerNamesTheOriginalDeadline(t *testing.T) {
 		}
 		return unknown.RetryUntil
 	}
-	_, err := redeemer.Redeem(context.Background(), "codex", "c")
+	_, err := redeemer.Redeem(context.Background(), "codex", "c", "")
 	if first := deadlineOf(err); !first.Equal(madeAt.Add(retryWindow)) {
 		t.Fatalf("first deadline = %s, want %s", first, madeAt.Add(retryWindow))
 	}
 	// Eight minutes on, the repeat is refused, which proves nothing about the
 	// first consume. Its answer must still name the first deadline.
 	clock.advance(8 * time.Minute)
-	_, err = redeemer.Redeem(context.Background(), "codex", "c")
+	_, err = redeemer.Redeem(context.Background(), "codex", "c", "")
 	if second := deadlineOf(err); !second.Equal(madeAt.Add(retryWindow)) {
 		t.Fatalf("the repeat moved the deadline to %s; the claim's window closes at %s", second, madeAt.Add(retryWindow))
 	}
@@ -302,7 +302,7 @@ func TestARepeatAnsweredAfterTheWindowClosesSaysSo(t *testing.T) {
 	host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	host.queue(codexConsumeURL, reply{status: 502}, reply{status: 504})
 	redeemer := redeemerOn(host, clock)
-	_, _ = redeemer.Redeem(context.Background(), "codex", "c")
+	_, _ = redeemer.Redeem(context.Background(), "codex", "c", "")
 
 	clock.advance(retryWindow - 10*time.Second)
 	host.onRequest = func(request protocol.HostHTTPRequest) {
@@ -310,14 +310,14 @@ func TestARepeatAnsweredAfterTheWindowClosesSaysSo(t *testing.T) {
 			clock.advance(20 * time.Second)
 		}
 	}
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRetryWindowClosed) {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrRetryWindowClosed) {
 		t.Fatalf("err = %v, want ErrRetryWindowClosed", err)
 	}
 	if host.postCount() != 2 {
 		t.Fatalf("consumes = %d, want the repeat sent once", host.postCount())
 	}
 	host.onRequest = nil
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || host.calls(codexCreditsURL) != 2 {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || host.calls(codexCreditsURL) != 2 {
 		t.Fatalf("the next press did not start fresh: err = %v, inventory reads = %d", err, host.calls(codexCreditsURL))
 	}
 }
@@ -328,20 +328,20 @@ func TestARefusedFirstClaimLeavesNothingToRepeat(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	host.queue(claudeClaimURL, reply{body: `{"result":"not_limited"}`})
 	redeemer := redeemerOn(host, newClock())
-	if result, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || result.Outcome != OutcomeNotLimited {
+	if result, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || result.Outcome != OutcomeNotLimited {
 		t.Fatalf("first press = %+v, %v", result, err)
 	}
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); err != nil || host.calls(claudeStatusURL) != 2 {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); err != nil || host.calls(claudeStatusURL) != 2 {
 		t.Fatalf("a refused claim was repeated: err = %v, status reads = %d", err, host.calls(claudeStatusURL))
 	}
 
 	codex := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 	codex.queue(codexConsumeURL, reply{status: 401})
 	redeemer = redeemerOn(codex, newClock())
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); !errors.Is(err, ErrRefused) {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); !errors.Is(err, ErrRefused) {
 		t.Fatalf("codex first press err = %v", err)
 	}
-	if _, err := redeemer.Redeem(context.Background(), "codex", "c"); err != nil || codex.calls(codexCreditsURL) != 2 {
+	if _, err := redeemer.Redeem(context.Background(), "codex", "c", ""); err != nil || codex.calls(codexCreditsURL) != 2 {
 		t.Fatalf("a refused consume was repeated: err = %v, reads = %d", err, codex.calls(codexCreditsURL))
 	}
 }
@@ -352,8 +352,8 @@ func TestTheJournalIsPerCredential(t *testing.T) {
 	host := claudeHost(spendableStatus(), `{"result":"reset"}`)
 	host.queue(claudeClaimURL, reply{status: 502})
 	redeemer := redeemerOn(host, newClock())
-	_, _ = redeemer.Redeem(context.Background(), "claude", "claude-one@example.com.json")
-	if _, err := redeemer.Redeem(context.Background(), "claude", "claude-two@example.com.json"); err != nil {
+	_, _ = redeemer.Redeem(context.Background(), "claude", "claude-one@example.com.json", "full")
+	if _, err := redeemer.Redeem(context.Background(), "claude", "claude-two@example.com.json", "full"); err != nil {
 		t.Fatal(err)
 	}
 	if host.calls(claudeStatusURL) != 2 {
@@ -371,16 +371,16 @@ func TestAConcurrentPressDuringARepeatIsRefused(t *testing.T) {
 	// An unknown claim already on record for the credential.
 	redeemer.remember("c", pendingClaim{
 		provider: providerClaude, creditID: "grant-a", requestID: "0d4c3f8e-1b2a-4c5d-8e6f-7a8b9c0d1e2f",
-		account: claudeOrg, createdAt: clock.Now(), grantLeft: 2,
+		account: claudeOrg, createdAt: clock.Now(), kind: "full", grantLeft: 2,
 	})
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := redeemer.Redeem(context.Background(), "claude", "c")
+		_, err := redeemer.Redeem(context.Background(), "claude", "c", "full")
 		done <- err
 	}()
 	host.waitUntilEntered()
-	if _, err := redeemer.Redeem(context.Background(), "claude", "c"); !errors.Is(err, ErrInFlight) {
+	if _, err := redeemer.Redeem(context.Background(), "claude", "c", "full"); !errors.Is(err, ErrInFlight) {
 		t.Fatalf("second press err = %v, want ErrInFlight", err)
 	}
 	close(release)

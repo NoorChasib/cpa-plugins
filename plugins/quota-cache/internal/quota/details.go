@@ -349,12 +349,17 @@ func resetCredits(root map[string]any) *client.ResetCredits {
 var resetGrantID = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
 
 // resetGrant is one well-formed entry of the cedar_ember block, reduced to what
-// counting and the hold need. The label is not read at all.
+// counting, the hold and the kind need. The label is not read at all.
 type resetGrant struct {
 	id                               string
 	left                             int64
 	startsAt, endsAt                 time.Time // zero when not given
 	paused, usableNow, requiresLimit bool
+	// kind is client.ClaudeResetKind of the grant as the response carried it.
+	// It is decided here, once, from the raw object, because the type, clears
+	// and gives_back_weekly it reads are not kept: a second reading from a
+	// reduced copy could only drift from the one Quota Glance's spend makes.
+	kind string
 }
 
 // flag reads an optional boolean with the default Claude Code falls back to
@@ -384,7 +389,10 @@ func parseResetGrant(item any) (resetGrant, bool) {
 	g := resetGrant{id: id, left: left, paused: flag(o, "paused", false),
 		// Missing usability flags default to the refusing side, as they do in
 		// Claude Code: a grant that does not say it is usable is not.
-		usableNow: flag(o, "usable_now", false), requiresLimit: flag(o, "use_requires_limit", true)}
+		usableNow: flag(o, "usable_now", false), requiresLimit: flag(o, "use_requires_limit", true),
+		// A kind that cannot be read is "unknown", never a reason to drop the
+		// grant: it is still banked, and the count must still say so.
+		kind: client.ClaudeResetKind(o)}
 	g.startsAt, _ = rfc3339Field(o, "starts_at")
 	g.endsAt, _ = rfc3339Field(o, "ends_at")
 	return g, true
@@ -400,7 +408,8 @@ func parseResetGrant(item any) (resetGrant, bool) {
 // dashboard says nothing — and never a failed poll.
 //
 // Ids and labels are read and discarded. What survives is a count, a date, and
-// the provider's reason none can be spent now, if it gives one.
+// the provider's reason none can be spent now, if it gives one, both over every
+// grant and again for each kind of reset the account holds.
 func claudeResetGrants(q *client.Quota, block map[string]any, now time.Time) *client.ResetCredits {
 	eligible := boolean(block, "eligible")
 	if eligible == nil {
@@ -431,16 +440,67 @@ func claudeResetGrants(q *client.Quota, block map[string]any, now time.Time) *cl
 	if total == 0 {
 		return nil
 	}
-	credits := &client.ResetCredits{AvailableCount: total}
-	for _, g := range live {
-		if !g.endsAt.IsZero() && (credits.SoonestExpiry == nil || g.endsAt.Before(*credits.SoonestExpiry)) {
+	next, _ := block["next_grant_id"].(string)
+	atLimit := flag(block, "at_limit", false)
+	credits := &client.ResetCredits{AvailableCount: total, SoonestExpiry: soonestGrantEnd(live)}
+	credits.Hold, credits.HoldUntil = resetGrantHold(*eligible, atLimit, block, live, next, now)
+	credits.Kinds = claudeResetKinds(*eligible, atLimit, block, live, next, now)
+	return credits
+}
+
+// soonestGrantEnd is the earliest ends_at among grants, or nil when none is
+// dated. The grants are live, so every date here is still ahead.
+func soonestGrantEnd(grants []resetGrant) *time.Time {
+	var soonest *time.Time
+	for _, g := range grants {
+		if !g.endsAt.IsZero() && (soonest == nil || g.endsAt.Before(*soonest)) {
 			at := g.endsAt
-			credits.SoonestExpiry = &at
+			soonest = &at
 		}
 	}
-	next, _ := block["next_grant_id"].(string)
-	credits.Hold, credits.HoldUntil = resetGrantHold(*eligible, flag(block, "at_limit", false), block, live, next, now)
-	return credits
+	return soonest
+}
+
+// claudeResetKinds breaks the live grants down by kind, so a reader can tell a
+// full reset from a Fable one and offer to spend exactly the one it means.
+//
+// Each kind is judged as if its grants were the whole block, because that is
+// what a spend of that kind sees: Quota Glance's redeemer considers only grants
+// of the kind pressed. So the account-wide refusals (ineligible, a cooldown
+// still running) hold every kind, while "paused" and "not_limited" are read off
+// the grant of this kind a redemption would reach for — next_grant_id only when
+// the server named one of this kind, else this kind's soonest to expire. A
+// Fable grant can be paused while a full one is spendable, and the full entry
+// must not inherit the Fable one's hold, nor the other way round.
+//
+// live holds no spent grant, so every kind present has a count of at least
+// one, and since each grant has exactly one kind the counts add up to the
+// total. Grants this build cannot classify are kept as an "unknown" entry
+// rather than dropped, for the same reason.
+func claudeResetKinds(eligible, atLimit bool, block map[string]any, live []resetGrant, next string, now time.Time) []client.ResetKindCredits {
+	byKind := map[string][]resetGrant{}
+	for _, g := range live {
+		byKind[g.kind] = append(byKind[g.kind], g)
+	}
+	kinds := make([]client.ResetKindCredits, 0, len(byKind))
+	for kind, grants := range byKind {
+		entry := client.ResetKindCredits{Kind: kind, SoonestExpiry: soonestGrantEnd(grants)}
+		for _, g := range grants {
+			entry.AvailableCount += int(g.left)
+		}
+		entry.Hold, entry.HoldUntil = resetGrantHold(eligible, atLimit, block, grants, next, now)
+		kinds = append(kinds, entry)
+	}
+	// ClaudeResetKind gives each kind its own rank; the name only breaks a tie
+	// should that ever change, so the order never follows map iteration.
+	sort.Slice(kinds, func(i, j int) bool {
+		a, b := client.ResetKindRank(kinds[i].Kind), client.ResetKindRank(kinds[j].Kind)
+		if a != b {
+			return a < b
+		}
+		return kinds[i].Kind < kinds[j].Kind
+	})
+	return kinds
 }
 
 // claudeBillingPeriod reads how often the subscription is billed from the
@@ -477,6 +537,9 @@ func claudeBillingPeriod(block map[string]any) string {
 // both the server's preferred grant being paused and every grant being paused.
 // A grant refused for a reason outside this vocabulary, such as usable_now
 // false with no stated cause, reports "": the provider has not said why.
+//
+// live is every live grant for the account-wide hold, and one kind's grants
+// for that kind's (claudeResetKinds); the rules are the same either way.
 func resetGrantHold(eligible, atLimit bool, block map[string]any, live []resetGrant, next string, now time.Time) (string, *time.Time) {
 	if !eligible {
 		return client.HoldIneligible, nil
@@ -502,8 +565,11 @@ func resetGrantHold(eligible, atLimit bool, block map[string]any, live []resetGr
 
 // preferredResetGrant is the grant a redemption tries first: the one the server
 // names in next_grant_id, else the soonest to expire, an undated grant last,
-// ties broken by id so the answer does not depend on response order. live is
-// never empty here; the caller has already returned for a zero count.
+// ties broken by id so the answer does not depend on response order. Given one
+// kind's grants, a next_grant_id of another kind matches none of them, and the
+// soonest of this kind is the answer. live is never empty here: the caller has
+// already returned for a zero count, and a kind is judged only once it has a
+// grant.
 func preferredResetGrant(live []resetGrant, next string) resetGrant {
 	for _, g := range live {
 		if g.id == next {

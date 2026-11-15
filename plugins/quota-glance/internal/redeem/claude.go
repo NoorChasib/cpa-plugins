@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	qc "github.com/NoorChasib/cpa-plugins/plugins/quota-cache/client"
 	"github.com/NoorChasib/cpa-plugins/plugins/quota-glance/internal/protocol"
 )
 
@@ -60,12 +61,13 @@ var claudeWindows = map[string]bool{
 	"seven_day_oauth_apps":       true,
 }
 
-// redeemClaude spends one Claude reset grant: the organization from the
-// profile, the grant status, and one claim naming the grant the provider
-// recommends. A repeat of an unresolved claim reads the organization again —
-// it must be the same one — skips the status, and claims the same grant with
-// the same request_id.
-func (r *Redeemer) redeemClaude(ctx context.Context, authIndex string, retry pendingClaim, isRetry bool) (Result, error) {
+// redeemClaude spends one Claude reset grant of the kind asked for: the
+// organization from the profile, the grant status, and one claim naming a
+// grant of that kind — the one the provider recommends when it is of that
+// kind. A repeat of an unresolved claim reads the organization again — it must
+// be the same one — skips the status, and claims the same grant with the same
+// request_id.
+func (r *Redeemer) redeemClaude(ctx context.Context, authIndex, kind string, retry pendingClaim, isRetry bool) (Result, error) {
 	token, err := r.claudeAccessToken(ctx, authIndex)
 	var org string
 	if err == nil {
@@ -79,10 +81,10 @@ func (r *Redeemer) redeemClaude(ctx context.Context, authIndex string, retry pen
 		}
 		return Result{}, err
 	}
-	return r.claudeClaim(ctx, authIndex, token, org, retry, isRetry)
+	return r.claudeClaim(ctx, authIndex, token, org, kind, retry, isRetry)
 }
 
-func (r *Redeemer) claudeClaim(ctx context.Context, authIndex, token, org string, retry pendingClaim, isRetry bool) (Result, error) {
+func (r *Redeemer) claudeClaim(ctx context.Context, authIndex, token, org, kind string, retry pendingClaim, isRetry bool) (Result, error) {
 	claim := retry
 	if isRetry {
 		// A claim is addressed to an organization. If the credential now signs
@@ -97,8 +99,8 @@ func (r *Redeemer) claudeClaim(ctx context.Context, authIndex, token, org string
 			return Result{}, err
 		}
 		now := r.clock()
-		grant, blocked := chooseGrant(status, now)
-		held := status.held(now)
+		grant, blocked := chooseGrant(status, kind, now)
+		held := status.held(kind, now)
 		if blocked != "" {
 			return Result{Outcome: blocked, RemainingCount: held}, nil
 		}
@@ -108,7 +110,7 @@ func (r *Redeemer) claudeClaim(ctx context.Context, authIndex, token, org string
 		}
 		claim = pendingClaim{
 			provider: providerClaude, creditID: grant.id, requestID: id, account: org,
-			createdAt: now, others: held - grant.left, grantLeft: grant.left,
+			createdAt: now, kind: kind, others: held - grant.left, grantLeft: grant.left,
 		}
 	}
 	request, ok := claudeClaimRequest(token, claim)
@@ -314,6 +316,10 @@ type claudeStatus struct {
 type claudeGrant struct {
 	id   string
 	left int
+	// kind is what spending the grant does, as qc.ClaudeResetKind reads it —
+	// the same function quota-cache counts the card's kinds with, so the kind
+	// a reader pressed for and the kind spent cannot disagree.
+	kind string
 	// startsAt and endsAt are zero when the provider sent none.
 	startsAt, endsAt time.Time
 	paused           bool
@@ -321,13 +327,15 @@ type claudeGrant struct {
 	requiresLimit    bool
 }
 
-// held is every reset the account holds across the grants that have not
-// ended, counted as quota-cache counts the card: a grant not yet started is
-// held, just not spendable, and one past its end is gone.
-func (s claudeStatus) held(now time.Time) int {
+// held is every reset of kind the account holds across the grants that have
+// not ended, counted as quota-cache counts the card's kind: a grant not yet
+// started is held, just not spendable, and one past its end is gone. Grants of
+// other kinds are not counted: what a press reports left is what is left of
+// the kind it was for.
+func (s claudeStatus) held(kind string, now time.Time) int {
 	sum := 0
 	for _, grant := range s.grants {
-		if grant.live(now) {
+		if grant.kind == kind && grant.live(now) {
 			sum += grant.left
 		}
 	}
@@ -435,6 +443,23 @@ func parseClaudeGrant(value any) (claudeGrant, bool) {
 			return claudeGrant{}, false
 		}
 	}
+	// The two fields that, with clears, say what kind of reset the grant is.
+	// Both are optional in Claude Code's schema, so absent or null is a grant
+	// that predates kinds; present in another shape is drift, and a block
+	// whose kinds cannot be read is not one to claim from. A type string this
+	// build does not know is not drift: Anthropic adding a kind is expected,
+	// and that grant is classified unknown, which chooseGrant never takes.
+	if raw := item["gives_back_weekly"]; raw != nil {
+		if _, ok := raw.(bool); !ok {
+			return claudeGrant{}, false
+		}
+	}
+	if raw := item["type"]; raw != nil {
+		if _, ok := raw.(string); !ok {
+			return claudeGrant{}, false
+		}
+	}
+	grant.kind = qc.ClaudeResetKind(item)
 	return grant, true
 }
 
@@ -479,20 +504,31 @@ func (g claudeGrant) spendable(status claudeStatus, now time.Time) bool {
 	return true
 }
 
-// chooseGrant picks the grant to claim, or says why there is none.
+// chooseGrant picks the grant of kind to claim, or says why there is none.
 //
-// The provider's recommendation wins when it is spendable — the claim endpoint
-// can refuse any other grant as not the next one. Without a spendable
-// recommendation, the spendable grant that lapses soonest is taken, so the
-// grant closest to being lost is the one used, and ties go by id so the choice
-// does not move between two reads of the same status.
+// Only grants of the kind asked for are ever considered. The grant claimed is
+// what decides the kind spent, so a grant of another kind is never taken, not
+// even the provider's own recommendation and not even when nothing of the
+// kind asked for can be spent: a reader who asked for a full reset and got a
+// Fable one has lost the reset they meant to keep. A grant this build cannot
+// classify is of no kind a press can name, so it is never taken either.
 //
-// When nothing is spendable, the reason given is the account's own first —
-// ineligible, then a cooldown still running — and otherwise the reason the
-// grant that would have been chosen gives. Not being at a limit is reported
-// ahead of a grant merely saying it is not usable now, because when both are
-// true the first is the one the operator can act on.
-func chooseGrant(status claudeStatus, now time.Time) (claudeGrant, string) {
+// Among those, the provider's recommendation wins when it is spendable — the
+// claim endpoint can refuse any other grant as not the next one. Without a
+// spendable recommendation of the kind, the spendable grant of the kind that
+// lapses soonest is taken, so the grant closest to being lost is the one used,
+// and ties go by id so the choice does not move between two reads of the same
+// status. That is Claude Code's own choice too: it asks which kind, then
+// claims a grant of that kind.
+//
+// When nothing of the kind is spendable, the reason given is the account's own
+// first — ineligible, then a cooldown still running, both of which hold for
+// every kind — and otherwise the reason the grant of the kind that would have
+// been chosen gives. Not being at a limit is reported ahead of a grant merely
+// saying it is not usable now, because when both are true the first is the one
+// the operator can act on. An account holding none of the kind live is
+// OutcomeNoCredit, whatever it holds of others.
+func chooseGrant(status claudeStatus, kind string, now time.Time) (claudeGrant, string) {
 	if !status.eligible {
 		return claudeGrant{}, OutcomeIneligible
 	}
@@ -501,6 +537,9 @@ func chooseGrant(status claudeStatus, now time.Time) (claudeGrant, string) {
 	}
 	var spendable, held []claudeGrant
 	for _, grant := range status.grants {
+		if grant.kind != kind || grant.kind == qc.ResetKindUnknown {
+			continue
+		}
 		if grant.live(now) {
 			held = append(held, grant)
 		}

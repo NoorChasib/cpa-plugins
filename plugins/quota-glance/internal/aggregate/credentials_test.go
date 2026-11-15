@@ -1,7 +1,11 @@
 package aggregate
 
 import (
+	"encoding/json"
+	"fmt"
 	"math/big"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,8 +38,30 @@ func oneCredential(t *testing.T, identity Identity, entry qc.Entry, redeemable b
 	return doc.Credentials[0]
 }
 
+// banked is count resets, all of them full resets as quota-cache reports an
+// account whose grants predate kinds. Codex ignores the breakdown.
 func banked(count int) *qc.Quota {
-	return &qc.Quota{Schema: 1, ResetCredits: &qc.ResetCredits{AvailableCount: count}}
+	return &qc.Quota{Schema: 1, ResetCredits: &qc.ResetCredits{
+		AvailableCount: count,
+		Kinds:          []qc.ResetKindCredits{{Kind: qc.ResetKindFull, AvailableCount: count}},
+	}}
+}
+
+// offered reports whether a client may put a button anywhere on these
+// credits: on the count itself for Codex, and on a kind for Claude.
+func offered(credits *ResetCredits) bool {
+	if credits == nil {
+		return false
+	}
+	if credits.Redeemable {
+		return true
+	}
+	for _, kind := range credits.Kinds {
+		if kind.Redeemable {
+			return true
+		}
+	}
+	return false
 }
 
 // Every account holding a banked reset gets its own button, so the operator
@@ -51,7 +77,7 @@ func TestACredentialInCooldownKeepsItsButton(t *testing.T) {
 		if got.Status != StatusUnavailable {
 			t.Fatalf("%s: status = %q; the fixture should be in cooldown", provider, got.Status)
 		}
-		if got.ResetCredits == nil || !got.ResetCredits.Redeemable {
+		if !offered(got.ResetCredits) {
 			t.Fatalf("%s: a credential in cooldown lost its button: %+v", provider, got.ResetCredits)
 		}
 	}
@@ -78,10 +104,117 @@ func TestTheButtonGoesOnlyWhereItCannotWork(t *testing.T) {
 		if got.ResetCredits == nil || got.ResetCredits.AvailableCount != 1 {
 			t.Fatalf("%s: the count went with the button: %+v", name, got.ResetCredits)
 		}
-		if got.ResetCredits.Redeemable != one.want {
-			t.Fatalf("%s: redeemable = %v, want %v", name, got.ResetCredits.Redeemable, one.want)
+		if offered(got.ResetCredits) != one.want {
+			t.Fatalf("%s: offered = %v, want %v: %+v", name, offered(got.ResetCredits), one.want, got.ResetCredits)
 		}
 	}
+}
+
+// A Claude press names the kind it spends, so the count itself never carries
+// the button there: each kind does. Codex keeps its one button on the count
+// and has no kinds, whatever the snapshot says.
+func TestClaudesButtonsAreOnItsKindsAndCodexsOnItsCount(t *testing.T) {
+	claude := oneCredential(t, Identity{AuthIndex: "claude-a@northwind.dev.json", Provider: "claude"}, qc.Entry{Quota: banked(2)}, true).ResetCredits
+	if claude.Redeemable || len(claude.Kinds) != 1 || !claude.Kinds[0].Redeemable || claude.Kinds[0].Kind != qc.ResetKindFull {
+		t.Fatalf("claude = %+v", claude)
+	}
+	codex := oneCredential(t, Identity{AuthIndex: "codex-a@example.com.json", Provider: "codex"}, qc.Entry{Quota: banked(2)}, true).ResetCredits
+	if !codex.Redeemable || codex.Kinds == nil || len(codex.Kinds) != 0 {
+		t.Fatalf("codex = %+v, want its button on the count and an empty, non-nil kinds", codex)
+	}
+}
+
+// Quota Cache's breakdown by kind, carried onto the credential: dropped where
+// empty, in rank order whatever order it arrived in, each dated and held as the
+// account is, and each offered only where a press could name it.
+func TestClaudeResetKindsAreCarriedKindByKind(t *testing.T) {
+	now := at(t, 0)
+	soon, later, past := now.Add(26*time.Hour), now.Add(9*24*time.Hour), now.Add(-time.Hour)
+	cooling, cooled := now.Add(90*time.Minute), now.Add(-time.Minute)
+	quota := &qc.Quota{Schema: 1, ResetCredits: &qc.ResetCredits{
+		AvailableCount: 5, SoonestExpiry: &soon,
+		Kinds: []qc.ResetKindCredits{
+			{Kind: qc.ResetKindUnknown, AvailableCount: 1, SoonestExpiry: &later},
+			{Kind: qc.ResetKindSession, AvailableCount: 0},
+			{Kind: qc.ResetKindFable, AvailableCount: 2, SoonestExpiry: &soon, Hold: qc.HoldCooldown, HoldUntil: &cooling},
+			{Kind: "monthly", AvailableCount: 1},
+			{Kind: qc.ResetKindFull, AvailableCount: 1, SoonestExpiry: &past, Hold: qc.HoldCooldown, HoldUntil: &cooled},
+		},
+	}}
+	identity := Identity{AuthIndex: "claude-a@northwind.dev.json", Provider: "claude"}
+	got := oneCredential(t, identity, qc.Entry{Quota: quota}, true).ResetCredits
+	if got.AvailableCount != 5 || got.Redeemable || got.ExpiresAtEpoch == nil || *got.ExpiresAtEpoch != soon.Unix() {
+		t.Fatalf("account-wide = %+v", got)
+	}
+	want := []ResetKind{
+		// Its expiry and its cooldown both already past: dropped, as the
+		// account's would be.
+		{Kind: qc.ResetKindFull, AvailableCount: 1, Redeemable: true},
+		{Kind: qc.ResetKindFable, AvailableCount: 2, Redeemable: true, Hold: "cooldown",
+			ExpiresAtEpoch: ptr(soon.Unix()), ExpiresInSeconds: ptr(int64(26 * 3600)), HoldUntilEpoch: ptr(cooling.Unix())},
+		// Counted, never offered: neither is a kind a press may name.
+		{Kind: qc.ResetKindUnknown, AvailableCount: 1, ExpiresAtEpoch: ptr(later.Unix()), ExpiresInSeconds: ptr(int64(9 * 24 * 3600))},
+		{Kind: "monthly", AvailableCount: 1},
+	}
+	if len(got.Kinds) != len(want) {
+		t.Fatalf("kinds = %+v, want %d entries", got.Kinds, len(want))
+	}
+	for i := range want {
+		if !sameKind(got.Kinds[i], want[i]) {
+			t.Fatalf("kinds[%d] = %s, want %s", i, kindString(got.Kinds[i]), kindString(want[i]))
+		}
+	}
+
+	// The credential's own condition takes every kind's button with it, and
+	// the counts stay.
+	for name, one := range map[string]struct {
+		identity   Identity
+		redeemable bool
+	}{
+		"disabled":                {Identity{AuthIndex: identity.AuthIndex, Provider: "claude", Disabled: true}, true},
+		"redemption switched off": {identity, false},
+	} {
+		got := oneCredential(t, one.identity, qc.Entry{Quota: quota}, one.redeemable).ResetCredits
+		if len(got.Kinds) != 4 {
+			t.Fatalf("%s: kinds = %+v", name, got.Kinds)
+		}
+		for _, kind := range got.Kinds {
+			if kind.Redeemable {
+				t.Fatalf("%s: %s is offered", name, kind.Kind)
+			}
+		}
+	}
+}
+
+// A Quota Cache older than the breakdown gives a Claude count with no kinds.
+// The count still shows, with no button anywhere, and kinds is an empty array
+// rather than null so a client has one shape to read.
+func TestAClaudeCountWithoutKindsOffersNoButton(t *testing.T) {
+	quota := &qc.Quota{Schema: 1, ResetCredits: &qc.ResetCredits{AvailableCount: 2, Hold: qc.HoldNotLimited}}
+	got := oneCredential(t, Identity{AuthIndex: "claude-a@northwind.dev.json", Provider: "claude"}, qc.Entry{Quota: quota}, true)
+	if got.ResetCredits == nil || got.ResetCredits.AvailableCount != 2 || got.ResetCredits.Hold != "notLimited" || offered(got.ResetCredits) {
+		t.Fatalf("resetCredits = %+v", got.ResetCredits)
+	}
+	for _, credential := range []Credential{got, oneCredential(t, Identity{AuthIndex: "codex-a@example.com.json", Provider: "codex"}, qc.Entry{Quota: quota}, true)} {
+		raw, err := json.Marshal(credential.ResetCredits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"kinds":[]`) {
+			t.Fatalf("%s: %s, want kinds as an empty array", credential.Provider, raw)
+		}
+	}
+}
+
+func sameKind(a, b ResetKind) bool {
+	same := func(x, y *int64) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	return a.Kind == b.Kind && a.AvailableCount == b.AvailableCount && a.Redeemable == b.Redeemable && a.Hold == b.Hold &&
+		same(a.ExpiresAtEpoch, b.ExpiresAtEpoch) && same(a.ExpiresInSeconds, b.ExpiresInSeconds) && same(a.HoldUntilEpoch, b.HoldUntilEpoch)
+}
+
+func kindString(k ResetKind) string {
+	raw, _ := json.Marshal(k)
+	return string(raw)
 }
 
 // quota-cache's hold arrives in this document's vocabulary. A cooldown already
@@ -109,15 +242,22 @@ func TestHoldsAreTranslatedAndExpire(t *testing.T) {
 	} {
 		quota := banked(1)
 		quota.ResetCredits.Hold, quota.ResetCredits.HoldUntil = one.hold, one.until
+		quota.ResetCredits.Kinds[0].Hold, quota.ResetCredits.Kinds[0].HoldUntil = one.hold, one.until
 		got := oneCredential(t, Identity{AuthIndex: "claude-a@northwind.dev.json", Provider: "claude"}, qc.Entry{Quota: quota}, true).ResetCredits
-		if got.Hold != one.want {
-			t.Fatalf("%s: hold = %q, want %q", name, got.Hold, one.want)
-		}
-		if (got.HoldUntilEpoch == nil) != (one.wantUntil == nil) || (got.HoldUntilEpoch != nil && *got.HoldUntilEpoch != *one.wantUntil) {
-			t.Fatalf("%s: holdUntilEpoch = %v, want %v", name, got.HoldUntilEpoch, one.wantUntil)
+		// The account's hold and its kind's are read by the same rule.
+		for where, hold := range map[string]struct {
+			hold  string
+			until *int64
+		}{"account": {got.Hold, got.HoldUntilEpoch}, "kind": {got.Kinds[0].Hold, got.Kinds[0].HoldUntilEpoch}} {
+			if hold.hold != one.want {
+				t.Fatalf("%s: %s hold = %q, want %q", name, where, hold.hold, one.want)
+			}
+			if (hold.until == nil) != (one.wantUntil == nil) || (hold.until != nil && *hold.until != *one.wantUntil) {
+				t.Fatalf("%s: %s holdUntilEpoch = %v, want %v", name, where, hold.until, one.wantUntil)
+			}
 		}
 		// A hold is a hint beside the button, never a reason to remove it.
-		if !got.Redeemable {
+		if !got.Kinds[0].Redeemable {
 			t.Fatalf("%s: a hold took the button away", name)
 		}
 	}
@@ -244,26 +384,48 @@ func TestGoldenContractsCoverTheCredentialExtras(t *testing.T) {
 		return c
 	}
 
-	// Claude holding resets: one spendable, one with a hold beside its button.
-	if c := credential("claude-sierra@example.com.json"); c.ResetCredits == nil || !c.ResetCredits.Redeemable || c.ResetCredits.Hold != "" {
-		t.Errorf("spendable Claude reset = %+v", c.ResetCredits)
+	// kinds is a Claude credential's kinds as "kind:count:redeemable:hold".
+	kinds := func(c Credential) []string {
+		out := []string{}
+		for _, kind := range c.ResetCredits.Kinds {
+			out = append(out, fmt.Sprintf("%s:%d:%v:%s", kind.Kind, kind.AvailableCount, kind.Redeemable, kind.Hold))
+		}
+		return out
 	}
-	if c := credential("claude-agency@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Hold != "notLimited" || !c.ResetCredits.Redeemable {
+	// Claude holding resets of two kinds, each with its own button and the
+	// Fable one with its own hold, and none on the count; and an account whose
+	// grants predate kinds, which are all full resets, with a hold beside its
+	// one button.
+	if c := credential("claude-sierra@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Redeemable || c.ResetCredits.Hold != "" ||
+		!slices.Equal(kinds(c), []string{"full:1:true:", "fable:2:true:notLimited"}) {
+		t.Errorf("Claude holding full and Fable resets = %+v", c.ResetCredits)
+	}
+	if c := credential("claude-agency@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Hold != "notLimited" ||
+		!slices.Equal(kinds(c), []string{"full:3:true:notLimited"}) {
 		t.Errorf("held Claude reset = %+v", c.ResetCredits)
 	}
 	// A Claude credential CPA has in cooldown, still offered, with its hold
-	// dated.
+	// dated on every kind, and one kind this build cannot name, counted and
+	// never offered.
 	if c := credential("claude-unavailable@example.com.json"); c.Status != StatusUnavailable || c.ResetCredits == nil ||
-		!c.ResetCredits.Redeemable || c.ResetCredits.Hold != "cooldown" || c.ResetCredits.HoldUntilEpoch == nil {
+		c.ResetCredits.Hold != "cooldown" || c.ResetCredits.HoldUntilEpoch == nil ||
+		!slices.Equal(kinds(c), []string{"full:1:true:cooldown", "unknown:1:false:cooldown"}) {
 		t.Errorf("cooling Claude credential = status %q, %+v", c.Status, c.ResetCredits)
 	}
-	// A cooldown already over, dropped; and a disabled credential's count
+	// A cooldown already over, dropped, on an entry from a Quota Cache too old
+	// to say which kind each reset is; and a disabled credential's count
 	// without its button.
-	if c := credential("claude-stale@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Hold != "" || c.ResetCredits.HoldUntilEpoch != nil {
-		t.Errorf("expired hold = %+v", c.ResetCredits)
+	if c := credential("claude-stale@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Hold != "" || c.ResetCredits.HoldUntilEpoch != nil ||
+		c.ResetCredits.Kinds == nil || len(c.ResetCredits.Kinds) != 0 {
+		t.Errorf("expired hold, no kinds = %+v", c.ResetCredits)
 	}
-	if c := credential("claude-disabled@example.com.json"); c.ResetCredits == nil || c.ResetCredits.Redeemable {
+	if c := credential("claude-disabled@example.com.json"); c.ResetCredits == nil || offered(c.ResetCredits) ||
+		!slices.Equal(kinds(c), []string{"fable:1:false:"}) {
 		t.Errorf("disabled Claude reset = %+v", c.ResetCredits)
+	}
+	// Codex's credits are one sort: the button on the count, and no kinds.
+	if c := credential("codex-noor@example.com.json"); c.ResetCredits == nil || !c.ResetCredits.Redeemable || len(c.ResetCredits.Kinds) != 0 {
+		t.Errorf("codex resets = %+v", c.ResetCredits)
 	}
 	// Codex credits and renewal, and the unlimited and lapsed shapes.
 	if c := credential("codex-noor@example.com.json"); c.Credits == nil || c.Credits.Display != "57,706.15" || c.RenewalAtEpoch == nil {

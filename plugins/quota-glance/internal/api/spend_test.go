@@ -56,7 +56,7 @@ func newGatedRedeemer() *gatedRedeemer {
 	}
 }
 
-func (g *gatedRedeemer) Redeem(context.Context, string, string) (redeem.Result, error) {
+func (g *gatedRedeemer) Redeem(context.Context, string, string, string) (redeem.Result, error) {
 	g.calls.Add(1)
 	select {
 	case g.entered <- struct{}{}:
@@ -555,7 +555,7 @@ func TestAFullLedgerOfPressesInFlightRefusesANewOne(t *testing.T) {
 	a.ledger.clock = clock.read
 	entries := make([]*pressEntry, ledgerCapacity)
 	for i := range ledgerCapacity {
-		entry, _, err := a.ledger.begin(pressID(1000+i), "someone-else.json")
+		entry, _, err := a.ledger.begin(pressID(1000+i), "someone-else.json", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -609,7 +609,7 @@ func TestAPressStaysSingleUseHoweverManyPressesFollowIt(t *testing.T) {
 // panicRedeemer fails the way nothing else can: by not returning at all.
 type panicRedeemer struct{ calls atomic.Int32 }
 
-func (p *panicRedeemer) Redeem(context.Context, string, string) (redeem.Result, error) {
+func (p *panicRedeemer) Redeem(context.Context, string, string, string) (redeem.Result, error) {
 	p.calls.Add(1)
 	panic("redeemer failed")
 }

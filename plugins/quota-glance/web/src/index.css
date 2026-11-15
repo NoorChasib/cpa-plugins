@@ -46,6 +46,25 @@
   --color-warn: #fab219;
   --color-crit: #d03b3b;
 
+  /* The kinds of Claude banked reset, each a colour of its own and none of
+   * them a status tone: green, amber and red already mean how much is left,
+   * and a Fable reset in any of them would read as good or bad news rather
+   * than as a kind. Full keeps the accent every reset button had before there
+   * were kinds. Each is a base, for a button's ink and a mark's fill, and a
+   * lighter ink for text and icons, both at least 4.5:1 on a card. Never the
+   * only signal: every kind also has its own icon and its name in words. The
+   * page is dark-only (color-scheme: dark), so there is one value each. */
+  --color-kind-full: #3987e5;
+  --color-kind-full-ink: #80b1ef;
+  --color-kind-fable: #a283f2;
+  --color-kind-fable-ink: #c4b0fa;
+  --color-kind-weekly: #22a8b8;
+  --color-kind-weekly-ink: #7fd3de;
+  --color-kind-session: #d8679f;
+  --color-kind-session-ink: #eca6c9;
+  --color-kind-unknown: #6b7280;
+  --color-kind-unknown-ink: #9aa1ab;
+
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
   --font-num: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -274,6 +293,8 @@
     border-top: 1px solid var(--color-rule);
   }
 
+  /* In a kind's group the mark takes the kind's colour; elsewhere — Codex —
+   * the accent it always had. */
   .qg-pico {
     display: grid;
     grid-area: ico;
@@ -281,8 +302,8 @@
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: color-mix(in srgb, var(--color-accent) 16%, transparent);
-    color: #80b1ef;
+    background: color-mix(in srgb, var(--kind, var(--color-accent)) 16%, transparent);
+    color: var(--kind-ink, #80b1ef);
   }
 
   .qg-pico svg {
@@ -298,12 +319,15 @@
   }
 
   /* Who and how many. The count never gives way; a long address does, with
-   * the whole of it in the row's hover and the button's accessible name. */
+   * the whole of it in the row's hover and the button's accessible name.
+   * Clipped at its own edge all the same, so that a name too long for the
+   * column can never paint under the button beside it. */
   .qg-bwho {
     display: flex;
     grid-area: who;
     gap: 0.3em;
     min-width: 0;
+    overflow: hidden;
     font-size: 12.5px;
     font-weight: 600;
     color: var(--color-ink);
@@ -344,7 +368,9 @@
   }
 
   /* The control that spends. Accent ink and outline rather than a fill: it is
-   * irreversible, and a solid button is the shape people click unread. */
+   * irreversible, and a solid button is the shape people click unread. In a
+   * kind's group, the kind's ink instead, so "Use Fable reset" and "Use full
+   * reset" differ in colour as well as in words. */
   .qg-use {
     display: inline-flex;
     grid-area: use;
@@ -352,12 +378,12 @@
     gap: 5px;
     height: 28px;
     padding: 0 10px 0 12px;
-    border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+    border: 1px solid color-mix(in srgb, var(--kind, var(--color-accent)) 45%, transparent);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--color-accent) 9%, var(--color-card));
+    background: color-mix(in srgb, var(--kind, var(--color-accent)) 9%, var(--color-card));
     font-size: 11.5px;
     font-weight: 550;
-    color: var(--color-accent);
+    color: var(--kind, var(--color-accent));
     white-space: nowrap;
     cursor: pointer;
     transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
@@ -369,9 +395,9 @@
   }
 
   .qg-use:hover:not(:disabled) {
-    border-color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 20%, var(--color-card));
-    color: #cfe1fa;
+    border-color: var(--kind, var(--color-accent));
+    background: color-mix(in srgb, var(--kind, var(--color-accent)) 20%, var(--color-card));
+    color: var(--kind-hover, #cfe1fa);
   }
 
   .qg-use:active:not(:disabled) {
@@ -379,7 +405,7 @@
   }
 
   .qg-use:focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--kind, var(--color-accent));
     outline-offset: 2px;
   }
 
@@ -398,6 +424,150 @@
   .qg-brow.is-held .qg-use:hover:not(:disabled) {
     border-color: var(--color-ink-4);
     color: var(--color-ink);
+  }
+
+  /* ---------- a kind of Claude reset ---------- */
+
+  /* What every part of a kind reads its colour from: the group, the dialog,
+   * a notice's tag. One class per group resetKinds.ts sorts into, and no
+   * other, so a kind newer than this bundle falls into the unknown's grey. */
+  .qg-k-full {
+    --kind: var(--color-kind-full);
+    --kind-ink: var(--color-kind-full-ink);
+  }
+
+  .qg-k-fable {
+    --kind: var(--color-kind-fable);
+    --kind-ink: var(--color-kind-fable-ink);
+  }
+
+  .qg-k-weekly {
+    --kind: var(--color-kind-weekly);
+    --kind-ink: var(--color-kind-weekly-ink);
+  }
+
+  .qg-k-session {
+    --kind: var(--color-kind-session);
+    --kind-ink: var(--color-kind-session-ink);
+  }
+
+  .qg-k-unknown {
+    --kind: var(--color-kind-unknown);
+    --kind-ink: var(--color-kind-unknown-ink);
+  }
+
+  .qg-k-full,
+  .qg-k-fable,
+  .qg-k-weekly,
+  .qg-k-session,
+  .qg-k-unknown {
+    --kind-hover: color-mix(in srgb, var(--kind-ink) 45%, #fff);
+  }
+
+  /* One kind's group: a rule above it, its mark and name, what it does, then
+   * its rows. The rule is the line the eye crosses from one kind to the next,
+   * so no row can be read as belonging to the group above it. */
+  .qg-kgroup {
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--color-line);
+  }
+
+  .qg-kgroup > .qg-brows {
+    margin-top: 4px;
+    border-top: 0;
+  }
+
+  .qg-khead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--kind-ink);
+  }
+
+  /* The kind's mark: its icon on its colour. A rounded square rather than the
+   * rows' circle, so the heading's mark is not read as one more account. */
+  .qg-kmark {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--kind) 20%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kind) 45%, transparent);
+    color: var(--kind-ink);
+  }
+
+  .qg-kmark svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* What spending one does, under the name, in readable ink: it is the line
+   * that tells a Fable reset from a full one in words. */
+  .qg-keffect {
+    margin: 3px 0 0 28px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--color-ink-2);
+    text-wrap: pretty;
+  }
+
+  /* The kind in a notice, after the address: its icon and its name. */
+  .qg-ntag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 7px 0 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--kind) 16%, transparent);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 18px;
+    color: var(--kind-ink);
+    white-space: nowrap;
+    vertical-align: 1px;
+  }
+
+  .qg-ntag svg {
+    flex: none;
+    width: 10px;
+    height: 10px;
+  }
+
+  /* The kind in the dialog: its mark, its name and what it does, in a panel
+   * edged in its colour, between the question and the sentence that spends. */
+  .qg-dkind {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--kind) 40%, var(--color-line));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--kind) 8%, var(--color-card));
+  }
+
+  .qg-dkind > .qg-kmark {
+    margin-top: 1px;
+  }
+
+  .qg-dkind-name {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--kind-ink);
+  }
+
+  .qg-dkind-effect {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-ink-2);
   }
 
   /* Why the rows above have no button in this browser, once for the card. */
@@ -1483,16 +1653,17 @@
 
   /* The affirmative one. Accent ink rather than an accent fill: it spends
    * something irreversibly, and a solid primary button is the shape people
-   * click without reading. The dialog is where the weight belongs. */
+   * click without reading. The dialog is where the weight belongs. In a
+   * dialog about one kind of Claude reset, that kind's ink. */
   .qg-btn-go {
-    border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
-    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--kind, var(--color-accent)) 45%, transparent);
+    color: var(--kind, var(--color-accent));
   }
 
   .qg-btn-go:hover:not(:disabled) {
-    border-color: var(--color-accent);
-    color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-card-2));
+    border-color: var(--kind, var(--color-accent));
+    color: var(--kind, var(--color-accent));
+    background: color-mix(in srgb, var(--kind, var(--color-accent)) 12%, var(--color-card-2));
   }
 
   .qg-btn:disabled {
@@ -1779,6 +1950,45 @@
 
     .qg-bst {
       font-size: 11px;
+    }
+
+    /* The effect line takes the card's whole width once the mark's column
+     * is worth more as text. */
+    .qg-keffect {
+      margin-left: 0;
+    }
+  }
+
+  /* ---------- 380px and under: the narrowest phones ---------- */
+
+  /* A Claude row's button names its kind, and "Use 5-hour reset" is half a
+   * 320px card. Beside it the account came down to a letter or two, and to
+   * nothing once a qualifier stood beside it — the qualifier that exists
+   * because two accounts share a name and this row is the way into an
+   * irreversible spend. So here the button takes a line of its own under the
+   * hold and the deadline, and the name and the figures have the row's whole
+   * width. Codex's "Use one" still fits beside them and stays there. */
+  @media (max-width: 380px) {
+    .qg-kgroup .qg-brow {
+      grid-template-columns: 26px minmax(0, 1fr);
+      grid-template-areas:
+        "ico who"
+        "ico st";
+    }
+
+    /* Level with the name it belongs to, not adrift beside the button. */
+    .qg-kgroup .qg-brow > .qg-pico {
+      align-self: start;
+    }
+
+    /* A row of its own that only a row with a button has, so the unknown
+     * kind's rows, which have none, keep their height. */
+    .qg-kgroup .qg-use {
+      grid-area: auto;
+      grid-row: 3;
+      grid-column: 2;
+      justify-self: start;
+      margin-top: 6px;
     }
   }
 }

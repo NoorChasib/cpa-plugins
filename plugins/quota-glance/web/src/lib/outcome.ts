@@ -1,6 +1,10 @@
 // How a press that the plugin answered is told to the reader: which outcomes
 // fell short, which spent a reset with CPA possibly still skipping the
-// account, and the sentence for each.
+// account, and the sentence for each — and, since Claude's banked resets
+// come in kinds, the words for each kind wherever the page names one: its
+// group on the card, its button, the dialog that asks, and what it came to.
+// One vocabulary for all of them, so the card can never call a reset one
+// thing and the outcome line another.
 //
 // Kept apart from redeem.ts, which makes the request, so it imports nothing
 // at all and Node can load it for its tests by stripping the types alone.
@@ -53,6 +57,14 @@ export interface RedeemResult {
    */
   replayed: boolean
   /**
+   * The kind of Claude reset this press spent, or tried to — "full", "fable",
+   * "weekly" or "session" — as the plugin names it. Null for Codex, whose
+   * resets are all one sort, and from a plugin older than the kinds, which
+   * spent whichever grant it chose; the sentence then names no kind rather
+   * than guessing one.
+   */
+  kind: string | null
+  /**
    * What became of CPA's own routing cooldown on the credential after a reset:
    * "cleared"; "failed" or "unsupported", where CPA may keep skipping the
    * account until its cooldown ends; or "unconfirmed", where the provider's
@@ -82,6 +94,209 @@ export function nameOf(provider: string): string {
 /** The same name, opening a sentence. */
 export function opening(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/**
+ * Everything the page says about one kind of Claude banked reset.
+ *
+ * The meanings are Claude Code's, and go no further: it says a Fable reset
+ * "returns what Fable used to your weekly limit", and so does this, without
+ * claiming either way what it does to the 5-hour limit, which Claude Code
+ * does not say. "Not a full reset" is said outright on Fable's line because
+ * that is the confusion this exists to prevent.
+ */
+export interface KindWords {
+  /** In a sentence: "full reset", "Fable reset". */
+  one: string
+  /** Its plural: "full resets". */
+  many: string
+  /** Its group's heading on the card: "Full resets". */
+  heading: string
+  /** What spending one does, in one line, under the heading and in the dialog. */
+  effect: string
+  /** Its button, and the dialog's: "Use full reset". Empty for a kind never spent here. */
+  button: string
+  /**
+   * What a spend of it came to, in Claude Code's own done line: "Limits
+   * reset", "Weekly limits reset" — prefixed with the kind, so the outcome
+   * names it.
+   */
+  done: string
+}
+
+/** The four kinds a press can name. Keys match resetKinds.ts SPENDABLE_KINDS; a test holds them together. */
+export const KIND_WORDS: Readonly<Record<string, KindWords>> = {
+  full: {
+    one: "full reset",
+    many: "full resets",
+    heading: "Full resets",
+    effect: "Clears the 5-hour and weekly limits.",
+    button: "Use full reset",
+    done: "Full reset used — limits reset.",
+  },
+  fable: {
+    one: "Fable reset",
+    many: "Fable resets",
+    heading: "Fable resets",
+    effect: "Gives back to the weekly limit what Fable used this week. Not a full reset.",
+    button: "Use Fable reset",
+    done: "Fable reset used — what Fable used is back in the weekly limit.",
+  },
+  weekly: {
+    one: "weekly reset",
+    many: "weekly resets",
+    heading: "Weekly resets",
+    effect: "Clears the weekly limits, not the 5-hour limit.",
+    button: "Use weekly reset",
+    done: "Weekly reset used — weekly limits reset.",
+  },
+  session: {
+    one: "5-hour reset",
+    many: "5-hour resets",
+    heading: "5-hour resets",
+    effect: "Clears the 5-hour limit, not the weekly limits.",
+    button: "Use 5-hour reset",
+    done: "5-hour reset used — 5-hour limit reset.",
+  },
+}
+
+/**
+ * A kind this bundle cannot name — "unknown", or one newer than it. Counted
+ * and shown, never offered: there is no button to name, and the way to spend
+ * one is the tool that knows what it is.
+ */
+export const UNRECOGNISED_WORDS: KindWords = {
+  one: "unrecognised reset",
+  many: "unrecognised resets",
+  heading: "Unrecognised resets",
+  effect: "A kind of reset this version doesn’t recognise — use it from Claude Code with /limit-reset.",
+  button: "",
+  done: "Reset used.",
+}
+
+/** The words for a kind, any kind: its own, or the unrecognised kind's. */
+export function kindWords(kind: string): KindWords {
+  return KIND_WORDS[kind] ?? UNRECOGNISED_WORDS
+}
+
+/** The words for a kind a press can name, or null for "" (Codex) and anything unrecognised. */
+function namedKind(kind: string | null | undefined): KindWords | null {
+  return (kind && KIND_WORDS[kind]) || null
+}
+
+/**
+ * The button a sentence tells the reader to press, or not to: "Use one" on
+ * Codex, as it always was, and the kind's own button, quoted, on Claude — so
+ * "press it again" can never be read as the button of the other kind.
+ */
+export function pressName(kind: string | null | undefined): string {
+  const words = namedKind(kind)
+  return words ? `“${words.button}”` : "Use one"
+}
+
+/** "1 full reset", "2 Fable resets", "No Fable resets". */
+export function countOf(count: number, kind: string, none = "No"): string {
+  const words = kindWords(kind)
+  if (count === 0) return `${none} ${words.many}`
+  return `${count} ${count === 1 ? words.one : words.many}`
+}
+
+/**
+ * What Claude asks of an account before it lets a reset be spent, in the
+ * dialog that asks. Claude Code's "usable once you reach a limit it refills",
+ * and the cooldown between resets that a refusal may cite.
+ */
+export const CLAUDE_RULE =
+  "Claude allows a reset only once the account has reached a limit it refills, and makes it wait out a cooldown between resets."
+
+/**
+ * Said in place of a button on a Claude account whose kinds Quota Cache did
+ * not report. The plugin will not spend one either: a press has to name a
+ * kind, and nothing here can say which these are.
+ */
+export const KINDS_UNREPORTED =
+  "Update Quota Cache to 0.5.0 or newer to see which kind each reset is — this page won’t spend one until it can tell full and Fable resets apart."
+
+/**
+ * The dialog's opening, for one kind: what it spends, from whom. A count of
+ * one is "the only" one, as on Codex.
+ */
+export function spendsSentence(kind: string, count: number, who: string): string {
+  const words = kindWords(kind)
+  const which = count === 1 ? `the only ${words.one}` : `one of the ${count} ${words.many}`
+  return `This spends ${which} that ${who} holds, straight away.`
+}
+
+/**
+ * What the dialog says of the account's other kinds, which the press leaves
+ * alone: "Its 1 full reset stays banked — this is not one of them." Empty
+ * when it holds no other kind. Said because the reader who means a full reset
+ * and opened the Fable dialog by mistake has exactly this line to catch it.
+ */
+export function othersSentence(others: readonly { kind: string; count: number }[]): string {
+  const kept = others.filter((other) => other.count > 0)
+  if (kept.length === 0) return ""
+  const parts = kept.map((other) => countOf(other.count, other.kind))
+  const listed = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]!}`
+  const verb = kept.length === 1 && kept[0]!.count === 1 ? "stays" : "stay"
+  return `Its ${listed} ${verb} banked — this is not one of them.`
+}
+
+/**
+ * The codes kindRefusal words. Each is the plugin's answer before it sent
+ * anything, and each sentence says "Nothing was spent", so a notice for one
+ * takes a refusal's tone, never the unknown's (redeem.ts mayHaveSpent).
+ *
+ * That includes other_kind_unresolved, though it is about a claim whose
+ * outcome is unknown. That claim is the earlier press's, of another kind, and
+ * the notice for this press carries the kind just pressed: marked unknown, it
+ * would say that kind may be spent, when it is the one certainly still banked.
+ * The sentence names the earlier kind, and that press's own notice carries
+ * the unknown.
+ */
+export const KIND_REFUSALS: ReadonlySet<string> = new Set(["kind_required", "invalid_kind", "other_kind_unresolved"])
+
+/**
+ * The plugin's three refusals about a kind, each of which spent nothing:
+ * the press named none on Claude, named one the plugin cannot spend, or met
+ * an earlier press of another kind on the same account whose outcome is still
+ * unknown. Null for any other code.
+ *
+ * The last is the one that matters. The plugin will not start a claim of one
+ * kind while a claim of another may still be landing, and the way out is the
+ * earlier kind's own button, which repeats that claim rather than making a
+ * new one — or the end of its retry window. `clock` prints that instant as a
+ * time of day (time.ts formatClock), passed in so this file stays import-free.
+ */
+export function kindRefusal(
+  code: string,
+  detail: {
+    kind: string
+    pendingKind: string | null
+    retryUntilEpoch: number | null
+    nowSeconds: number
+    clock: (epoch: number) => string
+  },
+): string | null {
+  switch (code) {
+    case "kind_required":
+      return "The plugin needs to be told which kind of reset to use, and this press did not say. Nothing was spent. Reload the page, then press the button for the kind you mean."
+    case "invalid_kind":
+      return "The plugin cannot spend the kind of reset this press named on this account. Nothing was spent. Reload the page; if this persists, the page and the plugin may be from different versions."
+    case "other_kind_unresolved": {
+      const pending = namedKind(detail.pendingKind)
+      const pressed = namedKind(detail.kind)
+      const using = pressed ? `using a ${pressed.one}` : "using another kind"
+      const until = detail.retryUntilEpoch
+      const wait = until !== null && until > detail.nowSeconds ? `, or wait until ${detail.clock(until)}` : ""
+      if (!pending) {
+        return `An earlier reset of another kind on this account has an unknown outcome. Check this account’s usage before ${using}${wait}. Nothing was spent.`
+      }
+      return `An earlier ${pending.one} on this account has an unknown outcome. Press ${pressName(detail.pendingKind)} again to settle it before ${using}${wait}. Nothing was spent.`
+    }
+    default:
+      return null
+  }
 }
 
 /**
@@ -160,7 +375,8 @@ function outcomeSentence(result: RedeemResult, provider: string): string {
  * "Reset applied" would claim what the answer did not.
  */
 function unconfirmedSentence(result: RedeemResult, who: string): string {
-  return `${who} took the reset but did not confirm what it cleared, so CPA’s cooldown on this credential was left as it was. ${leftOf(result)}${lagOf(result)} The reset is spent: don’t press Use one again. If CPA keeps skipping this account, use Clear cooldown on it in the CPA console.`
+  const reset = namedKind(result.kind)?.one ?? "reset"
+  return `${who} took the ${reset} but did not confirm what it cleared, so CPA’s cooldown on this credential was left as it was. ${leftOf(result)}${lagOf(result)} The reset is spent: don’t press ${pressName(result.kind)} again. If CPA keeps skipping this account, use Clear cooldown on it in the CPA console.`
 }
 
 /**
@@ -168,11 +384,11 @@ function unconfirmedSentence(result: RedeemResult, who: string): string {
  * sentence, which has already said the reset is spent. Every case that leaves
  * the account possibly still skipped points at the one remedy that costs
  * nothing, CPA's Clear cooldown, rather than at another press, which would
- * spend another.
+ * spend another — of the same kind, on Claude, which the remedy says.
  */
 function cooldownSentence(result: RedeemResult): string {
-  const remedy =
-    "CPA may keep skipping this account until that cooldown ends: use Clear cooldown on this credential in the CPA console. Don’t press Use one again — that would spend another reset."
+  const another = namedKind(result.kind)?.one ?? "reset"
+  const remedy = `CPA may keep skipping this account until that cooldown ends: use Clear cooldown on this credential in the CPA console. Don’t press ${pressName(result.kind)} again — that would spend another ${another}.`
   switch (result.cooldown) {
     case "cleared":
       return "CPA’s cooldown on this credential was cleared, so it is back in use."
@@ -189,8 +405,13 @@ function cooldownSentence(result: RedeemResult): string {
   }
 }
 
-/** What the account still holds, as a sentence. */
+/**
+ * What the account still holds, as a sentence: of the kind spent, on Claude,
+ * because that is all the plugin counts there — "1 full reset left" — and of
+ * every reset, as before, on Codex.
+ */
 function leftOf(result: RedeemResult): string {
+  if (namedKind(result.kind)) return `${countOf(result.remainingCount, result.kind!)} left.`
   return result.remainingCount === 0
     ? "No banked resets left."
     : `${result.remainingCount} banked reset${result.remainingCount === 1 ? "" : "s"} left.`
@@ -220,36 +441,50 @@ function providerSentence(result: RedeemResult, provider: string): string {
   const who = opening(nameOf(result.provider || provider))
   const left = leftOf(result)
   const lag = lagOf(result)
+  // On Claude every sentence names the kind the plugin says it spent or
+  // tried to, in the card's own words, so the line under the Fable group
+  // cannot be read as news of a full reset. Codex, and a plugin too old to
+  // name one, keep the sentences they always had.
+  const kind = namedKind(result.kind)
+  const reset = kind?.one ?? "reset"
   switch (result.outcome) {
     case "reset":
-      return `Reset applied. ${left}${lag}`
+      return `${kind ? kind.done : "Reset applied."} ${left}${lag}`
     case "nothingToReset":
       // The reset is gone either way. Saying otherwise would be a lie the
       // reader acts on when they check their windows.
-      return `The reset was spent, but no window needed clearing. ${left}${lag}`
+      return kind
+        ? `The ${reset} was spent, but no limit needed clearing. ${left}${lag}`
+        : `The reset was spent, but no window needed clearing. ${left}${lag}`
     case "noCredit":
       // Usually a count that was spent elsewhere since the poll; on Claude it is
       // also a grant the provider will not let be used, without saying why.
-      return `${who} reported no reset this account can spend right now — the count on this card may be out of date. Nothing was spent.`
+      return `${who} reported no ${reset} this account can spend right now — the count on this card may be out of date. Nothing was spent.`
     case "alreadyUsed":
       // Most often the answer to a second press after an unknown outcome: the
       // claim being replayed is one the provider had already honoured. Either
       // way this press spent nothing, and that is the half the reader needs.
-      return `${who} reports that reset as already used, so this press spent nothing. If an earlier press did not finish, it went through. ${left}${lag}`
+      return `${who} reports that ${reset} as already used, so this press spent nothing. If an earlier press did not finish, it went through. ${left}${lag}`
     // The four refusals. The provider declined before spending anything, and
     // each says what would have to change for the next press to work.
     case "notLimited":
-      return `${who} allows a reset only once the account has hit a usage limit, and this one has not. Nothing was spent.`
+      // Claude Code's rule, "usable once you reach a limit it refills", which
+      // is per kind: a weekly reset waits for a weekly limit.
+      return kind
+        ? `${who} allows a ${reset} only once the account has reached a limit it refills, and this one has not. Nothing was spent.`
+        : `${who} allows a reset only once the account has hit a usage limit, and this one has not. Nothing was spent.`
     case "cooldown":
       return `${who} has this account in a cooldown after its last reset. Nothing was spent — try again once the cooldown ends.`
     case "paused":
-      return `${who} has paused resets on this account. Nothing was spent.`
+      return kind
+        ? `${who} has paused this account’s ${kind.many}. Nothing was spent.`
+        : `${who} has paused resets on this account. Nothing was spent.`
     case "ineligible":
       return `${who} says this account is not eligible to use a reset right now. Nothing was spent.`
     case "failed":
       // Deliberately not "nothing was spent": this is the plugin's word for a
       // refusal it could not classify, and it does not promise that.
-      return `${who} did not apply the reset. Check this account’s usage before pressing again.`
+      return `${who} did not apply the ${reset}. Check this account’s usage before pressing again.`
     default:
       return `Done. ${left}${lag}`
   }

@@ -57,9 +57,10 @@
         "availableCount": 1,
         "expiresAtEpoch": null,
         "expiresInSeconds": null,
-        "redeemable": true,
+        "redeemable": false,
         "hold": "",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": []
       },
       "renewalAtEpoch": 1803801600,
       "renewalEstimated": true,
@@ -100,7 +101,18 @@
         "expiresInSeconds": 1713600,
         "redeemable": false,
         "hold": "",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": [
+          {
+            "kind": "fable",
+            "availableCount": 1,
+            "expiresAtEpoch": 1790726400,
+            "expiresInSeconds": 1713600,
+            "redeemable": false,
+            "hold": "",
+            "holdUntilEpoch": null
+          }
+        ]
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,
@@ -231,9 +243,29 @@
         "availableCount": 2,
         "expiresAtEpoch": 1789171200,
         "expiresInSeconds": 158400,
-        "redeemable": true,
+        "redeemable": false,
         "hold": "cooldown",
-        "holdUntilEpoch": 1789020000
+        "holdUntilEpoch": 1789020000,
+        "kinds": [
+          {
+            "kind": "full",
+            "availableCount": 1,
+            "expiresAtEpoch": 1789171200,
+            "expiresInSeconds": 158400,
+            "redeemable": true,
+            "hold": "cooldown",
+            "holdUntilEpoch": 1789020000
+          },
+          {
+            "kind": "unknown",
+            "availableCount": 1,
+            "expiresAtEpoch": 1789862400,
+            "expiresInSeconds": 849600,
+            "redeemable": false,
+            "hold": "cooldown",
+            "holdUntilEpoch": 1789020000
+          }
+        ]
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,
@@ -326,7 +358,8 @@
         "expiresInSeconds": null,
         "redeemable": true,
         "hold": "",
-        "holdUntilEpoch": null
+        "holdUntilEpoch": null,
+        "kinds": []
       },
       "renewalAtEpoch": null,
       "renewalEstimated": false,

@@ -67,8 +67,10 @@ Choose **Save and Open**, then sign in using the page's dashboard password
 (`web-token`) or its CPA console link. The app remembers its own session;
 Safari and Chrome sessions are separate. Enter the password on the page instead
 of adding `?token=` to the saved URL. Once signed in with the dashboard
-password, **Use one** spends a banked reset from the popover just as it does on
-the page (Quota Glance 0.5.0 or newer).
+password, a reset's button spends a banked reset from the popover just as it
+does on the page (Quota Glance 0.5.0 or newer): **Use one** for Codex, or, with
+Quota Glance 0.10.0 or newer, a kind's own button such as **Use full reset** or
+**Use Fable reset** for Claude.
 
 Click the menu bar item to open or close the page. Scroll inside the
 popover to see more. Right-click or Control-click the item for **Settings**,
