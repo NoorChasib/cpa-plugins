@@ -209,8 +209,8 @@ func (e *Engine) Response(raw []byte) []byte {
 	r := &Response{RequestID: req.RequestID, SourceFormat: req.SourceFormat, Model: req.Model, StatusCode: req.StatusCode,
 		Stream: req.Stream, Headers: req.ResponseHeaders, ObservedAt: start, Meta: req.Meta, RawLen: int64(req.BodyLen)}
 	if req.ResponseHeaders != nil {
-		r.ContentType = req.ResponseHeaders.Get("Content-Type")
-		r.ContentEncoding = strings.Join(req.ResponseHeaders.Values("Content-Encoding"), ", ") // every field line: RFC 9110 5.3
+		r.ContentType = HeaderGet(req.ResponseHeaders, "Content-Type")
+		r.ContentEncoding = HeaderList(req.ResponseHeaders, "Content-Encoding") // every field line, any key case
 	}
 	e.With(req.RequestID, true, func(en *Entry) { r.Index = en.NextResponse; en.NextResponse++ })
 	if cfg.Capture != "full" {

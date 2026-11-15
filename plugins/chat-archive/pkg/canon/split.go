@@ -23,7 +23,7 @@ type Input struct {
 	Format          string // a Format* value
 	Body            []byte
 	ContentType     string // Content-Type of the body: multipart boundary, speech mime
-	ContentEncoding string // Content-Encoding of the body: "" and "identity" mean none; gzip, zstd, deflate and br are decoded first (last applied first), capped at Options.MaxDecoded (flag gunzipped for gzip, content_decoded for the others); a body that is not in its labelled coding is read as is only when it parses as a JSON object (flag encoding_ignored), else ErrUndecodableBody
+	ContentEncoding string // Content-Encoding of the body: "" and "identity" mean none; gzip, zstd, deflate and br are decoded first (last applied first, at most three codings), capped by Options.MaxDecoded (flag gunzipped for gzip, content_decoded for the others); a body that is not in its labelled coding is read as is only when it parses as a JSON object (flag encoding_ignored), else ErrUndecodableBody
 }
 
 // Memo caches Masker.String results across bodies: the plugin's masking memo LRU and the
@@ -40,9 +40,10 @@ type Options struct {
 	MaxAttachment int64        // limits.attachment; 0 means wire.DefaultLimits.Attachment. Larger attachments get "dropped":"oversize" stubs and no piece
 	Memo          Memo         // optional; nil disables memoization
 
-	// MaxDecoded caps the decoded size of a content-encoded body; 0 means MaxGunzip. Over it the split returns
-	// ErrBodyBudget after reading at most MaxDecoded+1 decoded bytes, so the plugin can bound a small
-	// compressed body that expands far past its reservation.
+	// MaxDecoded caps the decoded size of each coding of a content-encoded body, and 2×MaxDecoded all of
+	// its codings together; 0 means MaxGunzip. Over it the split returns ErrBodyBudget after reading at
+	// most MaxDecoded+1 decoded bytes, so the plugin can bound a small compressed body that expands far
+	// past its reservation. A Brotli window over max(MaxDecoded, 4 MiB) is ErrBodyBudget before decoding.
 	MaxDecoded int64
 	// MaxNodes caps the JSON values the split parses (every object, array, string, number and
 	// literal, the body's and tool arguments' alike); 0 means no cap. Over it the split returns
@@ -166,7 +167,7 @@ func (s *splitter) split(in Input, response bool) (*Split, error) {
 	// is usually plain already. It is read as is only when it parses as a JSON object, which no
 	// compressed stream does; anything else is still encoded and never becomes a piece.
 	labelled, decoded := false, false
-	dec, flags, ok, err := decodeBody(body, in.ContentEncoding, s.maxDec)
+	dec, flags, ok, err := decodeBody(s.ctx, body, in.ContentEncoding, s.maxDec)
 	switch {
 	case err != nil:
 		return nil, err

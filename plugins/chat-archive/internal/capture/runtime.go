@@ -236,7 +236,7 @@ func (rt *Runtime) doBegin(b *hooks.Begin) {
 	ms := rt.opts.Masker.Get()
 	kept, hints, _ := headers.FilterRequest(b.Req.Headers, ms.Masker, rt.opts.HMACKeyID, rt.opts.HMACKey)
 	in := canon.Input{Format: CanonFormat(b.Req.SourceFormat), Body: b.Req.Body,
-		ContentType: headerGet(b.Req.Headers, "Content-Type"), ContentEncoding: headerList(b.Req.Headers, "Content-Encoding")}
+		ContentType: hooks.HeaderGet(b.Req.Headers, "Content-Type"), ContentEncoding: hooks.HeaderList(b.Req.Headers, "Content-Encoding")}
 	sr, err := rt.split(rt.drainCtx, in, reserved, false)
 	if err != nil {
 		e.Stats.Drop("stopped")

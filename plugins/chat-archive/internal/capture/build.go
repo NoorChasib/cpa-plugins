@@ -3,9 +3,7 @@ package capture
 import (
 	"context"
 	"errors"
-	"net/http"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,32 +58,6 @@ func (rt *Runtime) hmac(v string) string {
 		return ""
 	}
 	return fingerprint.HMAC(rt.opts.HMACKeyID, rt.opts.HMACKey, v)
-}
-
-func headerGet(h http.Header, name string) string {
-	for k, v := range h {
-		if strings.EqualFold(k, name) && len(v) > 0 {
-			return v[0]
-		}
-	}
-	return ""
-}
-
-// headerList returns every value of a list header (any key case), joined with ", " as RFC 9110 5.3
-// combines repeated field lines: a body sent with Content-Encoding twice ("gzip" then "br") names both
-// codings, and decoding only the first would leave it still encoded.
-func headerList(h http.Header, name string) string {
-	var keys, vs []string
-	for k := range h {
-		if strings.EqualFold(k, name) {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys) // one key in practice; a fixed order if a map holds two spellings
-	for _, k := range keys {
-		vs = append(vs, h[k]...)
-	}
-	return strings.Join(vs, ", ")
 }
 
 // splitResult is what a split contributes to an envelope.
@@ -202,14 +174,15 @@ func (rt *Runtime) buildBegin(b *hooks.Begin, sr splitResult, kept []wire.Header
 		eb.Body = metaBody(format, int64(req.BodyLen), dropped)
 	} else {
 		sp := sr.sp
-		if t := topString(req.Body, "type"); strings.HasPrefix(t, "response.") && cls.Transport == "ws" {
+		top := topOf(sp, req.Body)
+		if t := top("type"); strings.HasPrefix(t, "response.") && cls.Transport == "ws" {
 			eb.InputType = t
 		}
 		ids := canon.ItemIDs(sp.Items)
 		ckey := ConvKey(callerFP, req.SourceFormat, req.Meta.ExecutionSessionID, req.Headers, ids)
 		prev := ""
 		if cls.Transport == "ws" {
-			prev = topString(req.Body, "previous_response_id")
+			prev = top("previous_response_id")
 		}
 		dropped := rt.stats().DroppedTotal()
 		d := rt.prefix.Choose(ckey, ids, req.Meta.ExecutionSessionID, prev, dropped)
@@ -244,6 +217,17 @@ type beginCommit struct {
 	key     string
 	ids     []wire.Hash
 	dropped uint64
+}
+
+// topOf returns a reader of the top-level string fields of body (canon.TopKeys). body is still
+// compressed when the split decoded it (flag gunzipped or content_decoded), so the fields then come from
+// the split; reading body left a decoded response without its id, never linkable to a transcript. sp
+// may be nil (metadata only).
+func topOf(sp *canon.Split, body []byte) func(k string) string {
+	if sp != nil && (slices.Contains(sp.Flags, wire.FlagGunzipped) || slices.Contains(sp.Flags, wire.FlagContentDecoded)) {
+		return func(k string) string { return sp.TopStrings[k] }
+	}
+	return func(k string) string { return topString(body, k) }
 }
 
 // topString returns a top-level string field of a JSON object body without parsing the rest.
@@ -303,13 +287,7 @@ func (rt *Runtime) buildResponse(r *hooks.Response, sr splitResult) (outbox.NewE
 		}
 	}
 	format := CanonFormat(r.SourceFormat)
-	// top reads a top-level string field of a non-stream body. r.Body is still compressed when the split
-	// decoded it (flag gunzipped or content_decoded), so the field then comes from the split; reading
-	// r.Body left a decoded response without its id, never linkable to a transcript.
-	top := func(k string) string { return topString(r.Body, k) }
-	if sp := sr.sp; sp != nil && (slices.Contains(sp.Flags, wire.FlagGunzipped) || slices.Contains(sp.Flags, wire.FlagContentDecoded)) {
-		top = func(k string) string { return sp.TopStrings[k] }
-	}
+	top := topOf(sr.sp, r.Body)
 	if !r.Stream {
 		er.TerminalStatus = nonStreamStatus(format, top("status"))
 	}

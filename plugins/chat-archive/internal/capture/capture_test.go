@@ -472,7 +472,9 @@ func TestNonStreamTerminalStatus(t *testing.T) {
 // Claude Code's non-stream /v1/messages). The plugin stores it like an unlabelled body, masked, with
 // flag encoding_ignored and its response id. A body still in its coding is decoded (gzip flag
 // gunzipped, the others content_decoded), never dropped, and keeps its response id: read from the
-// decoded body, so the exchange can be linked to its transcript.
+// decoded body, so the exchange can be linked to its transcript. The header is read in any key case.
+// A plain body that is not a JSON object under a stale deflate label (a pretty-printed array, which raw
+// deflate would read as a short final block) is dropped as parse_error, never decoded into garbage.
 func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 	h := plugintest.New(t, nil, "")
 	secret := "ghp_" + randomAlnum(36)
@@ -488,11 +490,14 @@ func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 	fw, _ := flate.NewWriter(&fl, flate.DefaultCompression)
 	fw.Write(msg("msg_still_deflate"))
 	fw.Close()
+	pretty := []byte("[\n  {\n    \"id\": \"msg_pretty\",\n    \"text\": \"OK " + marker + "\"\n  }\n]\n")
 	cases := []struct {
 		rid, ce               string
 		body                  []byte
 		dropped, flag, respID string
 	}{
+		{"dec-pretty-array", "deflate", pretty, wire.DroppedParseError, "", ""},
+		{"real-gzip-lower-key", "gzip", gz.Bytes(), "", wire.FlagGunzipped, "msg_real_gzip"},
 		{"dec-gzip", "gzip", msg("msg_dec_gzip"), "", wire.FlagEncodingIgnored, "msg_dec_gzip"},
 		{"dec-br", "br", msg("msg_dec_br"), "", wire.FlagEncodingIgnored, "msg_dec_br"},
 		{"dec-zstd", "zstd", msg("msg_dec_zstd"), "", wire.FlagEncodingIgnored, "msg_dec_zstd"},
@@ -504,6 +509,11 @@ func TestNonStreamDecodedBodyWithUpstreamContentEncoding(t *testing.T) {
 	for _, c := range cases {
 		hdr := http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {c.ce}, "Request-Id": {"req_synthetic"},
 			"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.1"}}
+		if strings.HasSuffix(c.rid, "-lower-key") { // a host that passes header keys as written
+			delete(hdr, "Content-Encoding")
+			delete(hdr, "Content-Type")
+			hdr["content-encoding"], hdr["content-type"] = []string{c.ce}, []string{"application/json"}
+		}
 		h.Plugin.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(c.rid, "claude", plugintest.ClaudeBody("Reply only OK."), nil, meta))
 		h.Plugin.Hook(protocol.MethodResponseInterceptAfter, plugintest.ResponseWithHeaders(c.rid, "claude", c.body, hdr, meta))
 		h.Plugin.Hook(protocol.MethodRequestComplete, plugintest.Complete(c.rid, "succeeded", meta))
@@ -575,7 +585,8 @@ func randomAlnum(n int) string {
 // TestBeginCompressedRequestBody: a client that compresses its request body (Codex sends zstd) reaches
 // request.intercept_before still encoded when the host does not decode it. The begin is stored decoded,
 // flag content_decoded (gunzipped for gzip), with its text in its pieces and a secret masked; never
-// dropped as parse_error. A body that does not decode in its labelled coding stays metadata only.
+// dropped as parse_error. A body that does not decode in its labelled coding stays metadata only, and so
+// does one that names more than three codings (nothing of it is decoded).
 func TestBeginCompressedRequestBody(t *testing.T) {
 	h := plugintest.New(t, nil, "")
 	secret := "ghp_" + randomAlnum(36)
@@ -614,6 +625,8 @@ func TestBeginCompressedRequestBody(t *testing.T) {
 		{"req-br-jsonish", "br", brJSONish, "", wire.FlagContentDecoded},
 		{"req-gzip", "gzip", gz.Bytes(), "", wire.FlagGunzipped},
 		{"req-bad-zstd", "zstd", []byte("\x28\xb5\x2f\xfd not a frame"), wire.DroppedParseError, ""},
+		{"req-gzip-x3", "gzip, gzip, gzip", gzipN(body, 3), "", wire.FlagGunzipped},
+		{"req-gzip-x4", "gzip, gzip, gzip, gzip", gzipN(body, 4), wire.DroppedParseError, ""},
 	}
 	meta := plugintest.Meta("/v1/messages")
 	for _, c := range cases {
@@ -663,4 +676,16 @@ func TestBeginCompressedRequestBody(t *testing.T) {
 			t.Errorf("%s: request text in pieces %v, masked %v", c.rid, found, masked)
 		}
 	}
+}
+
+// gzipN gzips b n times over.
+func gzipN(b []byte, n int) []byte {
+	for range n {
+		var buf bytes.Buffer
+		w := gzip.NewWriter(&buf)
+		w.Write(b)
+		w.Close()
+		b = buf.Bytes()
+	}
+	return b
 }

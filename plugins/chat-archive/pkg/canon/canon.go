@@ -24,13 +24,15 @@ var errNoMasker = errors.New("canon: a Masker is required")
 var (
 	// ErrUndecodableBody: the body is still content-encoded, so no piece may be made of it (its
 	// plaintext would sit unmasked inside a stored blob). That is a gzip stream that does not decode
-	// (truncated or corrupt), or a body labelled with any other Content-Encoding (or labelled gzip
-	// without the gzip magic) that does not parse as a JSON object. A labelled body that does is
-	// plain already (CPA decodes upstream bodies but keeps their Content-Encoding header) and is
-	// split as is, flag encoding_ignored. The producer records Dropped parse_error.
+	// (truncated or corrupt), a body naming more than three codings, or a body not in its labelled
+	// coding (gzip or zstd without its magic, a deflate or br stream that does not decode, an unknown
+	// coding) that does not parse as a JSON object. A labelled body that does is plain already (CPA
+	// decodes upstream bodies but keeps their Content-Encoding header) and is split as is, flag
+	// encoding_ignored. The producer records Dropped parse_error.
 	ErrUndecodableBody = errors.New("canon: body is still content-encoded")
-	// ErrBodyBudget: the body is over the split's budget, Options.MaxDecoded decoded bytes of a gzip
-	// body or Options.MaxNodes parsed JSON values. The producer records Dropped body_budget.
+	// ErrBodyBudget: the body is over the split's budget: a content-encoded body that decodes past
+	// Options.MaxDecoded or declares a Brotli window over it, or Options.MaxNodes parsed JSON values.
+	// The producer records Dropped body_budget.
 	ErrBodyBudget = errors.New("canon: body over the split budget")
 )
 
