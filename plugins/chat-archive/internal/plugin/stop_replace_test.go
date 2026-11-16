@@ -1,6 +1,7 @@
 package plugin_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync/atomic"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/capture"
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/outbox"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
@@ -311,4 +313,53 @@ func TestStopWithinOneDeadline(t *testing.T) {
 		t.Fatalf("quiesce took %v, past StopTimeout %v", d, plugin.StopTimeout)
 	}
 	t.Logf("quiesce with an open exchange and a held commit took %v (StopTimeout %v)", d, plugin.StopTimeout)
+}
+
+// TestStopWithSlowOutboxClose: the outbox close comes after the final saves, which end at the
+// stop's deadline. A close that cannot get the write connection (here it waits as long as its
+// context lets it, up to outbox.CloseTimeout) does not extend the stop past the deadline plus
+// StopCloseMargin, and the next runtime still opens the outbox.
+func TestStopWithSlowOutboxClose(t *testing.T) {
+	setStopDrain(t, 15*time.Second)
+	setVar(t, &plugin.StopTimeout, 2500*time.Millisecond)
+	setVar(t, &plugin.StopAfterDrain, time.Second)
+	setVar(t, &plugin.CaptureStopMin, 300*time.Millisecond)
+	setVar(t, &plugin.FinalSaveTimeout, 200*time.Millisecond)
+	h := plugintest.New(t, nil, "")
+	// Set after New, so the harness's final shutdown closes the outbox normally.
+	var closeBy atomic.Int64
+	plugin.SetCloseOutbox(t, func(ob *outbox.Outbox, ctx context.Context) error {
+		if dl, ok := ctx.Deadline(); ok {
+			closeBy.Store(dl.UnixNano())
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(outbox.CloseTimeout):
+		}
+		return ob.CloseContext(ctx)
+	})
+	p := h.Plugin
+	release := h.Srv.Hold("POST " + wire.PathCommit)
+	defer release()
+	meta := plugintest.Meta("/v1/messages")
+	p.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth("sc-open", "claude", plugintest.ClaudeBody("x"), nil, meta))
+	ob, _, _ := p.Runtime()
+	plugintest.WaitFor(t, "the uploader inside the held commit", func() bool { return ob.Meta().NextSeq > 1 })
+	start := time.Now()
+	p.Handle(protocol.MethodPluginQuiesce, nil)
+	d := time.Since(start)
+	limit := plugin.StopTimeout + plugin.StopCloseMargin + 250*time.Millisecond
+	if plugin.StopCloseMargin > time.Second || d > limit {
+		t.Fatalf("quiesce with a slow outbox close took %v (StopTimeout %v, margin %v)", d, plugin.StopTimeout, plugin.StopCloseMargin)
+	}
+	if by := time.Unix(0, closeBy.Load()); by.Sub(start) > plugin.StopTimeout+plugin.StopCloseMargin+100*time.Millisecond {
+		t.Fatalf("the close's bound ends %v after the stop began", by.Sub(start))
+	}
+	t.Logf("quiesce with a held commit and a slow outbox close took %v (StopTimeout %v, margin %v)", d, plugin.StopTimeout, plugin.StopCloseMargin)
+	release()
+	p.Handle(protocol.MethodPluginReconfigure, plugintest.Lifecycle(h.YAML))
+	if ob2, _, _ := p.Runtime(); ob2 == nil {
+		st, why := p.State()
+		t.Fatalf("no runtime after the restart: %s %s", st, why)
+	}
 }

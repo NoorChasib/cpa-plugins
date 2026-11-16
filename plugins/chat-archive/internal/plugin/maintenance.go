@@ -37,9 +37,9 @@ type snapshot struct {
 
 // refreshSnapshot stores fresh outbox stats. When Stats fails it keeps the last good stats of the
 // same outbox (marked not ok) instead of zeroes, so heartbeats never report an empty backlog
-// because one query timed out.
-func (p *Plugin) refreshSnapshot(rs *runtimeState) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// because one query timed out. The stats query is bounded by ctx and by 5 s.
+func (p *Plugin) refreshSnapshot(ctx context.Context, rs *runtimeState) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	s, err := rs.ob.Stats(ctx)
 	if err != nil {
@@ -60,7 +60,7 @@ func (p *Plugin) maintenance(ctx context.Context, rs *runtimeState) {
 	for {
 		safego.Checkpoint("maintenance")
 		p.runJob(ctx, rs)
-		p.refreshSnapshot(rs)
+		p.refreshSnapshot(context.Background(), rs)
 		if time.Since(lastGC) >= GCEvery {
 			lastGC = time.Now()
 			p.gc(ctx, rs)

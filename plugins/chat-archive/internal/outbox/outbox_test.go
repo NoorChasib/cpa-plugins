@@ -422,3 +422,34 @@ func TestBootCountersPersist(t *testing.T) {
 		}
 	}
 }
+
+// TestCloseContextBounded: with the single write connection busy, Close waits up to CloseTimeout
+// for it to mark the run clean; CloseContext returns when its context ends instead, still closes
+// the databases and releases the lock, and leaves the run marked unclean.
+func TestCloseContextBounded(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	o, err := Open(Options{Dir: root, CapBytes: 1 << 40, Retention: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy, err := o.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	o.CloseContext(cctx)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("CloseContext took %v with a 300ms context", d)
+	}
+	busy.Close()
+	o2, err := Open(Options{Dir: root, CapBytes: 1 << 40, Retention: time.Hour})
+	if err != nil {
+		t.Fatalf("reopen after a bounded close: %v", err)
+	}
+	defer o2.Close()
+	if o2.Meta().UncleanRuns != 1 {
+		t.Fatalf("unclean runs = %d, want 1", o2.Meta().UncleanRuns)
+	}
+}

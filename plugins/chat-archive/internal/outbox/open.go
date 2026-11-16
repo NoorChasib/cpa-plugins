@@ -553,14 +553,22 @@ func Retryable(err error) bool {
 	return errors.As(err, &e) && (e.Code == sqlite.ErrBusy || e.Code == sqlite.ErrLocked)
 }
 
+// CloseTimeout bounds Close's clean mark and WAL checkpoint.
+const CloseTimeout = 5 * time.Second
+
 // Close marks the run clean and closes the databases and the lock. It is idempotent.
-func (o *Outbox) Close() error {
+func (o *Outbox) Close() error { return o.CloseContext(context.Background()) }
+
+// CloseContext is Close with the clean mark and the WAL checkpoint bounded by ctx as well as by
+// CloseTimeout. When ctx ends first the run stays marked unclean; the databases and the lock are
+// closed either way.
+func (o *Outbox) CloseContext(ctx context.Context) error {
 	if o == nil || o.closed.Swap(true) {
 		return nil
 	}
 	var err error
 	if o.db != nil && o.run != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, CloseTimeout)
 		_, _ = o.db.ExecContext(ctx, "UPDATE runs SET stopped_at=?,clean=1 WHERE id=?", o.opts.Now().UTC().UnixNano(), o.run)
 		_, _ = o.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 		cancel()

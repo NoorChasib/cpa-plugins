@@ -330,6 +330,13 @@ var (
 	CaptureStopMin = 3 * time.Second
 )
 
+// StopCloseMargin is how far past the stop's deadline its last step, the outbox close (the clean
+// mark and the WAL checkpoint), may run. The status snapshot before it ends by the deadline.
+var StopCloseMargin = 500 * time.Millisecond
+
+// closeOutbox closes the runtime's outbox at a stop (a variable so tests can slow it down).
+var closeOutbox = (*outbox.Outbox).CloseContext
+
 // CarryMaxAge is how old a saved set of open requests may be when the next instance opens the
 // outbox: CPA loads the new version right after the old one's quiesce returned, so an older set
 // belongs to requests that ended with an earlier CPA process.
@@ -450,7 +457,7 @@ func (p *Plugin) startWith(cfg config.Config, secrets config.Secrets, ob *outbox
 	p.rt = rs
 	p.state, p.reason = StateRunning, ""
 	p.mu.Unlock()
-	p.refreshSnapshot(rs)
+	p.refreshSnapshot(context.Background(), rs)
 }
 
 // applyExact rebuilds the masker from the server's exact set plus the local fingerprints.
@@ -490,7 +497,8 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 // response, and flushes the writer. The dropped counters are saved (drops counted after the final
 // heartbeat are reported by the next boot), and, with drain set, so are the open requests'
 // numbering, which the next instance on this outbox adopts so that the rest of each exchange gets
-// new keys. Then the outbox is closed. Shutdown does not drain: CPA has already detached the
+// new keys. Then the status snapshot is refreshed, by the deadline, and the outbox is closed, by
+// StopCloseMargin after it, so the whole stop returns by then. Shutdown does not drain: CPA has already detached the
 // plugin, so no further hook arrives and no exchange continues.
 func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
@@ -519,8 +527,12 @@ func (p *Plugin) stopRuntime(drain bool) {
 		_, _ = rs.ob.SaveOpenRequests(sctx, carriedToOutbox(p.engine.OpenRequests()))
 	}
 	cancel()
-	p.refreshSnapshot(rs)
-	_ = rs.ob.Close()
+	sctx, cancel = context.WithDeadline(context.Background(), deadline)
+	p.refreshSnapshot(sctx, rs)
+	cancel()
+	cctx, ccancel := context.WithDeadline(context.Background(), deadline.Add(StopCloseMargin))
+	_ = closeOutbox(rs.ob, cctx)
+	ccancel()
 	p.engine.Stopped()
 	p.mu.Lock()
 	p.rt = nil
