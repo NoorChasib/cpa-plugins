@@ -152,7 +152,10 @@ func TestShutdownWithinDeadlineWithStuckUpload(t *testing.T) {
 	if len(h.Srv.Envelopes(h.SourceID)) != 0 {
 		t.Fatal("held commit was answered")
 	}
-	// Init works again in the same process; the envelope is still pending and now uploads.
+	// Init works again in the same process; the envelope is still pending and now uploads. The fake
+	// archive may still answer the held commit once released: Go's server notices a client that went away
+	// only after the handler reads the body, and the hold comes before that read. So the envelope can
+	// arrive twice (ok, then duplicate, in either order); it must be acknowledged and stored once.
 	release()
 	install(pluginimpl.New(nil))
 	defer shutdownNative()
@@ -160,7 +163,23 @@ func TestShutdownWithinDeadlineWithStuckUpload(t *testing.T) {
 	if _, err := p.Handle(protocol.MethodPluginRegister, plugintest.Lifecycle(h.YAML)); err != nil {
 		t.Fatal(err)
 	}
-	plugintest.WaitFor(t, "pending envelope uploaded after restart", func() bool { return len(h.Srv.Envelopes(h.SourceID)) == 1 })
+	plugintest.WaitFor(t, "pending envelope acknowledged after restart", func() bool {
+		ob2, _, _ := p.Runtime()
+		if ob2 == nil {
+			return false
+		}
+		items, err := ob2.Pending(context.Background(), time.Now().Add(time.Hour), 10, 1<<30)
+		return err == nil && len(items) == 0
+	})
+	stored := 0
+	for _, e := range h.Srv.Envelopes(h.SourceID) {
+		if e.Status == wire.StatusOK {
+			stored++
+		}
+	}
+	if stored != 1 {
+		t.Fatalf("envelope stored %d times, want 1", stored)
+	}
 }
 
 func TestShutdownDrainsAdmittedNativeCall(t *testing.T) {
