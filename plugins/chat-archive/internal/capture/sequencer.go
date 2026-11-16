@@ -30,7 +30,15 @@ type acc struct {
 	pending      *hooks.Done
 	touched      time.Time
 	ended        bool // the last response handed off ended with a completed, done or incomplete event
+	// cut: the next response handed off lost part of its stream, so it is marked truncated. Set
+	// when this runtime picks a stream up after its first payload chunk (the start went to an
+	// earlier runtime or plugin instance), and when a stop writes a stream that is still open.
+	cut bool
 }
+
+// IncompleteStopped is the incomplete_reason of a stream response a stop wrote while it was
+// still open; the rest of the stream reaches the next runtime or plugin instance, or is lost.
+const IncompleteStopped = "plugin_stopped"
 
 // SweepInterval is how often the stream goroutine sweeps idle accumulators.
 var SweepInterval = time.Minute
@@ -57,6 +65,7 @@ func (rt *Runtime) sequencer(ctx context.Context) {
 		safego.Checkpoint("stream")
 		select {
 		case <-ctx.Done():
+			rt.finishStreams(accs)
 			return
 		case it := <-e.Stream:
 			rt.onStream(accs, it)
@@ -67,6 +76,58 @@ func (rt *Runtime) sequencer(ctx context.Context) {
 		}
 		rt.activeStreams.Store(int64(len(accs)))
 	}
+}
+
+// finishStreams runs at a stop, once admission closed (so the queues only shrink) and while the
+// workers still run. It processes the stream and control items the hooks queued, then writes
+// each stream still open as a partial response: incomplete (IncompleteStopped) and truncated,
+// instead of discarding what it captured. The exchange's completion is not written here: CPA
+// sends it later, to this instance's next runtime or to the next plugin instance. Past the drain
+// deadline it stops, and the deferred cleanup counts what is left stopped.
+func (rt *Runtime) finishStreams(accs map[string]*acc) {
+	e := rt.opts.Engine
+queued:
+	for rt.drainCtx.Err() == nil {
+		select {
+		case it := <-e.Stream:
+			rt.onStream(accs, it)
+		case c := <-e.Control:
+			rt.onControl(accs, c)
+		default:
+			break queued
+		}
+	}
+	for rid, a := range accs {
+		if rt.drainCtx.Err() != nil {
+			return
+		}
+		if a.pending != nil {
+			// Every queued chunk was processed: nothing more is coming for this completion.
+			d := a.pending
+			a.pending = nil
+			rt.flushStream(accs, rid, a, d)
+			continue
+		}
+		if a.re != nil {
+			at := e.Now()
+			for _, ev := range a.asm.Finish() {
+				for _, r := range a.re.Feed(ev, at) {
+					rt.handOff(rid, a, r)
+				}
+			}
+			for _, r := range a.re.Flush(stream.StatusIncomplete, at) {
+				if r.TerminalStatus == stream.StatusIncomplete && r.IncompleteReason == "" {
+					r.IncompleteReason = IncompleteStopped
+				}
+				// Chat and Gemini report completed once a finish reason arrived: the body is whole.
+				a.cut = a.cut || r.TerminalStatus != stream.StatusCompleted
+				rt.handOff(rid, a, r)
+			}
+		}
+		rt.releaseAcc(rid, a)
+		delete(accs, rid)
+	}
+	rt.activeStreams.Store(int64(len(accs)))
 }
 
 func (rt *Runtime) releaseAcc(rid string, a *acc) {
@@ -100,6 +161,9 @@ func (rt *Runtime) onStream(accs map[string]*acc, it hooks.StreamItem) {
 	if a.re == nil { // new, or a placeholder holding an early completion
 		a.format, a.model, a.meta = it.SourceFormat, it.Model, it.Meta
 		a.asm, a.re = &stream.Assembler{}, stream.New(it.SourceFormat)
+		// CPA sends the header-init first and numbers payload chunks from 0: a later chunk here
+		// means the stream started before this runtime (a restart or a plugin update).
+		a.cut = it.ChunkIndex > 0
 	}
 	a.touched = it.At
 	if it.ChunkIndex == protocol.StreamHeaderInit {
@@ -109,7 +173,7 @@ func (rt *Runtime) onStream(accs map[string]*acc, it hooks.StreamItem) {
 			a.resets++
 			rt.releaseAcc(it.RequestID, a)
 			a.asm, a.re = &stream.Assembler{}, stream.New(it.SourceFormat)
-			a.chunks, a.bytes, a.firstChunkAt = 0, 0, time.Time{}
+			a.chunks, a.bytes, a.firstChunkAt, a.cut = 0, 0, time.Time{}, false
 		}
 		a.headers, a.headerInitAt = it.Headers, it.At
 		if it.SourceFormat != "" {
@@ -233,8 +297,9 @@ func (rt *Runtime) handOff(rid string, a *acc, sr stream.Response) {
 	e.With(rid, true, func(en *hooks.Entry) {
 		r.Index = en.NextResponse
 		en.NextResponse++
-		r.Truncated = en.Truncated
+		r.Truncated = en.Truncated || a.cut
 	})
+	a.cut = false
 	a.chunks, a.bytes, a.firstChunkAt = 0, 0, time.Time{}
 	if CanonFormat(a.format) == canon.FormatOpaque {
 		r.ContentType = ""

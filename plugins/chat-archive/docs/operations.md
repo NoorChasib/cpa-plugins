@@ -26,7 +26,7 @@ With the Pushover settings filled in, the plugin sends at most one message per k
 | `dropped.body_budget` | Several very large bodies arrived at once, or a compressed body decodes past its share of the pool (a Brotli stream whose window alone is over it counts too); their metadata was kept, their bodies were not. The content pool is a fixed 256 MiB, so raising `memory-limit-mib` does not change this; it only gives the plugin's Go runtime more room. Keep `memory-limit-mib` at 768 or more: one 50 MB prompt needs about 530 MiB |
 | `dropped.parse_error` | A body labelled with a `Content-Encoding` could not be read, so only its metadata was kept: a gzip, zstd, deflate or br stream that does not decode (a deflate stream must end where the body ends), an unknown coding, more than three codings, or a body not in its labelled coding that does not parse as a JSON object (a JSON array, string or literal, text, multipart or media may still be compressed, so none of it is stored). A body that decodes is stored with flag `gunzipped` or `content_decoded`, and a labelled body that parses as a JSON object is CPA's decoded body under its stale upstream `Content-Encoding`, stored with flag `encoding_ignored`; neither is counted here. The archive raises `capture_drop` for any increase |
 | dead letters `mask_violation` | The archive's re-check found a value the plugin's masker missed (typically one captured before the first exact-set sync). Requeue with `remask=1` |
-| `dropped.stopped` after a restart or upgrade | Bodies in flight when the plugin stopped are not written; their metadata is |
+| `dropped.stopped` after a restart or upgrade | Hooks arrived after the stopping instance closed admission (REFERENCE.md, Stops and upgrades): their data was not captured. A stop first waits up to 15 s for open exchanges to finish, so a count here means traffic stayed busy through that wait, or the drain passed its 10 s bound |
 
 ## Requeue
 
@@ -38,4 +38,4 @@ Set `capture: off` and save: the plugin keeps registering and stripping `X-Archi
 
 ## Upgrades
 
-A new version file makes CPA quiesce the old instance (it stops every goroutine and closes the outbox) and load the new one. Streams that are open during the switch finish for the client; the old instance counts their bodies as `stopped`.
+A new version file makes CPA quiesce the old instance and then load the new one. The old instance keeps capturing until its open exchanges have finished (at most 15 s), then stops every goroutine and closes the outbox. Streams that are open during the switch finish for the client; a stream still open when the old instance closes is written as a partial response (`incomplete_reason` `plugin_stopped`, `truncated`), and the new version captures the rest of it if it reaches the new version. See REFERENCE.md, Stops and upgrades.

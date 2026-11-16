@@ -381,6 +381,7 @@ func TestForcedPanicInEachGoroutine(t *testing.T) {
 func TestStreamSpanningRestart(t *testing.T) {
 	safego.MinBackoff = 5 * time.Millisecond
 	t.Cleanup(func() { safego.MinBackoff = time.Second }) // after the plugin's own cleanup stopped it
+	setStopDrain(t, 50*time.Millisecond)                  // the stream stays open across each restart
 	h := plugintest.New(t, nil, "")
 	p := h.Plugin
 	e := p.Engine()

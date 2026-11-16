@@ -234,7 +234,10 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		return registration(), nil
 	}
 	if running {
-		p.stopRuntime()
+		// A restart keeps capturing until in-flight exchanges finish; turning capture off or
+		// removing the archive settings stops at once (the kill switch).
+		ok, _ := cfg.Configured()
+		p.stopRuntime(ok && cfg.Capture != config.CaptureOff)
 	}
 	p.mu.Lock()
 	p.cfg, p.cfgSet = cfg, true
@@ -308,6 +311,12 @@ var (
 
 // FinalSaveTimeout bounds the save of the dropped counters at stop.
 var FinalSaveTimeout = 2 * time.Second
+
+// StopDrainTimeout bounds how long a quiesce or a restarting reconfigure keeps capturing while it
+// waits for a quiet point (no open exchange) before it closes admission. CPA keeps sending every
+// hook to this instance until quiesce returns and the new version is loaded, and gives its own
+// shutdown 30 s, so the bound stays well under that.
+var StopDrainTimeout = 15 * time.Second
 
 // openRetry is one background outbox-open loop.
 type openRetry struct {
@@ -443,22 +452,35 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 	rs.exactRev.Store(set.Rev)
 }
 
-// stopRuntime is the graceful stop: admission stopping, uploader and media
-// sender stopped within their deadline, background loops cancelled, workers drained (≤ 10 s),
-// the writer flushed, the dropped counters saved (the drain counts dropped.stopped after the
-// uploader's final heartbeat; the next boot reports them), the outbox closed.
-func (p *Plugin) stopRuntime() {
+// stopRuntime is the graceful stop. Hooks stay admitted for as long as possible, because a hook
+// that arrives while admission is closed is lost (counted dropped.stopped): CPA sends every hook
+// to this instance until a quiesce returns and the new version is loaded, and to this instance's
+// next runtime after a reconfigure.
+//
+// With drain set (quiesce, or a reconfigure that keeps capture on), capture first goes on until
+// no exchange is open or StopDrainTimeout passed, so replies to exchanges already begun are
+// captured. Then, still capturing, the uploader and media sender stop within their deadline (the
+// final heartbeat goes out) and the background loops are cancelled. Only then does admission
+// close; the capture runtime processes what the hooks queued, writes each stream still open as a
+// partial response, and flushes the writer (≤ 10 s). The dropped counters are saved (drops
+// counted after the final heartbeat are reported by the next boot) and the outbox is closed.
+// Shutdown does not drain: CPA has already detached the plugin, so no further hook arrives.
+func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
 	rs := p.rt
 	p.mu.RUnlock()
 	if rs == nil {
 		return
 	}
+	if drain {
+		p.setState(StateStopping, "draining")
+		p.engine.WaitIdle(StopDrainTimeout)
+	}
 	p.setState(StateStopping, "")
-	p.engine.BeginStop()
 	rs.up.Stop()
 	rs.cancel()
 	rs.wg.Wait()
+	p.engine.BeginStop()
 	rs.capture.Stop()
 	sctx, cancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
 	_ = rs.up.SaveDrops(sctx)
@@ -476,7 +498,7 @@ func (p *Plugin) stop(final bool) {
 	p.lifecycle.Lock()
 	defer p.lifecycle.Unlock()
 	p.cancelOpenRetry()
-	p.stopRuntime()
+	p.stopRuntime(!final)
 	if final {
 		p.mu.Lock()
 		p.terminal = true

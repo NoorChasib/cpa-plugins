@@ -49,11 +49,14 @@ type Runtime struct {
 	pressureByCap atomic.Bool
 	maskStats     maskStats
 
-	runCtx    context.Context
+	runCtx    context.Context // workers
 	runCancel context.CancelFunc
+	seqCtx    context.Context // the stream goroutine
+	seqCancel context.CancelFunc
 	drainCtx  context.Context
 	drainStop context.CancelFunc
 	wg        sync.WaitGroup
+	seqWG     sync.WaitGroup
 	writerWG  sync.WaitGroup
 	writerCtx context.Context
 	writerEnd context.CancelFunc
@@ -89,6 +92,7 @@ func Start(opts Options) *Runtime {
 	}
 	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, 1024)}
 	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
+	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
 	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
 	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
 	rec := opts.Engine.Stats.Panic
@@ -97,7 +101,7 @@ func Start(opts Options) *Runtime {
 	for i := 0; i < max(opts.Workers, 1); i++ {
 		safego.Loop(rt.runCtx, &rt.wg, "worker", rec, rt.worker)
 	}
-	safego.Loop(rt.runCtx, &rt.wg, "stream", rec, rt.sequencer)
+	safego.Loop(rt.seqCtx, &rt.seqWG, "stream", rec, rt.sequencer)
 	safego.Loop(rt.writerCtx, &rt.writerWG, "writer", rec, rt.writer)
 	return rt
 }
@@ -110,19 +114,19 @@ func (rt *Runtime) setPressure(ps outbox.PressureState) {
 // Prefix returns the prefix map (dead-letter notifications).
 func (rt *Runtime) Prefix() *PrefixMap { return rt.prefix }
 
-// Stop drains: the workers finish their current item within DrainTimeout (unfinished bodies are
-// counted stopped and never written), queued items are counted stopped and released, then the
-// writer flushes what it holds. The engine's admission must already be stopping.
+// Stop drains what admission let in, within DrainTimeout. The engine's admission must already be
+// stopping, so the queues only shrink. First the stream goroutine processes the queued stream and
+// control items and writes each stream still open as a partial response (finishStreams), while
+// the workers keep running; then the workers process the queued bodies and usage items; then the
+// writer flushes what it holds. Past DrainTimeout, unfinished bodies and whatever is still queued
+// are counted stopped and released, never written.
 func (rt *Runtime) Stop() {
+	expire := time.AfterFunc(DrainTimeout, rt.drainStop)
+	defer expire.Stop()
+	rt.seqCancel()
+	rt.seqWG.Wait()
 	rt.runCancel()
-	done := make(chan struct{})
-	go func() { rt.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(DrainTimeout):
-		rt.drainStop()
-		<-done
-	}
+	rt.wg.Wait()
 	rt.drainStop()
 	rt.drainChannels()
 	rt.writerEnd()
@@ -196,15 +200,36 @@ func (rt *Runtime) worker(ctx context.Context) {
 		safego.Checkpoint("worker")
 		select {
 		case <-ctx.Done():
+			rt.finishWork()
 			return
 		case w := <-e.Handoff:
-			if w.Begin != nil {
-				rt.doBegin(w.Begin)
-			} else if w.Response != nil {
-				rt.doResponse(w.Response)
-			}
+			rt.doWork(w)
 		case u := <-e.Usage:
 			rt.doUsage(&u)
+		}
+	}
+}
+
+func (rt *Runtime) doWork(w hooks.Work) {
+	if w.Begin != nil {
+		rt.doBegin(w.Begin)
+	} else if w.Response != nil {
+		rt.doResponse(w.Response)
+	}
+}
+
+// finishWork runs at a stop: it processes the bodies and usage items still queued (admission is
+// closed, so the queues only shrink) until they are empty or the drain deadline passed.
+func (rt *Runtime) finishWork() {
+	e := rt.opts.Engine
+	for rt.drainCtx.Err() == nil {
+		select {
+		case w := <-e.Handoff:
+			rt.doWork(w)
+		case u := <-e.Usage:
+			rt.doUsage(&u)
+		default:
+			return
 		}
 	}
 }

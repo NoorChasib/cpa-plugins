@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/fingerprint"
 )
@@ -158,5 +159,32 @@ func TestDropSignals(t *testing.T) {
 	}
 	if s.Dropped()["handoff_full"] != 1000 || s.DroppedTotal() != 1000 {
 		t.Fatalf("dropped = %v", s.Dropped())
+	}
+}
+
+// TestWaitIdle: a stop waits, while admission stays open, until every open request finished, and
+// gives up after its timeout with the number still open.
+func TestWaitIdle(t *testing.T) {
+	e := running(t, "metadata")
+	if n := e.WaitIdle(time.Second); n != 0 {
+		t.Fatalf("idle engine: %d open", n)
+	}
+	e.AfterAuth(rpc(map[string]any{"RequestID": "w1"}))
+	e.AfterAuth(rpc(map[string]any{"RequestID": "w2"}))
+	start := time.Now()
+	if n := e.WaitIdle(30 * time.Millisecond); n != 2 || time.Since(start) < 30*time.Millisecond {
+		t.Fatalf("WaitIdle = %d after %v, want 2 after the timeout", n, time.Since(start))
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		e.Delete("w1")
+		e.Delete("w2")
+	}()
+	start = time.Now()
+	if n := e.WaitIdle(10 * time.Second); n != 0 || time.Since(start) > 5*time.Second {
+		t.Fatalf("WaitIdle = %d after %v, want 0 once the requests finished", n, time.Since(start))
+	}
+	if e.State() != StateRunning {
+		t.Fatal("WaitIdle changed admission")
 	}
 }

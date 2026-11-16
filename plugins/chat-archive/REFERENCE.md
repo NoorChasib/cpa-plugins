@@ -38,9 +38,21 @@ The host-owned `enabled`, `priority` and `store` keys are accepted and ignored. 
 | `degraded` | Running with an active fault (see Faults) |
 | `config_error` | A referenced secret is unreadable; fix it and save the config again |
 | `storage_unavailable` | The outbox could not be opened (another process holds its lock, or the directory is unusable). Hooks pass through while a background loop retries the open (5 s, doubling to 5 minutes); capture resumes on its own once it succeeds |
-| `stopping` / `stopped` | During a graceful stop, and after `plugin.quiesce` (version upgrade) until a reconfigure starts it again |
+| `stopping` / `stopped` | During a graceful stop (reason `draining` while it still captures, see Stops and upgrades), and after `plugin.quiesce` (version upgrade) until a reconfigure starts it again |
 
 Saving the CPA config with identical plugin settings is a no-op. Changed settings stop the plugin gracefully and start it again with the new ones.
+
+## Stops and upgrades
+
+CPA sends every hook to the running instance until that instance stops. For a version update it calls `plugin.quiesce` on the old instance first, keeps sending hooks to it while the call runs, and switches to the new version only after the call returned and the new library is loaded. A hook that reaches an instance whose admission is closed is lost: counted `dropped.stopped` while that instance is stopping, uncounted once its stop has finished (its outbox is closed). A stop therefore keeps admission open as long as it can:
+
+1. A quiesce, and a reconfigure that keeps capture on, keep capturing until no exchange is open (every begun exchange had its completion), for at most 15 seconds. The replies and completions of exchanges begun before the stop are captured as usual. CPA's Plugin Store update runs the reload in the background, so the wait delays only the switch to the new version.
+2. Still capturing, the uploader stops (its in-flight upload, then the final heartbeat), and the background loops end.
+3. Admission closes. The plugin processes everything the hooks had queued, writes each stream that is still open as a partial response, flushes the outbox writer, saves the `dropped.*` counters and closes the outbox.
+
+A partial response has `terminal_status` `incomplete`, `incomplete_reason` `plugin_stopped` and `truncated` set. The rest of that stream reaches the next runtime or version, which writes it as the exchange's next response, also `truncated`, or as response 0 if that instance never saw the stream's first chunks. When response 0 was already written as a partial response (same RequestID, same index), the outbox skips the continuation as a duplicate key (counter `duplicate_key`). An exchange still waiting for a non-stream reply when admission closes gets nothing written for it at the stop: its response and completion go to the next runtime or version, which writes them under the same keys (a new version's completion says `begin_written: false`, because it did not see the begin). Hooks that arrive after the close and before the new version is serving are lost; with the quiet point above, that window holds only the local flush, the outbox close and CPA's load of the new library.
+
+Turning capture off (`capture: off`) or removing the archive settings stops at once, without the wait. A shutdown (CPA exiting, or the plugin being disabled or removed) does not wait either: CPA has already stopped sending hooks to the plugin.
 
 ## What is captured
 

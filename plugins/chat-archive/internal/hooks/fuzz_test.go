@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/capture"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
@@ -22,6 +24,12 @@ import (
 // -race. It asserts no panic, input_seq per RequestID equal to call order on the hook side,
 // and no reservation or state leak once the runtime stopped and the idle sweep ran.
 func TestConcurrentHookFuzzer(t *testing.T) {
+	// Duplex RequestIDs never complete, so every stop would wait the whole drain bound; and a stop
+	// processes what the flood queued until the capture drain deadline, which 1 s still exercises
+	// together with the past-deadline drop path.
+	drain, capDrain := plugin.StopDrainTimeout, capture.DrainTimeout
+	plugin.StopDrainTimeout, capture.DrainTimeout = 20*time.Millisecond, time.Second
+	t.Cleanup(func() { plugin.StopDrainTimeout, capture.DrainTimeout = drain, capDrain })
 	h := plugintest.New(t, nil, "")
 	p := h.Plugin
 	e := p.Engine()

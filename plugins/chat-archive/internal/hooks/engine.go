@@ -311,6 +311,24 @@ func (e *Engine) BeginStop() {
 // Stopped marks admission fully stopped.
 func (e *Engine) Stopped() { e.state.Store(StateStopped) }
 
+// IdlePoll is how often WaitIdle checks for open requests.
+var IdlePoll = 10 * time.Millisecond
+
+// WaitIdle waits, while admission stays open, until no request is open (no RequestID has state:
+// every exchange that began has had its completion taken) or timeout passes. It returns the
+// number of requests still open. A stop calls it before closing admission, so the replies of
+// exchanges already begun are captured instead of cut off.
+func (e *Engine) WaitIdle(timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	for {
+		n := e.Entries()
+		if n == 0 || !time.Now().Before(deadline) {
+			return n
+		}
+		time.Sleep(min(IdlePoll, time.Until(deadline)))
+	}
+}
+
 func (e *Engine) admit() bool {
 	e.inflight.Add(1)
 	if e.state.Load() != StateRunning {
