@@ -124,10 +124,13 @@ func (rt *Runtime) Stop() { rt.StopBy(time.Time{}) }
 // partial response (finishStreams), while the workers keep running; then the workers process the
 // queued bodies and usage items; then the writer flushes what it holds, its outbox writes also
 // bounded by deadline. Past the drain bound, unfinished bodies and whatever is still queued are
-// counted stopped and released, never written.
+// counted stopped and released, never written; an exchange's completion that waited for a drained
+// body is still handed to the writer until deadline (or DrainTimeout), else counted stopped.
 func (rt *Runtime) StopBy(deadline time.Time) {
 	bound := DrainTimeout
+	finalBy := time.Now().Add(DrainTimeout)
 	if !deadline.IsZero() {
+		finalBy = deadline
 		bound = min(bound, max(time.Until(deadline), 0))
 		rt.stopBy.Store(deadline.UnixNano())
 	}
@@ -138,13 +141,15 @@ func (rt *Runtime) StopBy(deadline time.Time) {
 	rt.runCancel()
 	rt.wg.Wait()
 	rt.drainStop()
-	rt.drainChannels()
+	rt.drainChannels(finalBy)
 	rt.writerEnd()
 	rt.writerWG.Wait()
 }
 
-// drainChannels counts every queued item stopped and releases its reservation.
-func (rt *Runtime) drainChannels() {
+// drainChannels counts every queued item stopped and releases its reservation. When a drained
+// body was the last work an exchange's completion waited for, the completion (recording the begin
+// or response as not written) still goes to the writer, which is running, until by.
+func (rt *Runtime) drainChannels(by time.Time) {
 	e := rt.opts.Engine
 	for {
 		select {
@@ -152,11 +157,15 @@ func (rt *Runtime) drainChannels() {
 			e.Stats.Drop("stopped")
 			if w.Begin != nil {
 				e.Pool.Release(w.Begin.Reserved)
-				e.WorkDone(w.Begin.Req.RequestID, true, false)
+				if d := e.WorkDone(w.Begin.Req.RequestID, true, false); d != nil {
+					rt.completeDeferredBy(d, by)
+				}
 			}
 			if w.Response != nil {
 				e.Pool.Release(w.Response.Reserved)
-				e.WorkDone(w.Response.RequestID, false, false)
+				if d := e.WorkDone(w.Response.RequestID, false, false); d != nil {
+					rt.completeDeferredBy(d, by)
+				}
 			}
 		case c := <-e.Control:
 			e.Stats.Drop("stopped")
@@ -359,6 +368,32 @@ func (rt *Runtime) doUsage(u *hooks.UsageItem) {
 func (rt *Runtime) completeDeferred(d *hooks.Done) {
 	cs := rt.opts.Engine.FinishDeferred(d.Req.RequestID)
 	rt.writeCompletion(d, cs)
+}
+
+// completeDeferredBy writes a deferred completion at a stop, after the drain bound: it waits for
+// the writer until by, and counts the completion dropped.stopped when the writer did not take it.
+func (rt *Runtime) completeDeferredBy(d *hooks.Done, by time.Time) {
+	cs := rt.opts.Engine.FinishDeferred(d.Req.RequestID)
+	env, err := rt.buildCompletion(d, cs)
+	if err != nil {
+		return
+	}
+	if !wire.ValidKey(env.Key) {
+		rt.stats().Drop("encode_error")
+		return
+	}
+	t := time.NewTimer(max(time.Until(by), 0))
+	defer t.Stop()
+	select {
+	case rt.writes <- writeReq{env: env}:
+		return
+	default:
+	}
+	select {
+	case rt.writes <- writeReq{env: env}:
+	case <-t.C:
+		rt.stats().Drop("stopped")
+	}
 }
 
 func (rt *Runtime) writeCompletion(d *hooks.Done, cs hooks.CompletionState) {
