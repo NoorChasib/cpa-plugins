@@ -21,7 +21,7 @@ The update from 0.1.2 runs 0.1.2's stop, so that one switch still behaves the ol
 3. Resume the clients.
 4. Check that `dropped.stopped` and `dropped.duplicate_key` did not rise, in the plugin's status route or the archive's next heartbeat.
 
-Going back to 0.1.2 needs the same quiet switch: 0.1.2 cannot take the numbering 0.1.3 saves, so an exchange open across the switch would reuse keys. Later updates from 0.1.3 behave as described above.
+Going back to 0.1.2 needs the same quiet switch: 0.1.2 cannot take the numbering 0.1.3 saves, so an exchange open across the switch would reuse keys. 0.1.2 does not report `dropped.duplicate_key`, so after going back such a reuse shows only as `conflict` rejects in the archive, or not at all when the outbox skipped the envelope locally. Later updates from 0.1.3 behave as described above.
 
 ## Known limits
 
