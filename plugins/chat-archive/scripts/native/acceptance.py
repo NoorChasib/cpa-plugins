@@ -385,29 +385,40 @@ def rejected(run):
     return "HTTP 403 from the test plugin"
 
 
-def websocket(run, model, turns):
+def ws_connect(run):
     port = run.config["server"]["port"]
-    conn = wsproto.connect("127.0.0.1", port, "/v1/responses", {"Authorization": "Bearer " + run.c.client_key,
-                                                                 "X-Archive-Machine": run.c.body["H8_archive_machine"],
-                                                                 "Cookie": run.c.secret["H5_cookie"]})
+    return wsproto.connect("127.0.0.1", port, "/v1/responses", {"Authorization": "Bearer " + run.c.client_key,
+                                                                "X-Archive-Machine": run.c.body["H8_archive_machine"],
+                                                                "Cookie": run.c.secret["H5_cookie"]})
+
+
+def ws_turn(run, conn, model, turn, previous):
+    """Send one response.create and read until its response.completed; returns that response id (None if none came)."""
+    req = {"type": "response.create", "model": model, "instructions": "ca ws instructions",
+           "input": [{"type": "message", "role": "user", "content": [{"type": "input_text",
+                      "text": "ws turn %d %s %s" % (turn, run.c.markers["request"], run.c.body["P9_github_pat"])}]}]}
+    if previous:
+        req["previous_response_id"] = previous
+    conn.send_json(req)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        event = conn.recv_json()
+        if event.get("type") == "response.completed":
+            return event["response"]["id"]
+        H.check(event.get("type") != "error", "websocket error event")
+    return None
+
+
+def websocket(run, model, turns):
+    conn = ws_connect(run)
     previous = None
     completed = 0
     try:
         for turn in range(turns):
-            req = {"type": "response.create", "model": model, "instructions": "ca ws instructions",
-                   "input": [{"type": "message", "role": "user", "content": [{"type": "input_text",
-                              "text": "ws turn %d %s %s" % (turn, run.c.markers["request"], run.c.body["P9_github_pat"])}]}]}
-            if previous:
-                req["previous_response_id"] = previous
-            conn.send_json(req)
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                event = conn.recv_json()
-                if event.get("type") == "response.completed":
-                    previous = event["response"]["id"]
-                    completed += 1
-                    break
-                H.check(event.get("type") != "error", "websocket error event")
+            previous = ws_turn(run, conn, model, turn, previous)
+            if previous is None:
+                break
+            completed += 1
     finally:
         conn.close()
     H.check(completed == turns, model, "completed turns", completed)
@@ -747,6 +758,29 @@ def scan_logs_mgmt(run, c):
         ("; CPA's own upstream-error logging (also without the plugin): " + ",".join(sorted(set(own)))) if own else "")
 
 
+def reload_to_new_version(run):
+    """Install the reload library (a new version file) and make CPA re-apply plugins: it quiesces the old
+    instance, then loads a new instance on the same outbox. Returns the seconds until the new one serves."""
+    start = time.monotonic()
+    shutil.copy2(run.args.reload_library, run.dir / "plugins" / "chat-archive-v9.9.9.so")
+    cfg = json.loads((run.dir / "config.yaml").read_text())
+    cfg["routing"]["retry"]["max-retry-interval"] = 1  # any saved change makes CPA re-apply plugins
+    (run.dir / "config.yaml").write_text(json.dumps(cfg))
+    H.wait_until(lambda: run.status().get("version") == "9.9.9", 60, "new version registered")
+    return time.monotonic() - start
+
+
+def check_new_instance_drops(run):
+    st = run.status()
+    H.check(not st["recovered_panics"], "panics after reload", st["recovered_panics"])
+    H.check(run.cpa.proc.poll() is None, "CPA died during reload")
+    dropped = {k: v for k, v in st.get("dropped", {}).items() if v}
+    H.check("duplicate_key" in st.get("dropped", {}), "dropped.duplicate_key not reported")
+    H.check(not dropped, "new instance dropped", dropped)
+    stats = run.fake.get("/stats")
+    H.check(stats["keys_received_twice"] == 0, "keys received twice", stats["keys_received_twice"])
+
+
 def reload_case(run):
     import http.client
     port = run.config["server"]["port"]
@@ -758,21 +792,68 @@ def reload_case(run):
     H.check(resp.status == 200, "hold stream", resp.status)
     first = resp.read1(65536)
     H.check(first, "no first chunk before reload")
-    shutil.copy2(run.args.reload_library, run.dir / "plugins" / "chat-archive-v9.9.9.so")
-    cfg = json.loads((run.dir / "config.yaml").read_text())
-    cfg["routing"]["retry"]["max-retry-interval"] = 1  # any saved change makes CPA re-apply plugins
-    (run.dir / "config.yaml").write_text(json.dumps(cfg))
-    H.wait_until(lambda: run.status().get("version") == "9.9.9", 60, "new version registered")
+    switch = reload_to_new_version(run)
     run.mock.release.set()
     rest = resp.read()
     conn.close()
     H.check(b"message_stop" in first + rest, "held stream did not finish")
-    st = run.status()
-    H.check(not st["recovered_panics"], "panics after reload", st["recovered_panics"])
-    H.check(run.cpa.proc.poll() is None, "CPA died during reload")
     code, raw = send_claude(run, "ca-claude", False, text="after reload " + run.c.markers["request"])
     H.check(code == 200, "request after reload", code)
-    return "stream finished across the reload; new instance 9.9.9 serving; no panic"
+    settle(run)
+    check_new_instance_drops(run)
+    # The held stream outlasted the old instance's drain: the old instance wrote what it saw as a
+    # partial response 0, the new one continued the request's numbering with response 1.
+    view = View(run.fake)
+    begins = view.begins("ca-claude-hold", True)
+    H.check(len(begins) == 1, "held stream begins", len(begins))
+    rid = begins[0]["body"]["request_id"]
+    responses = sorted((r["body"] for r in view.of("exchange.response", rid)), key=lambda b: b.get("index", 0))
+    H.check([r.get("index", 0) for r in responses] == [0, 1], "held stream response indexes", [r.get("index", 0) for r in responses])
+    head, tail = responses
+    H.check(head.get("terminal_status") == "incomplete" and head.get("incomplete_reason") == "plugin_stopped" and head.get("truncated"),
+            "held stream head", head.get("terminal_status"), head.get("incomplete_reason"), head.get("truncated"))
+    H.check(tail.get("terminal_status") == "completed", "held stream tail", tail.get("terminal_status"))
+    comps = [c["body"] for c in view.of("exchange.completion", rid)]
+    H.check(len(comps) == 1 and comps[0]["outcome"] == "succeeded" and comps[0]["responses"] == 2 and comps[0]["begin_written"] is True,
+            "held stream completion", [(c["outcome"], c["responses"], c["begin_written"]) for c in comps])
+    return ("stream finished across the reload (new version serving after %.1f s); response 0 partial plugin_stopped (old), "
+            "response 1 %s truncated=%s (new), completion responses=2 begin_written; dropped.duplicate_key=0, no key twice"
+            % (switch, tail.get("terminal_status"), tail.get("truncated")))
+
+
+def reload_websocket_case(run, model):
+    """A Responses WebSocket (one RequestID for the socket) left open across a reload: turn 0 on the old
+    instance, turn 1 on the new one."""
+    before = {b["body"]["request_id"] for b in View(run.fake).begins(model)}
+    conn = ws_connect(run)
+    try:
+        first = ws_turn(run, conn, model, 0, None)
+        H.check(first, "turn 0 did not complete")
+        switch = reload_to_new_version(run)
+        second = ws_turn(run, conn, model, 1, first)
+        H.check(second, "turn 1 did not complete after the reload")
+    finally:
+        conn.close()
+    settle(run)
+    check_new_instance_drops(run)
+    view = View(run.fake)
+    rids = {b["body"]["request_id"] for b in view.begins(model)} - before
+    H.check(len(rids) == 1, "socket RequestIDs", len(rids))
+    rid = rids.pop()
+    seqs = sorted(b["body"].get("input_seq", 0) for b in view.of("exchange.begin", rid))
+    H.check(seqs == [0, 1], "input_seq across the reload", seqs)
+    responses = sorted((r["body"] for r in view.of("exchange.response", rid)), key=lambda b: b.get("index", 0))
+    H.check([r.get("index", 0) for r in responses] == [0, 1], "response indexes across the reload", [r.get("index", 0) for r in responses])
+    H.check([r.get("terminal_status") for r in responses] == ["completed", "completed"], "terminal statuses",
+            [r.get("terminal_status") for r in responses])
+    ordinals = sorted(a["body"].get("ordinal", 0) for a in view.of("exchange.attempt", rid))
+    H.check(ordinals == [1, 2], "attempt ordinals across the reload", ordinals)
+    comps = [c["body"] for c in view.of("exchange.completion", rid)]
+    H.check(len(comps) == 1 and comps[0]["outcome"] == "succeeded" and comps[0]["responses"] == 2 and comps[0]["begin_written"] is True,
+            "socket completion", [(c["outcome"], c["responses"], c["begin_written"]) for c in comps])
+    return ("turn 0 on the old instance, turn 1 on 9.9.9 (serving after %.1f s): input_seq [0, 1], response index [0, 1] "
+            "(turn 1 truncated=%s), ordinals [1, 2], one completion responses=2; dropped.duplicate_key=0, no key twice"
+            % (switch, responses[1].get("truncated")))
 
 
 def restart_case(run, before):
@@ -802,6 +883,7 @@ def phase_duplex(args, c, mock_state, mock_url):
         for b in begins:
             by_rid.setdefault(b["body"]["request_id"], []).append(b["body"].get("input_seq", 0))
         dump_meta(run)
+        run_case("duplex: Responses WebSocket open across a reload keeps both turns", reload_websocket_case, run, "ca-codex-ws")
         run.cpa.stop()
         H.check(begins, "no duplex begins")
         multi = {rid: seqs for rid, seqs in by_rid.items() if len(seqs) > 1}
