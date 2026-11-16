@@ -162,29 +162,78 @@ func TestDropSignals(t *testing.T) {
 	}
 }
 
-// TestWaitIdle: a stop waits, while admission stays open, until every open request finished, and
-// gives up after its timeout with the number still open.
-func TestWaitIdle(t *testing.T) {
+// TestWaitOpen: a stop waits, while admission stays open, until every request open when it began
+// finished, and gives up at its deadline with the number still open. A request that begins during
+// the wait does not extend it.
+func TestWaitOpen(t *testing.T) {
 	e := running(t, "metadata")
-	if n := e.WaitIdle(time.Second); n != 0 {
+	if n := e.WaitOpen(time.Now().Add(time.Second)); n != 0 {
 		t.Fatalf("idle engine: %d open", n)
 	}
 	e.AfterAuth(rpc(map[string]any{"RequestID": "w1"}))
 	e.AfterAuth(rpc(map[string]any{"RequestID": "w2"}))
 	start := time.Now()
-	if n := e.WaitIdle(30 * time.Millisecond); n != 2 || time.Since(start) < 30*time.Millisecond {
-		t.Fatalf("WaitIdle = %d after %v, want 2 after the timeout", n, time.Since(start))
+	if n := e.WaitOpen(start.Add(30 * time.Millisecond)); n != 2 || time.Since(start) < 30*time.Millisecond {
+		t.Fatalf("WaitOpen = %d after %v, want 2 at the deadline", n, time.Since(start))
 	}
 	go func() {
 		time.Sleep(20 * time.Millisecond)
+		e.AfterAuth(rpc(map[string]any{"RequestID": "w3"})) // begins during the wait, stays open
 		e.Delete("w1")
+		time.Sleep(20 * time.Millisecond)
 		e.Delete("w2")
 	}()
 	start = time.Now()
-	if n := e.WaitIdle(10 * time.Second); n != 0 || time.Since(start) > 5*time.Second {
-		t.Fatalf("WaitIdle = %d after %v, want 0 once the requests finished", n, time.Since(start))
+	if n := e.WaitOpen(start.Add(10 * time.Second)); n != 0 || time.Since(start) > 5*time.Second {
+		t.Fatalf("WaitOpen = %d after %v, want 0 once the requests open at its start finished", n, time.Since(start))
+	}
+	if n := e.Entries(); n != 1 {
+		t.Fatalf("entries = %d, want the request begun during the wait", n)
 	}
 	if e.State() != StateRunning {
-		t.Fatal("WaitIdle changed admission")
+		t.Fatal("WaitOpen changed admission")
+	}
+}
+
+// TestAdoptContinuesNumbering: a new engine that adopts an open request's carried state gives its
+// next before-auth, after-auth and response the next input_seq, ordinal and index, and keeps the
+// larger counter when the request already has state.
+func TestAdoptContinuesNumbering(t *testing.T) {
+	old := running(t, "metadata")
+	old.BeforeAuth(rpc(map[string]any{"RequestID": "c1", "SourceFormat": "codex", "Body": []byte("{}")}))
+	old.AfterAuth(rpc(map[string]any{"RequestID": "c1"}))
+	old.Response(rpc(map[string]any{"RequestID": "c1", "SourceFormat": "codex", "Model": "m", "Body": []byte("{}"), "StatusCode": 200}))
+	carried := old.OpenRequests()
+	if len(carried) != 1 || carried[0].NextInputSeq != 1 || carried[0].NextOrdinal != 1 || carried[0].NextResponse != 1 || !carried[0].BeforeAuthSeen {
+		t.Fatalf("carried = %+v", carried)
+	}
+	e := running(t, "metadata")
+	if n := e.Adopt(carried); n != 1 {
+		t.Fatalf("adopted %d", n)
+	}
+	for len(e.Control) > 0 {
+		<-e.Control
+	}
+	e.BeforeAuth(rpc(map[string]any{"RequestID": "c1", "SourceFormat": "codex", "Body": []byte("{}")}))
+	e.AfterAuth(rpc(map[string]any{"RequestID": "c1"}))
+	e.Response(rpc(map[string]any{"RequestID": "c1", "SourceFormat": "codex", "Model": "m", "Body": []byte("{}"), "StatusCode": 200}))
+	var seq, ord, idx uint32
+	for i := 0; i < 3; i++ {
+		c := <-e.Control
+		switch {
+		case c.Begin != nil:
+			seq = c.Begin.InputSeq
+		case c.Attempt != nil:
+			ord = c.Attempt.Ordinal
+		case c.Response != nil:
+			idx = c.Response.Index
+		}
+	}
+	if seq != 1 || ord != 2 || idx != 1 {
+		t.Fatalf("after adopt: input_seq %d ordinal %d index %d, want 1 2 1", seq, ord, idx)
+	}
+	e.Adopt(carried) // lower counters never move numbering back
+	if got := e.OpenRequests(); len(got) != 1 || got[0].NextInputSeq != 2 || got[0].NextOrdinal != 2 || got[0].NextResponse != 2 {
+		t.Fatalf("after a second adopt = %+v", got)
 	}
 }

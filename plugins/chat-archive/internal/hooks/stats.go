@@ -28,14 +28,15 @@ var hookNames = [numHooks]string{"before_auth", "after_auth", "response", "strea
 
 func (h Hook) String() string { return hookNames[h] }
 
-// Dropped counter names, as the heartbeat and status report them.
+// Dropped counter names, as the heartbeat and status report them. duplicate_key counts envelopes
+// the outbox skipped because their key was already queued: the envelope it skipped is not stored.
 var DroppedNames = []string{"body_budget", "handoff_full", "control_full", "usage_queue", "stream_overflow",
 	"mask_timeout", "oversize", "oversize_rpc", "parse_error", "disk_guard", "outbox_cap", "disk_hard",
-	"encode_error", "stopped", "media_fetch"}
+	"encode_error", "stopped", "media_fetch", "duplicate_key"}
 
 // OtherNames are plugin counters that are not drops. recovered_refused counts the saved counters of an
 // earlier boot that the archive refused for good, so they were deleted unreported (uploader).
-var OtherNames = []string{"duplicate_key", "state_evicted", "ignored_model_list", "recovered_refused"}
+var OtherNames = []string{"state_evicted", "ignored_model_list", "recovered_refused"}
 
 // Stats holds every counter the plugin reports. Counters are cumulative for the plugin instance
 // (one boot_id). Hook-side updates are atomics only, plus, for a drop, a non-blocking send on a
@@ -69,9 +70,12 @@ func NewStats() *Stats {
 }
 
 // Drop increments dropped.<name> and signals DropSignal; unknown names are ignored.
-func (s *Stats) Drop(name string) {
-	if c := s.dropped[name]; c != nil {
-		c.Add(1)
+func (s *Stats) Drop(name string) { s.DropN(name, 1) }
+
+// DropN adds n to dropped.<name> and signals DropSignal; unknown names and n == 0 are ignored.
+func (s *Stats) DropN(name string, n uint64) {
+	if c := s.dropped[name]; c != nil && n > 0 {
+		c.Add(n)
 		select {
 		case s.dropSig <- struct{}{}:
 		default:

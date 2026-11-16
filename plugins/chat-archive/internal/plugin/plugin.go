@@ -309,14 +309,31 @@ var (
 	OpenRetryTimeout = 10 * time.Minute
 )
 
-// FinalSaveTimeout bounds the save of the dropped counters at stop.
+// FinalSaveTimeout bounds the save of the dropped counters and the open requests at stop.
 var FinalSaveTimeout = 2 * time.Second
 
+// StopTimeout bounds a whole stop: the drain, the uploader stop, the capture drain and the final
+// saves all end by one deadline this long after the stop began. CPA gives its own shutdown 30 s.
+var StopTimeout = 25 * time.Second
+
 // StopDrainTimeout bounds how long a quiesce or a restarting reconfigure keeps capturing while it
-// waits for a quiet point (no open exchange) before it closes admission. CPA keeps sending every
-// hook to this instance until quiesce returns and the new version is loaded, and gives its own
-// shutdown 30 s, so the bound stays well under that.
+// waits for the exchanges open when the stop began to finish, before it closes admission. CPA
+// keeps sending every hook to this instance until quiesce returns and the new version is loaded.
+// The drain also ends StopAfterDrain before the stop's deadline.
 var StopDrainTimeout = 15 * time.Second
+
+// StopAfterDrain is the part of StopTimeout the drain always leaves to the rest of the stop.
+// Within it, the uploader stop ends CaptureStopMin + FinalSaveTimeout before the deadline, and the
+// capture drain FinalSaveTimeout before it.
+var (
+	StopAfterDrain = 10 * time.Second
+	CaptureStopMin = 3 * time.Second
+)
+
+// CarryMaxAge is how old a saved set of open requests may be when the next instance opens the
+// outbox: CPA loads the new version right after the old one's quiesce returned, so an older set
+// belongs to requests that ended with an earlier CPA process.
+var CarryMaxAge = 2 * time.Minute
 
 // openRetry is one background outbox-open loop.
 type openRetry struct {
@@ -400,6 +417,13 @@ func (p *Plugin) startWith(cfg config.Config, secrets config.Secrets, ob *outbox
 		return
 	}
 	rs.masker = capture.NewMaskerHolder(m, 0, MemoBytes)
+	// The open requests a previous instance (or runtime) on this outbox saved at its stop: their
+	// remaining hooks come here and continue their numbering. Admission is still closed.
+	cctx, ccancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
+	if carried, err := ob.TakeOpenRequests(cctx, CarryMaxAge); err == nil {
+		e.Adopt(outboxToCarried(carried))
+	}
+	ccancel()
 	rs.up = uploader.New(uploader.Options{
 		BaseURL: cfg.ArchiveURL, Token: secrets.SourceToken, UserAgent: "chat-archive/" + Version, Outbox: ob, Stats: e.Stats,
 		OnExact: func(set wire.ExactSet) { p.applyExact(rs, set) }, OnDead: rs.prefix.Dead, OnAck: rs.prefix.Acked,
@@ -452,19 +476,22 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 	rs.exactRev.Store(set.Rev)
 }
 
-// stopRuntime is the graceful stop. Hooks stay admitted for as long as possible, because a hook
-// that arrives while admission is closed is lost (counted dropped.stopped): CPA sends every hook
-// to this instance until a quiesce returns and the new version is loaded, and to this instance's
-// next runtime after a reconfigure.
+// stopRuntime is the graceful stop, bounded as a whole by StopTimeout. Hooks stay admitted for as
+// long as possible, because a hook that arrives while admission is closed is lost (counted
+// dropped.stopped): CPA sends every hook to this instance until a quiesce returns and the new
+// version is loaded, and to this instance's next runtime after a reconfigure.
 //
 // With drain set (quiesce, or a reconfigure that keeps capture on), capture first goes on until
-// no exchange is open or StopDrainTimeout passed, so replies to exchanges already begun are
-// captured. Then, still capturing, the uploader and media sender stop within their deadline (the
-// final heartbeat goes out) and the background loops are cancelled. Only then does admission
-// close; the capture runtime processes what the hooks queued, writes each stream still open as a
-// partial response, and flushes the writer (≤ 10 s). The dropped counters are saved (drops
-// counted after the final heartbeat are reported by the next boot) and the outbox is closed.
-// Shutdown does not drain: CPA has already detached the plugin, so no further hook arrives.
+// the exchanges open when the stop began have finished or the drain bound passed, so replies to
+// exchanges already begun are captured; exchanges that begin during the drain do not extend it.
+// Then, still capturing, the uploader and media sender stop within their deadline (the final
+// heartbeat goes out) and the background loops are cancelled. Only then does admission close; the
+// capture runtime processes what the hooks queued, writes each stream still open as a partial
+// response, and flushes the writer. The dropped counters are saved (drops counted after the final
+// heartbeat are reported by the next boot), and, with drain set, so are the open requests'
+// numbering, which the next instance on this outbox adopts so that the rest of each exchange gets
+// new keys. Then the outbox is closed. Shutdown does not drain: CPA has already detached the
+// plugin, so no further hook arrives and no exchange continues.
 func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
 	rs := p.rt
@@ -472,18 +499,25 @@ func (p *Plugin) stopRuntime(drain bool) {
 	if rs == nil {
 		return
 	}
+	start := time.Now()
+	deadline := start.Add(StopTimeout)
+	captureBy := deadline.Add(-FinalSaveTimeout)
+	uploaderBy := captureBy.Add(-CaptureStopMin)
 	if drain {
 		p.setState(StateStopping, "draining")
-		p.engine.WaitIdle(StopDrainTimeout)
+		p.engine.WaitOpen(minTime(start.Add(StopDrainTimeout), deadline.Add(-StopAfterDrain)))
 	}
 	p.setState(StateStopping, "")
-	rs.up.Stop()
+	rs.up.StopBy(uploaderBy)
 	rs.cancel()
 	rs.wg.Wait()
 	p.engine.BeginStop()
-	rs.capture.Stop()
-	sctx, cancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
+	rs.capture.StopBy(captureBy)
+	sctx, cancel := context.WithDeadline(context.Background(), minTime(time.Now().Add(FinalSaveTimeout), deadline))
 	_ = rs.up.SaveDrops(sctx)
+	if drain {
+		_, _ = rs.ob.SaveOpenRequests(sctx, carriedToOutbox(p.engine.OpenRequests()))
+	}
 	cancel()
 	p.refreshSnapshot(rs)
 	_ = rs.ob.Close()
@@ -528,3 +562,30 @@ func (p *Plugin) State() (string, string) {
 }
 
 func sprint(format string, a ...any) string { return fmt.Sprintf(format, a...) }
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+func carriedToOutbox(cs []hooks.Carried) []outbox.OpenRequest {
+	out := make([]outbox.OpenRequest, len(cs))
+	for i, c := range cs {
+		out[i] = outbox.OpenRequest{RequestID: c.RequestID, NextInputSeq: c.NextInputSeq, NextOrdinal: c.NextOrdinal,
+			NextResponse: c.NextResponse, Responses: c.Responses, BeforeAuth: c.BeforeAuthSeen, BeginWritten: c.BeginWritten,
+			TouchedAt: c.Touched}
+	}
+	return out
+}
+
+func outboxToCarried(rs []outbox.OpenRequest) []hooks.Carried {
+	out := make([]hooks.Carried, len(rs))
+	for i, r := range rs {
+		out[i] = hooks.Carried{RequestID: r.RequestID, NextInputSeq: r.NextInputSeq, NextOrdinal: r.NextOrdinal,
+			NextResponse: r.NextResponse, Responses: r.Responses, BeforeAuthSeen: r.BeforeAuth, BeginWritten: r.BeginWritten,
+			Touched: r.TouchedAt}
+	}
+	return out
+}

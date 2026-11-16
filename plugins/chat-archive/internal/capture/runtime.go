@@ -63,6 +63,7 @@ type Runtime struct {
 
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
+	stopBy        atomic.Int64 // StopBy's deadline (unix ns), 0 while running
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
@@ -114,14 +115,23 @@ func (rt *Runtime) setPressure(ps outbox.PressureState) {
 // Prefix returns the prefix map (dead-letter notifications).
 func (rt *Runtime) Prefix() *PrefixMap { return rt.prefix }
 
-// Stop drains what admission let in, within DrainTimeout. The engine's admission must already be
-// stopping, so the queues only shrink. First the stream goroutine processes the queued stream and
-// control items and writes each stream still open as a partial response (finishStreams), while
-// the workers keep running; then the workers process the queued bodies and usage items; then the
-// writer flushes what it holds. Past DrainTimeout, unfinished bodies and whatever is still queued
-// are counted stopped and released, never written.
-func (rt *Runtime) Stop() {
-	expire := time.AfterFunc(DrainTimeout, rt.drainStop)
+// Stop is StopBy with no deadline but DrainTimeout.
+func (rt *Runtime) Stop() { rt.StopBy(time.Time{}) }
+
+// StopBy drains what admission let in, within DrainTimeout and before deadline (when not zero).
+// The engine's admission must already be stopping, so the queues only shrink. First the stream
+// goroutine processes the queued stream and control items and writes each stream still open as a
+// partial response (finishStreams), while the workers keep running; then the workers process the
+// queued bodies and usage items; then the writer flushes what it holds, its outbox writes also
+// bounded by deadline. Past the drain bound, unfinished bodies and whatever is still queued are
+// counted stopped and released, never written.
+func (rt *Runtime) StopBy(deadline time.Time) {
+	bound := DrainTimeout
+	if !deadline.IsZero() {
+		bound = min(bound, max(time.Until(deadline), 0))
+		rt.stopBy.Store(deadline.UnixNano())
+	}
+	expire := time.AfterFunc(bound, rt.drainStop)
 	defer expire.Stop()
 	rt.seqCancel()
 	rt.seqWG.Wait()
@@ -473,7 +483,15 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	var res outbox.WriteResult
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		budget := 10 * time.Second
+		if by := rt.stopBy.Load(); by != 0 {
+			// A stop's deadline bounds the final flush too.
+			if budget = min(budget, time.Until(time.Unix(0, by))); budget <= 0 {
+				drop("stopped")
+				return
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		res, err = ob.Write(ctx, envs)
 		cancel()
 		if err == nil || !outbox.Retryable(err) {
@@ -482,14 +500,18 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
 	}
 	if err != nil {
+		if by := rt.stopBy.Load(); by != 0 && !time.Now().Before(time.Unix(0, by)) {
+			drop("stopped") // the stop's deadline cut the write, not the disk
+			return
+		}
 		rt.stats().SetFault("write_unavailable", true)
 		*lastProbe = time.Now()
 		drop("disk_hard")
 		return
 	}
-	if res.Duplicates > 0 {
-		rt.stats().Count("duplicate_key", uint64(res.Duplicates))
-	}
+	// A skipped key is an envelope that is not stored. Keys are unique per exchange part, and a new
+	// plugin instance continues the open requests' numbering (hooks.Engine.Adopt), so this counts a loss.
+	rt.stats().DropN("duplicate_key", uint64(res.Duplicates))
 	inserted := make(map[string]bool, len(res.Inserted))
 	for _, in := range res.Inserted {
 		inserted[in.Key] = true

@@ -122,28 +122,42 @@ func (u *Uploader) Start() {
 	}
 }
 
-// Stop stops every loop. In-flight HTTP gets StopDeadline, then its context is cancelled; the
+// Stop is StopBy with no deadline but StopDeadline and FinalHeartbeat.
+func (u *Uploader) Stop() { u.StopBy(time.Time{}) }
+
+// StopBy stops every loop. In-flight HTTP gets StopDeadline, then its context is cancelled; the
 // outbox is durable so nothing is lost. A final heartbeat (state stopping) is attempted within
-// FinalHeartbeat. Queued media fetches are dropped and counted. The owner calls SaveDrops after
-// it stopped capture, whose shutdown counts dropped.stopped after this final heartbeat.
-func (u *Uploader) Stop() {
+// FinalHeartbeat. Both also end by deadline when it is not zero: the in-flight wait leaves
+// FinalHeartbeat before it for the heartbeat, which is skipped once deadline has passed. Queued
+// media fetches are dropped and counted. The owner calls SaveDrops after it stopped capture, whose
+// shutdown counts dropped.stopped after this final heartbeat.
+func (u *Uploader) StopBy(deadline time.Time) {
 	u.once.Do(func() {
+		wait, beat := StopDeadline, FinalHeartbeat
+		if !deadline.IsZero() {
+			wait = min(wait, max(time.Until(deadline)-FinalHeartbeat, 0))
+		}
 		close(u.stop)
 		done := make(chan struct{})
 		go func() { u.wg.Wait(); close(done) }()
+		t := time.NewTimer(wait)
 		select {
 		case <-done:
-		case <-time.After(StopDeadline):
+		case <-t.C:
 		}
+		t.Stop()
 		u.cancel()
 		<-done
 		u.media.dropAll()
+		if !deadline.IsZero() {
+			beat = min(beat, time.Until(deadline))
+		}
 		// The final heartbeat goes after every loop exited, so it is the last one sent.
 		safego.Run("heartbeat", u.opts.Stats.Panic, func() {
-			if u.opts.Heartbeat == nil || u.authPaused() {
+			if u.opts.Heartbeat == nil || u.authPaused() || beat <= 0 {
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), FinalHeartbeat)
+			ctx, cancel := context.WithTimeout(context.Background(), beat)
 			defer cancel()
 			hb := u.heartbeat("stopping")
 			_ = u.SaveDrops(ctx) // the saved n covers this heartbeat before it goes out (heartbeats)

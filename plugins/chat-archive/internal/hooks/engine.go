@@ -311,22 +311,96 @@ func (e *Engine) BeginStop() {
 // Stopped marks admission fully stopped.
 func (e *Engine) Stopped() { e.state.Store(StateStopped) }
 
-// IdlePoll is how often WaitIdle checks for open requests.
+// IdlePoll is how often WaitOpen checks for open requests.
 var IdlePoll = 10 * time.Millisecond
 
-// WaitIdle waits, while admission stays open, until no request is open (no RequestID has state:
-// every exchange that began has had its completion taken) or timeout passes. It returns the
-// number of requests still open. A stop calls it before closing admission, so the replies of
-// exchanges already begun are captured instead of cut off.
-func (e *Engine) WaitIdle(timeout time.Duration) int {
-	deadline := time.Now().Add(timeout)
+// WaitOpen waits, while admission stays open, until every request open when it was called has
+// closed (its completion was taken, so its RequestID has no state) or deadline passes. It returns
+// how many of those requests are still open. Requests that begin during the wait are not waited
+// for, so steady traffic cannot hold a stop to its bound. A stop calls it before closing
+// admission, so the replies of exchanges already begun are captured instead of cut off.
+func (e *Engine) WaitOpen(deadline time.Time) int {
+	var ids []string
+	for i := range e.shards {
+		s := &e.shards[i]
+		s.mu.Lock()
+		for rid := range s.m {
+			ids = append(ids, rid)
+		}
+		s.mu.Unlock()
+	}
 	for {
-		n := e.Entries()
-		if n == 0 || !time.Now().Before(deadline) {
-			return n
+		open := ids[:0]
+		for _, rid := range ids {
+			s := e.shard(rid)
+			s.mu.Lock()
+			_, ok := s.m[rid]
+			s.mu.Unlock()
+			if ok {
+				open = append(open, rid)
+			}
+		}
+		ids = open // a request that closed is never waited for again
+		if len(ids) == 0 || !time.Now().Before(deadline) {
+			return len(ids)
 		}
 		time.Sleep(min(IdlePoll, time.Until(deadline)))
 	}
+}
+
+// Carried is the numbering and progress of one open request, carried from a stopping plugin
+// instance to the next instance on the same outbox. CPA creates a new instance (and engine) for a
+// version update, and sends the rest of every open exchange to it; with the carried state the
+// continuation gets the next input_seq, attempt ordinal and response index instead of numbering
+// from zero again and reusing keys the old instance already wrote.
+type Carried struct {
+	RequestID      string
+	NextInputSeq   uint32
+	NextOrdinal    uint32
+	NextResponse   uint32
+	Responses      uint32
+	BeforeAuthSeen bool
+	BeginWritten   bool
+	Touched        time.Time
+}
+
+// OpenRequests returns the carried state of every open request.
+func (e *Engine) OpenRequests() []Carried {
+	var out []Carried
+	for i := range e.shards {
+		s := &e.shards[i]
+		s.mu.Lock()
+		for rid, en := range s.m {
+			out = append(out, Carried{RequestID: rid, NextInputSeq: en.NextInputSeq, NextOrdinal: en.NextOrdinal,
+				NextResponse: en.NextResponse, Responses: en.Responses, BeforeAuthSeen: en.BeforeAuthSeen,
+				BeginWritten: en.BeginWritten, Touched: time.Unix(0, en.Touched)})
+		}
+		s.mu.Unlock()
+	}
+	return out
+}
+
+// Adopt seeds the state of carried requests, keeping each one's last-touched time so the idle
+// sweep evicts it at the same age. A request that already has state (the same instance restarting
+// its runtime) keeps the larger of each counter. It returns the number of requests adopted.
+func (e *Engine) Adopt(cs []Carried) int {
+	for _, c := range cs {
+		s := e.shard(c.RequestID)
+		s.mu.Lock()
+		en := s.m[c.RequestID]
+		if en == nil {
+			en = &Entry{Touched: c.Touched.UnixNano()}
+			s.m[c.RequestID] = en
+		}
+		en.NextInputSeq = max(en.NextInputSeq, c.NextInputSeq)
+		en.NextOrdinal = max(en.NextOrdinal, c.NextOrdinal)
+		en.NextResponse = max(en.NextResponse, c.NextResponse)
+		en.Responses = max(en.Responses, c.Responses)
+		en.BeforeAuthSeen = en.BeforeAuthSeen || c.BeforeAuthSeen
+		en.BeginWritten = en.BeginWritten || c.BeginWritten
+		s.mu.Unlock()
+	}
+	return len(cs)
 }
 
 func (e *Engine) admit() bool {
