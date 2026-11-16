@@ -227,7 +227,8 @@ def drive():
     assert installed["status"] == "installed" and installed["version"] == VERSION, installed
     copied = Path("/CLIProxyAPI") / installed["path"]
     assert copied.read_bytes() == Path("/fixture/package/chat-archive.so").read_bytes(), "installed bytes differ"
-    item = H.wait_until(lambda: (lambda p: p if p and p.get("registered") else None)(inventory().get("chat-archive")), 30, "registration")
+    # CPA can list the plugin as registered a moment before its menus: wait for both (CI flake, menus [] at first read).
+    item = H.wait_until(lambda: (lambda p: p if p and p.get("registered") and p.get("menus") else None)(inventory().get("chat-archive")), 30, "registration with menus")
     assert item["effective_enabled"] and item["metadata"]["version"] == VERSION, item
     assert [m["menu"] for m in item["menus"]] == ["Chat Archive"] and item["menus"][0]["path"] == H.PUBLIC, item["menus"]
     rows = inventory()
