@@ -14,7 +14,14 @@ Keeps capturing the exchanges that are open while CPA replaces the plugin with a
 
 In CPA's Plugin Store, refresh the catalog and select **Update** for Chat Archive. Your configuration and local outbox are kept. At its first start, 0.1.3 adds a small `open_requests` table to the outbox; 0.1.2 ignores it if you go back.
 
-The update from 0.1.2 runs 0.1.2's stop, so that one switch still behaves the old way. Replies and completions of exchanges in flight are dropped as `stopped`, and a long stream or an open Responses WebSocket loses its continuation. To avoid this, update while no request is running. Later updates from 0.1.3 behave as described above.
+The update from 0.1.2 runs 0.1.2's stop, so that one switch still behaves the old way. Replies and completions of exchanges in flight are dropped as `stopped`, and a long stream or an open Responses WebSocket loses its continuation. To avoid this, switch while CPA is quiet:
+
+1. Let running requests finish and pause the clients that use CPA. Close Codex sessions too, so no Responses WebSocket stays open.
+2. Select **Update** and wait until the Plugin Store shows Chat Archive 0.1.3 running.
+3. Resume the clients.
+4. Check that `dropped.stopped` and `dropped.duplicate_key` did not rise, in the plugin's status route or the archive's next heartbeat.
+
+Going back to 0.1.2 needs the same quiet switch: 0.1.2 cannot take the numbering 0.1.3 saves, so an exchange open across the switch would reuse keys. Later updates from 0.1.3 behave as described above.
 
 ## Known limits
 
