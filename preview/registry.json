@@ -73,16 +73,16 @@
       "id": "chat-archive",
       "repository": "https://github.com/NoorChasib/cpa-plugins",
       "homepage": "https://github.com/NoorChasib/cpa-plugins/tree/main/plugins/chat-archive",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/chat-archive/v0.1.3/chat-archive_0.1.3_linux_amd64.zip",
-            "sha256": "ec7ced05d19c937007e15a8393db5d63cfd8b91fbe62a16605d5a9a6dc627dc8",
-            "size": 4917739
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/chat-archive/v0.1.4/chat-archive_0.1.4_linux_amd64.zip",
+            "sha256": "e85c7550b7b37f96cf487d85f4b2488c2d212198cf494f0326f692f83f2007bd",
+            "size": 4917461
           }
         ]
       }
