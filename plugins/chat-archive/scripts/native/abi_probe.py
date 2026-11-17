@@ -92,7 +92,7 @@ def main():
 
     configured = {"enabled": True, "priority": 0, "archive-url": "http://127.0.0.1:9", "source-token-file": str(token_file),
                   "hmac-key-file": str(key_file), "data-dir": str(data), "max-rpc-mib": 8,
-                  "store": {"id": "chat-archive", "version": "0.1.4", "install": {"type": "direct"}}}
+                  "store": {"id": "chat-archive", "version": "0.1.5", "install": {"type": "direct"}}}
     try:
         # Strict, sanitized configuration and schema 7 floor.
         for bad in ({"unknown-key": True}, {"archive-url": "http://u:" + CANARY + "@h/"}, {"data-dir": "relative"},
@@ -111,7 +111,7 @@ def main():
             assert caps.get(name) is True, name
         assert not caps.get("request_interceptor_omit_body_before") and not caps.get("websocket_response_observer")
         meta = reg["result"]["metadata"]
-        assert meta["Name"] == "Chat Archive" and meta["Version"] == "0.1.4" and meta["Author"] == "NoorChasib", meta
+        assert meta["Name"] == "Chat Archive" and meta["Version"] == "0.1.5" and meta["Author"] == "NoorChasib", meta
         assert status()["state"] == "unconfigured"
         checks += 4
         rc, routes = call(b"management.register")
