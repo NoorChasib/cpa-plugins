@@ -3,6 +3,8 @@ package hooks
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -143,6 +145,30 @@ func TestModelDirectoryWithCallerIdentity(t *testing.T) {
 	e.Complete(done("seen", "succeeded", 200, ident))
 	if n := e.Stats.Other()["ignored_model_list"]; n != 4 || len(e.Handoff) != 3 || len(e.Control) != 2 {
 		t.Fatalf("seen request ignored: ignored %d handoff %d control %d", n, len(e.Handoff), len(e.Control))
+	}
+}
+
+// The model-list response and completion CPA v8.0.76 really sends (moego-encoded, with the
+// caller's identity) are ignored; the execution it encodes the same way is captured.
+func TestModelDirectoryCPAMoegoWire(t *testing.T) {
+	wire := func(name string) []byte {
+		raw, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", "cpa-v8.0.76-moego", name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	e := running(t, "full")
+	e.Response(wire("model-list-response"))
+	e.Complete(wire("model-list-complete"))
+	if n := e.Stats.Other()["ignored_model_list"]; n != 2 || len(e.Handoff) != 0 || len(e.Control) != 0 || e.Entries() != 0 {
+		t.Fatalf("model list captured: ignored %d handoff %d control %d entries %d", n, len(e.Handoff), len(e.Control), e.Entries())
+	}
+	e.BeforeAuth(wire("before-auth"))
+	e.Response(wire("response"))
+	e.Complete(wire("complete"))
+	if n := e.Stats.Other()["ignored_model_list"]; n != 2 || len(e.Handoff) != 2 || len(e.Control) != 1 {
+		t.Fatalf("execution not captured: ignored %d handoff %d control %d", n, len(e.Handoff), len(e.Control))
 	}
 }
 
