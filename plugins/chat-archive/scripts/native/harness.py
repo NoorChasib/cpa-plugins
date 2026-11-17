@@ -129,7 +129,8 @@ class Fake:
         self.log.close()
 
 
-def cpa_config(directory, port, mock, c, fake_url, extra_plugin=None, plugin_overrides=None, steering=False, plugins=True):
+def cpa_config(directory, port, mock, c, fake_url, extra_plugin=None, plugin_overrides=None, steering=False, plugins=True,
+               codex_extra=None):
     models = lambda names: [{"name": n} for n in names]
     plugin = {"enabled": True, "priority": 100, "archive-url": fake_url, "source-token-env": "CA_TEST_SOURCE_TOKEN",
               "hmac-key-id": "k1", "hmac-key-env": "CA_TEST_HMAC_KEY", "workers": 2}
@@ -160,7 +161,7 @@ def cpa_config(directory, port, mock, c, fake_url, extra_plugin=None, plugin_ove
             "codex": [{"name": "ca-codex-http", "base-url": mock + "/codex", "proxy-url": "direct",
                        "models": models(["ca-codex", "ca-codex-native", "ca-codex-merged", "ca-codex-bootstrap"]), "keys": [{"api-key": c.codex_key}]},
                       {"name": "ca-codex-ws", "base-url": mock + "/codexws", "proxy-url": "direct",
-                       "models": models(["ca-codex-ws"]), "keys": [{"api-key": c.codex_key, "websockets": True}]}],
+                       "models": models(["ca-codex-ws"]), "keys": [{"api-key": c.codex_key, "websockets": True}]}] + (codex_extra or []),
             "gemini": [{"name": "ca-gemini", "base-url": mock, "proxy-url": "direct", "models": models(["ca-gemini"]),
                         "keys": [{"api-key": c.gemini_key}]}],
             "vertex": [{"name": "ca-vertex", "base-url": mock + "/vertex", "proxy-url": "direct", "models": models(["ca-vertex"]),

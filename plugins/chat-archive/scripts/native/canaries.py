@@ -65,6 +65,7 @@ class Canaries:
         self.claude_key_b = "sk-ant-api03-" + rand(B64URLISH, 93) + "AA"   # U11
         self.openai_key = "sk-proj-" + rand(ALNUM, 48)
         self.codex_key = "sk-proj-" + rand(ALNUM, 48)
+        self.codex_key_b = "sk-proj-" + rand(ALNUM, 48)                   # the failover case's second credential
         self.gemini_key = "AIza" + rand(B64URLISH, 35)                     # H3 shape, upstream
         self.vertex_key = "AIza" + rand(B64URLISH, 35)                     # U3
         self.xai_key = "xai-" + rand(ALNUM, 80)
@@ -129,6 +130,7 @@ class Canaries:
         out = {"H1_U1_client_key": self.client_key, "H2_client_key_2": self.client_key_2,
                "management_key": self.management_key, "U2_U11_claude_key_a": self.claude_key_a,
                "U11_claude_key_b": self.claude_key_b, "openai_key": self.openai_key, "codex_key": self.codex_key,
+               "codex_key_b": self.codex_key_b,
                "gemini_key": self.gemini_key, "U3_vertex_key": self.vertex_key, "xai_key": self.xai_key,
                "E4_hmac_key": self.hmac_key, "E2_ops_password": self.ops_password}
         if self.source_token:

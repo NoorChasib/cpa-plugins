@@ -6,8 +6,11 @@ CPA built from the pinned source (pins.sh) runs in a --network none container wi
 mock upstream (mockup.py) and the clienttest fake archive (fakearchive). Every value is
 synthetic. Output holds case names, counts, sizes, timings and canary ids only.
 
-  acceptance.py --cpa CPA --library PROD.so --reload-library PROD-0.1.1.so --fixture-library FIX.so
-                --reject-library reject-fixture.so --fakearchive BIN [--only PHASE,...]
+  acceptance.py --cpa CPA [--failover-cpa CPA-v8.0.76] --library PROD.so --reload-library PROD-0.1.1.so
+                --fixture-library FIX.so --reject-library reject-fixture.so --fakearchive BIN [--only PHASE,...]
+
+The failover phase runs on the --failover-cpa binary (CPA v8.0.76, pins.sh CPA_FAILOVER_PIN); every
+other phase runs on --cpa.
 """
 import argparse
 import base64
@@ -57,7 +60,7 @@ class Run:
     """One CPA configuration with its directory, fake archive and expectations."""
 
     def __init__(self, args, c, mock_state, mock_url, name, library, plugin_overrides=None, reject=False, steering=False,
-                 archive_url=None, plugins=True):
+                 archive_url=None, plugins=True, cpa=None, codex_extra=None):
         self.args, self.c, self.mock, self.name = args, c, mock_state, name
         self.dir = Path(tempfile.mkdtemp(prefix="ca-" + name + "-", dir="/tmp"))
         self.dir.chmod(0o700)
@@ -74,8 +77,8 @@ class Run:
             shutil.copy2(args.reject_library, self.dir / "plugins" / "reject-fixture.so")
             extra = {"reject-fixture": {"enabled": True, "priority": 200}}
         self.config = H.cpa_config(self.dir, H.free_port(), mock_url, c, archive_url or self.fake.url, extra, plugin_overrides,
-                                   steering, plugins)
-        self.cpa = H.CPA(args.cpa, self.dir, self.config, c)
+                                   steering, plugins, codex_extra)
+        self.cpa = H.CPA(cpa or args.cpa, self.dir, self.config, c)
         self.mgmt_outputs = []  # every management/public response body, scanned at the end
 
     def start(self, wait_plugin=True):
@@ -921,6 +924,80 @@ def phase_duplex(args, c, mock_state, mock_url):
 
 
 # ---------------------------------------------------------------------------------------------
+# Phase: in-place WebSocket failover (CPA v8.0.76)
+
+
+def rfc3339_ns(value):
+    """Unix nanoseconds of an RFC 3339 UTC timestamp with up to 9 fractional digits."""
+    import calendar
+    head, _, frac = value.rstrip("Z").partition(".")
+    secs = calendar.timegm(time.strptime(head, "%Y-%m-%dT%H:%M:%S"))
+    return secs * 10**9 + int((frac + "000000000")[:9])
+
+
+def phase_failover(args, c, mock_state, mock_url):
+    """CPA v8.0.76 fails a Responses WebSocket turn over to another credential in place, on the same
+    socket and under the same RequestID, when the pinned credential fails before any output. The
+    mock lets each credential serve its first request and answers every later one with a
+    usage-limit 429, so turn 2 fails on the credential turn 1 pinned and is retried on the other."""
+    H.check(args.failover_cpa, "the failover phase needs --failover-cpa")
+    model = "ca-codex-failover"
+    extra = [{"name": "ca-codex-failover", "base-url": mock_url + "/codexfo", "proxy-url": "direct", "models": [{"name": model}],
+              "keys": [{"api-key": c.codex_key, "websockets": True}, {"api-key": c.codex_key_b, "websockets": True}]}]
+    run = Run(args, c, mock_state, mock_url, "failover", args.library, cpa=args.failover_cpa, codex_extra=extra)
+    try:
+        run.start()
+        H.wait_until(lambda: run.status().get("uploader", {}).get("archive_id"), 30, "sync")
+        conn = ws_connect(run)
+        try:
+            H.check(ws_turn(run, conn, model, 0, None), "turn 1 did not complete")
+            # A full response.create (no previous_response_id): eligible for the in-place failover.
+            H.check(ws_turn(run, conn, model, 1, None), "turn 2 did not complete on the other credential")
+        finally:
+            conn.close()
+        settle(run)
+        status = run.status()
+        dump_meta(run)
+        view = View(run.fake)
+        by_rid = {}
+        for e in view.completions_for(model):
+            by_rid.setdefault(e["body"]["request_id"], []).append(e)
+        reused = {rid: es for rid, es in by_rid.items() if len(es) > 1}
+        H.check(len(by_rid) == 2 and len(reused) == 1, "completions per RequestID", sorted(len(v) for v in by_rid.values()))
+        rid, comps = next(iter(reused.items()))
+        bare = "ex/" + rid + "/completion"
+        keys = sorted(e["key"] for e in comps)
+        H.check(len(comps) == 2 and keys[0] == bare and keys[1].startswith(bare + "/"), "completion keys",
+                [k.replace(rid, "<rid>") for k in keys])
+        failed = next(e["body"] for e in comps if e["key"] == bare)
+        retry = next(e["body"] for e in comps if e["key"] != bare)
+        H.check(failed["outcome"] != "succeeded" and retry["outcome"] == "succeeded", "outcomes", failed["outcome"], retry["outcome"])
+        H.check(keys[1] == bare + "/" + str(rfc3339_ns(retry["started_at"])), "the retry's key is its started_at")
+        H.check(rfc3339_ns(failed["started_at"]) < rfc3339_ns(retry["started_at"]), "lifecycle order")
+        H.check(retry.get("lifecycle_input_seq") == 1, "lifecycle_input_seq", retry.get("lifecycle_input_seq"))
+        seqs = sorted(b["body"].get("input_seq", 0) for b in view.of("exchange.begin", rid))
+        H.check(seqs == [0, 1], "input_seq", seqs)
+        ordinals = sorted(a["body"]["ordinal"] for a in view.of("exchange.attempt", rid))
+        H.check(len(ordinals) >= 2 and len(set(ordinals)) == len(ordinals), "attempt ordinals", ordinals)
+        responses = view.of("exchange.response", rid)
+        H.check([r["body"].get("terminal_status") for r in responses].count("completed") == 1, "the retry's response",
+                [r["body"].get("terminal_status") for r in responses])
+        H.check(status["dropped"].get("duplicate_key", 0) == 0, "dropped.duplicate_key", status["dropped"].get("duplicate_key"))
+        H.check(status["counters"].get("reused_request_id") == 1, "reused_request_id", status["counters"].get("reused_request_id"))
+        stats = run.fake.get("/stats")
+        H.check(stats["keys_received_twice"] == 0 and stats["by_status"].get("conflict", 0) == 0, "archive duplicates or conflicts",
+                stats["keys_received_twice"], stats["by_status"])
+        used = sorted(n for k, n in mock_state.attempts.items() if k.startswith("failover:"))
+        H.check(len(used) == 2, "both credentials reached", used)
+        run.cpa.stop()
+        return ("turn 2 failed over in place (%d upstream requests on the pinned credential, 1 on the other): completion and "
+                "completion/<started_at>, input_seq [0, 1], attempts %s, lifecycle_input_seq 1, reused_request_id 1, "
+                "dropped.duplicate_key 0" % (used[-1], ordinals))
+    finally:
+        run.close()
+
+
+# ---------------------------------------------------------------------------------------------
 # Phase: nativefixture library (sanitized hook trace)
 
 
@@ -1284,7 +1361,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("cpa", "library", "reload_library", "fixture_library", "reject_library", "fakearchive"):
         parser.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
-    parser.add_argument("--only", default="main,duplex,fixture,memory,latency,blackhole")
+    parser.add_argument("--failover-cpa", type=Path, help="CPA v8.0.76, for the failover phase")
+    parser.add_argument("--only", default="main,duplex,failover,fixture,memory,latency,blackhole")
     parser.add_argument("--results", type=Path, default=Path("/tmp/chat-archive-native-results.json"))
     args = parser.parse_args()
     phases = set(args.only.split(","))
@@ -1298,6 +1376,8 @@ def main():
             run_case("phase main", phase_main, args, c, mock_state, mock_url, rules)
         if "duplex" in phases:
             run_case("Responses WebSocket duplex (upstream.codex.response-steering)", phase_duplex, args, c, mock_state, mock_url)
+        if "failover" in phases:
+            run_case("CPA v8.0.76 in-place WebSocket failover under one RequestID", phase_failover, args, c, mock_state, mock_url)
         if "fixture" in phases:
             run_case("nativefixture status holds hook names, counts and reason codes only", phase_fixture, args, c, mock_state, mock_url)
         if "memory" in phases:
