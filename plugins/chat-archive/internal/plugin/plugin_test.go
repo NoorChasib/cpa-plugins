@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/capture"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
@@ -382,6 +383,10 @@ func TestStreamSpanningRestart(t *testing.T) {
 	safego.MinBackoff = 5 * time.Millisecond
 	t.Cleanup(func() { safego.MinBackoff = time.Second }) // after the plugin's own cleanup stopped it
 	setStopDrain(t, 50*time.Millisecond)                  // the stream stays open across each restart
+	// No stream evidence spans a restart, so each canceled completion below is held until its
+	// segment's owner settles (capture.OwnerSettle, checked on the sequencer tick).
+	setVar(t, &capture.OwnerSettle, 50*time.Millisecond)
+	setVar(t, &capture.SweepInterval, 20*time.Millisecond)
 	h := plugintest.New(t, nil, "")
 	p := h.Plugin
 	e := p.Engine()

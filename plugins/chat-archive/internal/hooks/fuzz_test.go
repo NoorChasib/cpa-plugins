@@ -2,6 +2,7 @@ package hooks_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -30,6 +31,12 @@ func TestConcurrentHookFuzzer(t *testing.T) {
 	drain, capDrain := plugin.StopDrainTimeout, capture.DrainTimeout
 	plugin.StopDrainTimeout, capture.DrainTimeout = 20*time.Millisecond, time.Second
 	t.Cleanup(func() { plugin.StopDrainTimeout, capture.DrainTimeout = drain, capDrain })
+	// Overlapping before-auths and header-inits on one RequestID look like reused lifecycles, so a
+	// non-succeeded completion is held until its segments' owner settles (capture.OwnerSettle). The
+	// settle runs on the sequencer tick; shorten both so the leak checks below see it.
+	settle, sweep := capture.OwnerSettle, capture.SweepInterval
+	capture.OwnerSettle, capture.SweepInterval = 50*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { capture.OwnerSettle, capture.SweepInterval = settle, sweep })
 	h := plugintest.New(t, nil, "")
 	p := h.Plugin
 	e := p.Engine()
@@ -134,13 +141,21 @@ func TestConcurrentHookFuzzer(t *testing.T) {
 	}
 	// Streams that straddled the restarts above: completing every RequestID while the runtime
 	// runs must release every reservation (a completion held for chunks a previous runtime
-	// processed would keep its accumulator and stream bytes).
+	// processed would keep its accumulator and stream bytes). A completion claims only its own
+	// lifecycle's segments, and the random completions above carry lifecycle times that leave many
+	// segments to lifecycles that never complete; a completion without started_at tells no
+	// lifecycles apart and claims every segment with no hook after its CompletedAt.
 	meta := plugintest.Meta("/v1/messages")
+	spanning := func(rid, outcome string) []byte {
+		b, _ := json.Marshal(map[string]any{"RequestID": rid, "SourceFormat": "claude", "Model": "model-x", "RequestedModel": "model-x",
+			"Outcome": outcome, "StatusCode": 0, "CompletedAt": time.Now().UTC(), "Metadata": meta})
+		return b
+	}
 	for i := 0; i < 24; i++ {
-		p.Hook(protocol.MethodRequestComplete, plugintest.Complete(fmt.Sprintf("fz-%d", i), "canceled", meta))
+		p.Hook(protocol.MethodRequestComplete, spanning(fmt.Sprintf("fz-%d", i), "canceled"))
 	}
 	for w := 0; w < workers; w++ {
-		p.Hook(protocol.MethodRequestComplete, plugintest.Complete(fmt.Sprintf("duplex-%d", w), "succeeded", meta))
+		p.Hook(protocol.MethodRequestComplete, spanning(fmt.Sprintf("duplex-%d", w), "succeeded"))
 	}
 	plugintest.WaitFor(t, "no reservation while running", func() bool { return e.Pool.Used() == 0 && e.Pool.StreamUsed() == 0 })
 	// Stop the runtime: every queued item is released, then the idle sweep removes all state.

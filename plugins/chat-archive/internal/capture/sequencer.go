@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
@@ -13,8 +14,10 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/headers"
 )
 
-// acc is one RequestID's stream accumulator, owned by the stream goroutine.
-type acc struct {
+// segment is one stream attempt of a RequestID: what the hooks sent from one header-init (or the
+// first chunk) up to the next header-init. A RequestID that CPA reuses for an in-place WebSocket
+// failover can have one segment per lifecycle, and a bootstrap retry gives a segment per attempt.
+type segment struct {
 	format       string
 	model        string
 	meta         protocol.Meta
@@ -25,36 +28,111 @@ type acc struct {
 	firstChunkAt time.Time
 	chunks       uint32
 	bytes        int64
-	resets       uint32
 	state        int64 // stream-pool bytes held for assembled state
-	pending      *hooks.Done
-	touched      time.Time
+	resets       uint32
 	ended        bool // the last response handed off ended with a completed, done or incomplete event
 	// cut: the next response handed off lost part of its stream, so it is marked truncated. Set
 	// when this runtime picks a stream up after its first payload chunk (the start went to an
 	// earlier runtime or plugin instance), and when a stop writes a stream that is still open.
 	cut bool
+
+	t          time.Time        // start: the first item's hook time (header-init, else first chunk)
+	ev         hooks.StreamItem // boundary evidence of the first item (BAAt, BAPrevAt, Since)
+	lastHookAt time.Time        // latest hook time of its items
+	kept       bool             // a completion classified it as another lifecycle's
+}
+
+func (s *segment) empty() bool {
+	return s == nil || (s.chunks == 0 && s.state == 0 && s.headerInitAt.IsZero())
+}
+
+// acc is one RequestID's stream accumulator, owned by the stream goroutine: the open segment and
+// the segments parked at a later header-init until their completion claims them.
+type acc struct {
+	cur     *segment
+	parked  []*segment
+	resets  uint32
+	touched time.Time
+}
+
+// segments returns the parked segments and the open one, oldest first. The open segment is
+// included while it is empty too (every response it carried was handed off): its ended flag still
+// decides a canceled completion (flushDone).
+func (a *acc) segments() []*segment {
+	out := append([]*segment(nil), a.parked...)
+	if a.cur != nil && a.cur.re != nil {
+		out = append(out, a.cur)
+	}
+	return out
+}
+
+// held is the number of segments that still hold content.
+func (a *acc) held() int {
+	n := len(a.parked)
+	if !a.cur.empty() {
+		n++
+	}
+	return n
+}
+
+func (a *acc) remove(s *segment) {
+	if a.cur == s {
+		a.cur = nil
+		return
+	}
+	if i := slices.Index(a.parked, s); i >= 0 {
+		a.parked = slices.Delete(a.parked, i, i+1)
+	}
+}
+
+// pendDone is a completion the sequencer holds: its stream items are not all processed yet, or
+// which segments are its own is not settled yet.
+type pendDone struct {
+	d       *hooks.Done
+	readyAt time.Time // when its stream items were all processed (OwnerSettle counts from it)
+	held    bool      // counted ownership_held
+}
+
+// seqState is the stream goroutine's state. Pending completions belong to the RequestID, not to a
+// segment, so no flush or reset drops one; starts holds the started_at (unix ns) of every completion
+// read for the RequestID, which tells lifecycles apart (F2).
+type seqState struct {
+	accs   map[string]*acc
+	pend   map[string][]*pendDone
+	starts map[string][]int64
+}
+
+func newSeqState() *seqState {
+	return &seqState{accs: map[string]*acc{}, pend: map[string][]*pendDone{}, starts: map[string][]int64{}}
 }
 
 // IncompleteStopped is the incomplete_reason of a stream response a stop wrote while it was
 // still open; the rest of the stream reaches the next runtime or plugin instance, or is lost.
 const IncompleteStopped = "plugin_stopped"
 
-// SweepInterval is how often the stream goroutine sweeps idle accumulators.
+// SweepInterval is how often the stream goroutine sweeps idle accumulators and settles held
+// completions.
 var SweepInterval = time.Minute
+
+// OwnerSettle is how long a completion whose candidate segments' owner is uncertain is held for
+// causal evidence (a later hook after its CompletedAt, or another completion's started_at) before it
+// is settled without it: every candidate is then written, none released.
+var OwnerSettle = time.Minute
 
 // sequencer is the single stream goroutine: stream chunks (one at a time), attempts,
 // metadata-only begins and responses, and completions, in channel order.
 func (rt *Runtime) sequencer(ctx context.Context) {
 	e := rt.opts.Engine
-	accs := map[string]*acc{}
+	sq := newSeqState()
 	defer func() {
 		// Shutdown or a recovered panic: open streams are unfinished bodies (counted stopped,
 		// never written raw). A stream that continues after a restart lost this state, so its
 		// later responses are marked truncated.
-		for rid, a := range accs {
+		for rid, a := range sq.accs {
 			e.Stats.Drop("stopped")
-			rt.releaseAcc(rid, a)
+			for _, s := range a.segments() {
+				rt.releaseSeg(rid, s)
+			}
 			e.With(rid, false, func(en *hooks.Entry) { en.Truncated = true })
 		}
 		rt.activeStreams.Store(0)
@@ -65,142 +143,207 @@ func (rt *Runtime) sequencer(ctx context.Context) {
 		safego.Checkpoint("stream")
 		select {
 		case <-ctx.Done():
-			rt.finishStreams(accs)
+			rt.finishStreams(sq)
 			return
 		case it := <-e.Stream:
-			rt.onStream(accs, it)
+			rt.onStream(sq, it)
 		case c := <-e.Control:
-			rt.onControl(accs, c)
+			rt.onControl(sq, c)
 		case <-tick.C:
-			rt.sweepAccs(accs, e.Now().Add(-hooks.IdleAfter))
+			for rid := range sq.pend {
+				rt.evalPending(sq, rid, false)
+			}
+			rt.sweepAccs(sq, e.Now().Add(-hooks.IdleAfter))
 		}
-		rt.activeStreams.Store(int64(len(accs)))
+		rt.activeStreams.Store(int64(len(sq.accs)))
 	}
 }
 
 // finishStreams runs at a stop, once admission closed (so the queues only shrink) and while the
-// workers still run. It processes the stream and control items the hooks queued, then writes
-// each stream still open as a partial response: incomplete (IncompleteStopped) and truncated,
-// instead of discarding what it captured. The exchange's completion is not written here: CPA
-// sends it later, to this instance's next runtime or to the next plugin instance. Past the drain
-// deadline it stops, and the deferred cleanup counts what is left stopped.
-func (rt *Runtime) finishStreams(accs map[string]*acc) {
+// workers still run. It processes the stream and control items the hooks queued, settles every
+// held completion, then writes each segment still open or kept as a partial response: incomplete
+// (IncompleteStopped) and truncated, instead of discarding what it captured. An exchange's
+// completion not yet received is not written here: CPA sends it later, to this instance's next
+// runtime or to the next plugin instance. Past the drain deadline it stops, and the deferred
+// cleanup counts what is left stopped.
+func (rt *Runtime) finishStreams(sq *seqState) {
 	e := rt.opts.Engine
 queued:
 	for rt.drainCtx.Err() == nil {
 		select {
 		case it := <-e.Stream:
-			rt.onStream(accs, it)
+			rt.onStream(sq, it)
 		case c := <-e.Control:
-			rt.onControl(accs, c)
+			rt.onControl(sq, c)
 		default:
 			break queued
 		}
 	}
-	for rid, a := range accs {
+	for rid := range sq.pend {
 		if rt.drainCtx.Err() != nil {
 			return
 		}
-		if a.pending != nil {
-			// Every queued chunk was processed: nothing more is coming for this completion.
-			d := a.pending
-			a.pending = nil
-			rt.flushStream(accs, rid, a, d)
+		// Every queued chunk was processed: nothing more is coming for these completions.
+		rt.evalPending(sq, rid, true)
+	}
+	for rid, a := range sq.accs {
+		if rt.drainCtx.Err() != nil {
+			return
+		}
+		for _, s := range a.segments() {
+			rt.writeOpen(rid, a, s)
+		}
+		delete(sq.accs, rid)
+	}
+	rt.activeStreams.Store(int64(len(sq.accs)))
+}
+
+// writeOpen writes a segment whose completion has not come as a partial response: incomplete
+// (IncompleteStopped) and truncated.
+func (rt *Runtime) writeOpen(rid string, a *acc, s *segment) {
+	if s.re != nil {
+		at := rt.opts.Engine.Now()
+		for _, ev := range s.asm.Finish() {
+			for _, r := range s.re.Feed(ev, at) {
+				rt.handOff(rid, a, s, r)
+			}
+		}
+		for _, r := range s.re.Flush(stream.StatusIncomplete, at) {
+			if r.TerminalStatus == stream.StatusIncomplete && r.IncompleteReason == "" {
+				r.IncompleteReason = IncompleteStopped
+			}
+			// Chat and Gemini report completed once a finish reason arrived: the body is whole.
+			s.cut = s.cut || r.TerminalStatus != stream.StatusCompleted
+			rt.handOff(rid, a, s, r)
+		}
+	}
+	rt.releaseSeg(rid, s)
+	a.remove(s)
+}
+
+func (rt *Runtime) releaseSeg(rid string, s *segment) {
+	e := rt.opts.Engine
+	if s != nil && s.state > 0 {
+		e.Pool.ReleaseStream(s.state)
+		rt.streamAccum.Add(-s.state)
+		st := s.state
+		e.With(rid, false, func(en *hooks.Entry) { en.StreamBytes -= st })
+		s.state = 0
+	}
+}
+
+// sweepAccs drops accumulators idle since before cutoff, with their pending completions. A segment
+// a completion kept for another lifecycle whose completion never came is written as a partial
+// response first, not dropped.
+func (rt *Runtime) sweepAccs(sq *seqState, cutoff time.Time) {
+	for rid, a := range sq.accs {
+		if !a.touched.Before(cutoff) {
 			continue
 		}
-		if a.re != nil {
-			at := e.Now()
-			for _, ev := range a.asm.Finish() {
-				for _, r := range a.re.Feed(ev, at) {
-					rt.handOff(rid, a, r)
-				}
-			}
-			for _, r := range a.re.Flush(stream.StatusIncomplete, at) {
-				if r.TerminalStatus == stream.StatusIncomplete && r.IncompleteReason == "" {
-					r.IncompleteReason = IncompleteStopped
-				}
-				// Chat and Gemini report completed once a finish reason arrived: the body is whole.
-				a.cut = a.cut || r.TerminalStatus != stream.StatusCompleted
-				rt.handOff(rid, a, r)
+		for _, s := range a.segments() {
+			if s.kept || slices.Contains(a.parked, s) {
+				s.cut = true
+				rt.writeOpen(rid, a, s)
+			} else {
+				rt.releaseSeg(rid, s)
 			}
 		}
-		rt.releaseAcc(rid, a)
-		delete(accs, rid)
+		delete(sq.accs, rid)
+		delete(sq.pend, rid)
+		delete(sq.starts, rid)
 	}
-	rt.activeStreams.Store(int64(len(accs)))
-}
-
-func (rt *Runtime) releaseAcc(rid string, a *acc) {
-	e := rt.opts.Engine
-	if a.state > 0 {
-		e.Pool.ReleaseStream(a.state)
-		rt.streamAccum.Add(-a.state)
-		st := a.state
-		e.With(rid, false, func(en *hooks.Entry) { en.StreamBytes -= st })
-		a.state = 0
-	}
-}
-
-// SweepAccsNow runs the accumulator idle sweep (tests).
-func (rt *Runtime) sweepAccs(accs map[string]*acc, cutoff time.Time) {
-	for rid, a := range accs {
-		if a.touched.Before(cutoff) {
-			rt.releaseAcc(rid, a)
-			delete(accs, rid)
+	for rid, list := range sq.pend {
+		if sq.accs[rid] != nil {
+			continue
+		}
+		idle := true
+		for _, p := range list {
+			idle = idle && p.d.ObservedAt.Before(cutoff)
+		}
+		if idle {
+			delete(sq.pend, rid)
+			delete(sq.starts, rid)
 		}
 	}
 }
 
-func (rt *Runtime) onStream(accs map[string]*acc, it hooks.StreamItem) {
-	done, found := rt.opts.Engine.ChunkDone(it.RequestID, false)
-	a := accs[it.RequestID]
-	if a == nil {
-		a = &acc{}
-		accs[it.RequestID] = a
-	}
-	if a.re == nil { // new, or a placeholder holding an early completion
-		a.format, a.model, a.meta = it.SourceFormat, it.Model, it.Meta
-		a.asm, a.re = &stream.Assembler{}, stream.New(it.SourceFormat)
+func (rt *Runtime) newSegment(a *acc, it hooks.StreamItem) *segment {
+	s := &segment{format: it.SourceFormat, model: it.Model, meta: it.Meta, asm: &stream.Assembler{}, re: stream.New(it.SourceFormat),
+		resets: a.resets, t: it.At, ev: it,
 		// CPA sends the header-init first and numbers payload chunks from 0: a later chunk here
 		// means the stream started before this runtime (a restart or a plugin update).
-		a.cut = it.ChunkIndex > 0
+		cut: it.ChunkIndex > 0}
+	s.ev.Body, s.ev.Headers = nil, nil
+	return s
+}
+
+// sameLifecycle reports whether segment s provably belongs to the lifecycle of header-init h: no
+// before-auth of the RequestID started between s's start and h, and h's record is continuous over
+// that span. Every lifecycle opens with a before-auth (F6), so there is no new lifecycle between.
+func sameLifecycle(h hooks.StreamItem, s *segment) bool {
+	t := s.t.UnixNano()
+	return h.BAAt < t && h.Since < t
+}
+
+func (rt *Runtime) onStream(sq *seqState, it hooks.StreamItem) {
+	e := rt.opts.Engine
+	e.ChunkDone(it.RequestID, false)
+	a := sq.accs[it.RequestID]
+	if a == nil {
+		a = &acc{}
+		sq.accs[it.RequestID] = a
 	}
 	a.touched = it.At
 	if it.ChunkIndex == protocol.StreamHeaderInit {
-		if a.chunks > 0 || a.state > 0 || !a.headerInitAt.IsZero() {
-			// Bootstrap retry: CPA ran the stream again and sent a second header-init for the
-			// same request. Discard what the previous attempt buffered.
+		if s := a.cur; !s.empty() {
 			a.resets++
-			rt.releaseAcc(it.RequestID, a)
-			a.asm, a.re = &stream.Assembler{}, stream.New(it.SourceFormat)
-			a.chunks, a.bytes, a.firstChunkAt, a.cut = 0, 0, time.Time{}, false
+			if sameLifecycle(it, s) {
+				// Bootstrap retry: CPA ran the stream again and sent a second header-init for the
+				// same request. Discard what the previous attempt buffered.
+				rt.releaseSeg(it.RequestID, s)
+			} else {
+				// A before-auth came between, or the record is not continuous: the segment may be
+				// an earlier lifecycle's. Keep it for the completion that claims it.
+				a.parked = append(a.parked, s)
+				e.Stats.Count("segments_parked", 1)
+			}
+			a.cur = nil
 		}
-		a.headers, a.headerInitAt = it.Headers, it.At
+		if a.cur.empty() {
+			a.cur = rt.newSegment(a, it)
+		}
+		s := a.cur
+		s.headers, s.headerInitAt = it.Headers, it.At
 		if it.SourceFormat != "" {
-			a.format = it.SourceFormat
+			s.format = it.SourceFormat
 		}
 	} else {
-		if a.firstChunkAt.IsZero() {
-			a.firstChunkAt = it.At
+		if a.cur == nil {
+			a.cur = rt.newSegment(a, it)
 		}
-		a.chunks++
-		a.bytes += int64(len(it.Body))
-		a.state += it.Reserved // the raw chunk's reservation becomes assembled state
+		s := a.cur
+		if s.firstChunkAt.IsZero() {
+			s.firstChunkAt = it.At
+		}
+		s.chunks++
+		s.bytes += int64(len(it.Body))
+		s.state += it.Reserved // the raw chunk's reservation becomes assembled state
 		rt.streamAccum.Add(it.Reserved)
-		for _, ev := range a.asm.Add(it.Body) {
-			for _, r := range a.re.Feed(ev, it.At) {
-				rt.handOff(it.RequestID, a, r)
+		for _, ev := range s.asm.Add(it.Body) {
+			for _, r := range s.re.Feed(ev, it.At) {
+				rt.handOff(it.RequestID, a, s, r)
 			}
 		}
 	}
-	if a.pending != nil && (!found || done >= a.pending.ChunksQueued) {
-		d := a.pending
-		a.pending = nil
-		rt.flushStream(accs, it.RequestID, a, d)
+	if it.At.After(a.cur.lastHookAt) {
+		a.cur.lastHookAt = it.At
+	}
+	if len(sq.pend[it.RequestID]) > 0 {
+		rt.evalPending(sq, it.RequestID, false)
 	}
 }
 
-func (rt *Runtime) onControl(accs map[string]*acc, c hooks.Control) {
+func (rt *Runtime) onControl(sq *seqState, c hooks.Control) {
 	e := rt.opts.Engine
 	switch {
 	case c.Attempt != nil:
@@ -222,40 +365,148 @@ func (rt *Runtime) onControl(accs map[string]*acc, c hooks.Control) {
 			}
 		}
 	case c.Done != nil:
-		rid := c.Done.Req.RequestID
-		a := accs[rid]
-		if c.Done.ChunksQueued > 0 && !e.ChunksProcessed(rid, c.Done.ChunksQueued) {
-			// The channels are read in no fixed order: hold the completion until every chunk the
-			// hooks queued for this RequestID was processed.
-			if a == nil {
-				a = &acc{touched: c.Done.ObservedAt}
-				accs[rid] = a
+		d := c.Done
+		rid := d.Req.RequestID
+		if !d.Req.StartedAt.IsZero() {
+			if sn := d.Req.StartedAt.UnixNano(); !slices.Contains(sq.starts[rid], sn) {
+				sq.starts[rid] = append(sq.starts[rid], sn)
 			}
-			a.pending = c.Done
-			return
 		}
-		rt.flushStream(accs, rid, a, c.Done)
+		// Ascending snapshot order, ties in arrival order: the snapshot counts the stream items
+		// queued before the completion's hook, so the order is causal.
+		list := sq.pend[rid]
+		i := len(list)
+		for i > 0 && list[i-1].d.ChunksQueued > d.ChunksQueued {
+			i--
+		}
+		sq.pend[rid] = slices.Insert(list, i, &pendDone{d: d})
+		rt.evalPending(sq, rid, false)
 	}
 }
 
-// flushStream closes a RequestID's stream at its completion and writes the completion.
-func (rt *Runtime) flushStream(accs map[string]*acc, rid string, a *acc, d *hooks.Done) {
+// evalPending flushes every pending completion of rid whose stream items were all processed and
+// whose segments' ownership is settled. With stop set (a stop's drain), every one is flushed now,
+// settled without evidence where it is uncertain.
+func (rt *Runtime) evalPending(sq *seqState, rid string, stop bool) {
 	e := rt.opts.Engine
-	if a != nil && a.re != nil {
-		status := stream.StatusCompleted
-		switch d.Req.Outcome {
-		case "failed":
-			status = stream.StatusFailed
-		case "canceled":
-			status = stream.StatusCanceled
+	for {
+		progressed := false
+		for i, p := range sq.pend[rid] {
+			if !stop && p.d.ChunksQueued > 0 && !e.ChunksProcessed(rid, p.d.ChunksQueued) {
+				continue
+			}
+			now := e.Now()
+			if p.readyAt.IsZero() {
+				p.readyAt = now
+			}
+			cl := rt.classify(sq, rid, p.d)
+			settle := stop || now.Sub(p.readyAt) >= OwnerSettle
+			if !cl.certain && !settle {
+				if !p.held {
+					p.held = true
+					e.Stats.Count("ownership_held", 1)
+				}
+				continue
+			}
+			sq.pend[rid] = slices.Delete(sq.pend[rid], i, i+1)
+			rt.flushDone(sq, rid, p.d, cl)
+			progressed = true
+			break
 		}
-		for _, ev := range a.asm.Finish() {
-			for _, r := range a.re.Feed(ev, d.ObservedAt) {
-				rt.handOff(rid, a, r)
+		if !progressed {
+			break
+		}
+	}
+	if len(sq.pend[rid]) == 0 {
+		delete(sq.pend, rid)
+		if sq.accs[rid] == nil {
+			delete(sq.starts, rid)
+		}
+	}
+}
+
+// claim is which segments a completion flushes.
+type claim struct {
+	cands   []*segment // oldest first
+	certain bool       // ownership settled
+	release bool       // older candidates are bootstrap retries of a succeeded lifecycle: release them
+}
+
+// classify sorts rid's segments for completion d (S = started_at, C = completed_at): a segment that
+// started before S is an earlier lifecycle's (F2); one with a hook after C is a later lifecycle's
+// (F1); one that started after another completion's started_at S' > S is a later lifecycle's (F2).
+// The rest are candidates. A candidate is provably d's when its first item shows at most one
+// before-auth after S (d's own opener) over a continuous record.
+func (rt *Runtime) classify(sq *seqState, rid string, d *hooks.Done) claim {
+	var cl claim
+	a := sq.accs[rid]
+	if a == nil {
+		cl.certain = true
+		return cl
+	}
+	var sn, cn int64
+	if !d.Req.StartedAt.IsZero() {
+		sn = d.Req.StartedAt.UnixNano()
+	}
+	if !d.Req.CompletedAt.IsZero() {
+		cn = d.Req.CompletedAt.UnixNano()
+	}
+	provable, content := sn != 0, false
+	for _, s := range a.segments() {
+		t := s.t.UnixNano()
+		later := cn != 0 && (t > cn || s.lastHookAt.UnixNano() > cn)
+		if sn != 0 && !later {
+			for _, o := range sq.starts[rid] {
+				later = later || (o > sn && t > o)
 			}
 		}
-		open := a.re.Flush(status, d.ObservedAt)
-		if d.Req.Outcome == "canceled" && len(open) == 0 && a.ended {
+		if (sn != 0 && t < sn) || later {
+			s.kept = true
+			continue
+		}
+		cl.cands = append(cl.cands, s)
+		if !s.empty() {
+			// An empty segment holds nothing to misattribute: it never makes ownership uncertain.
+			provable = provable && s.ev.BAPrevAt < sn && s.ev.Since < sn
+			content = true
+		}
+	}
+	switch {
+	case !content, provable:
+		cl.certain = true
+	case sn == 0:
+		// No started_at: nothing can be told apart, and nothing is released.
+		cl.certain = true
+	case d.Req.Outcome == "succeeded":
+		// No later lifecycle of the RequestID can exist (F7): the older candidates are bootstrap
+		// retries, released as 0.1.4 did.
+		cl.certain, cl.release = true, true
+	}
+	return cl
+}
+
+// flushDone flushes completion d's claimed segments and writes the completion. The newest candidate
+// is flushed with d's status at the response index 0.1.4 would have given it; older candidates are
+// released (succeeded) or written as their own partial responses. Then the entry learns how many
+// segments are still held, and the completion is taken.
+func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) {
+	e := rt.opts.Engine
+	a := sq.accs[rid]
+	status := stream.StatusCompleted
+	switch d.Req.Outcome {
+	case "failed":
+		status = stream.StatusFailed
+	case "canceled":
+		status = stream.StatusCanceled
+	}
+	if n := len(cl.cands); n > 0 {
+		if !cl.certain {
+			e.Stats.Count("segments_uncertain", 1)
+		}
+		// Candidates are written newest first; with cl.release the older ones are dropped.
+		newest := cl.cands[n-1]
+		open := rt.flushSeg(rid, a, newest, status, d.ObservedAt)
+		if d.Req.Outcome == "canceled" && len(open) == 0 && newest.ended {
 			// Every response this stream carried had ended before the cancel. CPA v8.0.60 cancels
 			// a Responses WebSocket turn when the client closes the socket after the turn's last
 			// event but before CPA reads the upstream close (and always for a duplex RequestID,
@@ -264,44 +515,74 @@ func (rt *Runtime) flushStream(accs map[string]*acc, rid string, a *acc, d *hook
 			d.Req.Outcome, d.Req.StatusCode, d.Req.Error = "succeeded", http.StatusOK, ""
 		}
 		for _, r := range open {
-			rt.handOff(rid, a, r)
+			rt.handOff(rid, a, newest, r)
+		}
+		rt.releaseSeg(rid, newest)
+		a.remove(newest)
+		for _, s := range cl.cands[:n-1] {
+			if !cl.release {
+				for _, r := range rt.flushSeg(rid, a, s, status, d.ObservedAt) {
+					rt.handOff(rid, a, s, r)
+				}
+			}
+			rt.releaseSeg(rid, s)
+			a.remove(s)
 		}
 	}
+	held := 0
 	if a != nil {
-		rt.releaseAcc(rid, a)
-		delete(accs, rid)
+		if held = a.held(); held == 0 {
+			for _, s := range a.segments() {
+				rt.releaseSeg(rid, s)
+			}
+			delete(sq.accs, rid)
+		}
 	}
+	e.SetHeld(rid, uint32(held))
 	if cs, ready := e.TakeCompletion(d); ready {
 		rt.writeCompletion(d, cs)
 	}
 }
 
+// flushSeg finishes a segment's assembly with status and returns the responses still open.
+func (rt *Runtime) flushSeg(rid string, a *acc, s *segment, status string, at time.Time) []stream.Response {
+	if s.re == nil {
+		return nil
+	}
+	for _, ev := range s.asm.Finish() {
+		for _, r := range s.re.Feed(ev, at) {
+			rt.handOff(rid, a, s, r)
+		}
+	}
+	return s.re.Flush(status, at)
+}
+
 // handOff converts a reassembled response's stream reservation into 4 × its size and hands it
 // to a worker; on budget or a full queue it writes metadata only.
-func (rt *Runtime) handOff(rid string, a *acc, sr stream.Response) {
+func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 	e := rt.opts.Engine
-	rt.releaseAcc(rid, a)
+	rt.releaseSeg(rid, s)
 	switch sr.TerminalStatus {
 	case stream.StatusCompleted, stream.StatusDone, stream.StatusIncomplete:
-		a.ended = !sr.TerminalAt.IsZero() // zero when Flush closed it, not a terminal event
+		s.ended = !sr.TerminalAt.IsZero() // zero when Flush closed it, not a terminal event
 	default:
-		a.ended = false
+		s.ended = false
 	}
 	r := &hooks.Response{
-		RequestID: rid, SourceFormat: a.format, Model: a.model, StatusCode: 200, Stream: true, Headers: a.headers,
-		Body: sr.Body, ContentType: "application/json", ObservedAt: e.Now(), Meta: a.meta,
-		ResponseID: sr.ResponseID, PrevResponseID: sr.PrevResponseID, HeaderInitAt: a.headerInitAt, FirstChunkAt: a.firstChunkAt,
+		RequestID: rid, SourceFormat: s.format, Model: s.model, StatusCode: 200, Stream: true, Headers: s.headers,
+		Body: sr.Body, ContentType: "application/json", ObservedAt: e.Now(), Meta: s.meta,
+		ResponseID: sr.ResponseID, PrevResponseID: sr.PrevResponseID, HeaderInitAt: s.headerInitAt, FirstChunkAt: s.firstChunkAt,
 		TerminalAt: sr.TerminalAt, TerminalStatus: sr.TerminalStatus, IncompleteReason: sr.IncompleteReason,
-		Chunks: a.chunks, StreamBytes: a.bytes, BootstrapResets: a.resets, Events: sr.Events, Flags: sr.Flags,
+		Chunks: s.chunks, StreamBytes: s.bytes, BootstrapResets: s.resets, Events: sr.Events, Flags: sr.Flags,
 	}
 	e.With(rid, true, func(en *hooks.Entry) {
 		r.Index = en.NextResponse
 		en.NextResponse++
-		r.Truncated = en.Truncated || a.cut
+		r.Truncated = en.Truncated || s.cut
 	})
-	a.cut = false
-	a.chunks, a.bytes, a.firstChunkAt = 0, 0, time.Time{}
-	if CanonFormat(a.format) == canon.FormatOpaque {
+	s.cut = false
+	s.chunks, s.bytes, s.firstChunkAt = 0, 0, time.Time{}
+	if CanonFormat(s.format) == canon.FormatOpaque {
 		r.ContentType = ""
 	}
 	need := int64(len(r.Body)) * hooks.BodyReserveFactor
