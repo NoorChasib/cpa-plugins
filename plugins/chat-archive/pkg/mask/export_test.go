@@ -20,3 +20,23 @@ func GenericStopword(secret string) bool {
 	}
 	return false
 }
+
+// GenericSkipped reports whether generic-api-key skips secret by design: one of its allowlist stopwords
+// occurs in it, or its Shannon entropy is not above the rule's entropy gate. Test helper only: generic
+// canaries redraw such values (a few percent of short composed canaries fall under the gate), so a canary
+// failure always means a masking bug.
+func GenericSkipped(secret string) bool {
+	if GenericStopword(secret) {
+		return true
+	}
+	rs, err := rulesetCompiled()
+	if err != nil {
+		panic(err)
+	}
+	for _, r := range rs.rules {
+		if r.id == "generic-api-key" && r.entropy != 0 && shannonEntropy(secret) <= r.entropy {
+			return true
+		}
+	}
+	return false
+}

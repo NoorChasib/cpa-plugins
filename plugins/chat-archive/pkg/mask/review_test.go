@@ -147,7 +147,7 @@ func TestGlobalAllowlistPrecedence(t *testing.T) {
 	g := newGen(t)
 	m := newMasker(t, mask.Config{})
 	nullSecret := "Zq9" + g.generic(12) + "null"
-	for mask.GenericStopword(nullSecret) {
+	for mask.GenericSkipped(nullSecret) {
 		nullSecret = "Zq9" + g.generic(12) + "null"
 	}
 	for _, c := range []struct{ id, text, secret string }{

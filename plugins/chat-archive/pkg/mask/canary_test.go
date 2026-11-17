@@ -63,7 +63,7 @@ func (g *gen) s(alpha string, n int) string {
 // allowlists those, about 1 in 50 random 24-character values).
 func (g *gen) generic(n int) string {
 	for {
-		if v := g.s(alnum, n); !mask.GenericStopword(v) {
+		if v := g.s(alnum, n); !mask.GenericSkipped(v) {
 			return v
 		}
 	}
