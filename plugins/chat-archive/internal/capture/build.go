@@ -368,14 +368,25 @@ func (rt *Runtime) buildCompletion(d *hooks.Done, cs hooks.CompletionState) (out
 		RequestID: c.RequestID, TraceID: c.TraceID, SourceFormat: c.SourceFormat, Model: c.Model, RequestedModel: c.RequestedModel,
 		Stream: c.Stream, Outcome: c.Outcome, StatusCode: c.StatusCode, Error: maskCut(ms.Masker, c.Error, 4096),
 		StartedAt: c.StartedAt.UTC(), CompletedAt: c.CompletedAt.UTC(), BeginWritten: cs.BeginWritten, Responses: cs.Responses,
-		HookMicros: cs.HookMicros,
+		HookMicros: cs.HookMicros, LifecycleInputSeq: cs.LifecycleInputSeq,
 	}
 	raw, err := finalBody(ec, ms.Masker)
 	if err != nil {
 		rt.stats().Drop("encode_error")
 		return outbox.NewEnvelope{}, err
 	}
-	return outbox.NewEnvelope{Kind: wire.KindExchangeDone, Key: wire.ExchangeCompletionKey(c.RequestID), CreatedAt: d.ObservedAt, ExactRev: ms.Rev, Body: raw}, nil
+	key := cs.Key
+	if key == "" {
+		key = wire.ExchangeCompletionKey(c.RequestID)
+	}
+	if cs.Reused {
+		// A later lifecycle of a RequestID CPA reused (an in-place WebSocket failover).
+		rt.stats().Count("reused_request_id", 1)
+		if cs.LifecycleInputSeq == 0 {
+			rt.stats().Count("lifecycle_unverified", 1)
+		}
+	}
+	return outbox.NewEnvelope{Kind: wire.KindExchangeDone, Key: key, AltKey: cs.AltKey, CreatedAt: d.ObservedAt, ExactRev: ms.Rev, Body: raw}, nil
 }
 
 // buildUsage builds usage.attempt; Failure.Body becomes a masked text piece.
