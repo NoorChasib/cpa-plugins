@@ -7,6 +7,7 @@ body, or the Gemini path). Every response is synthetic and carries the run's can
 ordinary markers. The mock records request paths, header names and body sizes only.
 """
 import base64
+import hashlib
 import json
 import socket
 import threading
@@ -290,6 +291,7 @@ def make_handler(state):
             return self.stream([sse(e, name) for name, e in events])
 
         def websocket(self):
+            key = self.headers.get("Authorization", "").removeprefix("Bearer ")
             conn = wsproto.server_upgrade(self)
             turn = 0
             try:
@@ -298,6 +300,12 @@ def make_handler(state):
                     turn += 1
                     model = request.get("model", "")
                     state.note("WS", "/responses", model, {}, 0)
+                    if model == "ca-codex-failover" and state.attempt("failover:" + hashlib.sha256(key.encode()).hexdigest()[:12]) > 1:
+                        # The in-place failover case: each credential serves its first request and
+                        # then answers every request with a usage-limit 429 before any output.
+                        conn.send_json({"type": "error", "status": 429, "error": {"type": "usage_limit_reached",
+                                        "code": "usage_limit_reached", "message": "ca failover quota"}})
+                        continue
                     rid = "ws_%s_%d_%d" % (model.replace("-", ""), id(conn) % 10000, turn)
                     for _, event in self.codex_events(model, rid, M["websocket"]):
                         conn.send_json(event)

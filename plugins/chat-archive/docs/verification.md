@@ -18,6 +18,7 @@ Native acceptance of chat-archive 0.1.0, run 2026-11-08 on a shared Linux amd64 
 | Mid-stream error | pass | completion `failed` |
 | Canceled before and after the first chunk | pass | both completions `canceled` |
 | Bootstrap retry with two header-inits | pass | 2 upstream attempts; the one stored response has `bootstrap_resets` 1, terminal status `completed`; completion `succeeded`. How the case makes CPA call header-init twice is in [development.md](development.md#native-acceptance) |
+| In-place WebSocket failover under one RequestID (CPA v8.0.76) | pass | added in 0.1.5, on CPA v8.0.76 (commit `7df56074b252384d878ec4fca840552c6fb5236e`), and run in a rerun of the `failover` phase only (`SMOKE_ONLY=failover`: 1 passed, 0 failed). Turn 2's pinned credential answered with a usage-limit 429 before any output (3 upstream requests on it, 1 on the other credential): one bare and one `completion/<started_at>` key, `input_seq` 0 and 1, attempts 1 to 3, `lifecycle_input_seq` 1, `reused_request_id` 1, `dropped.duplicate_key` 0. The same case with the 0.1.4 library failed with one completion per RequestID |
 | Rejected by a higher-priority test plugin | pass | completion `rejected`, `begin_written=false` |
 | Model-list GETs | pass | `ignored_model_list` 4, no envelope |
 | 10 MB and 50 MB prompts, text and base64 image | pass | no drops |

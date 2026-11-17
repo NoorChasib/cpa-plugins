@@ -2,10 +2,12 @@
 # Required, non-publishing native acceptance for chat-archive.
 # Builds CPA from its pinned source (scripts/native/pins.sh), the production, reload and nativefixture
 # libraries, the reject-fixture test plugin and the fake archive, then runs everything in a
-# --network none container. Never reads operator configuration; every value is synthetic.
+# --network none container. The failover phase runs on a second CPA, v8.0.76 (CPA_FAILOVER_PIN).
+# Never reads operator configuration; every value is synthetic.
 #
 #   CPA_SOURCE_DIR=/path      reuse a local checkout of the pinned commit (copied, never modified)
 #   CPA_SOURCE_ARCHIVE=/path  reuse a downloaded codeload archive (sha256 checked)
+#   CPA_FAILOVER_SOURCE_DIR / CPA_FAILOVER_SOURCE_ARCHIVE  the same for the v8.0.76 pin
 #   SMOKE_ONLY=main,duplex    run only some acceptance phases
 #   SMOKE_CPUS / SMOKE_MEMORY container limits (default 2 CPUs, 3g)
 #   SMOKE_LABEL               container name label: ca-test-<label>-<work dir> (default smoke)
@@ -22,9 +24,12 @@ WORK=$(mktemp -d /tmp/chat-archive-smoke.XXXXXXXX)
 printf 'Pinned CPA source/build/runtime artifacts: %s\n' "$WORK"
 mkdir -p "$WORK/runtime"
 fetch_cpa_source "$WORK/source"
+fetch_cpa_failover_source "$WORK/source-failover"
 LIBFLAGS='-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin.Version'
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
   -ldflags "-X main.Version=$CPA_VERSION -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
+CGO_ENABLED=1 go -C "$WORK/source-failover" build -trimpath \
+  -ldflags "-X main.Version=$CPA_FAILOVER_VERSION -X main.Commit=$CPA_FAILOVER_PIN" -o "$WORK/cpa-failover" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
   -ldflags "$LIBFLAGS=0.1.5" -o "$WORK/chat-archive-production.so" .
 # A second production build with a higher version, for the reload case (a different file and
@@ -40,8 +45,8 @@ docker run --rm --name "ca-test-${SMOKE_LABEL:-smoke}-$(basename "$WORK" | tr 'A
   --network none --read-only --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
   --pids-limit 512 --cpus "${SMOKE_CPUS:-2}" --memory "${SMOKE_MEMORY:-3g}" \
   -e PYTHONDONTWRITEBYTECODE=1 -e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)" \
-  -e "SMOKE_ONLY=${SMOKE_ONLY:-main,duplex,fixture,memory,latency,blackhole}" \
-  -v "$WORK/cpa:/fixture/cpa:ro" \
+  -e "SMOKE_ONLY=${SMOKE_ONLY:-main,duplex,failover,fixture,memory,latency,blackhole}" \
+  -v "$WORK/cpa:/fixture/cpa:ro" -v "$WORK/cpa-failover:/fixture/cpa-failover:ro" \
   -v "$WORK/chat-archive-production.so:/fixture/chat-archive-production.so:ro" \
   -v "$WORK/chat-archive-reload.so:/fixture/chat-archive-reload.so:ro" \
   -v "$WORK/chat-archive.so:/fixture/chat-archive.so:ro" \
@@ -53,7 +58,8 @@ docker run --rm --name "ca-test-${SMOKE_LABEL:-smoke}-$(basename "$WORK" | tr 'A
     chown 0:0 /tmp
     python /fixture/scripts/abi_probe.py /fixture/chat-archive-production.so
     python /fixture/scripts/abi_probe.py /fixture/chat-archive.so
-    python /fixture/scripts/acceptance.py --cpa /fixture/cpa --library /fixture/chat-archive-production.so \
+    python /fixture/scripts/acceptance.py --cpa /fixture/cpa --failover-cpa /fixture/cpa-failover \
+      --library /fixture/chat-archive-production.so \
       --reload-library /fixture/chat-archive-reload.so --fixture-library /fixture/chat-archive.so \
       --reject-library /fixture/reject-fixture.so --fakearchive /fixture/fakearchive --only "$SMOKE_ONLY" \
       --results /tmp/results.json
