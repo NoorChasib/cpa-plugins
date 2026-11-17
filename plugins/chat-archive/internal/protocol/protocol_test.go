@@ -65,6 +65,25 @@ func TestScanResponseSkipsRequestHeaders(t *testing.T) {
 	}
 }
 
+// Execution is set by a top-level requested_model key of any value, never by a nested one.
+func TestDecodeMetaExecution(t *testing.T) {
+	for _, c := range []struct {
+		raw              string
+		present, execute bool
+	}{
+		{`null`, false, false},
+		{`{"caller_scope":"c","access_provider":"config-inline","frontend_auth_metadata":{"requested_model":"x"}}`, true, false},
+		{`{"requested_model":""}`, true, true},
+		{`{"requested_model":"model-x","request_path":"/v1/messages"}`, true, true},
+		{`{"requested_model":null}`, true, true},
+	} {
+		m, err := DecodeMeta([]byte(c.raw))
+		if err != nil || m.Present != c.present || m.Execution != c.execute {
+			t.Fatalf("%s: present %v execution %v err %v", c.raw, m.Present, m.Execution, err)
+		}
+	}
+}
+
 func TestDecodeUsageZeroesScratch(t *testing.T) {
 	key := "sk-cpa-synthetic-canary-0123456789"
 	src := "user@example.invalid"

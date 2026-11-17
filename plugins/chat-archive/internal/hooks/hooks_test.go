@@ -106,6 +106,46 @@ func TestOversizeAndModelList(t *testing.T) {
 	}
 }
 
+// CPA v8.0.70 and later send a model-directory call (list or detail) with the caller's identity in
+// Metadata instead of null. Both hooks still ignore it and leave no state. A call that has
+// requested_model in Metadata (every CPA execution, even with an empty model) or follows a
+// before-auth is kept.
+func TestModelDirectoryWithCallerIdentity(t *testing.T) {
+	e := running(t, "full")
+	ident := map[string]any{"caller_scope": strings.Repeat("c", 64), "access_provider": "config-inline",
+		"frontend_auth_metadata": map[string]any{"requested_model": "nested keys are not read"}}
+	dir := func(rid string, meta map[string]any) []byte {
+		return rpc(map[string]any{"RequestID": rid, "SourceFormat": "openai", "Model": "", "RequestedModel": "", "Stream": false,
+			"RequestHeaders": map[string][]string{"Authorization": {"Bearer client-canary"}}, "ResponseHeaders": map[string][]string{"Content-Type": {"application/json; charset=utf-8"}},
+			"OriginalRequest": nil, "RequestBody": nil, "Body": []byte(`{"object":"list","data":[]}`), "StatusCode": 200, "Metadata": meta})
+	}
+	done := func(rid, outcome string, status int, meta map[string]any) []byte {
+		return rpc(map[string]any{"RequestID": rid, "SourceFormat": "openai", "Model": "", "RequestedModel": "", "Stream": false,
+			"Outcome": outcome, "StatusCode": status, "Metadata": meta})
+	}
+	e.Response(dir("list", ident))
+	e.Complete(done("list", "succeeded", 200, ident))
+	e.Response(dir("detail-404", ident))
+	e.Complete(done("detail-404", "failed", 404, ident))
+	if n := e.Stats.Other()["ignored_model_list"]; n != 4 || len(e.Handoff) != 0 || len(e.Control) != 0 || e.Entries() != 0 || e.Pool.Used() != 0 {
+		t.Fatalf("model directory captured: ignored %d handoff %d control %d entries %d pool %d", n, len(e.Handoff), len(e.Control), e.Entries(), e.Pool.Used())
+	}
+	// requested_model marks an execution even when empty: kept without a before-auth.
+	exec := map[string]any{"requested_model": "", "caller_scope": strings.Repeat("c", 64)}
+	e.Response(dir("exec", exec))
+	e.Complete(done("exec", "succeeded", 200, exec))
+	if len(e.Handoff) != 1 || len(e.Control) != 1 {
+		t.Fatalf("begin-less execution ignored: handoff %d control %d", len(e.Handoff), len(e.Control))
+	}
+	// The model-directory shape after a before-auth is an execution of this plugin's own: kept.
+	e.BeforeAuth(rpc(map[string]any{"RequestID": "seen", "Body": []byte("{}")}))
+	e.Response(dir("seen", ident))
+	e.Complete(done("seen", "succeeded", 200, ident))
+	if n := e.Stats.Other()["ignored_model_list"]; n != 4 || len(e.Handoff) != 3 || len(e.Control) != 2 {
+		t.Fatalf("seen request ignored: ignored %d handoff %d control %d", n, len(e.Handoff), len(e.Control))
+	}
+}
+
 func TestUsageFingerprintsMatchPkgFingerprint(t *testing.T) {
 	if CallerScopeBytes([]byte("  key-1 \n")) != fingerprint.CallerScope("key-1") || CallerScopeBytes([]byte(" ")) != "" {
 		t.Fatal("CallerScopeBytes differs")

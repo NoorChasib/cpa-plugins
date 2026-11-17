@@ -188,6 +188,7 @@ type HostAuthGetRuntimeResponse struct {
 // Meta holds the Metadata keys the plugin reads from CPA's per-request metadata.
 type Meta struct {
 	Present            bool // Metadata was a JSON object (false for null or absent)
+	Execution          bool // Metadata has requested_model (any value), which CPA sets on every model execution
 	RequestPath        string
 	ExecutionSessionID string
 	IdempotencyKey     string

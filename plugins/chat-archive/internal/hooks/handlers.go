@@ -174,6 +174,17 @@ func (e *Engine) AfterAuth(raw []byte) []byte {
 	return OK
 }
 
+// modelDirectory reports whether a response or completion call has the shape of CPA's
+// model-directory handler (WriteModelListResponse: /v1/models, /v1/models/{id}, /v1beta/models
+// and the other catalogs): no model, no requested model, and Metadata without requested_model.
+// CPA sets requested_model on every model execution; a model-directory call has none, because
+// its Metadata is null (CPA before v8.0.70, or a caller without identity) or only the caller's
+// identity (caller_scope, access_provider, frontend_auth_metadata since v8.0.70). The hooks
+// also require that no before-auth was seen for the RequestID.
+func modelDirectory(model, requestedModel string, m protocol.Meta) bool {
+	return model == "" && requestedModel == "" && !m.Execution
+}
+
 // Response handles response.intercept_after.
 func (e *Engine) Response(raw []byte) []byte {
 	start := e.Now()
@@ -194,7 +205,7 @@ func (e *Engine) Response(raw []byte) []byte {
 	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" {
 		return OK
 	}
-	if req.Model == "" && req.RequestedModel == "" && req.OriginalAbsent && !req.Meta.Present {
+	if req.OriginalAbsent && modelDirectory(req.Model, req.RequestedModel, req.Meta) {
 		seen := false
 		e.With(req.RequestID, false, func(en *Entry) { seen = en.BeforeAuthSeen })
 		if !seen {
@@ -395,7 +406,7 @@ func (e *Engine) Complete(raw []byte) []byte {
 	seen := false
 	var queued uint64
 	exists := e.With(req.RequestID, false, func(en *Entry) { seen = en.BeforeAuthSeen; queued = en.ChunksQueued })
-	if req.Model == "" && !req.Meta.Present && !seen {
+	if modelDirectory(req.Model, req.RequestedModel, req.Meta) && !seen {
 		e.Stats.Count("ignored_model_list", 1)
 		if exists {
 			e.Delete(req.RequestID)

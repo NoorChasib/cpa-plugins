@@ -33,7 +33,9 @@ func decodeHeaders(val []byte) (http.Header, error) {
 }
 
 // DecodeMeta reads the Metadata keys the plugin keeps; every other key is skipped without
-// decoding. A non-object (null) leaves Present false.
+// decoding. A non-object (null) leaves Present false. Execution records only that the
+// requested_model key is there, whatever its value: CPA sets it on every model execution and
+// never on a model-directory call.
 func DecodeMeta(val []byte) (Meta, error) {
 	var m Meta
 	if len(val) == 0 || IsNull(val) {
@@ -69,6 +71,9 @@ func DecodeMeta(val []byte) (Meta, error) {
 			dst = &m.SelectionID
 		case "node_kind":
 			dst = &m.NodeKind
+		case "requested_model":
+			m.Execution = true
+			return nil
 		case "generate":
 			if b, ok := boolValue(v); ok {
 				m.Generate = &b

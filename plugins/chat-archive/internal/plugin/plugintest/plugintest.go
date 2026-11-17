@@ -98,10 +98,31 @@ func ResponseWithHeaders(rid, format string, body []byte, headers http.Header, m
 		"OriginalRequest": []byte("{}"), "RequestBody": []byte("{}"), "Body": body, "StatusCode": 200, "Metadata": meta})
 }
 
-// ModelList builds the response hook call of a model-list GET.
-func ModelList(rid string) []byte {
+// ModelList builds the response hook call of a model-list GET as CPA before v8.0.70 sends it
+// (Metadata null).
+func ModelList(rid string) []byte { return ModelDirectory(rid, nil) }
+
+// ModelDirectory builds the response hook call of a model-list or model-detail GET with the given
+// Metadata; CPA v8.0.70 and later send the caller's identity (see CallerIdentity).
+func ModelDirectory(rid string, meta map[string]any) []byte {
 	return enc(map[string]any{"RequestID": rid, "SourceFormat": "openai", "Model": "", "RequestedModel": "", "Stream": false,
-		"OriginalRequest": nil, "RequestBody": nil, "Body": []byte(`{"data":[]}`), "StatusCode": 200, "Metadata": nil})
+		"RequestHeaders":  map[string][]string{"Authorization": {"Bearer upstream-request-header-canary"}},
+		"ResponseHeaders": map[string][]string{"Content-Type": {"application/json; charset=utf-8"}},
+		"OriginalRequest": nil, "RequestBody": nil, "Body": []byte(`{"object":"list","data":[]}`), "StatusCode": 200, "Metadata": meta})
+}
+
+// ModelDirectoryComplete builds the request.complete call of a model-list or model-detail GET.
+func ModelDirectoryComplete(rid, outcome string, status int, meta map[string]any) []byte {
+	now := time.Now().UTC()
+	return enc(map[string]any{"RequestID": rid, "TraceID": "trace-" + rid, "SourceFormat": "openai", "Model": "", "RequestedModel": "",
+		"Stream": false, "Outcome": outcome, "StatusCode": status, "StartedAt": now.Add(-time.Millisecond), "CompletedAt": now, "Metadata": meta})
+}
+
+// CallerIdentity is the Metadata CPA v8.0.70 and later give a model-directory call of an
+// authenticated caller.
+func CallerIdentity() map[string]any {
+	return map[string]any{"caller_scope": strings.Repeat("c", 64), "access_provider": "config-inline",
+		"frontend_auth_metadata": map[string]any{"name": "synthetic"}}
 }
 
 // Chunk builds response.intercept_stream_chunk (index -1 is header-init).

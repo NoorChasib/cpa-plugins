@@ -439,6 +439,50 @@ func TestModelListIgnored(t *testing.T) {
 	}
 }
 
+// CPA v8.0.70 and later give model-directory calls the caller's identity as Metadata. Lists and
+// details stay unarchived, while an execution that reaches the plugin without a begin (its
+// before-auth went to an earlier instance, for example) carries requested_model and is still
+// archived.
+func TestModelDirectoryWithCallerIdentityIgnored(t *testing.T) {
+	h := plugintest.New(t, nil, "")
+	p := h.Plugin
+	ident := plugintest.CallerIdentity()
+	p.Hook(protocol.MethodResponseInterceptAfter, plugintest.ModelDirectory("ml-2", ident))
+	p.Hook(protocol.MethodRequestComplete, plugintest.ModelDirectoryComplete("ml-2", "succeeded", 200, ident))
+	p.Hook(protocol.MethodResponseInterceptAfter, plugintest.ModelDirectory("md-404", ident))
+	p.Hook(protocol.MethodRequestComplete, plugintest.ModelDirectoryComplete("md-404", "failed", 404, ident))
+	meta := map[string]any{"requested_model": "model-x", "model_execution_source": "internal"}
+	p.Hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth("ex-1"))
+	p.Hook(protocol.MethodResponseInterceptAfter, plugintest.Response("ex-1", "claude", []byte(`{"id":"msg_synthetic","type":"message","role":"assistant","content":[]}`), meta))
+	p.Hook(protocol.MethodRequestComplete, plugintest.Complete("ex-1", "succeeded", meta))
+	plugintest.WaitFor(t, "begin-less execution completion", func() bool {
+		for _, r := range h.Srv.Envelopes(h.SourceID) {
+			if r.Envelope.Key == wire.ExchangeCompletionKey("ex-1") {
+				return true
+			}
+		}
+		return false
+	})
+	var comp wire.ExchangeCompletion
+	for _, r := range h.Srv.Envelopes(h.SourceID) {
+		if strings.Contains(r.Envelope.Key, "/ml-2/") || strings.Contains(r.Envelope.Key, "/md-404/") {
+			t.Fatalf("model directory archived: %s", r.Envelope.Key)
+		}
+		if r.Envelope.Key == wire.ExchangeCompletionKey("ex-1") {
+			json.Unmarshal(r.Envelope.Body, &comp)
+		}
+	}
+	if comp.BeginWritten || comp.Responses != 1 {
+		t.Fatalf("begin-less execution completion = %+v", comp)
+	}
+	if n := p.Engine().Stats.Other()["ignored_model_list"]; n != 4 {
+		t.Fatalf("ignored_model_list = %d", n)
+	}
+	if n := p.Engine().Entries(); n != 0 {
+		t.Fatalf("entries left = %d", n)
+	}
+}
+
 func TestHeartbeatReachesArchive(t *testing.T) {
 	h := plugintest.New(t, nil, "")
 	h.Plugin.Shutdown()
