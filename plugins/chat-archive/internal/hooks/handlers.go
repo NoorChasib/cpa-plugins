@@ -62,8 +62,15 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 		// input_seq still advances; no begin is written (begin_written=false).
 		e.Stats.Drop("oversize_rpc")
 		rid, h, _ := protocol.ScanHeaders(raw)
+		if rid == "" {
+			e.StampBlind(start)
+		}
 		if rid != "" && cfg.Configured && cfg.Capture != "off" && e.admit() {
-			e.With(rid, true, func(en *Entry) { en.BeforeAuthSeen = true; en.NextInputSeq++ })
+			e.With(rid, true, func(en *Entry) {
+				en.BeforeAuthSeen = true
+				e.noteBeforeAuth(en, start.UnixNano(), en.NextInputSeq)
+				en.NextInputSeq++
+			})
 			e.leave()
 		}
 		e.record(HookBeforeAuth, 0, len(raw), "oversize_rpc")
@@ -72,6 +79,7 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 	}
 	req, sp, err := protocol.ScanBeforeAuth(raw)
 	if err != nil {
+		e.StampBlind(start)
 		e.Stats.HookError(HookBeforeAuth)
 		e.finish(HookBeforeAuth, "", start)
 		return OK
@@ -93,6 +101,7 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 	e.With(req.RequestID, true, func(en *Entry) {
 		en.BeforeAuthSeen = true
 		b.InputSeq = en.NextInputSeq
+		e.noteBeforeAuth(en, start.UnixNano(), b.InputSeq)
 		en.NextInputSeq++
 	})
 	if cfg.Capture != "full" {
@@ -149,12 +158,14 @@ func (e *Engine) AfterAuth(raw []byte) []byte {
 	start := e.Now()
 	cfg := e.cfg.Load()
 	if len(raw) > protocol.MaxSmallHook {
+		e.StampBlind(start)
 		e.Stats.Drop("oversize_rpc")
 		e.finish(HookAfterAuth, "", start)
 		return OK
 	}
 	req, err := protocol.DecodeAfterAuth(raw)
 	if err != nil {
+		e.StampBlind(start)
 		e.Stats.HookError(HookAfterAuth)
 		e.finish(HookAfterAuth, "", start)
 		return OK
@@ -165,7 +176,11 @@ func (e *Engine) AfterAuth(raw []byte) []byte {
 	}
 	defer e.leave()
 	a := &Attempt{Req: req, ObservedAt: start}
-	e.With(req.RequestID, true, func(en *Entry) { en.NextOrdinal++; a.Ordinal = en.NextOrdinal })
+	e.With(req.RequestID, true, func(en *Entry) {
+		noteHook(en, start.UnixNano())
+		en.NextOrdinal++
+		a.Ordinal = en.NextOrdinal
+	})
 	select {
 	case e.Control <- Control{Attempt: a}:
 	default:
@@ -190,6 +205,7 @@ func (e *Engine) Response(raw []byte) []byte {
 	start := e.Now()
 	cfg := e.cfg.Load()
 	if len(raw) > cfg.MaxRPC {
+		e.StampBlind(start)
 		e.Stats.Drop("oversize_rpc")
 		e.record(HookResponse, 0, len(raw), "oversize_rpc")
 		e.finish(HookResponse, "", start)
@@ -197,6 +213,7 @@ func (e *Engine) Response(raw []byte) []byte {
 	}
 	req, sp, err := protocol.ScanResponse(raw)
 	if err != nil {
+		e.StampBlind(start)
 		e.Stats.HookError(HookResponse)
 		e.finish(HookResponse, "", start)
 		return OK
@@ -223,7 +240,11 @@ func (e *Engine) Response(raw []byte) []byte {
 		r.ContentType = HeaderGet(req.ResponseHeaders, "Content-Type")
 		r.ContentEncoding = HeaderList(req.ResponseHeaders, "Content-Encoding") // every field line, any key case
 	}
-	e.With(req.RequestID, true, func(en *Entry) { r.Index = en.NextResponse; en.NextResponse++ })
+	e.With(req.RequestID, true, func(en *Entry) {
+		noteHook(en, start.UnixNano())
+		r.Index = en.NextResponse
+		en.NextResponse++
+	})
 	if cfg.Capture != "full" {
 		e.metaResponse(r, "")
 		return OK
@@ -288,8 +309,11 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		e.Stats.Drop("oversize_rpc")
 		e.record(hook, 0, len(raw), "oversize_rpc")
 		rid := protocol.ScanRequestID(raw)
+		if rid == "" {
+			e.StampBlind(start)
+		}
 		if rid != "" && cfg.Configured && cfg.Capture == "full" && e.admit() {
-			e.With(rid, false, func(en *Entry) { en.Truncated = true })
+			e.With(rid, false, func(en *Entry) { noteHook(en, start.UnixNano()); en.Truncated = true })
 			e.leave()
 		}
 		e.finish(hook, rid, start)
@@ -297,6 +321,7 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 	}
 	req, sp, err := protocol.ScanStreamChunk(raw)
 	if err != nil {
+		e.StampBlind(start)
 		e.Stats.HookError(hook)
 		e.finish(hook, "", start)
 		return OK
@@ -312,7 +337,13 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 	it := StreamItem{RequestID: req.RequestID, SourceFormat: req.SourceFormat, Model: req.Model, ChunkIndex: req.ChunkIndex,
 		Headers: req.ResponseHeaders, At: start, Meta: req.Meta}
 	if req.ChunkIndex == protocol.StreamHeaderInit {
-		e.With(req.RequestID, true, func(en *Entry) { en.ChunksQueued++; en.Stream = true; en.Truncated = false })
+		e.With(req.RequestID, true, func(en *Entry) {
+			noteHook(en, start.UnixNano())
+			e.evidence(en, &it)
+			en.ChunksQueued++
+			en.Stream = true
+			en.Truncated = false
+		})
 		select {
 		case e.Stream <- it:
 			e.record(hook, -1, 0, "")
@@ -328,6 +359,8 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 	n := int64(req.BodyLen)
 	ok := false
 	e.With(req.RequestID, true, func(en *Entry) {
+		noteHook(en, start.UnixNano())
+		e.evidence(en, &it)
 		en.Stream = true
 		if en.Truncated || en.StreamBytes+n > StreamPerStream {
 			en.Truncated = true
@@ -389,12 +422,14 @@ func (e *Engine) Complete(raw []byte) []byte {
 	start := e.Now()
 	cfg := e.cfg.Load()
 	if len(raw) > protocol.MaxSmallHook {
+		e.StampBlind(start)
 		e.Stats.Drop("oversize_rpc")
 		e.finish(HookLifecycle, "", start)
 		return OK
 	}
 	req, err := protocol.DecodeCompletion(raw)
 	if err != nil {
+		e.StampBlind(start)
 		e.Stats.HookError(HookLifecycle)
 		e.finish(HookLifecycle, "", start)
 		return OK

@@ -27,12 +27,17 @@ type NewEnvelope struct {
 	Refs      []wire.Hash
 	Body      json.RawMessage
 	Pieces    []canon.Piece // pieces this envelope references (a subset of Refs may already be stored)
+	// AltKey is a bare completion's durable fallback key (wire.ExchangeCompletionKeyAt). When Key is
+	// already queued (another lifecycle of a RequestID CPA reused took it), the envelope is
+	// inserted at AltKey instead, in the same transaction. Empty for every other envelope.
+	AltKey string
 }
 
 // WriteResult reports one Write.
 type WriteResult struct {
 	Inserted   []Inserted
 	Duplicates int // keys skipped because they were already queued (duplicate_key)
+	Rekeyed    int // completions inserted at their AltKey because Key was already queued
 }
 
 // Inserted is one envelope the write queued.
@@ -49,6 +54,23 @@ func (o *Outbox) buildEnvelope(e NewEnvelope, seq, epoch uint64, outboxID string
 		CreatedAt: e.CreatedAt.UTC(), Refs: e.Refs, Body: e.Body,
 	}
 	return canon.Marshal(env)
+}
+
+// insertEnvelope inserts e at seq unless its key is already queued; ok reports the insert.
+func (o *Outbox) insertEnvelope(ctx context.Context, tx *sql.Tx, e NewEnvelope, seq uint64, meta Meta) (bool, error) {
+	body, err := o.buildEnvelope(e, seq, meta.EpochSeen, meta.OutboxID)
+	if err != nil {
+		return false, err
+	}
+	stored, _ := o.compress(body)
+	r, err := tx.ExecContext(ctx, `INSERT INTO envelopes(seq,kind,key,created_at,state,attempts,next_attempt_at,body,body_len,bytes_total)
+VALUES(?,?,?,?,0,0,0,?,?,?) ON CONFLICT(key) WHERE NOT (state = 3 AND dead_reason IS 'superseded') DO NOTHING`,
+		seq, string(e.Kind), e.Key, e.CreatedAt.UTC().UnixNano(), stored, len(body), len(stored))
+	if err != nil {
+		return false, err
+	}
+	n, _ := r.RowsAffected()
+	return n == 1, nil
 }
 
 func (o *Outbox) compress(b []byte) ([]byte, int) {
@@ -90,21 +112,21 @@ func (o *Outbox) Write(ctx context.Context, envs []NewEnvelope) (WriteResult, er
 		}
 	}()
 	for _, e := range envs {
-		var body []byte
-		body, err = o.buildEnvelope(e, next, meta.EpochSeen, meta.OutboxID)
+		var ok bool
+		ok, err = o.insertEnvelope(ctx, tx, e, next, meta)
 		if err != nil {
 			return res, err
 		}
-		stored, _ := o.compress(body)
-		var r sql.Result
-		r, err = tx.ExecContext(ctx, `INSERT INTO envelopes(seq,kind,key,created_at,state,attempts,next_attempt_at,body,body_len,bytes_total)
-VALUES(?,?,?,?,0,0,0,?,?,?) ON CONFLICT(key) WHERE NOT (state = 3 AND dead_reason IS 'superseded') DO NOTHING`,
-			next, string(e.Kind), e.Key, e.CreatedAt.UTC().UnixNano(), stored, len(body), len(stored))
-		if err != nil {
-			return res, err
+		if !ok && e.AltKey != "" && e.AltKey != e.Key && wire.ValidKey(e.AltKey) {
+			e.Key = e.AltKey
+			if ok, err = o.insertEnvelope(ctx, tx, e, next, meta); err != nil {
+				return res, err
+			}
+			if ok {
+				res.Rekeyed++
+			}
 		}
-		n, _ := r.RowsAffected()
-		if n != 1 {
+		if !ok {
 			res.Duplicates++
 			continue
 		}
@@ -649,6 +671,48 @@ VALUES(?,?,?,?,0,0,0,?,?,?)`, seq, string(e.Kind), e.Key, e.CreatedAt.UTC().Unix
 	o.meta.NextSeq = seq + 1
 	o.mu.Unlock()
 	return seq, nil
+}
+
+// Rekey moves a bare exchange completion that the archive answered conflict (it holds another
+// lifecycle's completion of a reused RequestID at that key) to the completion's started_at key: the
+// stored envelope is read back and inserted again at wire.ExchangeCompletionKeyAt with a new seq
+// (ON CONFLICT DO NOTHING). A completion without started_at stays a conflict. It reports whether a
+// new envelope was queued.
+func (o *Outbox) Rekey(ctx context.Context, seq uint64) (bool, error) {
+	if o.closed.Load() {
+		return false, ErrClosed
+	}
+	var stored []byte
+	if err := o.read.QueryRowContext(ctx, "SELECT body FROM envelopes WHERE seq=? AND kind=?", seq, string(wire.KindExchangeDone)).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	raw, err := o.dec.DecodeAll(stored, nil)
+	if err != nil {
+		raw = stored // stored raw because compression did not help
+	}
+	env, err := wire.DecodeEnvelope(raw)
+	if err != nil {
+		return false, err
+	}
+	var c wire.ExchangeCompletion
+	if err := json.Unmarshal(env.Body, &c); err != nil {
+		return false, err
+	}
+	if c.StartedAt.IsZero() || env.Key != wire.ExchangeCompletionKey(c.RequestID) {
+		return false, nil
+	}
+	key := wire.ExchangeCompletionKeyAt(c.RequestID, c.StartedAt)
+	if !wire.ValidKey(key) {
+		return false, nil
+	}
+	res, err := o.Write(ctx, []NewEnvelope{{Kind: env.Kind, Key: key, CreatedAt: env.CreatedAt, ExactRev: env.ExactRev, Refs: env.Refs, Body: env.Body}})
+	if err != nil {
+		return false, err
+	}
+	return len(res.Inserted) == 1, nil
 }
 
 // ProbeWrite checks that a write transaction commits, without changing any data.

@@ -157,13 +157,13 @@ func (rt *Runtime) drainChannels(by time.Time) {
 			e.Stats.Drop("stopped")
 			if w.Begin != nil {
 				e.Pool.Release(w.Begin.Reserved)
-				if d := e.WorkDone(w.Begin.Req.RequestID, true, false); d != nil {
+				for _, d := range e.WorkDone(w.Begin.Req.RequestID, true, false) {
 					rt.completeDeferredBy(d, by)
 				}
 			}
 			if w.Response != nil {
 				e.Pool.Release(w.Response.Reserved)
-				if d := e.WorkDone(w.Response.RequestID, false, false); d != nil {
+				for _, d := range e.WorkDone(w.Response.RequestID, false, false) {
 					rt.completeDeferredBy(d, by)
 				}
 			}
@@ -273,7 +273,7 @@ func (rt *Runtime) doBegin(b *hooks.Begin) {
 			e.Pool.Release(reserved)
 		}
 		b.Req.Body = nil
-		if d := e.WorkDone(b.Req.RequestID, true, written); d != nil {
+		for _, d := range e.WorkDone(b.Req.RequestID, true, written) {
 			rt.completeDeferred(d)
 		}
 	}()
@@ -316,7 +316,7 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 			e.Pool.Release(reserved)
 		}
 		r.Body = nil
-		if d := e.WorkDone(r.RequestID, false, written); d != nil {
+		for _, d := range e.WorkDone(r.RequestID, false, written) {
 			rt.completeDeferred(d)
 		}
 	}()
@@ -366,14 +366,14 @@ func (rt *Runtime) doUsage(u *hooks.UsageItem) {
 
 // completeDeferred writes a completion whose Handoff work just finished.
 func (rt *Runtime) completeDeferred(d *hooks.Done) {
-	cs := rt.opts.Engine.FinishDeferred(d.Req.RequestID)
+	cs := rt.opts.Engine.FinishDeferred(d)
 	rt.writeCompletion(d, cs)
 }
 
 // completeDeferredBy writes a deferred completion at a stop, after the drain bound: it waits for
 // the writer until by, and counts the completion dropped.stopped when the writer did not take it.
 func (rt *Runtime) completeDeferredBy(d *hooks.Done, by time.Time) {
-	cs := rt.opts.Engine.FinishDeferred(d.Req.RequestID)
+	cs := rt.opts.Engine.FinishDeferred(d)
 	env, err := rt.buildCompletion(d, cs)
 	if err != nil {
 		return
@@ -546,7 +546,10 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	}
 	// A skipped key is an envelope that is not stored. Keys are unique per exchange part, and a new
 	// plugin instance continues the open requests' numbering (hooks.Engine.Adopt), so this counts a loss.
+	// A bare completion key already queued moves the completion to its started_at key instead.
 	rt.stats().DropN("duplicate_key", uint64(res.Duplicates))
+	rt.stats().Count("completion_rekeyed.outbox", uint64(res.Rekeyed))
+	rt.stats().Count("reused_request_id", uint64(res.Rekeyed))
 	inserted := make(map[string]bool, len(res.Inserted))
 	for _, in := range res.Inserted {
 		inserted[in.Key] = true

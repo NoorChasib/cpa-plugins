@@ -36,7 +36,17 @@ var DroppedNames = []string{"body_budget", "handoff_full", "control_full", "usag
 
 // OtherNames are plugin counters that are not drops. recovered_refused counts the saved counters of an
 // earlier boot that the archive refused for good, so they were deleted unreported (uploader).
-var OtherNames = []string{"state_evicted", "ignored_model_list", "recovered_refused"}
+//
+// For a RequestID that CPA reuses (an in-place WebSocket failover): reused_request_id counts
+// completions written under a started_at key; lifecycle_unverified those of them written without
+// lifecycle_input_seq; numbering_evicted tombstones dropped for capacity; segments_parked stream
+// segments parked at a later header-init; ownership_held completions held until a candidate
+// segment's owner was settled; segments_uncertain completions settled without causal evidence;
+// completion_rekeyed.outbox and completion_rekeyed.archive bare completions moved to their
+// started_at key because the outbox or the archive already held the bare key.
+var OtherNames = []string{"state_evicted", "ignored_model_list", "recovered_refused", "reused_request_id", "lifecycle_unverified",
+	"numbering_evicted", "segments_parked", "ownership_held", "segments_uncertain", "completion_rekeyed.outbox",
+	"completion_rekeyed.archive"}
 
 // Stats holds every counter the plugin reports. Counters are cumulative for the plugin instance
 // (one boot_id). Hook-side updates are atomics only, plus, for a drop, a non-blocking send on a
