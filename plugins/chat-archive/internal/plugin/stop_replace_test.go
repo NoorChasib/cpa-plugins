@@ -363,3 +363,63 @@ func TestStopWithSlowOutboxClose(t *testing.T) {
 		t.Fatalf("no runtime after the restart: %s %s", st, why)
 	}
 }
+
+// TestReplacementCarriesReusedRequestID: CPA closes the failed attempt's lifecycle on the old
+// instance (its completion is taken there), then runs the retry under the same RequestID on the
+// instance that replaced it. The closed RequestID's numbering is carried (completion_numbering), so
+// the retry gets begin 1, attempt 2 and completion/<started_at> instead of reusing the old keys.
+func TestReplacementCarriesReusedRequestID(t *testing.T) {
+	setStopDrain(t, 0)
+	h := plugintest.New(t, nil, "")
+	p1 := h.Plugin
+	ws := map[string]any{"request_path": "/v1/responses", "execution_session_id": "rp-reuse"}
+	rid := "rp-reuse"
+	complete := func(outcome string, status int, started, completed time.Time) []byte {
+		b, _ := json.Marshal(map[string]any{"RequestID": rid, "SourceFormat": "openai-response", "Model": "model-x", "RequestedModel": "model-x",
+			"Outcome": outcome, "StatusCode": status, "StartedAt": started, "CompletedAt": completed, "Metadata": ws})
+		return b
+	}
+	s1 := time.Now().UTC()
+	time.Sleep(time.Millisecond)
+	p1.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "openai-response", []byte(`{"type":"response.create","input":"turn"}`), nil, ws))
+	p1.Hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth(rid))
+	time.Sleep(time.Millisecond)
+	p1.Hook(protocol.MethodRequestComplete, complete("failed", 429, s1, time.Now().UTC()))
+	plugintest.WaitFor(t, "C1 archived", func() bool { got, _ := bodies(h); return got[wire.ExchangeCompletionKey(rid)] != nil })
+	p1.Handle(protocol.MethodPluginQuiesce, nil)
+
+	p2 := plugin.New(nil)
+	if _, err := p2.Handle(protocol.MethodPluginRegister, plugintest.Lifecycle(h.YAML)); err != nil {
+		t.Fatalf("register new instance: %v", err)
+	}
+	t.Cleanup(p2.Shutdown)
+	time.Sleep(time.Millisecond)
+	s2 := time.Now().UTC()
+	time.Sleep(time.Millisecond)
+	p2.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "openai-response", []byte(`{"type":"response.create","input":"turn"}`), nil, ws))
+	p2.Hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth(rid))
+	p2.Hook(protocol.MethodResponseInterceptAfter, plugintest.Response(rid, "openai-response", []byte(`{"id":"resp_r","object":"response","status":"completed","output":[]}`), ws))
+	time.Sleep(time.Millisecond)
+	p2.Hook(protocol.MethodRequestComplete, complete("succeeded", 200, s2, time.Now().UTC()))
+	want := []string{wire.ExchangeBeginKey(rid, 0), wire.ExchangeAttemptKey(rid, 1), wire.ExchangeCompletionKey(rid),
+		wire.ExchangeBeginKey(rid, 1), wire.ExchangeAttemptKey(rid, 2), wire.ExchangeResponseKey(rid, 0), wire.ExchangeCompletionKeyAt(rid, s2)}
+	var got map[string]json.RawMessage
+	plugintest.WaitFor(t, "the retry archived", func() bool {
+		got, _ = bodies(h)
+		for _, k := range want {
+			if got[k] == nil {
+				return false
+			}
+		}
+		return true
+	})
+	if len(got) != len(want) {
+		t.Fatalf("archived %d keys, want %d", len(got), len(want))
+	}
+	if c := decode[wire.ExchangeCompletion](t, got[wire.ExchangeCompletionKeyAt(rid, s2)]); c.LifecycleInputSeq != 1 || c.Outcome != "succeeded" {
+		t.Fatalf("retry completion = %+v", c)
+	}
+	if d := p2.Engine().Stats.Dropped(); d["duplicate_key"] != 0 {
+		t.Fatalf("new instance dropped = %v", d)
+	}
+}
