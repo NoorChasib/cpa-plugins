@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -574,6 +575,7 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 	var outs []outbox.Outcome
 	var deadItems []outbox.Item
 	var ackedKeys []string
+	var rekey []uint64
 	u.mu.Lock()
 	for _, it := range items {
 		r, ok := bySeq[it.Seq]
@@ -585,6 +587,10 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 			oc.Kind = outbox.OutAck
 			if r.Status != wire.StatusConflict && it.Tomb == nil {
 				ackedKeys = append(ackedKeys, it.Key) // a conflict holds another body: never a base
+			}
+			if r.Status == wire.StatusConflict && it.Tomb == nil && it.Kind == wire.KindExchangeDone && bareCompletionKey(it.Key) {
+				// The archive holds another lifecycle's completion of a RequestID CPA reused.
+				rekey = append(rekey, it.Seq)
 			}
 			delete(u.missing, it.Seq)
 			for _, h := range it.Refs {
@@ -613,6 +619,15 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 		outs = append(outs, oc)
 	}
 	u.mu.Unlock()
+	// Queue each re-keyed completion before its conflict is acked: if the process stops in
+	// between, the conflict is sent again and answered again, and the second insert is a no-op.
+	for _, seq := range rekey {
+		if ok, err := ob.Rekey(ctx, seq); err == nil && ok {
+			u.opts.Stats.Count("completion_rekeyed.archive", 1)
+			u.opts.Stats.Count("reused_request_id", 1)
+			u.Notify()
+		}
+	}
 	if err := ob.Apply(ctx, resp.Epoch, resp.HW[m.OutboxID], outs); err != nil {
 		return err
 	}
@@ -625,6 +640,16 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 		}
 	}
 	return nil
+}
+
+// bareCompletionKey reports whether key is "ex/<rid>/completion".
+func bareCompletionKey(key string) bool {
+	rid, ok := strings.CutPrefix(key, "ex/")
+	if !ok {
+		return false
+	}
+	rid, ok = strings.CutSuffix(rid, "/completion")
+	return ok && rid != "" && !strings.Contains(rid, "/")
 }
 
 // heartbeats sends a heartbeat every HeartbeatEvery, directly over HTTP, after reporting any other
