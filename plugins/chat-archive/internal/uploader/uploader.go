@@ -575,7 +575,7 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 	var outs []outbox.Outcome
 	var deadItems []outbox.Item
 	var ackedKeys []string
-	var rekey []uint64
+	var rekey []int // indexes into outs of bare completions the archive answered conflict for
 	u.mu.Lock()
 	for _, it := range items {
 		r, ok := bySeq[it.Seq]
@@ -590,7 +590,7 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 			}
 			if r.Status == wire.StatusConflict && it.Tomb == nil && it.Kind == wire.KindExchangeDone && bareCompletionKey(it.Key) {
 				// The archive holds another lifecycle's completion of a RequestID CPA reused.
-				rekey = append(rekey, it.Seq)
+				rekey = append(rekey, len(outs))
 			}
 			delete(u.missing, it.Seq)
 			for _, h := range it.Refs {
@@ -621,10 +621,19 @@ func (u *Uploader) apply(ctx context.Context, items []outbox.Item, resp wire.Com
 	u.mu.Unlock()
 	// Queue each re-keyed completion before its conflict is acked: if the process stops in
 	// between, the conflict is sent again and answered again, and the second insert is a no-op.
-	for _, seq := range rekey {
-		if ok, err := ob.Rekey(ctx, seq); err == nil && ok {
+	// A failed re-key leaves the conflict pending, so it is sent, answered and re-keyed again.
+	for _, i := range rekey {
+		ok, opener, err := ob.Rekey(ctx, outs[i].Seq)
+		if err != nil {
+			outs[i].Kind, outs[i].NextAttempt = outbox.OutRetry, now.Add(backoff(uint32(items[i].Attempts+1)))
+			continue
+		}
+		if ok {
 			u.opts.Stats.Count("completion_rekeyed.archive", 1)
 			u.opts.Stats.Count("reused_request_id", 1)
+			if opener == 0 {
+				u.opts.Stats.Count("lifecycle_unverified", 1)
+			}
 			u.Notify()
 		}
 	}

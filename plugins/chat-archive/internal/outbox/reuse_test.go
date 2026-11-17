@@ -99,18 +99,30 @@ func TestRekey(t *testing.T) {
 	if err != nil || len(res.Inserted) != 2 {
 		t.Fatal(res, err)
 	}
-	if ok, err := o.Rekey(ctx, res.Inserted[0].Seq); !ok || err != nil {
-		t.Fatalf("rekey = %v, %v", ok, err)
+	if ok, opener, err := o.Rekey(ctx, res.Inserted[0].Seq); !ok || opener != 0 || err != nil {
+		t.Fatalf("rekey = %v, %d, %v", ok, opener, err)
 	}
-	if ok, err := o.Rekey(ctx, res.Inserted[0].Seq); ok || err != nil {
+	if ok, _, err := o.Rekey(ctx, res.Inserted[0].Seq); ok || err != nil {
 		t.Fatalf("second rekey = %v, %v", ok, err)
 	}
-	if ok, err := o.Rekey(ctx, res.Inserted[1].Seq); ok || err != nil {
+	if ok, _, err := o.Rekey(ctx, res.Inserted[1].Seq); ok || err != nil {
 		t.Fatalf("rekey without started_at = %v, %v", ok, err)
+	}
+	// A completion that names its replay begin reports it, so the caller counts it as verified.
+	body, err := canon.Marshal(wire.ExchangeCompletion{RequestID: "q", Outcome: "succeeded", StartedAt: s, CompletedAt: s.Add(time.Second), LifecycleInputSeq: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := o.Write(ctx, []NewEnvelope{{Kind: wire.KindExchangeDone, Key: wire.ExchangeCompletionKey("q"), CreatedAt: s, Body: body}})
+	if err != nil || len(named.Inserted) != 1 {
+		t.Fatal(named, err)
+	}
+	if ok, opener, err := o.Rekey(ctx, named.Inserted[0].Seq); !ok || opener != 2 || err != nil {
+		t.Fatalf("rekey of a named lifecycle = %v, %d, %v", ok, opener, err)
 	}
 	got := storedKeys(t, o)
 	at := wire.ExchangeCompletionKeyAt("r", s)
-	if len(got) != 3 || string(got[at].Body) != string(got[wire.ExchangeCompletionKey("r")].Body) {
+	if len(got) != 5 || string(got[at].Body) != string(got[wire.ExchangeCompletionKey("r")].Body) {
 		t.Fatalf("stored %v", got)
 	}
 }

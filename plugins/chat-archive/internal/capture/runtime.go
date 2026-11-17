@@ -558,6 +558,10 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		if r.commit != nil {
 			r.commit(inserted[r.env.Key])
 		}
+		if res.Rekeyed > 0 && r.env.AltKey != "" && inserted[r.env.AltKey] && !namedLifecycle(r.env.Body) {
+			// A completion built bare (so not counted at build) and stored at its started_at key.
+			rt.stats().Count("lifecycle_unverified", 1)
+		}
 	}
 	if rt.opts.Notify != nil && len(res.Inserted) > 0 {
 		rt.opts.Notify()

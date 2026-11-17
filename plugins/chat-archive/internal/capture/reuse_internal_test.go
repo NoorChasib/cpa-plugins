@@ -478,6 +478,11 @@ func TestCompletionAfterIdleSweep(t *testing.T) {
 		if want := map[bool]uint64{false: 0, true: 1}[afterTTL]; r.counter("completion_rekeyed.outbox") != want {
 			t.Fatalf("afterTTL=%v: completion_rekeyed.outbox = %d", afterTTL, r.counter("completion_rekeyed.outbox"))
 		}
+		// The sweep lost L2's opener either way: counted once, at build (tombstone) or at the re-key.
+		if g.comp[wire.ExchangeCompletionKeyAt(rid, s2)].LifecycleInputSeq != 0 || r.counter("reused_request_id") != 1 ||
+			r.counter("lifecycle_unverified") != 1 {
+			t.Fatalf("afterTTL=%v: counters %v", afterTTL, r.e.Stats.Other())
+		}
 	}
 }
 
@@ -509,7 +514,7 @@ func TestReverseFallback(t *testing.T) {
 	if !g.comp[wire.ExchangeCompletionKey(rid)].StartedAt.Equal(s2) || !g.comp[wire.ExchangeCompletionKeyAt(rid, s1)].StartedAt.Equal(s1) {
 		t.Fatalf("completions %+v", g.comp)
 	}
-	if r.counter("completion_rekeyed.outbox") != 1 || r.counter("reused_request_id") != 1 {
+	if r.counter("completion_rekeyed.outbox") != 1 || r.counter("reused_request_id") != 1 || r.counter("lifecycle_unverified") != 1 {
 		t.Fatalf("counters %v", r.e.Stats.Other())
 	}
 }
