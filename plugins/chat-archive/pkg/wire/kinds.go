@@ -95,6 +95,10 @@ type ExchangeCompletion struct {
 	BeginWritten   bool              `json:"begin_written"`
 	Responses      uint32            `json:"responses"`
 	HookMicros     map[string]uint32 `json:"hook_micros,omitempty"` // time spent inside this plugin's sync hooks, per capability
+	// LifecycleInputSeq is the input_seq of the before-auth that opened this completion's lifecycle,
+	// set only when CPA reused the RequestID for a later lifecycle and the plugin can prove which
+	// before-auth opened it (always >= 1 when set). That begin replays the turn: it is not a new input.
+	LifecycleInputSeq uint32 `json:"lifecycle_input_seq,omitempty"`
 }
 
 // MediaFetch is NOT an envelope and is never queued in the outbox. The plugin keeps it in memory only

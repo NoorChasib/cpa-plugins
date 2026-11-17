@@ -282,6 +282,14 @@ func envelopeFixtures(t testing.TB) []envFixture {
 		HookMicros:     map[string]uint32{"request.intercept_before": 120, "response.stream_chunk": 15},
 	}
 
+	// The retry of an in-place WebSocket failover: CPA reused the RequestID, so the completion is
+	// keyed by its started_at, and it names the begin that replayed the turn.
+	retried := *completion
+	retried.Outcome, retried.StatusCode = "succeeded", 200
+	retried.StartedAt, retried.CompletedAt = created.Add(3*time.Second), created.Add(5*time.Second)
+	retried.HookMicros = map[string]uint32{"request.intercept_before": 90}
+	retried.LifecycleInputSeq = 1
+
 	usage := &wire.UsageAttempt{
 		UsageRequestID:  "usage-test-0001",
 		TraceID:         "trace-test-0001",
@@ -366,6 +374,7 @@ func envelopeFixtures(t testing.TB) []envFixture {
 		{"import.record.json", recA, record},
 		{"import.record.relocated.json", recB, record},
 		{"import.file.json", fileEnv, file},
+		{"exchange.completion.reused.json", base(wire.KindExchangeDone, 8, wire.ExchangeCompletionKeyAt(requestID, retried.StartedAt), nil, &retried), &retried},
 	}
 }
 

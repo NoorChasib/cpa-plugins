@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -509,5 +510,24 @@ func TestStatusAndReasonValues(t *testing.T) {
 	b, _ = json.Marshal(wire.SourcesSelf{Accepted: wire.Accepted{Mask: map[string]wire.MaskAcceptance{wire.MaskV1: {}}}})
 	if !bytes.Contains(b, []byte(`"mask":{"mask/v1":{"created_before":null}}`)) {
 		t.Errorf("created_before must marshal as null: %s", b)
+	}
+}
+
+// TestExchangeCompletionKeyAt: a reused RequestID's later completions are keyed by started_at in unix
+// nanoseconds. The bare key sorts first, the suffixed keys sort in started_at order, and a RequestID
+// of 167 bytes or more no longer fits MaxKeyLen with the suffix.
+func TestExchangeCompletionKeyAt(t *testing.T) {
+	s1 := time.Date(2026, 11, 18, 1, 2, 3, 4, time.UTC)
+	s2 := s1.Add(time.Millisecond)
+	k1, k2 := wire.ExchangeCompletionKeyAt("rid", s1), wire.ExchangeCompletionKeyAt("rid", s2)
+	if k1 != "ex/rid/completion/"+strconv.FormatInt(s1.UnixNano(), 10) || !wire.ValidKey(k1) {
+		t.Fatalf("key = %q", k1)
+	}
+	if bare := wire.ExchangeCompletionKey("rid"); !(bare < k1 && k1 < k2) {
+		t.Fatalf("order: %q %q %q", bare, k1, k2)
+	}
+	if !wire.ValidKey(wire.ExchangeCompletionKeyAt(strings.Repeat("r", 166), s1)) ||
+		wire.ValidKey(wire.ExchangeCompletionKeyAt(strings.Repeat("r", 167), s1)) {
+		t.Fatal("166 bytes must fit and 167 must not")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"time"
 )
 
 // MaxKeyLen is the longest valid envelope key in bytes.
@@ -54,6 +55,14 @@ func ExchangeResponseKey(requestID string, index uint32) string {
 // ExchangeCompletionKey returns "ex/<request_id>/completion".
 func ExchangeCompletionKey(requestID string) string {
 	return "ex/" + requestID + "/completion"
+}
+
+// ExchangeCompletionKeyAt returns "ex/<request_id>/completion/<started_at as unix ns, decimal>": the key
+// of a completion whose RequestID CPA reused for another lifecycle (an in-place WebSocket failover
+// since CPA v8.0.76). started_at is unique per lifecycle of one RequestID, so the keys never collide.
+// "ex/<rid>/completion" sorts before every one of them, and 19-digit values sort in time order.
+func ExchangeCompletionKeyAt(requestID string, startedAt time.Time) string {
+	return "ex/" + requestID + "/completion/" + strconv.FormatInt(startedAt.UnixNano(), 10)
 }
 
 // UsageKey returns "usage/<usage_request_id>".
