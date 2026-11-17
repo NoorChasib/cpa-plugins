@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,8 +69,22 @@ func Meta(path string) map[string]any {
 	return map[string]any{"request_path": path, "generate": true, "reasoning_effort": "high", "service_tier": "auto", "caller_scope": strings.Repeat("c", 64)}
 }
 
+// started holds, per RequestID, when its first BeforeAuth was built since its last Complete: CPA
+// sets a lifecycle's StartedAt when it creates the request's tracker, just before that before-auth.
+var started sync.Map // string -> time.Time
+
+// startedAt returns rid's lifecycle start as CPA would report it and forgets it: just before its
+// first before-auth, else one second ago (a request whose before-auth no test built).
+func startedAt(rid string, now time.Time) time.Time {
+	if v, ok := started.LoadAndDelete(rid); ok {
+		return v.(time.Time)
+	}
+	return now.Add(-time.Second)
+}
+
 // BeforeAuth builds request.intercept_before.
 func BeforeAuth(rid, format string, body []byte, headers http.Header, meta map[string]any) []byte {
+	started.LoadOrStore(rid, time.Now().UTC())
 	return enc(map[string]any{"RequestID": rid, "TraceID": "trace-" + rid, "SourceFormat": format, "ToFormat": "", "Model": "model-x",
 		"RequestedModel": "model-x", "Stream": false, "Headers": headers, "Body": body, "CallerScope": strings.Repeat("c", 64), "Metadata": meta,
 		"host_callback_id": "cb"})
@@ -143,11 +158,12 @@ func Complete(rid, outcome string, meta map[string]any) []byte {
 	return CompleteStatus(rid, outcome, 200, "", meta)
 }
 
-// CompleteStatus builds request.complete with an explicit status code and error text.
+// CompleteStatus builds request.complete with an explicit status code and error text. StartedAt is
+// just before the RequestID's first BeforeAuth built since its last Complete (startedAt).
 func CompleteStatus(rid, outcome string, status int, errText string, meta map[string]any) []byte {
 	now := time.Now().UTC()
 	return enc(map[string]any{"RequestID": rid, "TraceID": "trace-" + rid, "SourceFormat": "claude", "Model": "model-x", "RequestedModel": "model-x",
-		"Stream": false, "Outcome": outcome, "StatusCode": status, "Error": errText, "StartedAt": now.Add(-time.Second), "CompletedAt": now, "Metadata": meta})
+		"Stream": false, "Outcome": outcome, "StatusCode": status, "Error": errText, "StartedAt": startedAt(rid, now), "CompletedAt": now, "Metadata": meta})
 }
 
 // Usage builds usage.handle; apiKey and source are the secret fields.
