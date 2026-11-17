@@ -331,6 +331,9 @@ func OpenContext(ctx context.Context, opts Options) (o *Outbox, err error) {
 	if _, err = o.db.ExecContext(ctx, openRequestsTable); err != nil {
 		return
 	}
+	if _, err = o.db.ExecContext(ctx, completionNumberingTable); err != nil {
+		return
+	}
 	if err = o.loadMeta(ctx); err != nil {
 		return
 	}

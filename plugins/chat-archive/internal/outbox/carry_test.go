@@ -102,3 +102,49 @@ func TestOpenRequestsTableAddedToOlderOutbox(t *testing.T) {
 		t.Fatalf("user_version = %d, %v", version, err)
 	}
 }
+
+// TestCompletionNumberingSaveTake: SaveCarry saves the numbering with the open requests in one
+// transaction; a take returns it once (within maxAge) and deletes it, across a close and reopen.
+func TestCompletionNumberingSaveTake(t *testing.T) {
+	ctx := context.Background()
+	c := &clock{t: time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)}
+	dir := filepath.Join(t.TempDir(), "data")
+	open := func() *Outbox {
+		o, err := Open(Options{Dir: dir, CapBytes: 1 << 40, Retention: 168 * time.Hour, Now: c.now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	o := open()
+	nums := []Numbering{
+		{RequestID: "closed", NextInputSeq: 1, NextOrdinal: 1, FirstHookAt: 10, LastHookAt: 20, BareStart: 5, TakenEnd: 30, ClosedAt: 40},
+		{RequestID: "open", NextInputSeq: 2, NextOrdinal: 2, NextResponse: 1, FirstHookAt: 11, LastHookAt: 21},
+		{RequestID: ""}, // left out
+	}
+	if n, err := o.SaveCarry(ctx, []OpenRequest{{RequestID: "open", NextInputSeq: 2}}, nums); err != nil || n != 1 {
+		t.Fatalf("save = %d, %v", n, err)
+	}
+	o.Close()
+	o = open()
+	got, err := o.TakeNumbering(ctx, time.Minute)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("take = %+v, %v", got, err)
+	}
+	for _, g := range got {
+		if g != nums[0] && g != nums[1] {
+			t.Fatalf("row %+v", g)
+		}
+	}
+	if again, err := o.TakeNumbering(ctx, time.Minute); err != nil || len(again) != 0 {
+		t.Fatalf("second take = %v, %v", again, err)
+	}
+	if _, err := o.SaveCarry(ctx, nil, nums[:1]); err != nil {
+		t.Fatal(err)
+	}
+	c.t = c.t.Add(3 * time.Minute)
+	if old, err := o.TakeNumbering(ctx, 2*time.Minute); err != nil || len(old) != 0 {
+		t.Fatalf("stale take = %v, %v", old, err)
+	}
+	o.Close()
+}

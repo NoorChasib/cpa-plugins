@@ -430,6 +430,10 @@ func (p *Plugin) startWith(cfg config.Config, secrets config.Secrets, ob *outbox
 	if carried, err := ob.TakeOpenRequests(cctx, CarryMaxAge); err == nil {
 		e.Adopt(outboxToCarried(carried))
 	}
+	// Their lifecycle evidence too, so a RequestID CPA reuses keeps its completion keys apart.
+	if nums, err := ob.TakeNumbering(cctx, CarryMaxAge); err == nil {
+		e.AdoptNumbering(outboxToNumbering(nums))
+	}
 	ccancel()
 	rs.up = uploader.New(uploader.Options{
 		BaseURL: cfg.ArchiveURL, Token: secrets.SourceToken, UserAgent: "chat-archive/" + Version, Outbox: ob, Stats: e.Stats,
@@ -524,7 +528,7 @@ func (p *Plugin) stopRuntime(drain bool) {
 	sctx, cancel := context.WithDeadline(context.Background(), minTime(time.Now().Add(FinalSaveTimeout), deadline))
 	_ = rs.up.SaveDrops(sctx)
 	if drain {
-		_, _ = rs.ob.SaveOpenRequests(sctx, carriedToOutbox(p.engine.OpenRequests()))
+		_, _ = rs.ob.SaveCarry(sctx, carriedToOutbox(p.engine.OpenRequests()), numberingToOutbox(p.engine.Numbering()))
 	}
 	cancel()
 	sctx, cancel = context.WithDeadline(context.Background(), deadline)
@@ -598,6 +602,22 @@ func outboxToCarried(rs []outbox.OpenRequest) []hooks.Carried {
 		out[i] = hooks.Carried{RequestID: r.RequestID, NextInputSeq: r.NextInputSeq, NextOrdinal: r.NextOrdinal,
 			NextResponse: r.NextResponse, Responses: r.Responses, BeforeAuthSeen: r.BeforeAuth, BeginWritten: r.BeginWritten,
 			Touched: r.TouchedAt}
+	}
+	return out
+}
+
+func numberingToOutbox(ns []hooks.Numbering) []outbox.Numbering {
+	out := make([]outbox.Numbering, len(ns))
+	for i, n := range ns {
+		out[i] = outbox.Numbering(n)
+	}
+	return out
+}
+
+func outboxToNumbering(ns []outbox.Numbering) []hooks.Numbering {
+	out := make([]hooks.Numbering, len(ns))
+	for i, n := range ns {
+		out[i] = hooks.Numbering(n)
 	}
 	return out
 }
