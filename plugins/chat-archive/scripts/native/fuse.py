@@ -2,7 +2,7 @@
 """make fuse-smoke: CPA survives a host-side fuse of chat-archive (CPA disables a plugin whose hook
 panics inside its recovered adapter).
 
-The CPA under test is built from the pinned source with scripts/native/fuse-v8.0.60.patch, which
+The CPA under test is built from the pinned source with scripts/native/fuse-v8.0.73.patch, which
 panics inside the recovered before-auth adapter when CPA_TEST_FUSE_PLUGIN names the plugin. Run 1
 (variable unset) proves traffic moves calls.before_auth. Run 2 (same data directory, variable set
 to chat-archive) asserts: CPA keeps serving, CPA logs the fuse, and the plugin keeps heartbeating

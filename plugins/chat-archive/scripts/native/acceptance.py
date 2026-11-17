@@ -2,7 +2,7 @@
 """chat-archive native acceptance on real CPA: every capture case, the canary scans and the memory,
 latency and unreachable-archive checks.
 
-CPA built from the pinned v8.0.60 source runs in a --network none container with a loopback
+CPA built from the pinned source (pins.sh) runs in a --network none container with a loopback
 mock upstream (mockup.py) and the clienttest fake archive (fakearchive). Every value is
 synthetic. Output holds case names, counts, sizes, timings and canary ids only.
 
@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import traceback
+from urllib.parse import quote
 
 import canaries as canarylib
 import harness as H
@@ -236,7 +237,7 @@ def phase_main(args, c, mock_state, mock_url, rules):
         H.wait_until(lambda: run.status().get("uploader", {}).get("archive_id"), 30, "first sources/self sync")
         time.sleep(0.5)  # masker rebuild with the server exact set happens in the same sync
         run_case("auth: private routes 401/403 without or with a wrong key; public shell fixed", auth_checks, run)
-        run_case("model-list GETs ignored by both hooks (counter only)", model_lists, run)
+        run_case("keyed model-list and model-detail GETs ignored by both hooks (counter only)", model_lists, run)
         sent = {}
 
         def send(name, fn, *a):
@@ -335,16 +336,32 @@ def auth_checks(run):
 
 
 def model_lists(run):
-    before = run.status()["counters"].get("ignored_model_list", 0)
+    """Keyed model-list and model-detail GETs. Since CPA v8.0.70 each reaches the response and
+    lifecycle hooks with the caller's identity as Metadata (null before); both hooks must still
+    ignore every one, counting 2 per GET, and none may produce an envelope."""
+    counter = lambda: run.status()["counters"].get("ignored_model_list", 0)
+    before = counter()
     n_before = len(run.fake.get("/envelopes") or [])
-    H.check(H.request(run.base, "/v1/models", headers={"Authorization": "Bearer " + run.c.client_key})[0] == 200, "/v1/models")
-    H.check(H.request(run.base, "/v1beta/models", headers={"X-Goog-Api-Key": run.c.client_key})[0] == 200, "/v1beta/models")
-    H.wait_until(lambda: run.status()["counters"].get("ignored_model_list", 0) >= before + 2, 10, "ignored_model_list counter")
+    bearer = {"Authorization": "Bearer " + run.c.client_key}
+    code, _, raw = H.request(run.base, "/v1/models", headers=bearer)
+    H.check(code == 200, "/v1/models", code)
+    ids = [m["id"] for m in json.loads(raw).get("data") or [] if m.get("id")]
+    H.check(ids, "/v1/models listed no model")
+    gets = (("/v1/models (Anthropic)", "/v1/models", {"X-Api-Key": run.c.client_key_2, "Anthropic-Version": "2023-06-01"}, 200),
+            ("/v1/models/{id}", "/v1/models/" + quote(ids[0], safe=""), bearer, 200),
+            ("/v1/models/{unknown id}", "/v1/models/ca-no-such-model", bearer, 404),
+            ("/v1beta/models", "/v1beta/models", {"X-Goog-Api-Key": run.c.client_key}, 200))
+    for name, path, headers, want in gets:
+        got = H.request(run.base, path, headers=headers)[0]
+        H.check(got == want, name, "HTTP", got, "want", want)
+    want = before + 2 * (1 + len(gets))
+    H.wait_until(lambda: counter() >= want, 10, "ignored_model_list to reach %d" % want)
     time.sleep(1.5)
+    H.check(counter() == want, "ignored_model_list", counter(), "want", want)
     after = run.fake.get("/envelopes") or []
     new = [row for row in after[n_before:] if not row["envelope"]["body"].get("requested_model")]
-    H.check(not new, "model-list GET produced envelopes", len(new))
-    return "ignored_model_list=%d" % run.status()["counters"]["ignored_model_list"]
+    H.check(not new, "model-directory GET produced envelopes", len(new))
+    return "%d GETs, ignored_model_list=%d" % (1 + len(gets), want)
 
 
 def midstream(run):

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# make fuse-smoke: CPA v8.0.60 with a host-side fault injected by
-# scripts/native/fuse-v8.0.60.patch keeps serving after it fuses chat-archive, and the plugin keeps
+# make fuse-smoke: the pinned CPA with a host-side fault injected by
+# scripts/native/fuse-v8.0.73.patch keeps serving after it fuses chat-archive, and the plugin keeps
 # heartbeating with frozen hook counters. If the patch no longer applies, this fails loudly.
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -13,10 +13,10 @@ WORK=$(mktemp -d /tmp/chat-archive-fuse.XXXXXXXX)
 printf 'Fuse smoke artifacts: %s\n' "$WORK"
 mkdir -p "$WORK/runtime"
 fetch_cpa_source "$WORK/source"
-patch -d "$WORK/source" -p1 --forward --batch < "$ROOT/scripts/native/fuse-v8.0.60.patch" || {
-  printf 'scripts/native/fuse-v8.0.60.patch no longer applies to the pinned CPA source.\n' >&2; exit 1; }
+patch -d "$WORK/source" -p1 --forward --batch < "$ROOT/scripts/native/fuse-v8.0.73.patch" || {
+  printf 'scripts/native/fuse-v8.0.73.patch no longer applies to the pinned CPA source.\n' >&2; exit 1; }
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
-  -ldflags "-X main.Version=v8.0.60-fuse -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
+  -ldflags "-X main.Version=$CPA_VERSION-fuse -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
   -ldflags '-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin.Version=0.1.3' \
   -o "$WORK/chat-archive-production.so" .

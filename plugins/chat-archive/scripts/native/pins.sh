@@ -1,7 +1,8 @@
 # Pins shared by run-smoke.sh and fuse-smoke.sh (sourced, not executed).
-# CPA v8.0.60 = commit 91e0dee; codeload archive sha256 checked 2026-11-08.
-CPA_PIN=91e0dee827abf476f9f86246f68c500a112f7155
-CPA_ARCHIVE_SHA256=21e2a4316350a75b9a260ec9d6f1cbf139604598c7b9b509255fa58579885e23
+# CPA v8.0.73 = commit 43806c8; codeload archive sha256 checked 2026-11-17.
+CPA_VERSION=v8.0.73
+CPA_PIN=43806c865da7d47f9252316e95e315ad9f885b84
+CPA_ARCHIVE_SHA256=54196b15f8de4c9e32133b7100709738adec33191dde597f08bf48f7dc053acb
 PYTHON_IMAGE=python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
 # fetch_cpa_source DIR: the pinned CPA tree in DIR (a fresh copy, safe to patch).

@@ -50,7 +50,7 @@ See each plugin's reference documentation for its exact build and verification c
 
 ## Compatibility
 
-Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. Chat Archive declares ABI 1 / RPC schema 7, needs CPA v8.0.60 or newer, and is verified in CPA v8.0.60 built from source and in the official v8.0.60 image beside every published plugin. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
+Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. Chat Archive declares ABI 1 / RPC schema 7, needs CPA v8.0.60 or newer, and is verified in CPA v8.0.73 built from source and in the official v8.0.60 image beside every published plugin. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Required, non-publishing native acceptance for chat-archive.
-# Builds CPA v8.0.60 from its pinned source, the production, reload and nativefixture
+# Builds CPA from its pinned source (scripts/native/pins.sh), the production, reload and nativefixture
 # libraries, the reject-fixture test plugin and the fake archive, then runs everything in a
 # --network none container. Never reads operator configuration; every value is synthetic.
 #
@@ -24,7 +24,7 @@ mkdir -p "$WORK/runtime"
 fetch_cpa_source "$WORK/source"
 LIBFLAGS='-s -w -X github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin.Version'
 CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
-  -ldflags "-X main.Version=v8.0.60 -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
+  -ldflags "-X main.Version=$CPA_VERSION -X main.Commit=$CPA_PIN" -o "$WORK/cpa" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
   -ldflags "$LIBFLAGS=0.1.3" -o "$WORK/chat-archive-production.so" .
 # A second production build with a higher version, for the reload case (a different file and
