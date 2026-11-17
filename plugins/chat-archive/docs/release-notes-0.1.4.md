@@ -18,4 +18,5 @@ Exchanges already stored from these polls are not removed by the update.
 
 - The plugin recognizes a model list because its metadata has no `requested_model`. If a later CPA added that key to model-list calls, the polls would be stored again as exchanges without a begin.
 - A model execution with no model, no requested model, no `requested_model` in its metadata and no before-auth seen by the plugin would be ignored as a model list. CPA sets `requested_model` on every execution.
+- **CPA v8.0.76 and later: keep CPA at v8.0.75 or earlier for now.** When a Responses WebSocket turn fails over to another credential in place, CPA v8.0.76 runs the retry under the same request ID as the failed attempt. This plugin then numbers the retry's begin, attempt and completion as if they were new, so they collide with the failed attempt's keys: the retry's records are skipped as duplicate keys, and the exchange keeps the failed attempt's outcome. A later release will handle the reused ID. Payloads from CPA v8.0.74 to v8.0.76 otherwise decode the same as before.
 - The 0.1.3 limits still apply.
