@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -387,6 +388,14 @@ func (rt *Runtime) buildCompletion(d *hooks.Done, cs hooks.CompletionState) (out
 		}
 	}
 	return outbox.NewEnvelope{Kind: wire.KindExchangeDone, Key: key, AltKey: cs.AltKey, CreatedAt: d.ObservedAt, ExactRev: ms.Rev, Body: raw}, nil
+}
+
+// namedLifecycle reports whether a completion body carries lifecycle_input_seq.
+func namedLifecycle(body []byte) bool {
+	var c struct {
+		LifecycleInputSeq uint32 `json:"lifecycle_input_seq"`
+	}
+	return json.Unmarshal(body, &c) == nil && c.LifecycleInputSeq != 0
 }
 
 // buildUsage builds usage.attempt; Failure.Body becomes a masked text piece.

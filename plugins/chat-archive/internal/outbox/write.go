@@ -677,17 +677,18 @@ VALUES(?,?,?,?,0,0,0,?,?,?)`, seq, string(e.Kind), e.Key, e.CreatedAt.UTC().Unix
 // lifecycle's completion of a reused RequestID at that key) to the completion's started_at key: the
 // stored envelope is read back and inserted again at wire.ExchangeCompletionKeyAt with a new seq
 // (ON CONFLICT DO NOTHING). A completion without started_at stays a conflict. It reports whether a
-// new envelope was queued.
-func (o *Outbox) Rekey(ctx context.Context, seq uint64) (bool, error) {
+// new envelope was queued and, when one was, the completion's lifecycle_input_seq (0 when absent).
+// An error means nothing was queued and the conflict must not be acked yet.
+func (o *Outbox) Rekey(ctx context.Context, seq uint64) (bool, uint32, error) {
 	if o.closed.Load() {
-		return false, ErrClosed
+		return false, 0, ErrClosed
 	}
 	var stored []byte
 	if err := o.read.QueryRowContext(ctx, "SELECT body FROM envelopes WHERE seq=? AND kind=?", seq, string(wire.KindExchangeDone)).Scan(&stored); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+			return false, 0, nil
 		}
-		return false, err
+		return false, 0, err
 	}
 	raw, err := o.dec.DecodeAll(stored, nil)
 	if err != nil {
@@ -695,24 +696,27 @@ func (o *Outbox) Rekey(ctx context.Context, seq uint64) (bool, error) {
 	}
 	env, err := wire.DecodeEnvelope(raw)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	var c wire.ExchangeCompletion
 	if err := json.Unmarshal(env.Body, &c); err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if c.StartedAt.IsZero() || env.Key != wire.ExchangeCompletionKey(c.RequestID) {
-		return false, nil
+		return false, 0, nil
 	}
 	key := wire.ExchangeCompletionKeyAt(c.RequestID, c.StartedAt)
 	if !wire.ValidKey(key) {
-		return false, nil
+		return false, 0, nil
 	}
 	res, err := o.Write(ctx, []NewEnvelope{{Kind: env.Kind, Key: key, CreatedAt: env.CreatedAt, ExactRev: env.ExactRev, Refs: env.Refs, Body: env.Body}})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return len(res.Inserted) == 1, nil
+	if len(res.Inserted) != 1 {
+		return false, 0, nil
+	}
+	return true, c.LifecycleInputSeq, nil
 }
 
 // ProbeWrite checks that a write transaction commits, without changing any data.
