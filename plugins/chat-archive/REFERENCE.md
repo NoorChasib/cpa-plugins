@@ -1,6 +1,6 @@
 # Chat Archive reference
 
-Plugin id `chat-archive`, version 0.1.4. ABI 1; declares RPC schema 7 and refuses a host below 7. Linux amd64 only; the library needs no glibc symbol newer than 2.36.
+Plugin id `chat-archive`, version 0.1.5. ABI 1; declares RPC schema 7 and refuses a host below 7. Linux amd64 only; the library needs no glibc symbol newer than 2.36.
 
 ## Capabilities
 
