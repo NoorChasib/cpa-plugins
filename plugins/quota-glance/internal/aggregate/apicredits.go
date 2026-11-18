@@ -65,6 +65,19 @@ func apiCreditsOf(in Input, now time.Time) *APICredits {
 	return fallbackCreditsOf(in)
 }
 
+// openAIAPICreditsOf is the OpenAI API credit card: Quota Cache's published
+// OpenAI state judged at now with this plugin's stale-after, and marked
+// read-only, as apiCreditsOf's is. There is no fallback card. No snapshot
+// entry names an OpenAI organization, so without a usable state there is
+// nothing to list, and the state's absence is health's to report. Nil then,
+// and while Quota Cache lists no OpenAI organization.
+func openAIAPICreditsOf(in Input, now time.Time) *APICredits {
+	if in.OpenAICreditsError != "" || in.OpenAICredits == nil {
+		return nil
+	}
+	return readOnly(qc.CreditsAt(in.OpenAICredits, now, in.StaleAfter))
+}
+
 // structuralReasons are the reasons an account could not be edited anywhere,
 // Quota Cache's page included. They are kept; every other reason becomes why
 // it is not edited here.

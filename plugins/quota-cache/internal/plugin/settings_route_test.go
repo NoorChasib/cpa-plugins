@@ -127,7 +127,7 @@ func (p *meterPlugin) published() *client.CreditState {
 		time.Sleep(10 * time.Millisecond)
 	}
 	p.mu.Lock()
-	publisher := p.publisher
+	publisher := p.claude.publisher
 	p.mu.Unlock()
 	publisher.PublishNow()
 	return p.creditsFile()
@@ -184,7 +184,7 @@ func (p *meterPlugin) wantError(name string, status int, code string, body any) 
 func (p *meterPlugin) revision() uint64 {
 	p.t.Helper()
 	p.mu.Lock()
-	store := p.store
+	store := p.claude.store
 	p.mu.Unlock()
 	return store.Current().Revision
 }
@@ -194,7 +194,7 @@ func (p *meterPlugin) revision() uint64 {
 func (p *meterPlugin) organizationsRevision() string {
 	p.t.Helper()
 	p.mu.Lock()
-	store := p.organizations
+	store := p.claude.organizations
 	p.mu.Unlock()
 	if store == nil {
 		p.t.Fatal("the cache is not running")
@@ -236,7 +236,7 @@ func removeOp(organizationID string) map[string]any {
 func (p *meterPlugin) removeAll() {
 	p.t.Helper()
 	p.mu.Lock()
-	current := p.organizations.Current()
+	current := p.claude.organizations.Current()
 	p.mu.Unlock()
 	ops := []map[string]any{}
 	for _, item := range current.Items {
@@ -593,7 +593,7 @@ func TestAReadingTakesItsBaselineFromThePublishedMeter(t *testing.T) {
 	if code, body, _ := p.post(batchOf(settings.KindAPICredits, creditRow(alphaAccount, "", nil, nil, readingOf("150.00", at)))); code != http.StatusOK {
 		t.Fatalf("%d %v", code, body)
 	}
-	stored := p.store.Current().APICredits[alphaAccount].Reading
+	stored := p.claude.store.Current().APICredits[alphaAccount].Reading
 	want := 0
 	if client.MeterHourStart(at).After(day) {
 		// The reading's day has an hour before the reading's own.
@@ -620,11 +620,11 @@ func TestAnUnchangedOldReadingResentWithANewCreditSaves(t *testing.T) {
 			"rev": 3, "updatedAt": at.Add(time.Minute).Format(time.RFC3339),
 		}}})
 	})
-	stored := p.store.Current().APICredits[alphaAccount].Reading
+	stored := p.claude.store.Current().APICredits[alphaAccount].Reading
 	if code, body, _ := p.post(batchOf(settings.KindAPICredits, creditRow(alphaAccount, "3", "300", nil, readingOf("150.00", at)))); code != http.StatusOK {
 		t.Fatalf("%d %v", code, body)
 	}
-	if again := p.store.Current().APICredits[alphaAccount]; again.Reading != stored || again.MonthlyUSD != "300" {
+	if again := p.claude.store.Current().APICredits[alphaAccount]; again.Reading != stored || again.MonthlyUSD != "300" {
 		t.Fatalf("stored %+v", again)
 	}
 }
@@ -695,7 +695,7 @@ func TestAFullSettingsFileKeepsTheDatesOfListedCredentials(t *testing.T) {
 	}
 	renewalsOf := func(p *meterPlugin) map[string]settings.Renewal {
 		p.mu.Lock()
-		store := p.store
+		store := p.claude.store
 		p.mu.Unlock()
 		return store.Current().Renewals
 	}
@@ -814,7 +814,7 @@ func TestOrganizationsChangeTheMeterWithoutAConfigure(t *testing.T) {
 		t.Fatal(body)
 	}
 	p.removeAll()
-	if p.meter.Load() != nil {
+	if p.claude.meter.Load() != nil {
 		t.Fatal("the meter outlived the last organization")
 	}
 	if file := p.meterFile(); file.StopReason != client.MeterStopNoItems {
@@ -825,14 +825,14 @@ func TestOrganizationsChangeTheMeterWithoutAConfigure(t *testing.T) {
 		t.Fatalf("published %+v %+v", state.APICredits, state.Organizations)
 	}
 	p.organizationOps(addOp("alpha", fakeOrgA))
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("adding an organization did not open the meter")
 	}
 	p.usage(goldenRecord(t))
 	if account := accountIn(t, p.creditsFile(), alphaAccount); account.Settings.MonthlyUSD != "300" || account.MonthlyCreditSource != client.CreditSourceDashboard {
 		t.Fatalf("the value saved before the removal: %+v", account)
 	}
-	p.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
+	p.claude.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
 	if file := p.meterFile(); file.Counted != 1 || len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopNoItems {
 		t.Fatalf("file %+v", file)
 	}
@@ -843,14 +843,14 @@ func TestOrganizationsChangeTheMeterWithoutAConfigure(t *testing.T) {
 // its first record, and one removed is unlinked with its history kept.
 func TestOrganizationsRelinkTheRunningMeter(t *testing.T) {
 	p := newRoutePlugin(t)
-	running := p.meter.Load()
+	running := p.claude.meter.Load()
 	if running == nil {
 		t.Fatal("no meter for alpha")
 	}
 	p.organizationOps(addOp("bravo", fakeOrgB))
 	p.usage([]byte(strings.Replace(string(goldenRecord(t)), strings.ToUpper(fakeOrgA), fakeOrgB, 1)))
 	p.organizationOps(removeOp(fakeOrgA))
-	if p.meter.Load() != running {
+	if p.claude.meter.Load() != running {
 		t.Fatal("the meter was replaced, not relinked")
 	}
 	running.Stop(client.MeterStopQuiesce, time.Now().UTC())
@@ -931,9 +931,9 @@ func TestAnOrganizationsBatchPublishesTheFileItOpenedAgain(t *testing.T) {
 			saved := p.organizationsRevision()
 			_, organizations := p.storesOf()
 			fixed := unopenable(t, client.OrganizationsPath(p.path))
-			p.followOrganizations(organizations, time.Now().UTC())
+			p.followOrganizations(&p.claude, organizations, time.Now().UTC())
 			fixed()
-			p.publisher.PublishNow()
+			p.claude.publisher.PublishNow()
 			state := p.creditsFile()
 			if _, listed := accountOf(state, bravo); listed || state.Organizations.State != client.OrganizationsStateUnreadable {
 				t.Fatalf("before the batch, published %+v with bravo listed %v", state.Organizations, listed)
@@ -1015,7 +1015,7 @@ func TestAFileABatchReadAgainIsFollowed(t *testing.T) {
 			if current := organizations.Current(); current.State != tc.state {
 				t.Fatalf("the store holds %+v", current)
 			}
-			p.publisher.tick(time.Now().UTC())
+			p.claude.publisher.tick(time.Now().UTC())
 			p.wantFollowed(tc.state, tc.listed)
 		})
 	}
@@ -1027,13 +1027,13 @@ func TestAFileABatchReadAgainIsFollowed(t *testing.T) {
 func (p *meterPlugin) wantFollowed(state string, listed []string) {
 	p.t.Helper()
 	items := []string{}
-	for _, item := range *p.apiCredits.Load() {
+	for _, item := range *p.claude.apiCredits.Load() {
 		items = append(items, item.id)
 	}
 	if !slices.Equal(items, listed) {
 		p.t.Fatalf("in force %v, want %v", items, listed)
 	}
-	if running := p.meter.Load() != nil; running != (len(listed) > 0) {
+	if running := p.claude.meter.Load() != nil; running != (len(listed) > 0) {
 		p.t.Fatalf("meter running %v", running)
 	}
 	published := p.creditsFile()
@@ -1087,7 +1087,7 @@ func TestOrphansOutliveTheLastOrganization(t *testing.T) {
 	if saved, _ := body["settings"].(map[string]any); code != http.StatusOK || saved == nil || saved[alphaAccount] != nil {
 		t.Fatalf("an orphan cleared: %d %v", code, body)
 	}
-	if _, has := p.store.Current().APICredits[alphaAccount]; has {
+	if _, has := p.claude.store.Current().APICredits[alphaAccount]; has {
 		t.Fatal("the cleared orphan is still saved")
 	}
 	if orphans := editorOrphans(); len(orphans) != 1 || orphans[0]["id"] != orphanAccount {
@@ -1121,7 +1121,7 @@ func TestSavedValuesAreHeldWhileTheOrganizationsFileCannotBeRead(t *testing.T) {
 	}
 
 	p.breakOrganizations()
-	p.publisher.tick(time.Now().UTC())
+	p.claude.publisher.tick(time.Now().UTC())
 	if state := p.creditsFile(); state.Organizations.State != client.OrganizationsStateUnreadable || state.APICredits != nil {
 		t.Fatalf("published %+v %+v", state.Organizations, state.APICredits)
 	}
@@ -1136,14 +1136,14 @@ func TestSavedValuesAreHeldWhileTheOrganizationsFileCannotBeRead(t *testing.T) {
 	} {
 		p.wantError(name, http.StatusServiceUnavailable, "organizations_unavailable", batchOf(settings.KindAPICredits, row))
 	}
-	if stored := p.store.Current().APICredits; len(stored) != 2 || stored[bravo].MonthlyUSD != "300" || stored[orphanAccount].MonthlyUSD != "10" {
+	if stored := p.claude.store.Current().APICredits; len(stored) != 2 || stored[bravo].MonthlyUSD != "300" || stored[orphanAccount].MonthlyUSD != "10" {
 		t.Fatalf("stored %+v", stored)
 	}
 
 	// The file read again: bravo is listed with its credit, and only the old
 	// orphan is one.
 	writeFile(t, client.OrganizationsPath(p.path), good)
-	p.publisher.tick(time.Now().UTC())
+	p.claude.publisher.tick(time.Now().UTC())
 	state := p.creditsFile()
 	if accountIn(t, state, bravo).Settings.MonthlyUSD != "300" || len(state.APICredits.Orphans) != 1 || state.APICredits.Orphans[0].ID != orphanAccount {
 		t.Fatalf("after the fix: %+v", state.APICredits)
@@ -1240,7 +1240,7 @@ func TestConcurrentSavesTicksAndConfiguresComplete(t *testing.T) {
 			op = removeOp(fakeOrgB)
 		}
 		p.mu.Lock()
-		store := p.organizations
+		store := p.claude.organizations
 		p.mu.Unlock()
 		if store != nil {
 			post(map[string]any{"kind": settings.KindOrganizations, "baseRevision": settings.RevisionText(store.Current().Revision), "ops": []any{op}})
@@ -1248,7 +1248,7 @@ func TestConcurrentSavesTicksAndConfiguresComplete(t *testing.T) {
 	})
 	run(func(int) {
 		p.mu.Lock()
-		publisher := p.publisher
+		publisher := p.claude.publisher
 		p.mu.Unlock()
 		if publisher != nil {
 			publisher.tick(time.Now().UTC())

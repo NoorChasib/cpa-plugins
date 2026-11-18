@@ -15,7 +15,7 @@ guarantees it can rely on. Two committed examples live under `testdata/golden/`:
 | File | What it shows |
 | --- | --- |
 | `summary.json` | Seven healthy credentials, an OpenRouter balance, and five Claude API credit organizations as Quota Cache 0.2.0 publishes them for this snapshot (its committed `seven-credentials.credits.json`, computed from `seven-credentials.meter.json` and the settings it keeps, every credit and refill date entered on its page): on the monthly credit, on a Console reading, low, one with a cache-write difference worth showing, and one on Haiku 5.5's long-prompt tier refilled at midnight, plus an organization the meter saw that nothing names. Every one is read-only here (`editing.reason: "quotaCache"`). A Claude credential under a CPA-style auth index carries a renewal date entered on Quota Cache's page equal to the build's own day, so it reads next month's. The layout the design was drawn against, with banked resets on Codex and Claude (one Claude account holding a full reset and two Fable resets, the Fable kind with its own `notLimited` hold, and one whose grants predate kinds, so a single full entry, with a `notLimited` hold), Codex credits and a renewal date, estimated Claude renewals (a month-end start clamped to a 30-day month, an annual plan, and a plan whose billing period was never read), and Grok prepaid credits. Claude's Fable row counts each account at no more than its weekly has left, so two entries print one figure and count another (`pooledPercent`), and the row reads 36% where the Fable figures alone average 43%. |
-| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a Grok product window folded into its credits, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its full reset with a dated `cooldown` hold on every kind, beside a reset of a kind this build cannot name (`unknown`, counted and never offered), a cooldown already over on an entry from a Quota Cache too old to say which kind each reset is (`kinds: []`, the count with no button), a disabled account's Fable reset without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state but `ok`, against a meter that has gone stale after a `shutdown` gap: out after a refusal, a lower bound because counting began after the cycle did, needing settings (one missing only its refill date, one missing its credit with an unpriced model), pending, an unlinked organization nothing names, an orphaned API credit setting and an orphaned renewal date, all as Quota Cache publishes them for this snapshot and read-only here. Beside them are values only the items of Quota Cache 0.1.x's `claude-api-credits` gave rise to, which 0.2.0 never publishes (Where the figures come from, below): misconfigured (`organization_id_invalid`), written by Quota Cache 0.1.13, an `item-<n>` for each reason one cannot be edited anywhere, and an over-limit unlinked organization. They stay so that the golden covers the whole contract. |
+| `summary-degraded.json` | Every degraded state a real deployment produces — stale, failed, never-polled, disabled, unavailable, unsupported, entries with no reading, per-model rows, an unmapped window, a Grok product window folded into its credits, a reset in the past, a window with no reset at all, and a low OpenRouter balance whose last poll failed and has gone stale. A Claude account whose weekly is spent: held out of the session mean (`heldOut`, `heldOutCount`) while its idle session still prints 98%, its session reset the soonest on the card yet not the recovery the card announces, and counted as 0% on Fable while its own Fable figure reads 60%. Also the edge shapes of the credential extras: a Claude account in CPA cooldown still offering its full reset with a dated `cooldown` hold on every kind, beside a reset of a kind this build cannot name (`unknown`, counted and never offered), a cooldown already over on an entry from a Quota Cache too old to say which kind each reset is (`kinds: []`, the count with no button), a disabled account's Fable reset without its button, unlimited Codex credits, a renewal already past, an estimated renewal for an annual plan begun on Feb 29, a subscription start still ahead of the build that gives no estimate, and an empty Grok balance. Claude API credits in every account state but `ok`, against a meter that has gone stale after a `shutdown` gap: out after a refusal, a lower bound because counting began after the cycle did, needing settings (one missing only its refill date, one missing its credit with an unpriced model), pending, an unlinked organization nothing names, an orphaned API credit setting and an orphaned renewal date, all as Quota Cache publishes them for this snapshot and read-only here. Beside them are values only the items of Quota Cache 0.1.x's `claude-api-credits` gave rise to, which 0.2.0 never publishes (Where the figures come from, below): misconfigured (`organization_id_invalid`), written by Quota Cache 0.1.13, an `item-<n>` for each reason one cannot be edited anywhere, and an over-limit unlinked organization. They stay so that the golden covers the whole contract. It is also the one golden with [`openaiApiCredits`](#api-credits--openai-api-organizations), as Quota Cache 0.6.0 publishes it for this snapshot (its committed `degraded-states.openai-credits.json`): a Pro organization `ok` on its monthly credit, a Business one `out` after OpenAI refused a request with `credit_balance_exhausted` and with an image model left unpriced, one `pending`, an organization OpenAI's responses named that nothing lists, and an orphaned setting. |
 
 Both are byte-identical to what the route serves and are regenerated with
 `make golden`. CI fails if a build stops reproducing them, so a change to either
@@ -901,8 +901,9 @@ save error; reloading it fixes that.
 
 `GET /v0/management/plugins/quota-glance/health` reports, in snake_case, the
 snapshot (`snapshot_written_at`, `snapshot_next_request`), the build
-(`built_at`, `stale`, `stale_reason`, `last_error`), the watcher, and two
-objects about the API credit card:
+(`built_at`, `stale`, `stale_reason`, `last_error`), the watcher, two
+objects about the API credit card, and the same two about the OpenAI API
+credit card (below):
 
 - `credit_state`, Quota Cache's published credit state:
   `{path, last_error, computed_at, valid_until, settings_state,
@@ -918,6 +919,11 @@ objects about the API credit card:
   state's own `meter_error`, or, without a usable state, `"unreadable"` when
   the state could not be read and `"missing"` otherwise. Quota Glance no
   longer reads the meter itself.
+- `openai_credit_state` and `openai_meter`, the same objects for the
+  [OpenAI API credit](#api-credits--openai-api-organizations): Quota Cache's
+  `snapshot.openai-credits.json`, and its `snapshot.openai-meter.json` as that
+  state describes it. `"missing"` in both is the ordinary value on an install
+  that lists no OpenAI organization, or with a Quota Cache older than 0.6.0.
 
 `last_error` is `"summary document could not be rebuilt"` after a rebuild that
 failed outright, on a fault in the plugin rather than in what it reads. The
@@ -1562,3 +1568,60 @@ minute); a prompt-length tier added to a model after the table was read; and
 Claude Code requests in an organization that also holds purchased credit, which
 Anthropic bills to the purchased credit but the meter counts against the
 monthly one. A Console reading resets all of these.
+
+## API credits — OpenAI API organizations
+
+`openaiApiCredits` is the monthly OpenAI API credit that a ChatGPT Pro or
+Business plan grants one OpenAI API organization, for every OpenAI
+organization Quota Cache 0.6.0 and newer lists on its page, **estimated** from
+the openai-compatibility traffic CPA serves whose responses name that
+organization, and pooled. It is the same object as
+[`apiCredits`](#api-credits--claude-console-organizations), read the same way:
+Quota Cache publishes it, as `api_credits` in its own
+`snapshot.openai-credits.json` beside the snapshot, and Quota Glance judges it
+at the build instant with its own `stale-after` and shows it read-only
+(Read from Quota Cache, above). Every rule, field and `accounts[].state` above
+applies to it as written, in OpenAI's words: what follows is only how it
+differs.
+
+It is **absent rather than `null`**. The key is left out when Quota Cache
+lists no OpenAI organization, when there is no usable OpenAI state (no file,
+one that cannot be read, or one abandoned by the same 5-minute rule as the
+Claude state's), and from a Quota Glance older than 0.11.0. There is no
+fallback card: no snapshot entry names an OpenAI organization, so without a
+usable state there is nothing to list, and `/health` says why
+(`openai_credit_state`, above). Like `apiCredits` it takes part in nothing
+above: it is not in `credentials[]` or `providers[]`, so the menu bar neither
+offers nor colours it, it is not counted in `counters`, and it moves no header
+instant or `staleReason`. Adding it did not bump `schemaVersion`. Reset
+Priority never reads it and routes nothing by it.
+
+| Field | In `openaiApiCredits` |
+| --- | --- |
+| `provider` | `openai-api`, its first key. `apiCredits` has never carried one, and still does not. |
+| `title` | `Monthly OpenAI API Credit`. |
+| `pricing` | `{asOf, source, cacheWrites}`: the day OpenAI's pricing page was read, the page, and `"30m"`. Every cache write is priced at the 30-minute rate, so `cacheWriteExtra` is always `0` and `cacheWriteExtraText` always `""`. |
+| `accounts[].id` | `oai-<12 hex>`, from the organization as its responses name it. |
+| `accounts[].organizationId`, `unlinked[].organizationId` | The organization as OpenAI's `openai-organization` response header names it, case kept: `user-` and 24 letters and digits for a personal organization, or the organization's name and a suffix. It is not the `org-…` Organization ID API Platform's settings show. |
+| `accounts[].refusals` | `claudeCodeTotal` is always `0` and `claudeCodeLastAtEpoch` always `null`. A refusal is a request OpenAI refused with `credit_balance_exhausted`. |
+| `accounts[].issue` | Quota Cache's sentence for the first issue, in OpenAI's words: "API Platform reading" where the Claude sentences say "Console reading", and, for `refused`, "OpenAI refused a request with credit_balance_exhausted, so this credit is spent." |
+
+Quota Cache never publishes these in it: the issues `claudeCodeRefused`,
+`refusedNearlySpent`, `cacheTooOld`, `misconfigured` and `meterUnattributed`;
+a `notEditableReason` of `noOrganization`, `duplicateOrganization`, `overLimit`
+or `cacheTooOld`; and an unlinked organization whose `reason` is `overLimit`.
+How Quota Cache counts and prices OpenAI traffic, and what its estimate cannot
+see, is in its [OpenAI API credit notes](../../quota-cache/docs/openai-credits.md).
+
+**On the page.** The card is the API credit card in OpenAI's words, in a
+section of its own headed **OpenAI API**, after every provider's section and
+before the prepaid balances. It is never in the Codex section, whose
+credentials are ChatGPT sign-ins: OpenAI does not cover Codex usage through API
+keys with this credit. Its heading is the `title` above. The bar's hover and a
+line's link say "API Platform reading" for "Console reading"; the pool's line
+for an unlinked organization names it "OpenAI organization", with a slug over
+16 characters shortened to its first 9 and last 4 (`user-AbCd…UvWx`); and the
+foot names OpenAI's list prices and says that built-in tool calls, storage and
+the 10% regional-processing uplift are not counted, and that complimentary
+data-sharing tokens are counted as if billed. Its links open Quota Cache's page
+at `#openai-api-credits`. Its fold is kept under `openai-api:@api-credits`.

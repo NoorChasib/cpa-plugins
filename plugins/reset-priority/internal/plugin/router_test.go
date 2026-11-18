@@ -32,12 +32,17 @@ var routingAt = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 // organizations, bravo (refills Oct 16) and delta (Oct 26) can be routed to;
 // alpha is out with $20.00 of its estimate left, and charlie is out at $0.00.
 // Their keys are …0a to …0d, all proven; …0e is foreign and …10 unmapped.
+// "openai-credits" and "openai-meter" are the OpenAI API credit state and
+// meter of Quota Cache's degraded-states fixture, files the router must never
+// read.
 func quotaCacheFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	dir := filepath.Join("..", "..", "..", "quota-cache", "internal", "credits", "testdata")
 	path := map[string]string{
-		"credits": filepath.Join(dir, "golden", "api-credits-routing.credits.json"),
-		"meter":   filepath.Join(dir, "snapshots", "api-credits-routing.meter.json"),
+		"credits":        filepath.Join(dir, "golden", "api-credits-routing.credits.json"),
+		"meter":          filepath.Join(dir, "snapshots", "api-credits-routing.meter.json"),
+		"openai-credits": filepath.Join(dir, "golden", "degraded-states.openai-credits.json"),
+		"openai-meter":   filepath.Join(dir, "snapshots", "degraded-states.openai-meter.json"),
 	}[name]
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -471,6 +476,36 @@ func TestRouterFollowsTheLoop(t *testing.T) {
 	}
 	if got := routerLines(g.caller); fmt.Sprint(got) != fmt.Sprint(lines) {
 		t.Fatalf("router lines = %q; want %q", got, lines)
+	}
+}
+
+// Quota Cache 0.6.0 keeps the OpenAI API credit in files of its own beside the
+// snapshot, and the router routes only Claude API keys, so it reads none of
+// them. A router that finds an OpenAI credit state published at the same
+// moment, and an OpenAI meter, beside the Claude ones shows exactly the status
+// of one that finds only the Claude ones, with no OpenAI account among its
+// organizations.
+func TestOpenAICreditFilesLeaveTheTableIdentical(t *testing.T) {
+	claude := newRoutingRig(t, "route-api-credits: true\n")
+	both := newRoutingRig(t, "route-api-credits: true\n")
+	state := decodeObject(t, quotaCacheFixture(t, "openai-credits"))
+	state["computed_at"] = routingAt.Format(time.RFC3339)
+	both.write(t, qc.OpenAICreditsPath(both.path), state)
+	both.write(t, qc.OpenAIMeterPath(both.path), quotaCacheFixture(t, "openai-meter"))
+	claude.clk.Advance(routerEvery)
+	both.clk.Advance(routerEvery)
+
+	want, got := claude.status(t), both.status(t)
+	if !want.Active || len(want.Orgs) != 4 {
+		t.Fatalf("the Claude files alone do not route, so there is nothing to compare: %+v", want)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("beside Quota Cache's OpenAI files the router is %+v; want %+v", got, want)
+	}
+	for _, o := range got.Orgs {
+		if strings.HasPrefix(o.ID, qc.OpenAICreditAccountPrefix) {
+			t.Errorf("the table lists OpenAI account %s (%s)", o.ID, o.Label)
+		}
 	}
 }
 

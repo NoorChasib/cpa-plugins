@@ -25,7 +25,8 @@ const stampLayout = "2006-01-02T15:04:05Z"
 
 var apiCreditKey = regexp.MustCompile(`^org-[0-9a-f]{12}$`)
 
-// ValidAPICreditID reports whether id can key an API credit entry.
+// ValidAPICreditID reports whether id can key a Claude API credit entry, as
+// Claude.ValidAPICreditID does.
 func ValidAPICreditID(id string) bool { return apiCreditKey.MatchString(id) }
 
 // parseStamp reads an instant in the file's one form.
@@ -83,9 +84,15 @@ type fileRenewal struct {
 // the same.
 var errShape = errors.New("settings file fails a shape rule")
 
-// decode reads the settings file and applies the load-time shape rules. An
-// entry with no value at all is dropped, as a save would have deleted it.
-func decode(raw []byte) (Values, error) {
+// decode reads the Claude settings file: decodeFor(Claude, raw).
+func decode(raw []byte) (Values, error) { return decodeFor(Claude, raw) }
+
+// decodeFor reads p's settings file and applies the load-time shape rules,
+// with p's account ids, organizations, prompt classes and service tiers. An
+// entry with no value at all is dropped, as a save would have deleted it. A
+// file of a provider without renewal dates that holds any fails, even one
+// with no value, which no save of that provider writes.
+func decodeFor(p *Provider, raw []byte) (Values, error) {
 	if len(raw) > MaxBytes {
 		return Values{}, errShape
 	}
@@ -96,7 +103,7 @@ func decode(raw []byte) (Values, error) {
 		return Values{}, errShape
 	}
 	if doc.Schema == nil || *doc.Schema != Schema || doc.Revision == nil ||
-		len(doc.APICredits) > MaxAPICredits || len(doc.Renewals) > MaxRenewals {
+		len(doc.APICredits) > MaxAPICredits || len(doc.Renewals) > MaxRenewals || (!p.renewals && len(doc.Renewals) > 0) {
 		return Values{}, errShape
 	}
 	v := Values{
@@ -106,7 +113,7 @@ func decode(raw []byte) (Values, error) {
 	}
 	validRev := func(rev *uint64) bool { return rev != nil && *rev >= 1 && *rev <= v.Revision }
 	for id, entry := range doc.APICredits {
-		if !ValidAPICreditID(id) || !validRev(entry.Rev) || entry.UpdatedAt == nil {
+		if !p.ValidAPICreditID(id) || !validRev(entry.Rev) || entry.UpdatedAt == nil {
 			return Values{}, errShape
 		}
 		updated, ok := parseStamp(*entry.UpdatedAt)
@@ -127,7 +134,7 @@ func decode(raw []byte) (Values, error) {
 			credit.Renews = *entry.Renews
 		}
 		if entry.Reading != nil {
-			reading, ok := decodeReading(*entry.Reading)
+			reading, ok := decodeReading(p, *entry.Reading)
 			if !ok {
 				return Values{}, errShape
 			}
@@ -156,7 +163,7 @@ func decode(raw []byte) (Values, error) {
 	return v, nil
 }
 
-func decodeReading(r fileReading) (*Reading, bool) {
+func decodeReading(p *Provider, r fileReading) (*Reading, bool) {
 	if r.RemainingUSD == nil || r.At == nil || r.EnteredAt == nil || r.OrganizationID == nil || r.Baseline == nil ||
 		r.Baseline.DayStart == nil || r.Baseline.Until == nil {
 		return nil, false
@@ -171,7 +178,7 @@ func decodeReading(r fileReading) (*Reading, bool) {
 	if !okAt || !okEntered || !okDay || !okUntil {
 		return nil, false
 	}
-	if org, ok := client.NormalizeOrganizationID(*r.OrganizationID); !ok || org != *r.OrganizationID {
+	if org, ok := p.normalizeOrganization(*r.OrganizationID); !ok || org != *r.OrganizationID {
 		return nil, false
 	}
 	if !dayStart.Equal(client.MeterDayStart(at)) || !until.Equal(client.MeterHourStart(at)) || len(r.Baseline.Usage) > MaxBaseline {
@@ -182,7 +189,7 @@ func decodeReading(r fileReading) (*Reading, bool) {
 		if u.Model != client.MeterOtherModel && client.NormalizeMeterModel(u.Model, "") != u.Model {
 			return nil, false
 		}
-		if u.Prompt != "" && u.Prompt != client.MeterPromptOver100K {
+		if !p.prompts[u.Prompt] || !p.tiers[u.Tier] {
 			return nil, false
 		}
 		usage = client.MergeMeterUsage(usage, u)
@@ -197,7 +204,8 @@ func decodeReading(r fileReading) (*Reading, bool) {
 }
 
 // encode writes v as the settings file, in exactly the bytes Quota Glance's
-// encoder writes for the same values.
+// encoder writes for the same values. Every provider's file has this schema,
+// so it needs none: the OpenAI file's renewals are always written {}.
 func encode(v Values) ([]byte, error) {
 	revision, schema := v.Revision, Schema
 	doc := fileDoc{

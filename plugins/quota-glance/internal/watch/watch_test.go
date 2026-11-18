@@ -161,6 +161,50 @@ func TestACreditStateWriteReloads(t *testing.T) {
 	}
 }
 
+// quota-cache 0.6.0 publishes its OpenAI API credit state in a file of its
+// own beside the snapshot, on the Claude state's schedule. A write to it alone
+// reloads, and the backstop fingerprints it, so a missed write is noticed
+// too. Its meter is not read here, so a write to that is ignored.
+func TestAWriteToTheOpenAICreditStateReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	openai := filepath.Join(dir, "snapshot.openai-credits.json")
+	commit(t, path, `{"schema":1}`)
+	var calls atomic.Int64
+	w, err := Start(Options{Path: path, CreditsPath: filepath.Join(dir, "snapshot.credits.json"), OpenAICreditsPath: openai,
+		Debounce: 40 * time.Millisecond, Backstop: time.Hour, Heartbeat: time.Hour, OnChange: func() { calls.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.Begin()
+	waitFor(t, &calls, 1)
+
+	commit(t, openai, `{"schema":1}`)
+	waitFor(t, &calls, 2)
+	commit(t, filepath.Join(dir, "snapshot.openai-meter.json"), `{"schema":1}`)
+	time.Sleep(200 * time.Millisecond)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("reloads = %d; the OpenAI meter reloaded", got)
+	}
+
+	// The backstop alone, with events never debounced into a reload.
+	var polls atomic.Int64
+	polled, err := Start(Options{Path: path, OpenAICreditsPath: openai, Debounce: time.Hour, Backstop: 50 * time.Millisecond, Heartbeat: time.Hour,
+		OnChange: func() { polls.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(polled.Close)
+	polled.Begin()
+	waitFor(t, &polls, 1)
+	commit(t, openai, `{"schema":1,"padding":"aaaaaaaa"}`)
+	waitFor(t, &polls, 2)
+	if polled.State().Backstops == 0 {
+		t.Fatal("the OpenAI credit state write was not picked up by the backstop")
+	}
+}
+
 // The backstop fingerprints the credit state too, so a missed write to it is
 // still noticed.
 func TestBackstopNoticesAMissedCreditStateWrite(t *testing.T) {

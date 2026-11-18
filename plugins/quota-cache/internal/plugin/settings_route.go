@@ -58,9 +58,11 @@ func credentialName(entry protocol.HostAuthFileEntry, provider string) string {
 	return derived
 }
 
-// editorStatus is the status route's editor key: whether and what the page
-// may edit, and what only the plugin knows about the rows. The API credit rows
-// themselves are credit_state's accounts.
+// editorStatus is the status route's editor key for one lane, editor for
+// Claude's and openai_editor for OpenAI's: whether and what the page may edit,
+// and what only the plugin knows about the rows. The API credit rows
+// themselves are the lane's credit state's accounts. OpenAI's lists no
+// credential and no renewal date, and takes none.
 type editorStatus struct {
 	// Available is whether the saved settings can be edited, and Reason why
 	// not: client.CreditEditingSettingsUnreadable.
@@ -136,22 +138,28 @@ type organizationItem struct {
 	OrganizationID string `json:"organization_id"`
 }
 
-// editorOf is the status route's editor key, from the stores as they are now
-// and the state last published, which is what the save route judges a request
+// editorOf is the lane's editor key, from its stores as they are now and the
+// state it last published, which is what the save route judges a request
 // against.
-func (p *Plugin) editorOf(store *settings.Store, organizations *settings.OrganizationStore, state *client.CreditState, snapshot client.Snapshot, now time.Time) editorStatus {
-	values, status := store.Snapshot()
+func (p *Plugin) editorOf(parts laneParts, state *client.CreditState, snapshot client.Snapshot, now time.Time) editorStatus {
+	spec := parts.lane.spec
+	values, status := parts.store.Snapshot()
 	editor := editorStatus{
 		Available: status.Editable(), Reason: editingReasonOf(status),
-		Revision: settings.RevisionText(values.Revision), MaxAPICreditItems: settings.MaxAPICreditItems,
-		MaxRenewalItems: settings.MaxRenewalItems, MaxBatchBytes: maxSettingsBytes,
+		Revision: settings.RevisionText(values.Revision), MaxAPICreditItems: settings.MaxAPICreditItems, MaxBatchBytes: maxSettingsBytes,
 		Credentials: []editorCredential{}, RenewalOrphans: []renewalOrphan{}, APICreditOrphans: []client.CreditOrphan{},
-		HeldAPICredits: []client.CreditOrphan{}, Organizations: organizationsEditorOf(organizations.Current()),
+		HeldAPICredits: []client.CreditOrphan{}, Organizations: organizationsEditorOf(parts.organizations.Current(), spec.settings),
 	}
 	if status.State == client.CreditSettingsOK {
 		editor.APICreditOrphans = apiCreditOrphansOf(state, values)
 		editor.HeldAPICredits = heldAPICreditsOf(state, values)
 	}
+	// Only Claude credentials renew, and only Claude's lane keeps their
+	// dates.
+	if !spec.renewals {
+		return editor
+	}
+	editor.MaxRenewalItems = settings.MaxRenewalItems
 	roster := p.roster.Load()
 	if roster == nil {
 		return editor
@@ -190,10 +198,10 @@ func editingReasonOf(status settings.Status) string {
 	return ""
 }
 
-func organizationsEditorOf(o settings.Organizations) editorOrganizations {
+func organizationsEditorOf(o settings.Organizations, provider *settings.Provider) editorOrganizations {
 	out := editorOrganizations{
 		Available: o.State != client.OrganizationsStateUnreadable, Revision: settings.RevisionText(o.Revision),
-		MaxItems: settings.MaxOrganizations, MaxOps: settings.MaxOrganizationOps, Items: organizationItemsOf(o),
+		MaxItems: settings.MaxOrganizations, MaxOps: settings.MaxOrganizationOps, Items: organizationItemsOf(o, provider),
 	}
 	if !out.Available {
 		out.Reason = organizationsUnreadable
@@ -201,10 +209,12 @@ func organizationsEditorOf(o settings.Organizations) editorOrganizations {
 	return out
 }
 
-func organizationItemsOf(o settings.Organizations) []organizationItem {
+// organizationItemsOf is every organization in o, each with provider's
+// account id.
+func organizationItemsOf(o settings.Organizations, provider *settings.Provider) []organizationItem {
 	items := make([]organizationItem, 0, len(o.Items))
 	for _, item := range o.Items {
-		items = append(items, organizationItem{ID: item.ID(), Label: item.Label, OrganizationID: item.OrganizationID})
+		items = append(items, organizationItem{ID: provider.AccountOf(item), Label: item.Label, OrganizationID: item.OrganizationID})
 	}
 	return items
 }
@@ -280,16 +290,19 @@ func epochOf(t *time.Time) *int64 {
 //  3. the body is not application/json: 415 unsupported_media_type;
 //  4. the body is over maxSettingsBytes: 400 invalid_request;
 //  5. what the request's kind needs cannot be read: 503
-//     organizations_unavailable for the organizations card, else 503
-//     settings_unavailable;
+//     organizations_unavailable for an organizations card, else 503
+//     settings_unavailable, each judged on the kind's own lane;
 //  6. then the kind's own rules.
 //
-// Each request kind locks one store at a time: the store's own lock inside its
-// Apply, then linkMu for an organizations change, then the publisher's lock
-// to publish, each released before the next is taken.
+// The kind picks the lane: organizations and openaiOrganizations are the two
+// organizations cards, openaiApiCredits is OpenAI's API credits card, and
+// every other kind is one of Claude's cards. Each request kind locks one store
+// at a time: the store's own lock inside its Apply, then linkMu for an
+// organizations change, then the publisher's lock to publish, each released
+// before the next is taken.
 func (p *Plugin) saveSettings(req protocol.ManagementRequest) protocol.ManagementResponse {
 	p.mu.Lock()
-	running, store, organizations, publisher := p.cache != nil, p.store, p.organizations, p.publisher
+	running, claude, openai := p.cache != nil, p.claude.partsLocked(), p.openai.partsLocked()
 	p.mu.Unlock()
 	switch {
 	case !running:
@@ -304,14 +317,15 @@ func (p *Plugin) saveSettings(req protocol.ManagementRequest) protocol.Managemen
 		return response(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 	}
 	now := time.Now().UTC()
-	kind := settings.RequestKind(req.Body)
-	if kind == settings.KindOrganizations {
-		return p.saveOrganizations(organizations, publisher, req.Body, now)
+	switch settings.RequestKind(req.Body) {
+	case settings.KindOrganizations:
+		return p.saveOrganizations(claude, req.Body, now)
+	case settings.KindOpenAIOrganizations:
+		return p.saveOrganizations(openai, req.Body, now)
+	case settings.KindOpenAIAPICredits:
+		return p.saveBatch(openai, req.Body, now)
 	}
-	if !store.Status().Editable() {
-		return response(http.StatusServiceUnavailable, map[string]string{"error": "settings_unavailable"})
-	}
-	return p.saveBatch(store, publisher, req.Body, now)
+	return p.saveBatch(claude, req.Body, now)
 }
 
 // crossSite reports a browser saying the request does not come from a page on
@@ -333,11 +347,17 @@ func jsonMedia(headers http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(media), "application/json")
 }
 
-// saveBatch is one API credit or renewal card's Save: its shape, its values,
-// whether a row waits on the organizations file, whether the published state
-// offers every row it names, and then the store, which takes it all or
-// nothing, then a publish before the answer.
-func (p *Plugin) saveBatch(store *settings.Store, publisher *publisher, raw []byte, now time.Time) protocol.ManagementResponse {
+// saveBatch is one API credit or renewal card's Save on the lane of parts:
+// whether its settings can be edited, its shape, its values, whether a row
+// waits on the organizations file, whether the published state offers every
+// row it names, and then the store, which takes it all or nothing, then a
+// publish before the answer. A lane that keeps no renewal dates judges against
+// no roster.
+func (p *Plugin) saveBatch(parts laneParts, raw []byte, now time.Time) protocol.ManagementResponse {
+	store, publisher := parts.store, parts.publisher
+	if !store.Status().Editable() {
+		return response(http.StatusServiceUnavailable, map[string]string{"error": "settings_unavailable"})
+	}
 	batch, err := settings.ParseBatch(raw)
 	if err != nil {
 		return response(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
@@ -348,7 +368,10 @@ func (p *Plugin) saveBatch(store *settings.Store, publisher *publisher, raw []by
 		state = publisher.LastState()
 	}
 	roster := []claudeCredential{}
-	rosterRead := p.roster.Load()
+	var rosterRead *[]claudeCredential
+	if parts.lane.spec.renewals {
+		rosterRead = p.roster.Load()
+	}
 	if rosterRead != nil {
 		roster = *rosterRead
 	}
@@ -392,11 +415,14 @@ func (p *Plugin) saveBatch(store *settings.Store, publisher *publisher, raw []by
 	})
 }
 
-// saveOrganizations is the organizations card's Save. The file is committed
-// under its store's lock alone; then, under linkMu, the item list and the
-// meter follow it; then the state is published, before the answer. They
-// follow the file whatever the batch comes to when Apply read it again.
-func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, publisher *publisher, raw []byte, now time.Time) protocol.ManagementResponse {
+// saveOrganizations is an organizations card's Save on the lane of parts.
+// The file is committed under its store's lock alone; then, under linkMu, the
+// lane's item list and meter follow it; then its state is published, before
+// the answer. They follow the file whatever the batch comes to when Apply
+// read it again. Only the lane's own kind parses, so a batch of the other
+// lane's kind is invalid_request.
+func (p *Plugin) saveOrganizations(parts laneParts, raw []byte, now time.Time) protocol.ManagementResponse {
+	l, organizations, publisher := parts.lane, parts.organizations, parts.publisher
 	// The file as it is now, as the next tick would see it: one moved aside
 	// or deleted is gone, so a batch sent in the seconds before that tick
 	// conflicts with the empty list instead of writing over a list the page
@@ -404,13 +430,13 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 	// that changed is published here, whatever the batch comes to: that tick
 	// has nothing left to follow, and a file that opened again once its owner
 	// was fixed changed none of the stamps the publisher compares.
-	if p.followOrganizations(organizations, now) {
+	if p.followOrganizations(l, organizations, now) {
 		publisher.PublishNow()
 	}
 	if organizations.Current().State == client.OrganizationsStateUnreadable {
 		return response(http.StatusServiceUnavailable, map[string]string{"error": "organizations_unavailable"})
 	}
-	batch, err := settings.ParseOrganizationsBatch(raw)
+	batch, err := settings.ParseOrganizationsBatchFor(l.spec.settings, raw)
 	if err != nil {
 		return response(http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 	}
@@ -421,13 +447,13 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 	// followOrganizations above, and the store keeps what it read, whatever
 	// the batch comes to. The item list and the meter follow it here, as the
 	// next tick would.
-	followed := p.followOrganizations(organizations, now)
+	followed := p.followOrganizations(l, organizations, now)
 	if saved && !followed {
 		p.linkMu.Lock()
 		// A stop that began meanwhile has let go of this run's stores, and
 		// the next start lists the items from the file.
-		if p.linkOrganizations == organizations {
-			p.relinkLocked(now, false)
+		if l.linkOrganizations == organizations {
+			p.relinkLaneLocked(l, now, false)
 		}
 		p.linkMu.Unlock()
 	}
@@ -439,7 +465,7 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 	switch {
 	case errors.As(err, &conflict):
 		return response(http.StatusConflict, map[string]any{
-			"error": "conflict", "revision": conflict.Revision, "organizations": organizationItemsOf(conflict.Organizations),
+			"error": "conflict", "revision": conflict.Revision, "organizations": organizationItemsOf(conflict.Organizations, l.spec.settings),
 		})
 	case errors.As(err, &op):
 		return response(http.StatusBadRequest, map[string]any{"error": op.Code, "op": op.Op, "field": op.Field})
@@ -449,11 +475,11 @@ func (p *Plugin) saveOrganizations(organizations *settings.OrganizationStore, pu
 		return storeRefusal(err)
 	}
 	if saved {
-		p.host.Log(context.Background(), "info", "quota-cache organizations changed", map[string]any{"added": result.Added, "renamed": result.Renamed, "removed": result.Removed})
+		p.host.Log(context.Background(), "info", l.spec.organizationsChanged, map[string]any{"added": result.Added, "renamed": result.Renamed, "removed": result.Removed})
 	}
 	return response(http.StatusOK, map[string]any{
 		"ok": true, "unchanged": result.Unchanged, "revision": settings.RevisionText(result.Revision),
-		"organizations": organizationItemsOf(organizations.Current()),
+		"organizations": organizationItemsOf(organizations.Current(), l.spec.settings),
 	})
 }
 

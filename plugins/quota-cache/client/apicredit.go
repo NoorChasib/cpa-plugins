@@ -25,6 +25,11 @@ import (
 // reset_at and observed_at stay empty, and so does quota.
 const ProviderAnthropicAPI = "anthropic-api"
 
+// ProviderOpenAIAPI names an OpenAI API organization's monthly credit: the
+// provider of the credit document in OpenAICreditsPath. OpenAI organizations
+// have no snapshot entry.
+const ProviderOpenAIAPI = "openai-api"
+
 // APICredit is one Console organization whose monthly API credit is tracked,
 // copied onto the entry at every scan: its label, its position and its
 // Organization ID. quota-cache 0.1.x filled the rest from its claude-api-credits

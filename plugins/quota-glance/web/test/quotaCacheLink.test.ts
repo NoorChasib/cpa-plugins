@@ -61,6 +61,11 @@ describe("quotaCacheEditURL", () => {
     assert.equal(quotaCacheEditURL(access(false), env, "api-credits"), `${ORIGIN}/v0/resource/plugins/quota-cache/status#api-credits`)
     // The Accounts card's foot.
     assert.equal(quotaCacheEditURL(access(false), env, "renewals"), `${ORIGIN}${QUOTA_CACHE_PAGE}#renewals`)
+    // The OpenAI API credit card's, at the OpenAI section of Quota Cache's page.
+    assert.equal(
+      quotaCacheEditURL(access(false), env, "openai-api-credits"),
+      `${ORIGIN}/v0/resource/plugins/quota-cache/status#openai-api-credits`,
+    )
   })
 
   test("keeps a reverse proxy's prefix, as Quota Cache's own page does", () => {
@@ -77,6 +82,7 @@ describe("quotaCacheEditURL", () => {
     remember(env)
     assert.equal(quotaCacheEditURL(access(true), env, "api-credits"), null)
     assert.equal(quotaCacheEditURL(access(true), env, "renewals"), null)
+    assert.equal(quotaCacheEditURL(access(true), env, "openai-api-credits"), null)
   })
 
   test("none behind the dashboard password alone: a phone, a bookmark", () => {

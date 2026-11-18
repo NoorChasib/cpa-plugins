@@ -293,6 +293,12 @@
     const flushed = date(s.api_meter && s.api_meter.flushed_at);
     return flushed > 0 && flushed <= now && now - flushed <= 30 * 60000;
   }
+  // The OpenAI API meter, which saves on the same schedule while it has a
+  // file, by the same rule.
+  function openAIMeterFresh(s, now) {
+    const flushed = date(s.openai_meter && s.openai_meter.flushed_at);
+    return flushed > 0 && flushed <= now && now - flushed <= 30 * 60000;
+  }
   const metered = (e, s, now) => e.provider === 'anthropic-api' && meterFresh(s, now);
   function next(e, s, now) {
     return Math.max(now, date(e.next_attempt), date(s.next_request), date((s.provider_cooldown || {})[e.provider]));
@@ -408,6 +414,41 @@
     }
     $('meter-unlinked-empty').hidden = unlinked.length > 0;
   }
+  // The OpenAI API meter file, as last saved, the same way. It counts no
+  // record as foreign or unattributed, so it has no rows for them, and its
+  // organizations not listed are the ones the OpenAI organizations card
+  // offers to add. The section stays hidden while there is no file, which
+  // the meter writes only once it has seen an OpenAI organization.
+  function openAIMeterPanel(s, now) {
+    const m = s.openai_meter;
+    $('openai-meter-section').hidden = !object(m);
+    if (!object(m)) return;
+    const stopped = node('span');
+    if (m.stopped_at) { stopped.append(time(m.stopped_at, now)); stopped.append(node('span', m.stop_reason || 'reason not recorded', 'secondary')); } else stopped.textContent = 'Counting';
+    const rows = [
+      ['Counting since', time(m.since, now)], ['This run started', time(m.started_at, now)], ['Last saved', time(m.flushed_at, now)], ['Stopped', stopped],
+      ['Records received', String(m.received || 0)], ['Counted', String(m.counted || 0)], ['Rejected', String(m.rejected || 0)], ['Dropped', String(m.dropped || 0)], ['Restarts', String(m.restarts || 0)]
+    ];
+    $('openai-meter').replaceChildren();
+    for (const [label, value] of rows) { const item = node('div'); const dd = node('dd'); dd.append(value instanceof Node ? value : document.createTextNode(value)); item.append(node('dt', label), dd); $('openai-meter').append(item); }
+    $('openai-meter-status').textContent = openAIMeterFresh(s, now) ? 'Saved within 30 minutes' : 'Not saved within 30 minutes';
+    const gaps = Array.isArray(m.gaps) ? m.gaps : [];
+    $('openai-meter-gaps').replaceChildren();
+    for (const g of gaps) {
+      const item = node('li');
+      item.append(time(g.from, now)); item.append(node('span', ' to ')); item.append(time(g.to, now)); item.append(node('span', ' · ' + (g.reason || 'reason not recorded'), 'secondary'));
+      $('openai-meter-gaps').append(item);
+    }
+    $('openai-meter-gaps-empty').hidden = gaps.length > 0;
+    const unlinked = Array.isArray(m.unlinked) ? m.unlinked : [];
+    $('openai-meter-unlinked').replaceChildren();
+    for (const u of unlinked) {
+      const item = node('li', (u.organization_id || 'unknown') + ' · ' + (u.requests || 0) + ' requests · last seen ');
+      item.append(time(u.last_seen_at, now));
+      $('openai-meter-unlinked').append(item);
+    }
+    $('openai-meter-unlinked-empty').hidden = unlinked.length > 0;
+  }
   function render(s) {
     const now = Date.now();
     const all = Object.values(s.entries || {});
@@ -481,6 +522,7 @@
       $('accounts').append(row);
     }
     meterPanel(s, now);
+    openAIMeterPanel(s, now);
     $('accounts-empty').hidden = entries.length > 0;
     $('accounts-empty').textContent = all.length ? 'No accounts match this provider.' : EMPTY;
     const history = (s.history || []).filter(p => selected === 'all' || p.provider === selected).slice().reverse();

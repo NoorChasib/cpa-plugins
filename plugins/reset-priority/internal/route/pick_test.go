@@ -177,6 +177,19 @@ func TestPickScope(t *testing.T) {
 		"ID of an OAuth file": change(func(c *cpaCandidate) {
 			c.ID, c.Attributes["source"] = "claude-oauth-placeholder.json", "config:claude[claude-oauth-placeholder.json]"
 		}),
+		// An openai-compatibility entry's key, whose OpenAI API credit Quota
+		// Cache counts but the router never spends, named as CPA's synthesizer
+		// names it for an entry named openai and for an unnamed one. CPA writes
+		// no auth_kind for these keys; apikey here leaves only the provider, ID
+		// and source to decline them.
+		"openai-compatibility entry named openai": change(func(c *cpaCandidate) {
+			c.ID, c.Provider = "openai-compatibility:openai:00000000000d", "openai-compatible-openai"
+			c.Attributes["source"] = "config:openai[00000000000d]"
+		}),
+		"unnamed openai-compatibility entry": change(func(c *cpaCandidate) {
+			c.ID, c.Provider = "openai-compatibility:openai-compatibility:00000000000d", "openai-compatibility"
+			c.Attributes["source"] = "config:openai-compatibility[00000000000d]"
+		}),
 	}
 	for name, candidate := range out {
 		r := routing(t, f.input())

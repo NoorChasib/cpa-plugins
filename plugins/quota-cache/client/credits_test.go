@@ -30,6 +30,7 @@ func TestCreditConstants(t *testing.T) {
 		{"CreditLevelLowAtOrBelow", CreditLevelLowAtOrBelow, 40},
 		{"CreditSentenceStale", CreditSentenceStale, "Quota Cache has not saved its meter recently, so recent spend may be missing."},
 		{"CreditSentenceMeterGap", CreditSentenceMeterGap, "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter a Console reading to correct it."},
+		{"CreditSentenceOpenAIMeterGap", CreditSentenceOpenAIMeterGap, "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter an API Platform reading to correct it."},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
@@ -283,6 +284,70 @@ func TestCreditsAtRules(t *testing.T) {
 	s.APICredits = nil
 	if got := CreditsAt(s, creditT.Add(100*time.Hour), DefaultCreditStaleAfter); got == s || encoded(t, got) != encoded(t, s) {
 		t.Errorf("no api_credits: %s", encoded(t, got))
+	}
+}
+
+// A meter gap's sentence names the reading that corrects it: a Console reading
+// in the Claude document, an API Platform reading in the OpenAI one. The
+// stale sentence names neither and is the same in both, and a gap that does
+// not land first leaves the published sentence alone in both.
+func TestCreditsAtUsesTheProvidersGapSentence(t *testing.T) {
+	for provider, want := range map[string]string{"": CreditSentenceMeterGap, ProviderOpenAIAPI: CreditSentenceOpenAIMeterGap} {
+		s := sampleState()
+		s.APICredits.Provider = provider
+		s.APICredits.Meter.StoppedAtEpoch, s.APICredits.Meter.StopReason = epochOf(creditT), MeterStopQuiesce
+		got := creditsAt(t, s, creditT.Add(MeterBriefGap), 0)
+		if got.Provider != provider {
+			t.Errorf("provider %q became %q", provider, got.Provider)
+		}
+		if a := got.Accounts[0]; !slices.Equal(a.DataIssues, []string{CreditIssueMeterGap}) || a.Issue != want {
+			t.Errorf("provider %q, gap first: %s", provider, encoded(t, a))
+		}
+		if b := got.Accounts[1]; !slices.Equal(b.DataIssues, []string{CreditIssueMeterStartedLate, CreditIssueMeterGap}) || b.Issue != "sentence for meterStartedLate" {
+			t.Errorf("provider %q, gap not first: %s", provider, encoded(t, b))
+		}
+		if a := creditsAt(t, s, creditT.Add(time.Hour), DefaultCreditStaleAfter).Accounts[0]; a.Issue != CreditSentenceStale {
+			t.Errorf("provider %q, stale and gap: %s", provider, encoded(t, a))
+		}
+	}
+	if strings.Replace(CreditSentenceOpenAIMeterGap, "an API Platform reading", "a Console reading", 1) != CreditSentenceMeterGap {
+		t.Error("the two gap sentences differ in more than the reading they name")
+	}
+}
+
+// The Claude credit document has never named a provider, so it still names
+// none; the OpenAI one names its provider first. Both load back as written,
+// and a reader's judgement keeps the provider.
+func TestCreditDocumentProviderIsOmittedForClaude(t *testing.T) {
+	raw, err := json.Marshal(fullState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := keysOf(t, raw, "api_credits"); slices.Contains(keys, "provider") || keys[0] != "title" {
+		t.Errorf("the Claude document's keys = %v", keys)
+	}
+	if bytes.Contains(raw, []byte(`"provider"`)) {
+		t.Errorf("the Claude state names a provider: %s", raw)
+	}
+
+	s := fullState()
+	s.APICredits.Provider = ProviderOpenAIAPI
+	raw, err = json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(keysOf(t, raw, "api_credits"), " "); got != "provider title currency pricing meter editing pool accounts unlinked orphans" {
+		t.Errorf("the OpenAI document's keys = %s", got)
+	}
+	if !bytes.Contains(raw, []byte(`"api_credits":{"provider":"openai-api","title":`)) {
+		t.Errorf("the OpenAI document does not begin with its provider: %s", raw)
+	}
+	loaded, err := LoadCredits(writeCredits(t, raw))
+	if err != nil || loaded.APICredits.Provider != ProviderOpenAIAPI || encoded(t, loaded) != string(raw) {
+		t.Fatalf("round trip: %v\n got %s\nwant %s", err, encoded(t, loaded), raw)
+	}
+	if got := CreditsAt(loaded, creditT.Add(time.Hour), DefaultCreditStaleAfter); got.APICredits.Provider != ProviderOpenAIAPI {
+		t.Errorf("CreditsAt dropped the provider: %q", got.APICredits.Provider)
 	}
 }
 

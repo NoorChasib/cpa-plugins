@@ -93,7 +93,7 @@ type Status struct {
 // be read.
 func (s Status) Editable() bool { return s.State == client.CreditSettingsOK }
 
-// Store is the settings file beside one snapshot.
+// Store is one provider's settings file beside one snapshot.
 //
 // Its mutex is a leaf lock: nothing else is acquired while it is held, and no
 // caller may publish, log or call into the host while holding it. Under it
@@ -101,6 +101,9 @@ func (s Status) Editable() bool { return s.State == client.CreditSettingsOK }
 // it: Current and Status return what the last commit or Sync swapped in.
 type Store struct {
 	dir, path string
+	// provider gives the file's load rules, which every read and every
+	// commit applies.
+	provider *Provider
 
 	mu     sync.Mutex
 	writes writeLog
@@ -141,17 +144,22 @@ type settingsFile struct {
 	retry bool
 }
 
-// Open loads the settings beside the snapshot at snapshotPath. It never fails
-// for the file's sake: a missing file is empty and editable, and one that
-// cannot be read leaves an unreadable store that applies nothing and saves
-// nothing, and never overwrites what is there. It writes nothing.
-func Open(snapshotPath string) *Store {
+// Open loads the Claude settings beside the snapshot at snapshotPath:
+// OpenFor(Claude, snapshotPath).
+func Open(snapshotPath string) *Store { return OpenFor(Claude, snapshotPath) }
+
+// OpenFor loads p's settings beside the snapshot at snapshotPath. It never
+// fails for the file's sake: a missing file is empty and editable, and one
+// that cannot be read leaves an unreadable store that applies nothing and
+// saves nothing, and never overwrites what is there. It writes nothing.
+func OpenFor(p *Provider, snapshotPath string) *Store {
 	s := &Store{
-		dir:     filepath.Dir(snapshotPath),
-		path:    FilePath(snapshotPath),
-		write:   writeFile,
-		syncDir: syncDirectory,
-		read:    readStamped,
+		dir:      filepath.Dir(snapshotPath),
+		path:     p.settingsPath(snapshotPath),
+		provider: p,
+		write:    writeFile,
+		syncDir:  syncDirectory,
+		read:     readStamped,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,9 +168,12 @@ func Open(snapshotPath string) *Store {
 	return s
 }
 
-// Load reads one settings file: empty when there is none, and Unreadable when
-// it fails a shape rule.
-func Load(path string) Values {
+// Load reads one Claude settings file: LoadFor(Claude, path).
+func Load(path string) Values { return LoadFor(Claude, path) }
+
+// LoadFor reads one of p's settings files: empty when there is none, and
+// Unreadable when it fails a shape rule.
+func LoadFor(p *Provider, path string) Values {
 	raw, stamp, ok := readRegular(path, MaxBytes)
 	switch {
 	case !stamp.exists:
@@ -170,7 +181,7 @@ func Load(path string) Values {
 	case !ok:
 		return unreadable()
 	}
-	v, err := decode(raw)
+	v, err := decodeFor(p, raw)
 	if err != nil {
 		return unreadable()
 	}
@@ -186,7 +197,7 @@ func (s *Store) readFile() settingsFile {
 	}
 	raw, settled, ok := s.read(s.path, stamp, MaxBytes)
 	f.retry = !settled
-	v, err := decode(raw)
+	v, err := decodeFor(s.provider, raw)
 	if !ok || err != nil {
 		f.values = unreadable()
 		return f
@@ -408,10 +419,10 @@ func (s *Store) Apply(b Batch, meter *client.APIMeter, now time.Time) (Result, e
 		case sameReading(stored.Reading, r):
 			credit.Reading = stored.Reading
 		default:
-			if org, ok := client.NormalizeOrganizationID(item.OrganizationID); !ok || org != item.OrganizationID {
+			if org, ok := s.provider.normalizeOrganization(item.OrganizationID); !ok || org != item.OrganizationID {
 				return Result{}, &NotEditableError{IDs: []string{item.ID}}
 			}
-			reading, ok := newReading(item, meter, now)
+			reading, ok := s.provider.newReading(item, meter, now)
 			if !ok {
 				return Result{}, &FieldError{Code: CodeReadingTime, ID: item.ID, Field: "reading.at"}
 			}
@@ -481,7 +492,7 @@ func (w *writeLog) allows(now time.Time) bool {
 // those hours, so the baseline from the hours it has is complete; one still
 // counting without saving gives a baseline short of the truth, which
 // overstates the spend since the reading, the safe direction.
-func newReading(item APICreditItem, meter *client.APIMeter, now time.Time) (*Reading, bool) {
+func (p *Provider) newReading(item APICreditItem, meter *client.APIMeter, now time.Time) (*Reading, bool) {
 	at, _ := parseStamp(item.Reading.At)
 	baseline := Baseline{DayStart: client.MeterDayStart(at), Until: client.MeterHourStart(at), Usage: []client.MeterUsage{}}
 	if meter != nil {
@@ -491,7 +502,7 @@ func newReading(item APICreditItem, meter *client.APIMeter, now time.Time) (*Rea
 				return nil, false
 			}
 			usage, _ := org.UsageInHours(baseline.DayStart, baseline.Until, meter.FlushedAt)
-			baseline.Usage = capBaseline(loadable(usage))
+			baseline.Usage = capBaseline(p.loadable(usage))
 		}
 	}
 	return &Reading{
@@ -503,20 +514,19 @@ func newReading(item APICreditItem, meter *client.APIMeter, now time.Time) (*Rea
 	}, true
 }
 
-// loadable puts the meter's usage in the form the settings file's load rules
+// loadable puts the meter's usage in the form p's settings file's load rules
 // accept. An entry whose model is not a NormalizeMeterModel result, or whose
-// prompt class this build does not know, such as one a newer meter adds, is
-// summed under client.MeterOtherModel, which is never priced: the baseline
-// then reads low and the spend since the reading high, the safe direction.
-// Stored as it came, it would make the file fail those rules at the next
-// open, and every value in it would stop applying.
-func loadable(usage []client.MeterUsage) []client.MeterUsage {
+// prompt class or service tier p does not know, such as one a newer meter
+// adds, is summed under client.MeterOtherModel, with neither, which is never
+// priced: the baseline then reads low and the spend since the reading high,
+// the safe direction. Stored as it came, it would make the file fail those
+// rules at the next open, and every value in it would stop applying.
+func (p *Provider) loadable(usage []client.MeterUsage) []client.MeterUsage {
 	out := make([]client.MeterUsage, 0, len(usage))
 	for _, u := range usage {
 		knownModel := u.Model == client.MeterOtherModel || client.NormalizeMeterModel(u.Model, "") == u.Model
-		knownPrompt := u.Prompt == "" || u.Prompt == client.MeterPromptOver100K
-		if !knownModel || !knownPrompt {
-			u.Model, u.Prompt = client.MeterOtherModel, ""
+		if !knownModel || !p.prompts[u.Prompt] || !p.tiers[u.Tier] {
+			u.Model, u.Prompt, u.Tier = client.MeterOtherModel, "", ""
 		}
 		out = client.MergeMeterUsage(out, u)
 	}
@@ -524,7 +534,7 @@ func loadable(usage []client.MeterUsage) []client.MeterUsage {
 }
 
 // capBaseline keeps the MaxBaseline-1 entries with the most tokens and sums
-// the rest under client.MeterOtherModel.
+// the rest under client.MeterOtherModel, which has no prompt class or tier.
 func capBaseline(usage []client.MeterUsage) []client.MeterUsage {
 	if len(usage) <= MaxBaseline {
 		return usage
@@ -534,7 +544,7 @@ func capBaseline(usage []client.MeterUsage) []client.MeterUsage {
 	kept := []client.MeterUsage{}
 	for i, u := range byTokens {
 		if i >= MaxBaseline-1 {
-			u.Model, u.Prompt = client.MeterOtherModel, ""
+			u.Model, u.Prompt, u.Tier = client.MeterOtherModel, "", ""
 		}
 		kept = client.MergeMeterUsage(kept, u)
 	}
@@ -615,7 +625,7 @@ func (s *Store) fit(next *Values, b Batch) ([]byte, error) {
 // refused instead.
 func (s *Store) commit(raw []byte) error {
 	return commitFile(s.path, raw, func(raw []byte) error {
-		_, err := decode(raw)
+		_, err := decodeFor(s.provider, raw)
 		return err
 	}, s.write, s.syncDir)
 }

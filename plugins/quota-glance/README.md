@@ -36,6 +36,9 @@ Spending the API credit that refills soonest first is Reset Priority's
   is absent and nothing else changes. Against an older Quota Cache the card
   lists each organization with no figures and says to update Quota Cache, and
   renewal dates are reported or estimated only.
+- Quota Cache **0.6.0 or newer**, with an OpenAI API organization added on
+  its page, for the [Monthly OpenAI API Credit](#openai-api-credits). Without
+  one there is no OpenAI API section and nothing else changes.
 - Quota Cache **0.2.0 or newer**, running, for the poll a spent
   [banked reset](#banked-resets) asks for, organizations or not. Against an
   older or stopped Quota Cache the card updates at its next scheduled poll,
@@ -438,6 +441,29 @@ Quota Glance is updated, save nothing in its editor: while only some
 organizations are added, Quota Glance 0.7.2 offers **Remove** for the others'
 saved values. Quota Glance 0.7's `settings.json` stays in `data-dir`, unread;
 rolling back to 0.7.2 shows its values again.
+
+## OpenAI API credits
+
+The **Monthly OpenAI API Credit** card estimates how much is left of the
+monthly API credit a ChatGPT Pro or Business plan grants one OpenAI API
+organization. It needs Quota Cache **0.6.0 or newer** with the organization
+added under **OpenAI organizations** on its page, as described in
+[its README](../quota-cache/README.md#openai-api-credits-optional). Neither
+plugin asks OpenAI anything and neither holds an OpenAI key.
+
+The card has a section of its own, **OpenAI API**, below the quota providers.
+It is never under Codex: Codex's section is ChatGPT sign-ins, and OpenAI does
+not cover Codex usage through API keys with this credit. It reads like the
+Claude card, in OpenAI's words. Quota Cache counts the openai-compatibility
+traffic CPA serves whose responses name an OpenAI organization, prices it at
+OpenAI's list prices, and publishes the result beside its snapshot; Quota
+Glance shows it read-only. Each organization's monthly credit, its refill date
+and its **API Platform readings** are edited on Quota Cache's page, and the
+card's foot links there as the Claude card's does. With no OpenAI organization
+listed, or against a Quota Cache older than 0.6.0, there is no section and
+`openaiApiCredits` is absent from the document. See
+[docs/summary-contract.md](docs/summary-contract.md#api-credits--openai-api-organizations)
+for the fields.
 
 ## The dashboard
 

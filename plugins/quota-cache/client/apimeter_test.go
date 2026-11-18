@@ -351,6 +351,46 @@ func TestMergeMeterUsage(t *testing.T) {
 	}
 }
 
+// The OpenAI meter keys usage by service tier too: one model and prompt class
+// at two tiers is two entries, ordered after the prompt class, with Standard
+// (no tier, where every Claude entry is) first. Summing a cycle keeps them
+// apart.
+func TestMergeMeterUsageKeysByTier(t *testing.T) {
+	var usage []MeterUsage
+	for _, u := range []MeterUsage{
+		{Model: "gpt-6-sol", Tier: MeterTierUltrafast, Requests: 1, Input: 1},
+		{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Requests: 1, Input: 300000},
+		{Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 1, Input: 2},
+		{Model: "gpt-6-sol", Requests: 1, Input: 4},
+		{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Tier: MeterTierFast, Failed: 1, Input: 280000},
+		{Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 2, Output: 8, CacheRead: 1, CacheWrite: 1},
+		{Model: "gpt-6-sol", Tier: MeterTierUnknown, Requests: 1, Input: 16},
+		{Model: "gpt-5.5", Tier: MeterTierFast, Requests: 1, Input: 32},
+	} {
+		usage = MergeMeterUsage(usage, u)
+	}
+	want := []MeterUsage{
+		{Model: "gpt-5.5", Tier: MeterTierFast, Requests: 1, Input: 32},
+		{Model: "gpt-6-sol", Requests: 1, Input: 4},
+		{Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 3, Input: 2, Output: 8, CacheRead: 1, CacheWrite: 1},
+		{Model: "gpt-6-sol", Tier: MeterTierUltrafast, Requests: 1, Input: 1},
+		{Model: "gpt-6-sol", Tier: MeterTierUnknown, Requests: 1, Input: 16},
+		{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Requests: 1, Input: 300000},
+		{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Tier: MeterTierFast, Failed: 1, Input: 280000},
+	}
+	if !slices.Equal(usage, want) {
+		t.Fatalf("usage = %+v\nwant %+v", usage, want)
+	}
+
+	org := MeterOrganization{Days: []MeterBucket{
+		{Start: utc(2026, 10, 1, 0, 0), Usage: []MeterUsage{{Model: "gpt-6-sol", Requests: 1}, {Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 2}}},
+		{Start: utc(2026, 10, 2, 0, 0), Usage: []MeterUsage{{Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 4}}},
+	}}
+	if got, want := org.UsageFromDay(utc(2026, 10, 1, 0, 0)), []MeterUsage{{Model: "gpt-6-sol", Requests: 1}, {Model: "gpt-6-sol", Tier: MeterTierFlex, Requests: 6}}; !slices.Equal(got, want) {
+		t.Fatalf("cycle usage = %+v\nwant %+v", got, want)
+	}
+}
+
 // A cycle's usage is every day bucket from its start, summed per model and
 // prompt class; the organization's own buckets are left as they were.
 func TestUsageFromDay(t *testing.T) {
@@ -627,6 +667,149 @@ func TestMaximalMeterFitsMaxMeterBytes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded, meter) {
 		t.Fatal("a maximal meter did not survive the round trip")
+	}
+}
+
+// A usage entry's tier is written after its prompt class, and only when it has
+// one, so a Claude entry, or an OpenAI one at Standard, encodes as it always
+// has. An OpenAI meter, with no auth IDs and nothing foreign or unattributed,
+// writes only the keys it uses, keeps its organizations' case, and loads back
+// whole.
+func TestOpenAIMeterUsageWireNames(t *testing.T) {
+	for _, tc := range []struct {
+		usage MeterUsage
+		want  string
+	}{
+		{MeterUsage{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Tier: MeterTierFlex, Requests: 1, Failed: 2, Input: 3, Output: 4, CacheRead: 5, CacheWrite: 6},
+			`{"model":"gpt-6-sol","prompt":"over_272k","tier":"flex","requests":1,"failed":2,"input":3,"output":4,"cache_read":5,"cache_write":6}`},
+		{MeterUsage{Model: "gpt-6-sol", Tier: MeterTierUltrafast, Requests: 1}, `{"model":"gpt-6-sol","tier":"ultrafast","requests":1}`},
+		{MeterUsage{Model: "gpt-6-sol", Requests: 1}, `{"model":"gpt-6-sol","requests":1}`},
+		{MeterUsage{Model: "claude-haiku-5-5", Prompt: MeterPromptOver100K, Requests: 1}, `{"model":"claude-haiku-5-5","prompt":"over_100k","requests":1}`},
+	} {
+		if raw, err := json.Marshal(tc.usage); err != nil || string(raw) != tc.want {
+			t.Errorf("usage = %s, %v; want %s", raw, err, tc.want)
+		}
+	}
+
+	start := utc(2026, 10, 9, 8, 0)
+	usage := []MeterUsage{
+		{Model: "gpt-6-sol", Requests: 1, Input: 10},
+		{Model: "gpt-6-sol", Prompt: MeterPromptOver272K, Tier: MeterTierFast, Requests: 1, Input: 300000},
+	}
+	meter := &APIMeter{
+		Schema: MeterSchema, Since: start, StartedAt: start, FlushedAt: start, Received: 3, Counted: 2, Gaps: []MeterGap{},
+		Organizations: map[string]MeterOrganization{"user-AbCdEfGhIjKlMnOpQrStUvWx": {Since: start,
+			Days: []MeterBucket{{Start: utc(2026, 10, 9, 0, 0), Usage: usage}}, Hours: []MeterBucket{{Start: start, Usage: usage}}}},
+		Unlinked: []MeterUnlinked{{OrganizationID: "acme-x1wegt", FirstSeenAt: start, LastSeenAt: start, Requests: 1}},
+		Auths:    map[string]MeterAuth{"fedcba9876543210": {OrganizationID: "user-AbCdEfGhIjKlMnOpQrStUvWx", SeenAt: start}},
+		AuthIDs:  map[string]MeterAuthID{},
+	}
+	raw, err := json.Marshal(meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := `[{"model":"gpt-6-sol","requests":1,"input":10},{"model":"gpt-6-sol","prompt":"over_272k","tier":"fast","requests":1,"input":300000}]`
+	want := `{"schema":1,"since":"2026-10-09T08:00:00Z","started_at":"2026-10-09T08:00:00Z","flushed_at":"2026-10-09T08:00:00Z",` +
+		`"received":3,"counted":2,"gaps":[],"organizations":{"user-AbCdEfGhIjKlMnOpQrStUvWx":{"since":"2026-10-09T08:00:00Z",` +
+		`"days":[{"start":"2026-10-09T00:00:00Z","usage":` + entries + `}],"hours":[{"start":"2026-10-09T08:00:00Z","usage":` + entries + `}]}},` +
+		`"unlinked":[{"organization_id":"acme-x1wegt","first_seen_at":"2026-10-09T08:00:00Z","last_seen_at":"2026-10-09T08:00:00Z","requests":1}],` +
+		`"auths":{"fedcba9876543210":{"organization_id":"user-AbCdEfGhIjKlMnOpQrStUvWx","seen_at":"2026-10-09T08:00:00Z"}},"auth_ids":{}}`
+	if string(raw) != want {
+		t.Fatalf("meter =\n%s\nwant\n%s", raw, want)
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.openai-meter.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, err := LoadMeter(path); err != nil || !reflect.DeepEqual(loaded, meter) {
+		t.Fatalf("round trip = %+v, %v", loaded, err)
+	}
+}
+
+// An OpenAI meter at every cap, with the longest slugs and model names, a tier
+// and the long-context class on every entry, and every count at its maximum,
+// still fits MaxMeterBytes beside Claude's, and LoadMeter reads it back whole.
+// It records no auth IDs, nothing foreign or unattributed and no Claude Code
+// refusal, which only the Claude meter does.
+func TestMaximalOpenAIMeterFitsMaxMeterBytes(t *testing.T) {
+	at := utc(2026, 10, 9, 12, 0)
+	most := uint64(math.MaxUint64)
+	stamp := func() *time.Time { v := at; return &v }
+	slug := func(i int) string { return fmt.Sprintf("User-%059d", i) }
+	meter := &APIMeter{
+		Schema: MeterSchema, Since: at, StartedAt: at, FlushedAt: at,
+		StoppedAt: stamp(), StopReason: MeterStopShutdown, Restarts: most,
+		Received: most, Counted: most,
+		Rejected: most, LastRejectedAt: stamp(), Dropped: most, LastDroppedAt: stamp(),
+		Gaps: []MeterGap{}, Organizations: map[string]MeterOrganization{}, Unlinked: []MeterUnlinked{}, Auths: map[string]MeterAuth{},
+		AuthIDs: map[string]MeterAuthID{},
+	}
+	for range MaxMeterGaps {
+		meter.Gaps = append(meter.Gaps, MeterGap{From: at, To: at, Reason: MeterGapUncleanStop})
+	}
+	for i := range MaxMeterUnlinked {
+		meter.Unlinked = append(meter.Unlinked, MeterUnlinked{OrganizationID: slug(0x1000 + i), FirstSeenAt: at, LastSeenAt: at, Requests: most})
+	}
+	for i := range MaxMeterAuths {
+		meter.Auths[fmt.Sprintf("%064x", i)] = MeterAuth{OrganizationID: slug(i + 1), SeenAt: at}
+	}
+
+	// As in the Claude meter: one entry in every bucket, and the entries
+	// left over one more to each bucket until they run out.
+	spare := MaxMeterUsageEntries - MaxMeterOrganizations*(MeterDays+1+MeterHours+1)
+	entries := 0
+	bucket := func(start time.Time) MeterBucket {
+		n := 1
+		if spare > 0 {
+			n, spare = 2, spare-1
+		}
+		b := MeterBucket{Start: start}
+		for k := range n {
+			b.Usage = append(b.Usage, MeterUsage{Model: fmt.Sprintf("gpt-%060d", k), Prompt: MeterPromptOver272K, Tier: MeterTierUltrafast,
+				Requests: most, Failed: most, Input: most, Output: most, CacheRead: most, CacheWrite: most})
+		}
+		entries += n
+		return b
+	}
+	for i := range MaxMeterOrganizations {
+		org := MeterOrganization{Since: at, UnlinkedAt: stamp(), LastSeenAt: stamp(), LastSuccessAt: stamp(),
+			Refusals: most, LastRefusalAt: stamp(), LastOverflowAt: stamp()}
+		for d := MeterDays; d >= 0; d-- {
+			org.Days = append(org.Days, bucket(MeterDayStart(at).AddDate(0, 0, -d)))
+		}
+		for h := MeterHours; h >= 0; h-- {
+			org.Hours = append(org.Hours, bucket(MeterHourStart(at).Add(-time.Duration(h)*time.Hour)))
+		}
+		meter.Organizations[slug(i+1)] = org
+	}
+	if entries != MaxMeterUsageEntries || spare != 0 || len(meter.Organizations) != MaxMeterOrganizations || len(meter.Auths) != MaxMeterAuths {
+		t.Fatalf("not a maximal meter: %d entries, %d spare, %d organizations, %d auths", entries, spare, len(meter.Organizations), len(meter.Auths))
+	}
+	if s, ok := NormalizeOpenAIOrganization(slug(1)); !ok || s != slug(1) || len(s) != 64 {
+		t.Fatalf("slug %q is not a 64-byte organization the meter keeps", slug(1))
+	}
+	if model := meter.Organizations[slug(1)].Days[0].Usage[0].Model; len(model) != 64 || NormalizeMeterModel(model, "") != model {
+		t.Fatalf("model %q is not a 64-character name the meter keeps", model)
+	}
+
+	raw, err := json.Marshal(meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > MaxMeterBytes {
+		t.Fatalf("a maximal OpenAI meter is %d bytes, over MaxMeterBytes (%d)", len(raw), MaxMeterBytes)
+	}
+	t.Logf("a maximal OpenAI meter is %d bytes of %d", len(raw), MaxMeterBytes)
+	path := filepath.Join(t.TempDir(), "snapshot.openai-meter.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadMeter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, meter) {
+		t.Fatal("a maximal OpenAI meter did not survive the round trip")
 	}
 }
 

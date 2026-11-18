@@ -49,6 +49,20 @@ func fixtureCredits(t *testing.T, name string) *qc.CreditState {
 	return state
 }
 
+// fixtureOpenAICredits is Quota Cache's published OpenAI API credit state for
+// a snapshot fixture: its committed golden output for the OpenAI lane, read
+// where Quota Cache keeps it, as fixtureCredits reads the Claude one. Only
+// degraded-states has one. Its meter is Quota Cache's own fixture, and this
+// module keeps no copy: nothing here reads the OpenAI meter.
+func fixtureOpenAICredits(t *testing.T, name string) *qc.CreditState {
+	t.Helper()
+	state, err := qc.LoadCredits(filepath.Join(quotaCacheTestdata, "golden", name+".openai-credits.json"))
+	if err != nil {
+		t.Fatalf("Quota Cache's OpenAI credit state for %s: %v", name, err)
+	}
+	return state
+}
+
 // The credit states above are Quota Cache's output for its copies of these
 // fixtures, so each snapshot and meter here must be byte for byte its copy.
 func TestSnapshotFixturesMatchQuotaCache(t *testing.T) {
@@ -1048,6 +1062,7 @@ func buildDegraded(t *testing.T) Document {
 		Redeemable:       true,
 		BalanceWarnBelow: 5,
 		Credits:          fixtureCredits(t, "degraded-states"),
+		OpenAICredits:    fixtureOpenAICredits(t, "degraded-states"),
 	}, at(t, 0))
 }
 

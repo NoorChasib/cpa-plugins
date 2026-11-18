@@ -58,7 +58,7 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.10.0"
+var Version = "0.11.0"
 
 // rawManagementSchema is the first RPC schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -404,11 +404,12 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 
 	p.rebuildWarned.Store(false)
 	watcher, err := watch.Start(watch.Options{
-		Path:        cachePath,
-		CreditsPath: qc.CreditsPath(cachePath),
-		WarmupPath:  qc.WarmupPath(cachePath),
-		OnChange:    p.Rebuild,
-		Logf:        func(message string) { p.log("warn", message, nil) },
+		Path:              cachePath,
+		CreditsPath:       qc.CreditsPath(cachePath),
+		OpenAICreditsPath: qc.OpenAICreditsPath(cachePath),
+		WarmupPath:        qc.WarmupPath(cachePath),
+		OnChange:          p.Rebuild,
+		Logf:              func(message string) { p.log("warn", message, nil) },
 	})
 	if err != nil {
 		return protocol.Registration{}, err
@@ -524,9 +525,11 @@ func (p *Plugin) rebuild() {
 		Redeemable:   settings.allowRedeem,
 		// Read on every rebuild, so a threshold changed in the panel
 		// applies at the next one rather than at the next snapshot write.
-		BalanceWarnBelow: settings.warnBelow,
-		Credits:          result.Credits,
-		CreditsError:     result.CreditsError,
+		BalanceWarnBelow:   settings.warnBelow,
+		Credits:            result.Credits,
+		CreditsError:       result.CreditsError,
+		OpenAICredits:      result.OpenAICredits,
+		OpenAICreditsError: result.OpenAICreditsError,
 	}
 
 	p.stateMu.Lock()
@@ -586,8 +589,10 @@ func (p *Plugin) rebuild() {
 		SnapshotNextRequest: p.nextReq,
 		BuiltAt:             p.builtAt,
 		LastError:           p.lastError,
-		Meter:               meterHealthOf(settings.cachePath, result),
-		CreditState:         creditStateHealthOf(settings.cachePath, result),
+		Meter:               meterHealthOf(qc.MeterPath(settings.cachePath), result.Credits, result.CreditsError),
+		CreditState:         creditStateHealthOf(qc.CreditsPath(settings.cachePath), result.Credits, result.CreditsError),
+		OpenAIMeter:         meterHealthOf(qc.OpenAIMeterPath(settings.cachePath), result.OpenAICredits, result.OpenAICreditsError),
+		OpenAICreditState:   creditStateHealthOf(qc.OpenAICreditsPath(settings.cachePath), result.OpenAICredits, result.OpenAICreditsError),
 	}
 	if watcher != nil {
 		state := watcher.State()
@@ -601,17 +606,18 @@ func (p *Plugin) rebuild() {
 	served.Publish(doc, health)
 }
 
-// meterHealthOf is quota-cache's meter as its published state describes it:
-// when the meter last saved, from the card's meter or, with no organization
-// listed, the state's inputs; and why there is none. Without a usable state
-// nothing is known of the meter, which is reported missing unless the state
-// itself could not be read.
-func meterHealthOf(cachePath string, result source.Result) api.MeterHealth {
-	health := api.MeterHealth{Path: qc.MeterPath(cachePath)}
-	state := result.Credits
-	if result.CreditsError != "" || state == nil {
+// meterHealthOf is one of quota-cache's meters, at path, as the credit state
+// it feeds describes it: when the meter last saved, from the card's meter or,
+// with no organization listed, the state's inputs; and why there is none.
+// stateError is the state's source error. Without a usable state nothing is
+// known of the meter, which is reported missing unless the state itself could
+// not be read. The same for the Claude and the OpenAI API meter, each from
+// its own state.
+func meterHealthOf(path string, state *qc.CreditState, stateError string) api.MeterHealth {
+	health := api.MeterHealth{Path: path}
+	if stateError != "" || state == nil {
 		health.LastError = qc.CreditMeterErrorMissing
-		if result.CreditsError == aggregate.CreditsUnreadable {
+		if stateError == aggregate.CreditsUnreadable {
 			health.LastError = qc.CreditMeterErrorUnreadable
 		}
 		return health
@@ -626,11 +632,11 @@ func meterHealthOf(cachePath string, result source.Result) api.MeterHealth {
 	return health
 }
 
-// creditStateHealthOf is quota-cache's published credit state as /health
-// reports it. An abandoned state's fields still show, to say how old it is.
-func creditStateHealthOf(cachePath string, result source.Result) api.CreditStateHealth {
-	health := api.CreditStateHealth{Path: qc.CreditsPath(cachePath), LastError: result.CreditsError}
-	state := result.Credits
+// creditStateHealthOf is one of quota-cache's published credit states, at
+// path, as /health reports it, with stateError its source error. An abandoned
+// state's fields still show, to say how old it is.
+func creditStateHealthOf(path string, state *qc.CreditState, stateError string) api.CreditStateHealth {
+	health := api.CreditStateHealth{Path: path, LastError: stateError}
 	if state == nil {
 		return health
 	}

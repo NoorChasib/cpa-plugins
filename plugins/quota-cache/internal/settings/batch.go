@@ -11,11 +11,14 @@ import (
 )
 
 // The kinds of request the save route takes: one batch per card, and the
-// organizations card's batch.
+// organizations card's batch. The OpenAI cards' batches have exactly the
+// shapes and bounds of their Claude twins.
 const (
-	KindAPICredits    = "apiCredits"
-	KindRenewals      = "renewals"
-	KindOrganizations = "organizations"
+	KindAPICredits          = "apiCredits"
+	KindRenewals            = "renewals"
+	KindOrganizations       = "organizations"
+	KindOpenAIAPICredits    = "openaiApiCredits"
+	KindOpenAIOrganizations = "openaiOrganizations"
 )
 
 // Batch bounds: one card's rows. Sixteen API credit rows is every
@@ -70,7 +73,7 @@ type APICreditItem struct {
 	OrganizationID string
 }
 
-// ReadingInput is a Console reading as the page sends it.
+// ReadingInput is a Console or API Platform reading as the page sends it.
 type ReadingInput struct {
 	RemainingUSD string
 	At           string
@@ -187,7 +190,7 @@ func ParseBatch(raw []byte) (Batch, error) {
 		return true
 	}
 	switch b.Kind {
-	case KindAPICredits:
+	case KindAPICredits, KindOpenAIAPICredits:
 		var items []struct {
 			ID           required     `json:"id"`
 			BaseRevision required     `json:"baseRevision"`

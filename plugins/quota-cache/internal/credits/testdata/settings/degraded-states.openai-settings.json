@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "revision": 5,
+  "apiCredits": {
+    "oai-c3a38df85b55": {
+      "monthlyUsd": "100",
+      "rev": 2,
+      "updatedAt": "2026-08-20T09:05:00Z"
+    },
+    "oai-dd79fc440924": {
+      "monthlyUsd": "200",
+      "renews": "2026-08-28",
+      "rev": 4,
+      "updatedAt": "2026-08-28T09:00:00Z"
+    },
+    "oai-ed5b51206e7d": {
+      "monthlyUsd": "260",
+      "renews": "2026-09-01",
+      "rev": 5,
+      "updatedAt": "2026-09-01T10:00:00Z"
+    }
+  },
+  "renewals": {}
+}

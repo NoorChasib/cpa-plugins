@@ -24,6 +24,11 @@ import (
 // LoadCredits, CreditsAt), so a consumer reads an organization's credit there
 // and never prices the meter itself, and every consumer shows the same
 // figures. Every time in a meter is UTC, truncated to the second.
+//
+// The OpenAI API meter (OpenAIMeterPath) is a second file of the same schema
+// and limits, counting OpenAI API organizations named as
+// NormalizeOpenAIOrganization returns them. Its usage entries may carry a
+// Tier; its Foreign and Unattributed are always 0, and it records no AuthIDs.
 
 // Meter file limits. They bound the file to MaxMeterBytes whatever traffic
 // CPA carries; quota-cache enforces them and a reader may rely on them.
@@ -32,7 +37,7 @@ const (
 	MeterDays              = 40      // daily buckets: today and the 40 days before
 	MeterHours             = 72      // hourly buckets: this hour and the 72 before
 	MaxMeterOrganizations  = 32      // 16 linked + 16 dormant
-	MaxMeterUsagePerBucket = 16      // distinct (Model, Prompt) pairs in one bucket; past it, usage goes to MeterOtherModel
+	MaxMeterUsagePerBucket = 16      // distinct (Model, Prompt, Tier) keys in one bucket; past it, usage goes to MeterOtherModel
 	MaxMeterUsageEntries   = 6000    // usage entries across every bucket of every organization
 	MaxMeterUnlinked       = 8       // unlinked organizations listed
 	MaxMeterAuths          = 64      // auth indexes remembered
@@ -64,7 +69,9 @@ const (
 	// was removed from quota-cache's page, or whose organizations file became
 	// unreadable. quota-cache 0.1.x wrote it when claude-api-credits was left
 	// with no items. A quota-cache that starts with no organization opens no
-	// meter, so the file keeps the reason its last run wrote.
+	// meter, so the file keeps the reason its last run wrote. The OpenAI meter
+	// never records it: with no OpenAI organization listed it keeps running,
+	// noting the organizations it sees.
 	MeterStopNoItems = "no_items"
 	MeterStopFailed  = "failed" // the meter stopped itself after an internal error
 	// MeterGapUncleanStop is the reason of a gap whose meter never said it
@@ -168,7 +175,9 @@ type APIMeter struct {
 	// Gaps are the periods the meter was not counting, oldest first, at most
 	// MaxMeterGaps. Never null.
 	Gaps []MeterGap `json:"gaps"`
-	// Organizations is keyed by lower-cased organization id. Never null.
+	// Organizations is keyed by organization id: lower-cased in the Claude
+	// meter, and as NormalizeOpenAIOrganization returns it, case kept, in the
+	// OpenAI meter. Never null.
 	Organizations map[string]MeterOrganization `json:"organizations"`
 	// Unlinked lists organizations that sent traffic no linked item names,
 	// newest LastSeenAt first, at most MaxMeterUnlinked. Never null.
@@ -265,28 +274,32 @@ type MeterOrganization struct {
 
 // MeterBucket is one day's or one hour's usage. A request lands in the day
 // bucket and the hour bucket that contain its completion, under the same
-// (Model, Prompt) key in both, or in neither.
+// (Model, Prompt, Tier) key in both, or in neither.
 type MeterBucket struct {
 	Start time.Time `json:"start"` // 00:00 UTC (days) or hh:00 UTC (hours)
-	// Usage is sorted by Model, then Prompt, and never empty: at most
-	// MaxMeterUsagePerBucket pairs, plus one MeterOtherModel entry for the
-	// pairs that arrived after the bucket held that many.
+	// Usage is sorted by Model, Prompt, then Tier, and never empty: at most
+	// MaxMeterUsagePerBucket keys, plus one MeterOtherModel entry for the
+	// keys that arrived after the bucket held that many.
 	Usage []MeterUsage `json:"usage"`
 }
 
-// MeterUsage is the attempts and tokens of one (Model, Prompt) pair. Every
-// count saturates at math.MaxUint64.
+// MeterUsage is the attempts and tokens of one (Model, Prompt, Tier) key.
+// Every count saturates at math.MaxUint64.
 type MeterUsage struct {
-	Model    string `json:"model"`              // a NormalizeMeterModel result, or MeterOtherModel
-	Prompt   string `json:"prompt,omitempty"`   // "" or MeterPromptOver100K
+	Model  string `json:"model"`            // a NormalizeMeterModel result, or MeterOtherModel
+	Prompt string `json:"prompt,omitempty"` // "", MeterPromptOver100K (Claude) or MeterPromptOver272K (OpenAI)
+	// Tier is OpenAI's service tier: "", MeterTierFlex, MeterTierFast,
+	// MeterTierUltrafast or MeterTierUnknown. Always "" for Claude, so a
+	// Claude entry encodes as it always has.
+	Tier     string `json:"tier,omitempty"`
 	Requests uint64 `json:"requests,omitempty"` // successful attempts
 	Failed   uint64 `json:"failed,omitempty"`   // failed attempts, refusals included
-	// Token counts as Anthropic bills them. Input excludes cache reads and
+	// Token counts as the provider bills them. Input excludes cache reads and
 	// writes; Output includes thinking. A failed attempt's tokens are counted.
 	Input      uint64 `json:"input,omitempty"`
 	Output     uint64 `json:"output,omitempty"`
 	CacheRead  uint64 `json:"cache_read,omitempty"`
-	CacheWrite uint64 `json:"cache_write,omitempty"` // 5-minute and 1-hour writes together
+	CacheWrite uint64 `json:"cache_write,omitempty"` // every write together: Anthropic's 5-minute and 1-hour, OpenAI's 30-minute and 12-hour
 }
 
 // MeterUnlinked is an organization that sent Claude API-key traffic through
@@ -404,10 +417,12 @@ func NormalizeMeterModel(model, responseModel string) string {
 }
 
 // MergeMeterUsage adds u's counts (saturating) into the entry with the same
-// (Model, Prompt), or inserts it in sorted position. No cap: callers cap.
+// (Model, Prompt, Tier), or inserts it in sorted position. No cap: callers
+// cap.
 //
-// into must be sorted by Model, then Prompt, as a bucket's Usage is. Like
-// append, it may change into's backing array, and the result must be used.
+// into must be sorted by Model, Prompt, then Tier, as a bucket's Usage is.
+// Like append, it may change into's backing array, and the result must be
+// used.
 func MergeMeterUsage(into []MeterUsage, u MeterUsage) []MeterUsage {
 	i, found := slices.BinarySearchFunc(into, u, compareMeterUsage)
 	if !found {
@@ -423,11 +438,16 @@ func MergeMeterUsage(into []MeterUsage, u MeterUsage) []MeterUsage {
 	return into
 }
 
+// compareMeterUsage orders by Model, Prompt, then Tier. A Claude entry's Tier
+// is always "", so Claude entries keep the order they always had.
 func compareMeterUsage(a, b MeterUsage) int {
 	if c := strings.Compare(a.Model, b.Model); c != 0 {
 		return c
 	}
-	return strings.Compare(a.Prompt, b.Prompt)
+	if c := strings.Compare(a.Prompt, b.Prompt); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Tier, b.Tier)
 }
 
 func addSaturating(a, b uint64) uint64 {
@@ -438,7 +458,7 @@ func addSaturating(a, b uint64) uint64 {
 }
 
 // UsageFromDay sums every day bucket with Start >= dayStart, sorted by Model,
-// then Prompt. Never nil.
+// Prompt, then Tier. Never nil.
 //
 // With dayStart a cycle's start, which is always 00:00 UTC, this is the
 // cycle's usage exactly, as far as the meter saw it.
@@ -456,7 +476,7 @@ func (o MeterOrganization) UsageFromDay(dayStart time.Time) []MeterUsage {
 }
 
 // UsageInHours sums hour buckets with from <= Start < to, sorted by Model,
-// then Prompt, never nil. covered is false when from is before
+// Prompt, then Tier, never nil. covered is false when from is before
 // MeterHourStart(flushedAt) - MeterHours*time.Hour, or to is after
 // MeterHourStart(flushedAt) + time.Hour: the meter flushed at flushedAt no
 // longer keeps, or does not yet have, every hour of the window.

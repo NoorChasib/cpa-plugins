@@ -298,3 +298,110 @@ func TestCreditLevelsMatchTheRows(t *testing.T) {
 		t.Fatal("Quota Cache names the levels differently")
 	}
 }
+
+// The OpenAI API credit card is Quota Cache's published OpenAI state, judged
+// at now with quota-glance's stale-after and marked read-only exactly as the
+// Claude card is, under its own key. Neither card is built from the other's
+// state, and the published state itself is never changed.
+func TestOpenAICreditsCardIsQuotaCachesStateReadOnly(t *testing.T) {
+	state := fixtureOpenAICredits(t, "degraded-states")
+	before := jsonOf(t, state)
+	now := state.ComputedAt.Add(20 * time.Minute)
+	doc := Build(Input{OpenAICredits: state, StaleAfter: 45 * time.Minute}, now)
+	card := doc.OpenAIAPICredits
+	if card == nil {
+		t.Fatal("openaiApiCredits is absent")
+	}
+	judged := qc.CreditsAt(state, now, 45*time.Minute).APICredits
+	if got, want := jsonOf(t, readOnlyMasked(card, judged)), jsonOf(t, judged); got != want {
+		t.Errorf("the card differs from the published state outside the read-only fields:\n got %s\nwant %s", got, want)
+	}
+	if card.Provider != qc.ProviderOpenAIAPI || card.Title != "Monthly OpenAI API Credit" {
+		t.Errorf("provider %q title %q", card.Provider, card.Title)
+	}
+	if card.Editing != (APICreditEditing{Reason: qc.CreditEditingQuotaCache}) {
+		t.Errorf("editing = %+v", card.Editing)
+	}
+	for _, account := range card.Accounts {
+		if account.Settings.Editable || account.Settings.NotEditableReason != qc.CreditEditingQuotaCache {
+			t.Errorf("%s: editable %v reason %q", account.ID, account.Settings.Editable, account.Settings.NotEditableReason)
+		}
+	}
+	if jsonOf(t, state) != before {
+		t.Error("building the card changed the published state")
+	}
+
+	// The OpenAI state is not the Claude card's, and the Claude state is not
+	// the OpenAI card's.
+	if doc.APICredits != nil {
+		t.Errorf("an OpenAI state alone built a Claude card: %s", jsonOf(t, doc.APICredits))
+	}
+	claude := Input{Snapshot: loadSnapshot(t, "degraded-states.json"), Credits: fixtureCredits(t, "degraded-states"), StaleAfter: 45 * time.Minute}
+	alone := Build(claude, now)
+	if alone.OpenAIAPICredits != nil {
+		t.Errorf("a Claude state alone built an OpenAI card: %s", jsonOf(t, alone.OpenAIAPICredits))
+	}
+	both := claude
+	both.OpenAICredits = state
+	if got, want := jsonOf(t, Build(both, now).APICredits), jsonOf(t, alone.APICredits); got != want {
+		t.Error("the Claude card changed with an OpenAI state beside it")
+	}
+}
+
+// Without a usable OpenAI state there is no OpenAI card, whatever the cause
+// and whatever the snapshot holds: no snapshot entry names an OpenAI
+// organization, so there is nothing a fallback could list. The key is then
+// absent from the document, not null, and the Claude card is as it would be.
+func TestNoOpenAICardWithoutAUsableState(t *testing.T) {
+	published := fixtureOpenAICredits(t, "degraded-states")
+	snapshot := loadSnapshot(t, "seven-credentials.json")
+	for _, cause := range []string{CreditsMissing, CreditsUnreadable, CreditsAbandoned, ""} {
+		in := Input{Snapshot: snapshot, Identities: fixtureRoster(), StaleAfter: 45 * time.Minute, OpenAICreditsError: cause}
+		if cause == CreditsAbandoned {
+			// An abandoned file is loaded, and ignored.
+			in.OpenAICredits = published
+		}
+		doc := Build(in, at(t, 0))
+		if doc.OpenAIAPICredits != nil {
+			t.Errorf("%q: openaiApiCredits = %s", cause, jsonOf(t, doc.OpenAIAPICredits))
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(jsonOf(t, doc)), &keys); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := keys["openaiApiCredits"]; ok {
+			t.Errorf("%q: the document carries openaiApiCredits: %s", cause, keys["openaiApiCredits"])
+		}
+		if doc.APICredits == nil {
+			t.Errorf("%q: the Claude fallback card is gone", cause)
+		}
+	}
+
+	// A Quota Cache that lists no OpenAI organization publishes none.
+	empty := fixtureOpenAICredits(t, "degraded-states")
+	empty.APICredits = nil
+	if card := Build(Input{OpenAICredits: empty}, at(t, 0)).OpenAIAPICredits; card != nil {
+		t.Errorf("an empty OpenAI state built a card: %s", jsonOf(t, card))
+	}
+}
+
+// A document served again while its source fails takes the OpenAI card from
+// the fresh build too, as it takes the Claude one, so a value entered on
+// Quota Cache's page meanwhile shows, and a state that has gone takes its
+// card with it.
+func TestWithCreditsCarriesTheOpenAICard(t *testing.T) {
+	without := Build(Input{StaleAfter: 45 * time.Minute}, at(t, 0))
+	with := Build(Input{OpenAICredits: fixtureOpenAICredits(t, "degraded-states"), StaleAfter: 45 * time.Minute}, at(t, 0))
+	if with.OpenAIAPICredits == nil {
+		t.Fatal("the fixture built no OpenAI card")
+	}
+	if got := WithCredits(without, with); got.OpenAIAPICredits != with.OpenAIAPICredits {
+		t.Errorf("WithCredits kept %v; want the fresh card", got.OpenAIAPICredits)
+	}
+	if without.OpenAIAPICredits != nil {
+		t.Error("WithCredits changed the document it was given")
+	}
+	if got := WithCredits(with, without); got.OpenAIAPICredits != nil {
+		t.Errorf("WithCredits kept a card whose state has gone: %s", jsonOf(t, got.OpenAIAPICredits))
+	}
+}

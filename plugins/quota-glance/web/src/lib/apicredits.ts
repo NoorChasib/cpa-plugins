@@ -1,5 +1,6 @@
 // What the Monthly API Credit card says about each Console organization, in
-// words.
+// words. The OpenAI API credit is drawn by the same card, from the same
+// shape, and says the few things that differ in OpenAI's words: CreditCopy.
 //
 // Every figure on the card is an estimate: Quota Cache prices the tokens CPA
 // metered for each organization at Anthropic's list prices, from a Console
@@ -619,6 +620,59 @@ export function shortOrganization(id: string): string {
 }
 
 /**
+ * The words a credit card uses that depend on whose credit it is. Everything
+ * else on the card is the server's own text, or says nothing of the provider.
+ */
+export interface CreditCopy {
+  /** The card's heading, which is also its accessible name. */
+  heading: string
+  /** What the reading entered on Quota Cache's page is called, in the bar's hover: "From your Console reading of …". */
+  readingNoun: string
+  /** What a line's link asking for one says. */
+  readingLink: string
+  /** What an organization the meter saw is called on the pool's lines. */
+  organizationNoun: string
+  /** That organization's id as a line names it. */
+  shortOrganization(id: string): string
+  /** The foot's first clause: where the card's values are set. */
+  foot: string
+  /** Whose list prices the foot says the spend is estimated at. */
+  prices: string
+  /** A sentence after the foot's first line on what the estimate leaves out or counts as billed, or "" for none. */
+  notCounted: string
+}
+
+/** The Claude API credit's words, which the card has always used. */
+export const CLAUDE_COPY: CreditCopy = {
+  heading: "Monthly API Credit",
+  readingNoun: "Console reading",
+  readingLink: "Enter Console reading in Quota Cache",
+  organizationNoun: "Console organization",
+  shortOrganization,
+  foot: "Credits, refill dates and Console readings are set in Quota Cache",
+  prices: "Anthropic's list prices",
+  notCounted: "",
+}
+
+/**
+ * The OpenAI API credit's words. Its organization is the slug OpenAI's
+ * responses name it by, mixed-case letters and digits rather than hex, so a
+ * long one keeps its first 9 characters, which hold a personal
+ * organization's "user-" and four more, and its last 4: "user-AbCd…UvWx".
+ */
+export const OPENAI_COPY: CreditCopy = {
+  heading: "Monthly OpenAI API Credit",
+  readingNoun: "API Platform reading",
+  readingLink: "Enter API Platform reading in Quota Cache",
+  organizationNoun: "OpenAI organization",
+  shortOrganization: (id) => (id.length > 16 ? `${id.slice(0, 9)}…${id.slice(-4)}` : id),
+  foot: "Credits, refill dates and API Platform readings are set in Quota Cache",
+  prices: "OpenAI's list prices",
+  notCounted:
+    "Built-in tool calls, storage and the 10% regional-processing uplift are not counted; complimentary data-sharing tokens are counted as if billed.",
+}
+
+/**
  * Where an account's estimate counts from: its Console reading, the start of
  * its cycle, else whatever its spend counts from; null when nothing.
  */
@@ -660,17 +714,18 @@ const UNLINKED_LINES = 3
 /**
  * The lines under the pool's figure when it is not the whole story, in this
  * order: which accounts it leaves out and why; each sentence several rows
- * share (`shared`), once, after whom it is about; each Console organization
- * CPA sent traffic from that no counted item names; a stretch the meter was
- * not counting; and records it dropped, could not match, or could not read.
- * The last two only when they fall after the oldest anchor the pool counts
- * from, where they can have touched its figures, and not when a shared
+ * share (`shared`), once, after whom it is about; each organization CPA sent
+ * traffic from that no counted item names, in `copy`'s words; a stretch the
+ * meter was not counting; and records it dropped, could not match, or could
+ * not read. The last two only when they fall after the oldest anchor the pool
+ * counts from, where they can have touched its figures, and not when a shared
  * sentence already says so. Empty when there is nothing to add.
  */
 export function poolNotes(
   credits: Pick<APICredits, "pool" | "accounts" | "unlinked" | "meter">,
   now: number,
   shared: SharedIssue[] = sharedIssues(credits.accounts),
+  copy: CreditCopy = CLAUDE_COPY,
 ): CreditNote[] {
   const notes: CreditNote[] = []
   const { pool, accounts, unlinked, meter } = credits
@@ -694,10 +749,12 @@ export function poolNotes(
   const sharedSays = (issue: string) => shared.some((group) => group.issue === issue)
 
   for (const org of unlinked.slice(0, UNLINKED_LINES)) {
-    const sent = `CPA sent traffic from Console organization ${shortOrganization(org.organizationId)} (${org.requests} ${
+    const sent = `CPA sent traffic from ${copy.organizationNoun} ${copy.shortOrganization(org.organizationId)} (${org.requests} ${
       org.requests === 1 ? "request" : "requests"
     }, last {age} ago)`
     notes.push({
+      // Over the limit only on the Claude credit: an OpenAI organization is
+      // always one added on Quota Cache's page, so it is never in an item.
       text:
         org.reason === "overLimit"
           ? `${sent}, which is in an item past the first 16 in claude-api-credits, so it is not counted.`

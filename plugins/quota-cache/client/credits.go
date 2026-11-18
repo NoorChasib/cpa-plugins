@@ -30,6 +30,12 @@ import (
 // Keys outside api_credits and renewals are snake_case, like the snapshot and
 // the meter. Keys inside those two are camelCase, the names of Quota Glance's
 // summary document, which passes them through.
+//
+// The monthly OpenAI API credit has a credit state of its own, of this type
+// and schema, at OpenAICreditsPath, judged from the OpenAI meter and the
+// OpenAI organizations' saved values. Its api_credits names its Provider,
+// ProviderOpenAIAPI, and its renewals are always empty. A reader loads and
+// judges each file alone, with the same functions.
 
 // Credit state file limits.
 const (
@@ -157,6 +163,9 @@ var creditIssueRank = func() map[string]int {
 const (
 	CreditSentenceStale    = "Quota Cache has not saved its meter recently, so recent spend may be missing."
 	CreditSentenceMeterGap = "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter a Console reading to correct it."
+	// CreditSentenceOpenAIMeterGap is CreditSentenceMeterGap for an OpenAI
+	// account.
+	CreditSentenceOpenAIMeterGap = "Quota Cache was not counting for part of this period, for example while it was off or reloading, so some spend may be missing. Enter an API Platform reading to correct it."
 )
 
 // Levels. The threshold lives here, not in CSS, so every client agrees.
@@ -389,7 +398,8 @@ func (s *CreditState) Current(now time.Time, maxAge time.Duration) bool {
 //  3. A meter stopped at least MeterBriefGap ago: every such account that is
 //     anchored gains the meterGap issue and becomes a lower bound.
 //  4. When 2 or 3 added the issue now first, the issue sentence becomes
-//     CreditSentenceStale or CreditSentenceMeterGap.
+//     CreditSentenceStale or CreditSentenceMeterGap, or
+//     CreditSentenceOpenAIMeterGap in a ProviderOpenAIAPI document.
 //  5. The pool is a lower bound when any counted account is.
 //  6. The countdowns count down to now, never below zero.
 //
@@ -414,6 +424,10 @@ func CreditsAt(s *CreditState, now time.Time, staleAfter time.Duration) *CreditS
 		(s.ValidUntil != nil && !now.Before(s.ValidUntil.Add(CreditBoundaryGrace)))
 	stale := expired || (staleAfter > 0 && d.Meter != nil && now.Sub(time.Unix(d.Meter.UpdatedAtEpoch, 0)) > staleAfter)
 	gap := d.Meter != nil && d.Meter.StoppedAtEpoch != nil && now.Sub(time.Unix(*d.Meter.StoppedAtEpoch, 0)) >= MeterBriefGap
+	gapSentence := CreditSentenceMeterGap
+	if d.Provider == ProviderOpenAIAPI {
+		gapSentence = CreditSentenceOpenAIMeterGap
+	}
 	if stale && d.Meter != nil {
 		d.Meter.Stale = true
 	}
@@ -441,7 +455,7 @@ func CreditsAt(s *CreditState, now time.Time, staleAfter time.Duration) *CreditS
 		case addedStale && a.DataIssues[0] == CreditIssueStale:
 			a.Issue = CreditSentenceStale
 		case addedGap && a.DataIssues[0] == CreditIssueMeterGap:
-			a.Issue = CreditSentenceMeterGap
+			a.Issue = gapSentence
 		}
 	}
 	d.Pool.LowerBound = false
@@ -553,8 +567,15 @@ func clonePointer[T any](p *T) *T {
 // tokens at the list prices of Pricing.AsOf, and a Console reading the
 // operator types in is the anchor that corrects it. An account whose figures
 // could be missing spend says so with LowerBound.
+//
+// In the OpenAI credit state (OpenAICreditsPath) it is the monthly OpenAI API
+// credit of every OpenAI organization quota-cache lists, in the same shape:
+// Provider says which one a document is.
 type CreditDocument struct {
-	Title string `json:"title"`
+	// Provider is "" for the Claude credit (api_credits has never carried one,
+	// so it is omitted) and ProviderOpenAIAPI in the OpenAI credit state.
+	Provider string `json:"provider,omitempty"`
+	Title    string `json:"title"`
 	// Currency is ISO 4217; every amount below is in it.
 	Currency string        `json:"currency"`
 	Pricing  CreditPricing `json:"pricing"`
@@ -580,7 +601,8 @@ type CreditPricing struct {
 	AsOf string `json:"asOf"`
 	// Source is the pricing page it was read from.
 	Source string `json:"source"`
-	// CacheWrites is the cache-write rate every amount uses: "5m".
+	// CacheWrites is the cache-write rate every amount uses: "5m" for Claude,
+	// "30m" for OpenAI.
 	CacheWrites string `json:"cacheWrites"`
 }
 
@@ -685,14 +707,16 @@ type CreditAccount struct {
 	// Organization ID (APICreditOrgAccount). The dashboard's stored values
 	// are keyed by it. "item-<n>", an item of quota-cache 0.1.x's
 	// configuration it could not link, stays in Quota Glance's summary
-	// contract; this quota-cache never lists one.
+	// contract; this quota-cache never lists one. An OpenAI account's is
+	// "oai-<12 hex>" from its organization (OpenAICreditOrgAccount).
 	ID string `json:"id"`
 	// Label is the organization's label on quota-cache's page.
 	Label string `json:"label"`
 	// Order is the organization's position in that list.
 	Order int `json:"order"`
 	// OrganizationID is the Organization ID as NormalizeOrganizationID
-	// returns it.
+	// returns it, or for an OpenAI account the organization as
+	// NormalizeOpenAIOrganization returns it.
 	OrganizationID string `json:"organizationId"`
 	// State is ok, stale, out, pending, needsSettings, misconfigured or
 	// cacheTooOld. Counted is true for ok, stale and out.
