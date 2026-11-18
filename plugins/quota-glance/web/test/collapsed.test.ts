@@ -56,6 +56,16 @@ describe("opened cards", () => {
     assert.equal(openedKeys().has(cardKey("claude", "api-credits")), false)
   })
 
+  test("the OpenAI API credit's card is its own section's, apart from the Claude one", () => {
+    const key = cardKey("openai-api", CARD.apiCredits)
+    assert.equal(key, "openai-api:@api-credits")
+    setOpened(key, true)
+    assert.equal(openedKeys().has(cardKey("claude", CARD.apiCredits)), false)
+    setOpened(cardKey("claude", CARD.apiCredits), true)
+    setOpened(key, false)
+    assert.deepEqual([...openedKeys()], ["claude:@api-credits"])
+  })
+
   test("an unreadable value reads as nothing opened", () => {
     store.set("quota-glance.opened", "{not json")
     assert.deepEqual([...openedKeys()], [])

@@ -1,9 +1,12 @@
 (function (page) {
   'use strict';
   // The editor: the Organizations, Claude API credits and Claude renewal dates
-  // cards. It is embedded after app.js in the page's one script element and
-  // reads the session, refusal and decoding rules from app.js's namespace, so
-  // a save follows exactly the rules a status read does:
+  // cards, and the OpenAI organizations and OpenAI API credits cards, which
+  // are the first two again for the OpenAI API credit: each API credit is a
+  // lane of two cards, drawn and saved by the same code in its provider's
+  // words (PROVIDERS). It is embedded after app.js in the page's one script
+  // element and reads the session, refusal and decoding rules from app.js's
+  // namespace, so a save follows exactly the rules a status read does:
   //
   // - nothing is sent without a remembered console session on this exact
   //   origin and API base, and a save goes only from a button press;
@@ -165,6 +168,9 @@
 
   const AMOUNT_MESSAGE = 'Enter a dollar amount, like 200 or 260.50.';
   const READING_AMOUNT_MESSAGE = 'Enter the amount Console shows, like 143.20.';
+  // What a reading's amount is said to be read from, unless a provider's
+  // words say otherwise (PROVIDERS).
+  const CONSOLE_WORDS = Object.freeze({amount: READING_AMOUNT_MESSAGE, empty: 'Enter the amount Console shows.'});
   const READING_TIME_MESSAGE = 'Enter a time in the last 48 hours.';
   // Quota Cache judges a reading's time by CPA's clock, which this device's
   // may not match, so its refusal says so.
@@ -204,8 +210,10 @@
   // A Console reading: cleared ({kind: 'clear'}), or a new one typed
   // ({kind: 'set', amount, at}). renews is the refill date the batch makes
   // effective for the row, which is what the plugin checks a new reading
-  // against; now is the page's clock.
+  // against; now is the page's clock; words, when given, say where the amount
+  // is read (CONSOLE_WORDS).
   function readingField(settings, edit, context) {
+    const words = context.words || CONSOLE_WORDS;
     const stored = settings.reading || null;
     const sent = stored ? {remainingUsd: stored.remainingUsd, at: rfc3339(stored.atEpoch)} : null;
     const state = {stored, unusedReason: settings.readingUnusedReason || '', edit, changed: false, amount: null, at: null, atError: null, onRefillDay: false, desired: sent};
@@ -214,7 +222,7 @@
     const amount = readMoney(edit.amount);
     state.amount = {
       text: edit.amount,
-      error: amount.kind === 'ok' ? null : amount.kind === 'ambiguous' ? ambiguousMessage(amount) : amount.kind === 'empty' ? 'Enter the amount Console shows.' : READING_AMOUNT_MESSAGE,
+      error: amount.kind === 'ok' ? null : amount.kind === 'ambiguous' ? ambiguousMessage(amount) : amount.kind === 'empty' ? words.empty : words.amount,
       ambiguous: amount.kind === 'ambiguous' ? {decimal: amount.decimal, thousands: amount.thousands} : null,
     };
     const at = localInstant(edit.at);
@@ -239,14 +247,14 @@
 
   // One organization's three fields, and what they add up to. unsaved counts
   // the fields edited and not typed back, whether or not they are valid yet:
-  // what leaving the page would lose.
-  function creditRow(settings, edit, now) {
+  // what leaving the page would lose. words are readingField's.
+  function creditRow(settings, edit, now, words) {
     const monthlyUsd = creditField(settings, edit && edit.monthlyUsd);
     const renews = refillField(settings, edit && edit.renews);
     // The refill date the plugin checks a new reading against: the one this
     // row keeps, if any.
     const effective = renews.error === null ? renews.desired : null;
-    const reading = readingField(settings, edit && edit.reading, {now, renews: effective});
+    const reading = readingField(settings, edit && edit.reading, {now, renews: effective, words});
     const fields = [monthlyUsd, renews];
     return {
       monthlyUsd, renews, reading,
@@ -289,8 +297,9 @@
   }
   // The API credit card's Save: every changed editable row, in account order,
   // each with its full desired state, then each orphan marked for removal
-  // with every value null.
-  function creditPlan(accounts, draft, now, settingsOf, limits) {
+  // with every value null. kind is the batch's: apiCredits, or
+  // openaiApiCredits for the OpenAI API credit card.
+  function creditPlan(accounts, draft, now, settingsOf, limits, kind = 'apiCredits') {
     const items = [];
     let changes = 0;
     let errors = 0;
@@ -311,11 +320,12 @@
       unsaved++;
       items.push({id, baseRevision: revision, monthlyUsd: null, renews: null, reading: null});
     }
-    return plan(items, changes, errors, unsaved, 'apiCredits', limits);
+    return plan(items, changes, errors, unsaved, kind, limits);
   }
   // The draft after the rows changed: rows no longer listed are dropped, each
   // with the sentence that says so, and removals of orphans already gone are
-  // forgotten. Everything else is kept.
+  // forgotten. Everything else is kept. where names the card the
+  // organizations are listed on.
   function reconcile(draft, listed, orphaned, gone) {
     const rows = {};
     const dropped = [];
@@ -327,7 +337,7 @@
     const unchanged = dropped.length === 0 && Object.keys(remove).length === Object.keys(draft.remove).length;
     return {draft: unchanged ? draft : {rows, remove}, dropped};
   }
-  const reconcileCredits = (draft, accounts, orphans) => reconcile(draft, new Set(accounts.map(a => a.id)), new Set(orphans.map(o => o.id)), name => name + ' is no longer listed under Organizations; its unsaved change was dropped.');
+  const reconcileCredits = (draft, accounts, orphans, where = 'Organizations') => reconcile(draft, new Set(accounts.map(a => a.id)), new Set(orphans.map(o => o.id)), name => name + ' is no longer listed under ' + where + '; its unsaved change was dropped.');
   const reconcileRenewals = (draft, credentials, orphans) => reconcile(draft, new Set(credentials.map(c => c.auth_index)), new Set(orphans.map(o => o.id)), name => name + ' is no longer in CPA; its unsaved change was dropped.');
   function editRenewal(draft, credential, name, edit) {
     const rows = Object.assign({}, draft.rows);
@@ -435,6 +445,16 @@
     if (!ORGANIZATION_ID.test(value) || /^[0-]*$/.test(value)) return null;
     return value.toLowerCase();
   }
+  // client.NormalizeOpenAIOrganization, ported: an OpenAI API organization as
+  // its responses' openai-organization header names it, trimmed, 1 to 64
+  // ASCII letters, digits, dots, underscores or dashes, the first a letter or
+  // digit. Its case is kept, since the meter matches the header exactly. Null
+  // for anything else.
+  const OPENAI_ORGANIZATION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  function normalizeOpenAIOrganization(input) {
+    const value = String(input).trim();
+    return OPENAI_ORGANIZATION.test(value) ? value : null;
+  }
   // settings.ValidOrganizationLabel: 1 to 64 characters, no surrounding
   // spaces, each one printable (a letter, mark, number, punctuation, symbol
   // or the plain space; unicode.IsPrint).
@@ -446,6 +466,12 @@
   const ORGANIZATION_ID_MESSAGE = 'Enter the Organization ID as Console shows it: 32 hex digits in five groups, like 00000000-0000-4000-8000-000000000000.';
   const DUPLICATE_ORGANIZATION_MESSAGE = 'This organization is already listed.';
   const tooManyOrganizations = max => max + ' organizations at most. Remove one before adding another.';
+  // What an organizations batch is judged by: its kind, how the organization
+  // of an add is read, and what is said when it cannot be. Each provider's
+  // organizations file has its own kind and its own form of organization.
+  const CLAUDE_RULES = Object.freeze({kind: 'organizations', normalize: normalizeOrganizationID, idMessage: ORGANIZATION_ID_MESSAGE});
+  const OPENAI_RULES = Object.freeze({kind: 'openaiOrganizations', normalize: normalizeOpenAIOrganization,
+    idMessage: 'Enter the organization as OpenAI’s responses name it: 1 to 64 letters, digits, dots, underscores or dashes, such as user-… for a personal organization.'});
 
   // An organizations draft: {rename: {id: label typed}, remove: {id: true},
   // add: {label, organizationId}}. Its Save is one batch whose ops the plugin
@@ -453,9 +479,10 @@
   // then the add, each judged against the list the ops before it left, as the
   // plugin judges them. errors are keyed "<id>:label", "add:label",
   // "add:organizationId" and "add:". refs[i] names the row and field of op i,
-  // so a refusal the plugin names by op index lands under its field.
+  // so a refusal the plugin names by op index lands under its field. rules
+  // are the provider's (CLAUDE_RULES, OPENAI_RULES).
   const emptyOrganizationsDraft = () => ({rename: {}, remove: {}, add: {label: '', organizationId: ''}});
-  function organizationsPlan(items, draft, revision, limits) {
+  function organizationsPlan(items, draft, revision, limits, rules = CLAUDE_RULES) {
     const ops = [];
     const refs = [];
     const errors = {};
@@ -484,10 +511,10 @@
     let normalized = null;
     if (addLabel !== '' || typedID.trim() !== '') {
       changes++;
-      normalized = normalizeOrganizationID(typedID);
+      normalized = rules.normalize(typedID);
       if (!validOrganizationLabel(addLabel)) errors['add:label'] = LABEL_MESSAGE;
       else if (list.some(one => sameLabel(one.label, addLabel))) errors['add:label'] = DUPLICATE_LABEL_MESSAGE;
-      if (normalized === null) errors['add:organizationId'] = ORGANIZATION_ID_MESSAGE;
+      if (normalized === null) errors['add:organizationId'] = rules.idMessage;
       else if (list.some(one => one.organizationId === normalized)) errors['add:organizationId'] = DUPLICATE_ORGANIZATION_MESSAGE;
       if (errors['add:label'] === undefined && errors['add:organizationId'] === undefined) {
         if (list.length >= limits.maxItems) errors['add:'] = tooManyOrganizations(limits.maxItems);
@@ -501,7 +528,7 @@
     // changes already counts the edits still to fix, so it is also unsaved.
     const result = {changes, errors, count, unsaved: changes, ops, refs, normalized, batch: null, tooLarge: false};
     if (count > 0 || ops.length === 0) return result;
-    const batch = {kind: 'organizations', baseRevision: revision, ops};
+    const batch = {kind: rules.kind, baseRevision: revision, ops};
     result.tooLarge = ops.length > limits.maxOps || new TextEncoder().encode(JSON.stringify(batch)).length > limits.maxBytes;
     if (!result.tooLarge) result.batch = batch;
     return result;
@@ -537,8 +564,9 @@
       ' dropped; check it, then make ' + (one ? 'it' : 'them') + ' again.';
   }
   // The question Remove asks. What was entered here for the organization
-  // stays in the settings file, and comes back with it.
-  const removeQuestion = label => 'Remove ' + label + '? Its amounts and readings entered here stay as an orphan you can clear below, and adding the same Organization ID again brings them back.';
+  // stays in the settings file, and comes back with it: same is what brings
+  // it back, as its provider names the organization.
+  const removeQuestion = (label, same = 'the same Organization ID') => 'Remove ' + label + '? Its amounts and readings entered here stay as an orphan you can clear below, and adding ' + same + ' again brings them back.';
   // The note while Quota Cache's configuration still lists count organizations
   // under claude-api-credits, which this version does not read.
   const configIgnoredText = count => 'Quota Cache’s configuration still lists ' + plural(count, 'organization', 'organizations') + ' under claude-api-credits. This version doesn’t read ' +
@@ -550,6 +578,9 @@
     file + ' aside and add the organizations again. The page picks that up within a few seconds.';
   // An Organization ID cut to its first 8 and last 4 characters.
   const shortOrganizationID = id => (id.length > 12 ? id.slice(0, 8) + '…' + id.slice(-4) : id);
+  // An OpenAI organization cut as Quota Glance cuts it, past 16 characters to
+  // its first 9 and last 4: "user-AbCd…UvWx".
+  const shortOpenAIOrganization = id => (id.length > 16 ? id.slice(0, 9) + '…' + id.slice(-4) : id);
   // A CPA auth index as an orphan line names it: "0123…cdef".
   const shortCredentialID = id => (id.length > 8 ? id.slice(0, 4) + '…' + id.slice(-4) : id);
   // The API credit card's edit button, which its orphan lines name too: Set
@@ -723,7 +754,129 @@
       'Moving it aside instead starts Quota Cache empty, and every value saved here has to be entered again.';
   }
 
-  // The rules above, for scripts/tests/editor.test.mjs.
+  // ---------------------------------------------------------------------------
+  // Providers
+
+  // The organizations a lane's meter saw in traffic that none listed, newest
+  // first, as {organizationId, requests, lastSeenEpoch}: the published
+  // state's own list while there is one, else the meter file's, which the
+  // meter keeps while no organization is listed and the lane publishes
+  // nothing. One already listed, as just after an add the state has not
+  // caught up with, is left out.
+  function seenInTraffic(state, meter, items) {
+    const listed = new Set((Array.isArray(items) ? items : []).filter(isObject).map(item => item.organization_id));
+    const doc = isObject(state) && isObject(state.api_credits) ? state.api_credits : null;
+    const seen = doc
+      ? (Array.isArray(doc.unlinked) ? doc.unlinked : []).filter(one => isObject(one) && one.reason === 'notConfigured')
+        .map(one => ({organizationId: one.organizationId, requests: one.requests, lastSeenEpoch: one.lastSeenEpoch}))
+      : (isObject(meter) && Array.isArray(meter.unlinked) ? meter.unlinked : []).filter(isObject)
+        .map(one => ({organizationId: one.organization_id, requests: one.requests, lastSeenEpoch: Date.parse(one.last_seen_at) / 1000}));
+    return seen.filter(one => typeof one.organizationId === 'string' && one.organizationId !== '' && !listed.has(one.organizationId))
+      .map(one => ({organizationId: one.organizationId, requests: Number.isInteger(one.requests) ? one.requests : 0, lastSeenEpoch: Number.isFinite(one.lastSeenEpoch) ? Math.floor(one.lastSeenEpoch) : null}));
+  }
+  // How long ago an instant was, as the status's own times say it: "5
+  // minutes ago".
+  function agoText(epoch, now) {
+    const seconds = Math.max(0, now - epoch);
+    const units = seconds < 60 ? [seconds, 'second'] : seconds < 3600 ? [Math.round(seconds / 60), 'minute'] : seconds < 86400 ? [Math.round(seconds / 3600), 'hour'] : [Math.round(seconds / 86400), 'day'];
+    return new Intl.RelativeTimeFormat(undefined, {numeric: 'auto'}).format(-units[0], units[1]);
+  }
+
+  // Each API credit's lane: the status keys its two cards read, their
+  // sections, the prefixes of their controls' ids, the batches they send, the
+  // files they name, and their words. Claude's are the page's words as they
+  // were before the OpenAI API credit had cards of its own; OpenAI's name API
+  // Platform where Claude's name Console, and the organization as OpenAI's
+  // responses name it. meterKey names the meter whose unlisted organizations
+  // the organizations card offers to add: OpenAI's organization is named
+  // nowhere the operator can copy it from, so the card is where they find it.
+  // Claude's meter panel lists its own. Claude's API credit card shows
+  // whenever its editor does; OpenAI's only once it has something to show.
+  const PROVIDERS = Object.freeze({
+    claude: Object.freeze({
+      stateKey: 'credit_state', editorKey: 'editor', meterKey: null,
+      orgsSection: 'organizations', orgsHeading: 'Organizations',
+      creditsSection: 'api-credits', creditsHeading: 'Claude API credits', creditsCardAlways: true,
+      ids: Object.freeze({org: 'qc-org', credit: 'qc-credit', reading: 'qc-reading-'}),
+      rules: CLAUDE_RULES, creditsKind: 'apiCredits',
+      files: Object.freeze({organizations: '.organizations.json', settings: '.settings.json'}),
+      orgNoun: Object.freeze(['Claude Console organization', 'Claude Console organizations']),
+      orgsLabel: 'Claude Console organizations',
+      orgsHint: 'Claude Console organizations whose API credit Quota Cache counts',
+      idLabel: 'Organization ID',
+      shortId: shortOrganizationID,
+      idHelp: () => 'Console → Settings → Organization. It is not a secret.',
+      idWarning: () => null,
+      orgsEmpty: Object.freeze(['No Console organizations yet. Add one to start counting its API credit.']),
+      orgsFoot: 'Set each organization’s monthly credit, refill date and Console reading in Claude API credits below. Renaming an organization keeps its values. Removing one keeps them as an orphan you can clear there.',
+      orgsEditHelp: 'Save applies every change together, or none of them. An Organization ID cannot be changed: a different ID is a different organization, so remove this one and add the other.',
+      sameOrganization: 'the same Organization ID',
+      orgsSaved: '. Claude API credits below lists them from the next view update.',
+      listedUnder: 'Organizations',
+      noneListed: 'No Claude Console organizations yet. Add one under Organizations above, then set its monthly credit and refill date here.',
+      noneReadable: 'No Claude Console organizations are listed: Quota Cache cannot read its organizations file. Organizations can be added above once it can read that file again.',
+      creditsLabel: 'Claude API credits by organization',
+      creditsFormLabel: 'Monthly credits, refill dates and Console readings',
+      readingNoun: 'Console reading', aReading: 'a Console reading', readingLeft: 'Left in Console',
+      readingHelp: 'From Console → Settings → Billing, Promotional credits: the amount left.',
+      refillDay: 'Today is the refill day. Enter the reading after the new credit shows in Console.',
+      words: CONSOLE_WORDS,
+      otherOrganization: 'for another Organization ID; not used',
+      monthlyHelp: '', refillHelp: '',
+      creditsEditHelp: 'A refill date repeats on that day every month, at 00:00 UTC. Labels and Organization IDs are edited under Organizations.',
+      creditsFootIntro: 'You set monthly credits, refill dates and Console readings here, and organizations above. ',
+      creditsFoot: pricedOn => 'Spend is metered from CPA traffic and priced at Anthropic’s list prices' + (pricedOn ? ' of ' + pricedOn : '') + '. Quota Glance 0.8.0 or newer shows these figures, and Reset Priority routes by them when its API-credit routing is on.',
+      creditsSaved: '. Quota Glance 0.8.0 or newer shows them from its next read of the cache.',
+      statusLink: 'Enter Console reading',
+    }),
+    openai: Object.freeze({
+      stateKey: 'openai_credits', editorKey: 'openai_editor', meterKey: 'openai_meter',
+      orgsSection: 'openai-organizations', orgsHeading: 'OpenAI organizations',
+      creditsSection: 'openai-api-credits', creditsHeading: 'OpenAI API credits', creditsCardAlways: false,
+      ids: Object.freeze({org: 'qc-oai-org', credit: 'qc-oai-credit', reading: 'qc-oai-reading-'}),
+      rules: OPENAI_RULES, creditsKind: 'openaiApiCredits',
+      files: Object.freeze({organizations: '.openai-organizations.json', settings: '.openai-settings.json'}),
+      orgNoun: Object.freeze(['OpenAI API organization', 'OpenAI API organizations']),
+      orgsLabel: 'OpenAI API organizations',
+      orgsHint: 'OpenAI API organizations whose monthly credit Quota Cache counts',
+      idLabel: 'Organization in responses',
+      shortId: shortOpenAIOrganization,
+      idHelp: seen => 'What OpenAI’s openai-organization response header names. It is not the org-… Organization ID, and not a secret.' + (seen ? ' Pick one seen in traffic below, or type it.' : ''),
+      idWarning: typed => (/^org-[A-Za-z0-9]{20,}$/.test(String(typed).trim())
+        ? 'This looks like the Organization ID from API Platform settings. OpenAI’s responses name the organization differently, so traffic would not match it.' : null),
+      orgsEmpty: Object.freeze([
+        'No OpenAI API organizations yet. Send a request through the openai-compatibility entry that uses your OpenAI API key: the organization OpenAI’s responses name then appears below under Seen in traffic, ready to add. You can also type it. Spend is counted from when the organization is added.',
+        'For a personal organization, OpenAI’s responses have been seen to name it user- followed by 24 letters and digits. This appears to be your user ID, shown in API Platform’s profile settings, but OpenAI does not document it.',
+      ]),
+      orgsFoot: 'Set each organization’s monthly credit, refill date and API Platform reading in OpenAI API credits below. Renaming an organization keeps its values. Removing one keeps them as an orphan you can clear there.',
+      orgsEditHelp: 'Save applies every change together, or none of them. An organization’s name in responses cannot be changed: a different name is a different organization, so remove this one and add the other.',
+      sameOrganization: 'the same organization',
+      orgsSaved: '. OpenAI API credits below lists them from the next view update.',
+      listedUnder: 'OpenAI organizations',
+      noneListed: 'No OpenAI API organizations yet. Add one under OpenAI organizations above, then set its monthly credit and refill date here.',
+      noneReadable: 'No OpenAI API organizations are listed: Quota Cache cannot read its OpenAI organizations file. Organizations can be added above once it can read that file again.',
+      creditsLabel: 'OpenAI API credits by organization',
+      creditsFormLabel: 'Monthly credits, refill dates and API Platform readings',
+      readingNoun: 'API Platform reading', aReading: 'an API Platform reading', readingLeft: 'Left in API Platform',
+      readingHelp: 'From API Platform’s billing settings. Where your account has a Credit grants page, it lists each grant with what is left of it; OpenAI does not document it for this credit. ' +
+        'If you read the billing overview’s credit balance instead, subtract any credits you bought.',
+      refillDay: 'Today is the refill day. Enter the reading after the new credit shows in API Platform.',
+      words: Object.freeze({amount: 'Enter the amount API Platform shows, like 143.20.', empty: 'Enter the amount API Platform shows.'}),
+      otherOrganization: 'for another organization; not used',
+      monthlyHelp: 'Pro: $100, $200 or $500 by plan. Business: $20 per paid Standard seat and $100 per paid Premium seat, shared by the workspace, at most $500 a month. ' +
+        'A first grant is prorated: enter what this cycle granted, or an API Platform reading.',
+      refillHelp: 'The day your ChatGPT subscription renews; only the day of the month is used.',
+      creditsEditHelp: 'A refill date repeats on that day every month, at 00:00 UTC. Labels and organizations are edited under OpenAI organizations.',
+      creditsFootIntro: 'You set monthly credits, refill dates and API Platform readings here, and organizations above. ',
+      creditsFoot: pricedOn => 'Spend is metered from openai-compatibility traffic and priced at OpenAI’s list prices' + (pricedOn ? ' of ' + pricedOn : '') +
+        ' (Standard, Flex, Fast and Ultrafast; long context over 272K input tokens). Built-in tool calls, storage and the 10% regional-processing uplift are not counted; complimentary data-sharing tokens are counted as if billed. ' +
+        'Quota Glance 0.11.0 or newer shows these figures; Reset Priority does not route on them.',
+      creditsSaved: '. Quota Glance 0.11.0 or newer shows them from its next read of the cache.',
+      statusLink: 'Enter API Platform reading',
+    }),
+  });
+
+  // The rules above, for scripts/tests/editor.test.mjs and openai.test.mjs.
   const logic = Object.freeze({
     readMoney, moneyText, sameAmount, readDate, dateEpoch, utcDay, cycleOn, cycleText, refillRule, ordinal, localInstant, localInputValue, rfc3339, utcClock,
     READING_MAX_AGE, READING_MAX_AHEAD, AMOUNT_MESSAGE, READING_AMOUNT_MESSAGE, READING_TIME_MESSAGE, READING_TIME_REFUSED, creditField, refillField, renewalField, readingField,
@@ -732,6 +885,7 @@
     overlaid, conflictFields, normalizeOrganizationID, validOrganizationLabel, emptyOrganizationsDraft, organizationsPlan, organizationsAfterConflict, organizationsHeld, organizationsConflictText, removeQuestion,
     configIgnoredText, organizationsUnreadableText, shortOrganizationID, shortCredentialID, creditsEditLabel, noneCountedText, FIELD_CODES, OPERATION_CODES, PLUGIN_CODES, FIELD_FOOT, CONFLICT_FOOT, CONFLICT_FIELD, SIGN_IN_FOOT, LOST,
     fieldMessage, saveErrorText, refusedText, refusalHold, retryText, outcomeOf, creditOrphansOf, heldCreditsOf, settingsUnreadableText,
+    normalizeOpenAIOrganization, shortOpenAIOrganization, CLAUDE_RULES, OPENAI_RULES, PROVIDERS, seenInTraffic, agoText,
   });
 
   // ---------------------------------------------------------------------------
@@ -843,24 +997,38 @@
   // card is open (liveOrphans).
   const credits = Object.assign(card('api-credits', 'qc-credits', ['qc-credits-edit', 'qc-credits-table']), {draft: emptyDraft(), overlay: {}, focused: null, gone: new Set(), revised: {}});
   const renewals = Object.assign(card('renewals', 'qc-renewals', ['qc-renewals-edit', 'qc-renewals-table']), {draft: emptyDraft(), overlay: {}, gone: new Set(), revised: {}});
-  const cards = [orgs, credits, renewals];
+  const openaiOrgs = Object.assign(card('openai-organizations', 'qc-oai-orgs', ['qc-oai-orgs-edit', 'qc-oai-orgs-add', 'qc-oai-orgs-table']), {draft: emptyOrganizationsDraft(), base: null, confirmRemove: null});
+  const openaiCredits = Object.assign(card('openai-api-credits', 'qc-oai-credits', ['qc-oai-credits-edit', 'qc-oai-credits-table']), {draft: emptyDraft(), overlay: {}, focused: null, gone: new Set(), revised: {}});
+  const cards = [orgs, credits, renewals, openaiOrgs, openaiCredits];
   const editing = () => cards.some(one => one.editing);
+  // Each API credit's organizations and API credit cards, with its
+  // provider's keys and words.
+  const claudeLane = {p: PROVIDERS.claude, orgs, credits};
+  const openaiLane = {p: PROVIDERS.openai, orgs: openaiOrgs, credits: openaiCredits};
+  const lanes = [claudeLane, openaiLane];
 
-  const creditState = () => (status && isObject(status.credit_state) ? status.credit_state : null);
-  const creditDocument = () => { const state = creditState(); return state && isObject(state.api_credits) ? state.api_credits : null; };
-  const editorInfo = () => (status && isObject(status.editor) ? status.editor : null);
+  const creditStateOf = lane => (status && isObject(status[lane.p.stateKey]) ? status[lane.p.stateKey] : null);
+  const creditDocumentOf = lane => { const state = creditStateOf(lane); return state && isObject(state.api_credits) ? state.api_credits : null; };
+  const editorInfoOf = lane => (status && isObject(status[lane.p.editorKey]) ? status[lane.p.editorKey] : null);
+  const editorInfo = () => editorInfoOf(claudeLane);
   const accountsOf = doc => (doc && Array.isArray(doc.accounts) ? doc.accounts : []);
-  const creditOrphans = () => creditOrphansOf(creditDocument(), editorInfo());
+  const orphansOf = lane => creditOrphansOf(creditDocumentOf(lane), editorInfoOf(lane));
   const credentialsOf = editor => (editor && Array.isArray(editor.credentials) ? editor.credentials : []);
   const renewalOrphansOf = editor => (editor && Array.isArray(editor.renewal_orphans) ? editor.renewal_orphans : []);
-  // The organizations the status lists, overlaid while the card is open by
-  // orgs.base, the list it saves against when that is not the status's: the
-  // plugin's after a conflict, or the one its renames and removals were made
-  // against (organizationsHeld).
-  function organizationsInfo() {
-    const editor = editorInfo();
+  // The organizations the status lists for a lane, overlaid while its card
+  // is open by orgs.base, the list it saves against when that is not the
+  // status's: the plugin's after a conflict, or the one its renames and
+  // removals were made against (organizationsHeld).
+  function organizationsInfoOf(lane) {
+    const editor = editorInfoOf(lane);
     const info = editor && isObject(editor.organizations) ? editor.organizations : {available: false, reason: '', revision: '', max_items: 16, max_ops: 16, items: []};
-    return orgs.base ? Object.assign({}, info, orgs.base) : info;
+    return lane.orgs.base ? Object.assign({}, info, lane.orgs.base) : info;
+  }
+  // What a lane's organizations card offers to add (seenInTraffic).
+  function seenOf(lane) {
+    if (!lane.p.meterKey) return [];
+    const meter = status && isObject(status[lane.p.meterKey]) ? status[lane.p.meterKey] : null;
+    return seenInTraffic(creditStateOf(lane), meter, organizationsInfoOf(lane).items);
   }
   const limits = editor => ({
     maxApiCreditItems: editor && Number.isInteger(editor.max_api_credit_items) ? editor.max_api_credit_items : LIMITS.maxApiCreditItems,
@@ -873,10 +1041,10 @@
     const base = path.split(/[\\/]/).pop() || 'snapshot.json';
     return base.replace(/\.json$/, '') + suffix;
   }
-  const organizationsUnreadable = () => organizationsInfo().reason === 'organizationsUnreadable';
-  function unavailableText(editor) {
+  const organizationsUnreadableOf = lane => organizationsInfoOf(lane).reason === 'organizationsUnreadable';
+  function unavailableText(editor, p) {
     if (!editor || editor.available) return null;
-    return settingsUnreadableText(besideSnapshot('.settings.json'));
+    return settingsUnreadableText(besideSnapshot(p.files.settings));
   }
   // What the console's session means for Save (refusalHold): {block},
   // {note}, or null. A lockout that ends while a card is open turns Save back
@@ -1174,191 +1342,247 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Organizations: the Claude Console organizations, above the API credit
-  // card, whose rows they decide
+  // Organizations: a lane's organizations, above its API credit card, whose
+  // rows they decide. Claude's are the Claude Console organizations; OpenAI's
+  // are OpenAI API organizations, named as OpenAI's responses name them.
 
-  function organizationNotes() {
-    const state = creditState();
-    const info = organizationsInfo();
+  function organizationNotesOf(lane) {
+    const {p, orgs} = lane;
+    const state = creditStateOf(lane);
+    const info = organizationsInfoOf(lane);
     const notes = [];
-    if (info.reason === 'organizationsUnreadable') notes.push(h('div', {class: 'alert error', role: 'alert'}, organizationsUnreadableText(besideSnapshot('.organizations.json'))));
+    if (info.reason === 'organizationsUnreadable') notes.push(h('div', {class: 'alert error', role: 'alert'}, organizationsUnreadableText(besideSnapshot(p.files.organizations))));
     const block = state && isObject(state.organizations) ? state.organizations : null;
     const ignored = block && Number.isInteger(block.config_items_ignored) ? block.config_items_ignored : 0;
-    if (ignored > 0 && !dismissed('organizations-config:' + ignored)) {
+    const key = p.orgsSection + '-config:' + ignored;
+    if (ignored > 0 && !dismissed(key)) {
       notes.push(h('div', {class: 'alert dismissible', role: 'status'},
         h('span', {class: 'pill'}, 'Config not used'),
         h('p', null, configIgnoredText(ignored)),
-        dismissLink('organizations-config:' + ignored, 'qc-orgs-config-dismiss')));
+        dismissLink(key, orgs.key + '-config-dismiss')));
     }
     return notes;
   }
-  function startOrganizations(adding) {
+  // Opens the card, on its add row when adding, with organizationId filled in
+  // and marked picked when one seen in traffic was picked.
+  function startOrganizationsOf(lane, adding, organizationId) {
+    const {p, orgs} = lane;
     if (editing()) return;
-    orgs.draft = emptyOrganizationsDraft();
+    orgs.draft = Object.assign(emptyOrganizationsDraft(), {add: organizationId ? {label: '', organizationId, picked: true} : {label: '', organizationId: ''}});
     orgs.base = null;
     orgs.confirmRemove = null;
     setEditing(orgs, true);
     renderAll();
-    focusLater(adding ? 'qc-org-add-label' : 'qc-org-0-label');
+    focusLater(adding ? p.ids.org + '-add-label' : p.ids.org + '-0-label');
   }
-  function cancelOrganizations() {
+  function cancelOrganizationsOf(lane) {
+    const {orgs} = lane;
     orgs.draft = emptyOrganizationsDraft();
     orgs.base = null;
     orgs.confirmRemove = null;
     setEditing(orgs, false);
     renderAndRefocus(orgs);
   }
-  function renderOrganizations() {
-    const section = $('organizations');
+  // What the add row says to fix at key. An empty label is not said while the
+  // organization on the row is one picked under Seen in traffic and the label
+  // was neither typed in nor tried with a save: the page filled the row, not
+  // the user. organizationsPlan still counts it, so Save stays held off.
+  function addErrorOf(orgs, result, key) {
+    if (key === 'add:label' && orgs.draft.add.picked === true && orgs.draft.add.label === '') return null;
+    return result.errors[key] || (orgs.marks[key] && orgs.marks[key].text) || null;
+  }
+  // The organizations seen in traffic that none listed, each with Add, which
+  // opens the card with it on the add row, or puts it there while the card is
+  // open. While none is listed the card says so when none is seen either.
+  // Nothing is shown for a lane whose meter the card does not read, or while
+  // the organizations cannot be edited.
+  function seenPart(lane, seen, empty) {
+    const {p, orgs} = lane;
+    if (!p.meterKey || (!seen.length && !empty)) return null;
+    const now = nowSeconds();
+    const pick = organizationId => () => {
+      if (!orgs.editing) { startOrganizationsOf(lane, true, organizationId); return; }
+      orgs.draft.add = Object.assign({}, orgs.draft.add, {organizationId, picked: true});
+      delete orgs.marks['add:organizationId'];
+      renderAll();
+      focusLater(p.ids.org + '-add-label');
+    };
+    const off = orgs.editing ? orgs.saving : editing();
+    return h('div', {class: 'seen'}, h('h3', null, 'Seen in traffic'),
+      seen.length
+        ? h('ul', {class: 'meter-list'}, seen.map((one, index) => h('li', null,
+          h('span', {class: 'num'}, one.organizationId), sep(), plural(one.requests, 'request', 'requests'),
+          one.lastSeenEpoch === null ? null : [sep(), 'last seen ' + agoText(one.lastSeenEpoch, now)], sep(),
+          link('Add', pick(one.organizationId), {id: p.ids.org + '-seen-' + index, disabled: off, 'aria-label': 'Add ' + one.organizationId}))))
+        : h('p', null, 'Nothing seen yet.'));
+  }
+  function renderOrganizationsOf(lane) {
+    const {p, orgs} = lane;
+    const section = $(p.orgsSection);
     if (!section) return;
-    const editor = editorInfo();
+    const editor = editorInfoOf(lane);
     section.hidden = editor === null;
     if (!editor) return;
-    if (orgs.editing) { keepFocus(() => replaceEdit(section, organizationsEdit())); return; }
-    const info = organizationsInfo();
+    if (orgs.editing) { keepFocus(() => replaceEdit(section, organizationsEditOf(lane))); return; }
+    const info = organizationsInfoOf(lane);
     const items = Array.isArray(info.items) ? info.items : [];
     const canEdit = info.available === true && !editing();
-    const counted = plural(items.length, 'Claude Console organization', 'Claude Console organizations');
+    const counted = plural(items.length, p.orgNoun[0], p.orgNoun[1]);
     const head = h('div', {class: 'section-head'},
-      h('h2', {id: 'organizations-heading', tabindex: '-1'}, 'Organizations'),
-      orgs.saved ? savedLine(orgs.saved) : h('span', {class: 'hint'}, items.length ? counted + ' · their API credit is counted below' : 'Claude Console organizations whose API credit Quota Cache counts'),
-      info.available === true && items.length ? h('div', {class: 'head-actions'}, editButton('Edit organizations', () => startOrganizations(false), false, !canEdit, 'qc-orgs-edit')) : null);
+      h('h2', {id: p.orgsSection + '-heading', tabindex: '-1'}, p.orgsHeading),
+      orgs.saved ? savedLine(orgs.saved) : h('span', {class: 'hint'}, items.length ? counted + ' · their API credit is counted below' : p.orgsHint),
+      info.available === true && items.length ? h('div', {class: 'head-actions'}, editButton('Edit organizations', () => startOrganizationsOf(lane, false), false, !canEdit, orgs.key + '-edit')) : null);
+    const seen = info.available === true ? seenPart(lane, seenOf(lane), items.length === 0) : null;
     let body = null;
     if (items.length) {
       body = h('div', {class: 'card'},
-        h('div', {id: 'qc-orgs-table', class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': 'Claude Console organizations'}, h('table', null,
-          h('thead', null, h('tr', null, h('th', {scope: 'col'}, 'Label'), h('th', {scope: 'col'}, 'Organization ID'))),
+        h('div', {id: orgs.key + '-table', class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': p.orgsLabel}, h('table', null,
+          h('thead', null, h('tr', null, h('th', {scope: 'col'}, 'Label'), h('th', {scope: 'col'}, p.idLabel))),
           h('tbody', null, items.map(item => h('tr', null,
             h('td', {class: 'account'}, item.label),
-            h('td', null, h('span', {class: 'org-id', title: item.organization_id}, shortOrganizationID(item.organization_id)))))))),
-        h('div', {class: 'card-foot'}, h('p', null,
-          'Set each organization’s monthly credit, refill date and Console reading in Claude API credits below. Renaming an organization keeps its values. Removing one keeps them as an orphan you can clear there.')));
+            h('td', null, h('span', {class: 'org-id', title: item.organization_id}, p.shortId(item.organization_id)))))))),
+        seen,
+        h('div', {class: 'card-foot'}, h('p', null, p.orgsFoot)));
     } else if (info.available === true) {
       body = h('div', {class: 'card'}, h('div', {class: 'empty-cta'},
-        h('p', null, 'No Console organizations yet. Add one to start counting its API credit.'),
-        h('button', {id: 'qc-orgs-add', type: 'button', disabled: !canEdit, on: {click: () => startOrganizations(true)}}, 'Add organization')));
+        p.orgsEmpty.map(text => h('p', null, text)),
+        h('button', {id: orgs.key + '-add', type: 'button', disabled: !canEdit, on: {click: () => startOrganizationsOf(lane, true)}}, 'Add organization')),
+      seen);
     }
-    settle(section, [head, ...organizationNotes(), ...(body ? [body] : [])]);
+    settle(section, [head, ...organizationNotesOf(lane), ...(body ? [body] : [])]);
   }
-  function organizationsPlanNow() {
-    const info = organizationsInfo();
-    return organizationsPlan(Array.isArray(info.items) ? info.items : [], orgs.draft, typeof info.revision === 'string' ? info.revision : '',
-      {maxItems: Number.isInteger(info.max_items) ? info.max_items : LIMITS.maxOrganizations, maxOps: Number.isInteger(info.max_ops) ? info.max_ops : LIMITS.maxOrganizationOps, maxBytes: limits(editorInfo()).maxBytes});
+  function organizationsPlanNowOf(lane) {
+    const info = organizationsInfoOf(lane);
+    return organizationsPlan(Array.isArray(info.items) ? info.items : [], lane.orgs.draft, typeof info.revision === 'string' ? info.revision : '',
+      {maxItems: Number.isInteger(info.max_items) ? info.max_items : LIMITS.maxOrganizations, maxOps: Number.isInteger(info.max_ops) ? info.max_ops : LIMITS.maxOrganizationOps, maxBytes: limits(editorInfoOf(lane)).maxBytes},
+      lane.p.rules);
   }
-  function organizationsEdit() {
-    const info = organizationsInfo();
+  function organizationsEditOf(lane) {
+    const {p, orgs} = lane;
+    const org = p.ids.org;
+    const info = organizationsInfoOf(lane);
     const items = Array.isArray(info.items) ? info.items : [];
-    const result = organizationsPlanNow();
+    const result = organizationsPlanNowOf(lane);
     const busy = orgs.saving;
     const rows = items.map((item, index) => {
       const removing = orgs.draft.remove[item.id] === true;
       const typed = orgs.draft.rename[item.id];
       const changed = typed !== undefined && typed.trim() !== item.label;
       const bad = Boolean(result.errors[item.id + ':label'] || orgs.marks[item.id + ':label']);
-      const id = 'qc-org-' + index + '-label';
+      const id = org + '-' + index + '-label';
       const input = h('input', {id, type: 'text', value: typed !== undefined ? typed : item.label, autocomplete: 'off', spellcheck: 'false', disabled: removing || busy,
         'aria-label': 'Label for organization ' + item.organization_id, 'aria-describedby': id + '-caps', 'aria-invalid': bad ? 'true' : null,
-        on: {input: event => { orgs.draft.rename = Object.assign({}, orgs.draft.rename, {[item.id]: event.target.value}); delete orgs.marks[item.id + ':label']; updateOrganizations(); }}});
+        on: {input: event => { orgs.draft.rename = Object.assign({}, orgs.draft.rename, {[item.id]: event.target.value}); delete orgs.marks[item.id + ':label']; updateOrganizationsOf(lane); }}});
       const caps = h('span', {id: id + '-caps', class: 'caps', 'data-row': item.id});
-      fillOrganizationCaps(caps, item, result);
+      fillOrganizationCapsOf(lane, caps, item, result);
       const row = h('div', {class: 'org-edit'},
         h('div', {class: 'edit-grid orgs-grid'},
           h('div', {class: 'field'}, box(boxClasses({changed: changed && !removing, bad, busy}) + (removing ? ' is-removed' : ''), null, input), caps),
           h('div', {class: 'field'}, h('span', {class: 'org-id' + (removing ? ' muted' : '')}, item.organization_id)),
-          h('div', {class: 'field row-acts'}, removing ? null : link('Remove', () => { orgs.confirmRemove = item.id; renderAll(); focusLater('qc-org-keep'); }, {id: 'qc-org-' + index + '-remove', disabled: busy, 'aria-expanded': orgs.confirmRemove === item.id ? 'true' : 'false', 'aria-label': 'Remove ' + item.label}))));
+          h('div', {class: 'field row-acts'}, removing ? null : link('Remove', () => { orgs.confirmRemove = item.id; renderAll(); focusLater(org + '-keep'); }, {id: org + '-' + index + '-remove', disabled: busy, 'aria-expanded': orgs.confirmRemove === item.id ? 'true' : 'false', 'aria-label': 'Remove ' + item.label}))));
       if (orgs.confirmRemove === item.id && !removing) {
         const label = typed !== undefined && typed.trim() ? typed.trim() : item.label;
-        row.append(h('div', {class: 'alert warn confirm', role: 'group', 'aria-labelledby': 'qc-org-remove-question'},
-          h('p', {id: 'qc-org-remove-question'}, removeQuestion(label)),
+        row.append(h('div', {class: 'alert warn confirm', role: 'group', 'aria-labelledby': org + '-remove-question'},
+          h('p', {id: org + '-remove-question'}, removeQuestion(label, p.sameOrganization)),
           h('div', {class: 'edit-acts'},
-            h('button', {id: 'qc-org-keep', type: 'button', class: 'secondary', on: {click: () => { orgs.confirmRemove = null; renderAll(); focusFirst('qc-org-' + index + '-remove'); }}}, 'Keep'),
-            h('button', {id: 'qc-org-remove', type: 'button', class: 'danger', on: {click: () => {
+            h('button', {id: org + '-keep', type: 'button', class: 'secondary', on: {click: () => { orgs.confirmRemove = null; renderAll(); focusFirst(org + '-' + index + '-remove'); }}}, 'Keep'),
+            h('button', {id: org + '-remove', type: 'button', class: 'danger', on: {click: () => {
               orgs.draft.remove = Object.assign({}, orgs.draft.remove, {[item.id]: true});
               orgs.confirmRemove = null;
               renderAll();
-              focusFirst('qc-org-' + index + '-undo');
+              focusFirst(org + '-' + index + '-undo');
             }}}, 'Remove'))));
       }
       return row;
     });
-    const addBad = key => Boolean(result.errors[key] || orgs.marks[key]);
-    const addLabel = h('input', {id: 'qc-org-add-label', type: 'text', value: orgs.draft.add.label, autocomplete: 'off', spellcheck: 'false', disabled: busy, 'aria-describedby': 'qc-org-add-label-caps', 'aria-invalid': addBad('add:label') ? 'true' : null,
-      on: {input: event => { orgs.draft.add = Object.assign({}, orgs.draft.add, {label: event.target.value}); delete orgs.marks['add:label']; updateOrganizations(); }}});
-    const addID = h('input', {id: 'qc-org-add-id', type: 'text', value: orgs.draft.add.organizationId, autocomplete: 'off', spellcheck: 'false', disabled: busy, 'aria-describedby': 'qc-org-add-id-caps', 'aria-invalid': addBad('add:organizationId') ? 'true' : null,
-      on: {input: event => { orgs.draft.add = Object.assign({}, orgs.draft.add, {organizationId: event.target.value}); delete orgs.marks['add:organizationId']; updateOrganizations(); }}});
+    const addBad = key => Boolean(addErrorOf(orgs, result, key));
+    const addLabel = h('input', {id: org + '-add-label', type: 'text', value: orgs.draft.add.label, autocomplete: 'off', spellcheck: 'false', disabled: busy, 'aria-describedby': org + '-add-label-caps', 'aria-invalid': addBad('add:label') ? 'true' : null,
+      on: {input: event => { orgs.draft.add = Object.assign({}, orgs.draft.add, {label: event.target.value, picked: false}); delete orgs.marks['add:label']; updateOrganizationsOf(lane); }}});
+    const addID = h('input', {id: org + '-add-id', type: 'text', value: orgs.draft.add.organizationId, autocomplete: 'off', spellcheck: 'false', disabled: busy, 'aria-describedby': org + '-add-id-caps', 'aria-invalid': addBad('add:organizationId') ? 'true' : null,
+      on: {input: event => { orgs.draft.add = Object.assign({}, orgs.draft.add, {organizationId: event.target.value}); delete orgs.marks['add:organizationId']; updateOrganizationsOf(lane); }}});
     const max = Number.isInteger(info.max_items) ? info.max_items : LIMITS.maxOrganizations;
     const addRow = h('div', {class: 'org-edit org-add'},
       h('div', {class: 'org-head'}, h('b', null, 'Add an organization'), secondary(max + ' at most')),
       h('div', {class: 'edit-grid orgs-grid'},
-        h('div', {class: 'field'}, h('label', {class: 'label', for: 'qc-org-add-label'}, 'Label'),
-          box(boxClasses({changed: orgs.draft.add.label !== '', bad: addBad('add:label'), busy}), null, addLabel), h('span', {id: 'qc-org-add-label-caps', class: 'caps', 'data-row': 'add:label'})),
-        h('div', {class: 'field'}, h('label', {class: 'label', for: 'qc-org-add-id'}, 'Organization ID'),
-          box(' id' + boxClasses({changed: orgs.draft.add.organizationId !== '', bad: addBad('add:organizationId'), busy}), null, addID), h('span', {id: 'qc-org-add-id-caps', class: 'caps', 'data-row': 'add:organizationId'}))));
-    const form = h('form', {novalidate: true, class: 'card', 'aria-label': 'Claude Console organizations', 'aria-busy': busy ? 'true' : null, on: {submit: event => { event.preventDefault(); saveOrganizations(); }}},
-      items.length ? h('div', {class: 'edit-head orgs-grid', 'aria-hidden': 'true'}, h('span', null, 'Label'), h('span', null, 'Organization ID'), h('span')) : null,
-      rows, addRow, h('div', {class: 'foot-slot'}));
-    const nodes = [editHead('organizations-heading', 'Organizations', orgs, result.unsaved), form];
-    fillOrganizationAddCaps(form, result);
-    form.querySelector('.foot-slot').replaceWith(organizationsFoot(result, null));
+        h('div', {class: 'field'}, h('label', {class: 'label', for: org + '-add-label'}, 'Label'),
+          box(boxClasses({changed: orgs.draft.add.label !== '', bad: addBad('add:label'), busy}), null, addLabel), h('span', {id: org + '-add-label-caps', class: 'caps', 'data-row': 'add:label'})),
+        h('div', {class: 'field'}, h('label', {class: 'label', for: org + '-add-id'}, p.idLabel),
+          box(' id' + boxClasses({changed: orgs.draft.add.organizationId !== '', bad: addBad('add:organizationId'), busy}), null, addID), h('span', {id: org + '-add-id-caps', class: 'caps', 'data-row': 'add:organizationId'}))));
+    const form = h('form', {novalidate: true, class: 'card', 'aria-label': p.orgsLabel, 'aria-busy': busy ? 'true' : null, on: {submit: event => { event.preventDefault(); saveOrganizationsOf(lane); }}},
+      items.length ? h('div', {class: 'edit-head orgs-grid', 'aria-hidden': 'true'}, h('span', null, 'Label'), h('span', null, p.idLabel), h('span')) : null,
+      rows, addRow, info.available === true ? seenPart(lane, seenOf(lane), false) : null, h('div', {class: 'foot-slot'}));
+    const nodes = [editHead(p.orgsSection + '-heading', p.orgsHeading, orgs, result.unsaved), form];
+    fillOrganizationAddCapsOf(lane, form, result);
+    form.querySelector('.foot-slot').replaceWith(organizationsFootOf(lane, result, null));
     return nodes;
   }
   // A label's caption, which keeps every node that did not change (settle),
   // so the window taking focus again (resync) leaves its Undo in place.
-  function fillOrganizationCaps(caps, item, result) {
+  function fillOrganizationCapsOf(lane, caps, item, result) {
+    const {p, orgs} = lane;
     const key = item.id + ':label';
     const removing = orgs.draft.remove[item.id] === true;
     const typed = orgs.draft.rename[item.id];
     const error = result.errors[key] || (orgs.marks[key] && orgs.marks[key].text);
     if (removing) {
-      const index = organizationIndex(item.id);
+      const index = organizationIndexOf(lane, item.id);
       settle(caps, [h('span', {class: 'cap'}, h('span', {class: 'dirty'}, 'removing'), sep(), link('Undo', () => {
-        const remove = Object.assign({}, orgs.draft.remove); delete remove[item.id]; orgs.draft.remove = remove; renderAll(); focusFirst('qc-org-' + index + '-remove');
-      }, {id: 'qc-org-' + index + '-undo', disabled: orgs.saving}))]);
+        const remove = Object.assign({}, orgs.draft.remove); delete remove[item.id]; orgs.draft.remove = remove; renderAll(); focusFirst(p.ids.org + '-' + index + '-remove');
+      }, {id: p.ids.org + '-' + index + '-undo', disabled: orgs.saving}))]);
       return;
     }
     const nodes = [];
     if (error) nodes.push(h('span', {class: 'cap bad'}, error));
     if (typed !== undefined && typed.trim() !== item.label) {
       nodes.push(h('span', {class: 'cap'}, h('span', {class: 'dirty'}, 'changed'), sep(), 'was ', h('b', null, item.label), sep(), link('Undo', () => {
-        const rename = Object.assign({}, orgs.draft.rename); delete rename[item.id]; orgs.draft.rename = rename; renderAll(); focusLater('qc-org-' + organizationIndex(item.id) + '-label');
+        const rename = Object.assign({}, orgs.draft.rename); delete rename[item.id]; orgs.draft.rename = rename; renderAll(); focusLater(p.ids.org + '-' + organizationIndexOf(lane, item.id) + '-label');
       }, {disabled: orgs.saving})));
     }
     settle(caps, nodes);
   }
-  const organizationIndex = id => (organizationsInfo().items || []).findIndex(item => item.id === id);
-  function fillOrganizationAddCaps(root, result) {
+  const organizationIndexOf = (lane, id) => (organizationsInfoOf(lane).items || []).findIndex(item => item.id === id);
+  // The add row's captions. An organization that is valid but looks like
+  // what the provider's settings show under another name is said to be one,
+  // without holding Save off (PROVIDERS' idWarning).
+  function fillOrganizationAddCapsOf(lane, root, result) {
+    const {p, orgs} = lane;
     const labelCaps = root.querySelector('[data-row="add:label"]');
     const idCaps = root.querySelector('[data-row="add:organizationId"]');
     if (!labelCaps || !idCaps) return;
-    const message = key => result.errors[key] || (orgs.marks[key] && orgs.marks[key].text);
+    const message = key => addErrorOf(orgs, result, key);
     settle(labelCaps, [message('add:label') ? h('span', {class: 'cap bad'}, message('add:label')) : h('span', {class: 'cap'}, 'Up to 64 characters, not used by another organization.')]);
     const nodes = [];
+    const warning = p.idWarning(orgs.draft.add.organizationId);
     if (message('add:organizationId')) nodes.push(h('span', {class: 'cap bad'}, message('add:organizationId')));
-    else if (result.normalized !== null && result.normalized !== orgs.draft.add.organizationId) nodes.push(h('span', {class: 'cap'}, 'Will be saved as ', h('span', {class: 'num'}, result.normalized)));
+    else {
+      if (warning) nodes.push(h('span', {class: 'cap warn'}, warning));
+      if (result.normalized !== null && result.normalized !== orgs.draft.add.organizationId) nodes.push(h('span', {class: 'cap'}, 'Will be saved as ', h('span', {class: 'num'}, result.normalized)));
+    }
     if (message('add:')) nodes.push(h('span', {class: 'cap bad'}, message('add:')));
-    nodes.push(h('span', {class: 'cap help'}, 'Console → Settings → Organization. It is not a secret.'));
+    nodes.push(h('span', {class: 'cap help'}, p.idHelp(seenOf(lane).length > 0)));
     settle(idCaps, nodes);
   }
   // The organizations card's foot: foot brought up to date, or a new one.
-  function organizationsFoot(result, foot) {
+  function organizationsFootOf(lane, result, foot) {
+    const {p, orgs} = lane;
     const session = sessionState() || {};
     const blocked = session.block || (result.tooLarge ? 'Too many changes for one save; undo some, save, then make the rest.' : null);
     const plan = {changes: result.changes, errors: result.count};
     if (foot) return fillFoot(foot, orgs, plan, blocked, session.note || null);
-    return editFoot(orgs, 'Save applies every change together, or none of them. An Organization ID cannot be changed: a different ID is a different organization, so remove this one and add the other.',
-      plan, blocked, cancelOrganizations, session.note || null);
+    return editFoot(orgs, p.orgsEditHelp, plan, blocked, () => cancelOrganizationsOf(lane), session.note || null);
   }
   // On each keystroke only the captions, the boxes and the foot change, so
   // the field being typed in is never rebuilt.
-  function updateOrganizations() {
-    const section = $('organizations');
+  function updateOrganizationsOf(lane) {
+    const {p, orgs} = lane;
+    const section = $(p.orgsSection);
     if (!section || !orgs.editing) return;
-    const result = organizationsPlanNow();
-    const items = organizationsInfo().items || [];
+    const result = organizationsPlanNowOf(lane);
+    const items = organizationsInfoOf(lane).items || [];
     items.forEach((item, index) => {
       const caps = section.querySelector('[data-row="' + CSS.escape(item.id) + '"]');
-      if (caps) fillOrganizationCaps(caps, item, result);
-      const input = within(section, 'qc-org-' + index + '-label');
+      if (caps) fillOrganizationCapsOf(lane, caps, item, result);
+      const input = within(section, p.ids.org + '-' + index + '-label');
       if (input) {
         const typed = orgs.draft.rename[item.id];
         const removing = orgs.draft.remove[item.id] === true;
@@ -1367,22 +1591,40 @@
         input.parentElement.className = 'box' + boxClasses({changed: typed !== undefined && typed.trim() !== item.label && !removing, bad, busy: orgs.saving}) + (removing ? ' is-removed' : '');
       }
     });
-    const label = within(section, 'qc-org-add-label');
-    const id = within(section, 'qc-org-add-id');
-    if (label) fillBox(label, '', {changed: orgs.draft.add.label !== '', bad: Boolean(result.errors['add:label'] || orgs.marks['add:label']), busy: orgs.saving});
+    const label = within(section, p.ids.org + '-add-label');
+    const id = within(section, p.ids.org + '-add-id');
+    if (label) fillBox(label, '', {changed: orgs.draft.add.label !== '', bad: Boolean(addErrorOf(orgs, result, 'add:label')), busy: orgs.saving});
     if (id) fillBox(id, ' id', {changed: orgs.draft.add.organizationId !== '', bad: Boolean(result.errors['add:organizationId'] || orgs.marks['add:organizationId']), busy: orgs.saving});
-    fillOrganizationAddCaps(section, result);
+    fillOrganizationAddCapsOf(lane, section, result);
     const foot = section.querySelector('.edit-foot');
-    if (foot) organizationsFoot(result, foot);
+    if (foot) organizationsFootOf(lane, result, foot);
     const hint = section.querySelector('.section-head .hint');
     const head = section.querySelector('.section-head');
     if (hint) hint.textContent = result.unsaved + ' unsaved';
     else if (head && result.unsaved > 0) head.append(h('span', {class: 'hint'}, result.unsaved + ' unsaved'));
     if (hint && result.unsaved === 0) hint.remove();
   }
-  async function saveOrganizations() {
-    const result = organizationsPlanNow();
-    if (result.batch === null || orgs.saving) return;
+  const renderOrganizations = () => renderOrganizationsOf(claudeLane);
+  const organizationsPlanNow = () => organizationsPlanNowOf(claudeLane);
+  const updateOrganizations = () => updateOrganizationsOf(claudeLane);
+  // What a refusal says on a lane's card: the organization and the reading
+  // named as its provider names them. outcomeOf's words are Claude's.
+  function refusalWords(lane, outcome) {
+    if (outcome.code === 'invalid_organization_id') return lane.p.rules.idMessage;
+    if (outcome.code === 'invalid_reading_amount') return lane.p.words.amount;
+    return outcome.text;
+  }
+  async function saveOrganizationsOf(lane) {
+    const {p, orgs} = lane;
+    const result = organizationsPlanNowOf(lane);
+    if (result.batch === null || orgs.saving) {
+      // A save tried on a picked organization says its label is to fix.
+      if (!orgs.saving && orgs.draft.add.picked === true) {
+        orgs.draft.add = Object.assign({}, orgs.draft.add, {picked: false});
+        updateOrganizationsOf(lane);
+      }
+      return;
+    }
     orgs.saving = true;
     orgs.status = null;
     orgs.marks = {};
@@ -1394,13 +1636,13 @@
         setEditing(orgs, false);
         orgs.draft = emptyOrganizationsDraft();
         orgs.base = null;
-        showSaved(orgs, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(result.changes, 'change', 'changes') + '. Claude API credits below lists them from the next view update.');
+        showSaved(orgs, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(result.changes, 'change', 'changes') + p.orgsSaved);
         page.reload();
         break;
       case 'conflict': {
         // The rows become the plugin's list, and the renames and removals
         // made against the old one go, by name; the unsaved add row stays.
-        const dropped = organizationEdits(Array.isArray(organizationsInfo().items) ? organizationsInfo().items : [], orgs.draft).map(item => item.label);
+        const dropped = organizationEdits(Array.isArray(organizationsInfoOf(lane).items) ? organizationsInfoOf(lane).items : [], orgs.draft).map(item => item.label);
         orgs.base = {revision: outcome.revision, items: (outcome.organizations || []).filter(isObject)};
         orgs.draft = organizationsAfterConflict(orgs.draft);
         orgs.status = {tone: 'bad', text: organizationsConflictText(dropped)};
@@ -1410,8 +1652,8 @@
       case 'operation': {
         const ref = result.refs[outcome.op];
         const key = ref ? (ref.row === 'add' ? 'add:' + (outcome.field === 'organizationId' ? 'organizationId' : outcome.field === '' ? '' : 'label') : ref.row + ':label') : '';
-        if (ref) orgs.marks[key] = {text: outcome.text, tone: 'bad'};
-        orgs.status = {tone: 'bad', text: ref ? FIELD_FOOT : outcome.text};
+        if (ref) orgs.marks[key] = {text: refusalWords(lane, outcome), tone: 'bad'};
+        orgs.status = {tone: 'bad', text: ref ? FIELD_FOOT : refusalWords(lane, outcome)};
         orgs.failed = true;
         break;
       }
@@ -1430,17 +1672,18 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Claude API credits: one row per published organization, with its monthly
-  // credit, refill date and Console reading, and the orphans to clear
+  // API credits: one row per published organization of a lane, with its
+  // monthly credit, refill date and reading (Console's for Claude, API
+  // Platform's for OpenAI), and the orphans to clear
 
-  const settingsOf = account => overlaid(account.settings, credits.overlay[account.id]);
+  const settingsIn = (lane, account) => overlaid(account.settings, lane.credits.overlay[account.id]);
   const creditName = account => account.label;
   // Why a row is locked: every organization is editable while the saved
   // settings can be read.
   const NOT_EDITABLE = 'This organization cannot be edited here.';
-  // Whether a Console reading would settle what the row says: it is out, it
-  // is counted but incomplete for want of one, or it lacks only a refill
-  // date, which a reading stands in for.
+  // Whether a reading would settle what the row says: it is out, it is
+  // counted but incomplete for want of one, or it lacks only a refill date,
+  // which a reading stands in for.
   const READING_SETTLES = ['meterStartedLate', 'meterGap', 'readingOnRefillDay', 'claudeCodeRefused'];
   function wantsReading(account) {
     const issues = Array.isArray(account.dataIssues) ? account.dataIssues : [];
@@ -1465,17 +1708,18 @@
       default: return [account.state || 'Unknown', ''];
     }
   }
-  function unusedText(reason, at) {
+  function unusedText(reason, at, p) {
     switch (reason) {
       case '': return localDateTime(at) + ' · ' + utcStamp(at) + ' · in use';
       case 'beforeRefill': return 'on ' + utcDay(at) + ', before the last refill; not used';
-      case 'otherOrganization': return 'for another Organization ID; not used';
+      case 'otherOrganization': return p.otherOrganization;
       case 'tooOld': return 'over 31 days old; not used';
       case 'future': return 'dated in the future; not used';
       default: return 'on ' + utcDay(at) + '; not used';
     }
   }
-  function creditCells(account, now) {
+  function creditCellsOf(lane, account, now) {
+    const {p} = lane;
     const s = account.settings || {};
     // A value entered here carries its mark; it is the only kind there is.
     const credit = account.monthlyCreditSource === 'dashboard'
@@ -1485,7 +1729,7 @@
       ? [utcDay(account.renewsAtEpoch), secondary(setMark(), 'entered here · ', untilText(account.renewsAtEpoch, now))]
       : [muted('Not set')];
     const reading = s.reading
-      ? [h('span', {class: 'num'}, moneyText(s.reading.remainingUsd)), secondary(unusedText(s.readingUnusedReason || '', s.reading.atEpoch))]
+      ? [h('span', {class: 'num'}, moneyText(s.reading.remainingUsd)), secondary(unusedText(s.readingUnusedReason || '', s.reading.atEpoch, p))]
       : [muted('None this cycle')];
     let used;
     if (account.hasEstimate) {
@@ -1499,10 +1743,10 @@
     else used = [muted('—')];
     const [word, tone] = statePill(account);
     const statusCell = [h('span', {class: 'pill' + (tone ? ' ' + tone : '')}, word), account.issue ? secondary(account.issue) : null];
-    const info = editorInfo();
+    const info = editorInfoOf(lane);
     if (info && info.available === true && s.editable && wantsReading(account)) {
-      statusCell.push(h('span', {class: 'secondary'}, link('Enter Console reading', () => enterReading(account.id),
-        {id: 'qc-reading-' + account.id, 'data-account': account.id, disabled: editing(), 'aria-label': 'Enter Console reading for ' + creditName(account)})));
+      statusCell.push(h('span', {class: 'secondary'}, link(p.statusLink, () => enterReadingOf(lane, account.id),
+        {id: p.ids.reading + account.id, 'data-account': account.id, disabled: editing(), 'aria-label': p.statusLink + ' for ' + creditName(account)})));
     }
     return [credit, refill, reading, used, statusCell];
   }
@@ -1515,60 +1759,65 @@
     return (pool.lowerBound ? '≤ ' : '≈ ') + pool.leftText + ' left of ' + pool.monthlyCreditText + ' across ' + plural(pool.countedCount, 'organization', 'organizations') +
       (refill ? ' · next refill ' + strings(refill.accountIds).map(label).join(', ') + ' ' + utcDay(refill.refillAtEpoch) + ', +' + refill.gainText : '');
   }
-  // A Console reading for the account id names, as the status now lists it.
-  function enterReading(id) {
-    const account = accountsOf(creditDocument()).find(item => item.id === id);
+  // A reading for the account id names, as the status now lists it.
+  function enterReadingOf(lane, id) {
+    const {p, credits} = lane;
+    const account = accountsOf(creditDocumentOf(lane)).find(item => item.id === id);
     if (!account || editing()) return;
-    startCredits();
-    credits.draft = editCredit(credits.draft, {id: account.id, settings: settingsOf(account)}, creditName(account), 'reading', {kind: 'set', amount: '', at: localInputValue(nowSeconds())});
+    startCreditsOf(lane);
+    credits.draft = editCredit(credits.draft, {id: account.id, settings: settingsIn(lane, account)}, creditName(account), 'reading', {kind: 'set', amount: '', at: localInputValue(nowSeconds())});
     renderAll();
-    const index = accountsOf(creditDocument()).findIndex(item => item.id === account.id);
-    focusLater('qc-credit-' + index + '-amount');
+    const index = accountsOf(creditDocumentOf(lane)).findIndex(item => item.id === account.id);
+    focusLater(p.ids.credit + '-' + index + '-amount');
   }
-  function startCredits() {
+  function startCreditsOf(lane) {
+    const {p, credits} = lane;
     if (editing()) return;
     credits.draft = emptyDraft();
     credits.overlay = {};
     setEditing(credits, true);
     renderAll();
-    const first = firstControl('api-credits');
+    const first = firstControl(p.creditsSection);
     if (first) first.focus();
   }
-  function cancelCredits() {
+  function cancelCreditsOf(lane) {
+    const {credits} = lane;
     credits.draft = emptyDraft();
     credits.overlay = {};
     setEditing(credits, false);
     renderAndRefocus(credits);
   }
-  function renderCredits() {
-    const section = $('api-credits');
+  function renderCreditsOf(lane) {
+    const {p, credits} = lane;
+    const section = $(p.creditsSection);
     if (!section) return;
-    const editor = editorInfo();
-    section.hidden = editor === null;
-    if (!editor) return;
-    if (credits.editing) { keepFocus(() => replaceEdit(section, creditsEdit())); return; }
-    const state = creditState();
-    const doc = creditDocument();
+    const editor = editorInfoOf(lane);
+    const state = creditStateOf(lane);
+    const doc = creditDocumentOf(lane);
+    const orphans = orphansOf(lane);
+    // A card being edited stays, whatever the status says, so it can be
+    // saved or cancelled.
+    const shown = editor !== null && (p.creditsCardAlways || credits.editing || doc !== null || orphans.length > 0 || heldCreditsOf(editor).length > 0);
+    section.hidden = !shown;
+    if (!shown) return;
+    if (credits.editing) { keepFocus(() => replaceEdit(section, creditsEditOf(lane))); return; }
     const accounts = accountsOf(doc);
-    const orphans = creditOrphans();
-    const off = unavailableText(editor);
+    const off = unavailableText(editor, p);
     const canEdit = editor.available === true && (accounts.some(account => account.settings && account.settings.editable) || orphans.length > 0);
     const counted = doc && doc.pool ? doc.pool.countedCount : 0;
     const editLabel = creditsEditLabel(accounts, counted);
     const head = h('div', {class: 'section-head'},
-      h('h2', {id: 'api-credits-heading', tabindex: '-1'}, 'Claude API credits'),
+      h('h2', {id: p.creditsSection + '-heading', tabindex: '-1'}, p.creditsHeading),
       credits.saved ? savedLine(credits.saved) : h('span', {class: 'hint'}, off ? 'Saved values cannot be read' : doc ? creditsHint(doc) : state ? 'No organizations yet' : 'Waiting for Quota Cache’s first figures'),
-      canEdit ? h('div', {class: 'head-actions'}, editButton(editLabel, startCredits, editLabel === SET_CREDITS, editing(), 'qc-credits-edit')) : null);
+      canEdit ? h('div', {class: 'head-actions'}, editButton(editLabel, () => startCreditsOf(lane), editLabel === SET_CREDITS, editing(), credits.key + '-edit')) : null);
     const alerts = off ? [h('div', {class: 'alert error', role: 'alert'}, off)] : [];
-    const orphanLines = orphans.map(orphan => h('p', {class: 'orphan'}, 'Saved values for an organization no longer listed under Organizations: ', h('span', {class: 'num'}, orphan.id), canEdit ? ' · clear them under ' + editLabel : ''));
+    const orphanLines = orphans.map(orphan => h('p', {class: 'orphan'}, 'Saved values for an organization no longer listed under ' + p.listedUnder + ': ', h('span', {class: 'num'}, orphan.id), canEdit ? ' · clear them under ' + editLabel : ''));
     const heldLines = heldLinesOf(editor);
-    const unreadable = organizationsUnreadable();
+    const unreadable = organizationsUnreadableOf(lane);
     if (!doc) {
       settle(section, [head, ...alerts, h('div', {class: 'card'}, h('p', {class: 'empty'}, !state
         ? 'Quota Cache has not worked out its credit figures yet. They appear here shortly after it starts.'
-        : unreadable
-          ? 'No Claude Console organizations are listed: Quota Cache cannot read its organizations file. Organizations can be added above once it can read that file again.'
-          : 'No Claude Console organizations yet. Add one under Organizations above, then set its monthly credit and refill date here.'), orphanLines, heldLines)]);
+        : unreadable ? p.noneReadable : p.noneListed), orphanLines, heldLines)]);
       return;
     }
     const now = nowSeconds();
@@ -1580,19 +1829,19 @@
         ' ' + approx + ' ' + pool.usedText + ' used of ' + pool.monthlyCreditText + ' this cycle · ' + approx + ' ' + pool.leftText + ' left' + (typeof pool.fullAtEpoch === 'number' ? ' · all refilled by ' + utcDay(pool.fullAtEpoch) : ''))))
       : null;
     const table = h('table', null,
-      h('thead', null, h('tr', null, ['Organization', 'Monthly credit', 'Refills (UTC)', 'Console reading', 'Credit used (est.)', 'Status'].map(title => h('th', {scope: 'col'}, title)))),
+      h('thead', null, h('tr', null, ['Organization', 'Monthly credit', 'Refills (UTC)', p.readingNoun, 'Credit used (est.)', 'Status'].map(title => h('th', {scope: 'col'}, title)))),
       h('tbody', null, accounts.map(account => {
-        const cells = creditCells(account, now);
+        const cells = creditCellsOf(lane, account, now);
         return h('tr', null,
-          h('td', {class: 'account', title: account.organizationId}, creditName(account), secondary(shortOrganizationID(account.organizationId))),
+          h('td', {class: 'account', title: account.organizationId}, creditName(account), secondary(p.shortId(account.organizationId))),
           cells.map(content => h('td', null, content)));
       })),
       total);
     const pricedOn = doc.pricing && /^\d{4}-\d{2}-\d{2}$/.test(doc.pricing.asOf) ? utcDay(dateEpoch(doc.pricing.asOf)) : doc.pricing ? doc.pricing.asOf : '';
-    settle(section, [head, ...alerts, h('div', {class: 'card'}, h('div', {id: 'qc-credits-table', class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': 'Claude API credits by organization'}, table), orphanLines, heldLines,
-      h('div', {class: 'card-foot'}, h('p', null, 'You set monthly credits, refill dates and Console readings here, and organizations above. ' +
+    settle(section, [head, ...alerts, h('div', {class: 'card'}, h('div', {id: credits.key + '-table', class: 'table-wrap', tabindex: '0', role: 'region', 'aria-label': p.creditsLabel}, table), orphanLines, heldLines,
+      h('div', {class: 'card-foot'}, h('p', null, p.creditsFootIntro +
         (accounts.some(account => account.monthlyCreditSource === 'dashboard' || account.renewsSource === 'dashboard') ? '● marks a value entered here. ' : '') +
-        'Spend is metered from CPA traffic and priced at Anthropic’s list prices' + (pricedOn ? ' of ' + pricedOn : '') + '. Quota Glance 0.8.0 or newer shows these figures, and Reset Priority routes by them when its API-credit routing is on.')))]);
+        p.creditsFoot(pricedOn))))]);
   }
   // One line per held value, with nothing to press: clearing one could delete
   // values an organization in the unreadable file still uses.
@@ -1600,107 +1849,114 @@
     return heldCreditsOf(editor).map(row => h('p', {class: 'orphan'}, 'Saved values kept while Quota Cache cannot read its organizations file: ', h('span', {class: 'num'}, row.id),
       ' · used again once the file is fixed or a good copy put back'));
   }
-  function creditsPlanNow() {
-    return creditPlan(accountsOf(creditDocument()), credits.draft, nowSeconds(), settingsOf, {maxItems: limits(editorInfo()).maxApiCreditItems, maxBytes: limits(editorInfo()).maxBytes});
+  function creditsPlanNowOf(lane) {
+    const editor = editorInfoOf(lane);
+    return creditPlan(accountsOf(creditDocumentOf(lane)), lane.credits.draft, nowSeconds(), account => settingsIn(lane, account),
+      {maxItems: limits(editor).maxApiCreditItems, maxBytes: limits(editor).maxBytes}, lane.p.creditsKind);
   }
-  const markOf = (id, key) => credits.marks[id + ':' + key] || null;
-  function editCreditField(account, key, edit, focus) {
-    credits.draft = editCredit(credits.draft, {id: account.id, settings: settingsOf(account)}, creditName(account), key, edit);
+  const markOf = (lane, id, key) => lane.credits.marks[id + ':' + key] || null;
+  function editCreditFieldOf(lane, account, key, edit) {
+    const {credits} = lane;
+    credits.draft = editCredit(credits.draft, {id: account.id, settings: settingsIn(lane, account)}, creditName(account), key, edit);
     // A mark is about the value it was left under; a new one replaces it.
     const prefix = account.id + ':' + key;
     for (const at of Object.keys(credits.marks)) if (at.startsWith(prefix)) delete credits.marks[at];
   }
-  function creditsEdit() {
-    const doc = creditDocument();
+  function creditsEditOf(lane) {
+    const {p, credits} = lane;
+    const doc = creditDocumentOf(lane);
     const accounts = accountsOf(doc);
     const now = nowSeconds();
     const busy = credits.saving;
     const rows = accounts.map((account, index) => {
-      const settings = settingsOf(account);
+      const settings = settingsIn(lane, account);
       const name = creditName(account);
-      const idOf = part => 'qc-credit-' + index + '-' + part;
+      const idOf = part => p.ids.credit + '-' + index + '-' + part;
       // Every row's fields share their visible labels, so each input is
       // named by its organization first, then its label.
       const named = part => idOf('name') + ' ' + idOf(part);
       const head = h('div', {class: 'org-head'}, h('b', {id: idOf('name')}, name), secondary(account.organizationId));
       if (credits.gone.has(account.id)) return h('div', {class: 'org-edit'}, head, h('p', {class: 'locked'}, 'Quota Cache no longer offers this organization for editing, so your change to it was dropped. Cancel, then select Refresh view to see why.'));
       if (!settings.editable) return h('div', {class: 'org-edit'}, head, h('p', {class: 'locked'}, NOT_EDITABLE));
-      const row = creditRow(settings, credits.draft.rows[account.id], now);
+      const row = creditRow(settings, credits.draft.rows[account.id], now, p.words);
       const monthly = h('input', {id: idOf('monthly'), type: 'text', inputmode: 'decimal', value: row.monthlyUsd.text, placeholder: 'not set', disabled: busy, spellcheck: 'false', autocomplete: 'off', 'aria-labelledby': named('monthly-label'), 'aria-describedby': idOf('monthly-caps'),
-        on: {input: event => { editCreditField(account, 'monthlyUsd', {kind: 'set', text: event.target.value}); updateCredits(); }}});
+        on: {input: event => { editCreditFieldOf(lane, account, 'monthlyUsd', {kind: 'set', text: event.target.value}); updateCreditsOf(lane); }}});
       const refill = h('input', {id: idOf('refill'), type: 'date', value: row.renews.text, min: '2000-01-01', max: '2099-12-31', disabled: busy, 'aria-labelledby': named('refill-label'), 'aria-describedby': idOf('refill-caps'),
         on: {
-          input: event => { editCreditField(account, 'renews', {kind: 'set', text: event.target.value, incomplete: event.target.validity.badInput || undefined}); updateCredits(); },
-          focus: () => { credits.focused = account.id; updateCredits(); },
-          blur: () => { credits.focused = null; updateCredits(); },
+          input: event => { editCreditFieldOf(lane, account, 'renews', {kind: 'set', text: event.target.value, incomplete: event.target.validity.badInput || undefined}); updateCreditsOf(lane); },
+          focus: () => { credits.focused = account.id; updateCreditsOf(lane); },
+          blur: () => { credits.focused = null; updateCreditsOf(lane); },
         }});
       return h('div', {class: 'org-edit', 'data-account': account.id},
         head,
         h('div', {class: 'edit-grid'},
           h('div', {class: 'field'}, h('label', {class: 'label', for: idOf('monthly'), id: idOf('monthly-label')}, 'Monthly credit, USD'), box('', '$', monthly), h('span', {id: idOf('monthly-caps'), class: 'caps', 'data-caps': 'monthlyUsd'})),
           h('div', {class: 'field'}, h('label', {class: 'label', for: idOf('refill'), id: idOf('refill-label')}, 'Refills on, UTC'), box('', null, refill), h('span', {id: idOf('refill-caps'), class: 'caps', 'data-caps': 'renews'})),
-          readingPart(account, settings, row, index, busy, now)));
+          readingPartOf(lane, account, settings, row, index, busy, now)));
     });
-    const orphans = liveOrphans(creditOrphans(), credits.gone, credits.revised).map((orphan, index) => {
+    const orphans = liveOrphans(orphansOf(lane), credits.gone, credits.revised).map((orphan, index) => {
       const removing = credits.draft.remove[orphan.id] !== undefined;
-      const idOf = part => 'qc-credit-orphan-' + index + '-' + part;
-      return h('p', {class: 'orphan'}, 'Saved values for an organization no longer listed under Organizations: ', h('span', {class: 'num'}, orphan.id), sep(),
+      const idOf = part => p.ids.credit + '-orphan-' + index + '-' + part;
+      return h('p', {class: 'orphan'}, 'Saved values for an organization no longer listed under ' + p.listedUnder + ': ', h('span', {class: 'num'}, orphan.id), sep(),
         removing ? [h('span', {class: 'dirty'}, 'removing'), sep(), link('Undo', () => { credits.draft = markRemoved(credits.draft, orphan, false); renderAll(); focusFirst(idOf('remove')); }, {id: idOf('undo'), disabled: busy})]
           : link('Remove', () => { credits.draft = markRemoved(credits.draft, orphan, true); renderAll(); focusFirst(idOf('undo')); }, {id: idOf('remove'), disabled: busy, 'aria-label': 'Remove saved values for ' + orphan.id}));
     });
-    const form = h('form', {novalidate: true, class: 'card', 'aria-label': 'Monthly credits, refill dates and Console readings', 'aria-busy': busy ? 'true' : null, on: {submit: event => { event.preventDefault(); saveCredits(); }}},
-      rows, orphans, heldLinesOf(editorInfo()), h('div', {class: 'foot-slot'}));
-    const plan = creditsPlanNow();
-    const nodes = [editHead('api-credits-heading', 'Claude API credits', credits, plan.unsaved), form];
-    fillCredits(form, plan);
+    const form = h('form', {novalidate: true, class: 'card', 'aria-label': p.creditsFormLabel, 'aria-busy': busy ? 'true' : null, on: {submit: event => { event.preventDefault(); saveCreditsOf(lane); }}},
+      rows, orphans, heldLinesOf(editorInfoOf(lane)), h('div', {class: 'foot-slot'}));
+    const plan = creditsPlanNowOf(lane);
+    const nodes = [editHead(p.creditsSection + '-heading', p.creditsHeading, credits, plan.unsaved), form];
+    fillCreditsOf(lane, form, plan);
     return nodes;
   }
-  function readingPart(account, settings, row, index, busy, now) {
+  function readingPartOf(lane, account, settings, row, index, busy, now) {
+    const {p, credits} = lane;
     const reading = row.reading;
-    const idOf = part => 'qc-credit-' + index + '-' + part;
+    const idOf = part => p.ids.credit + '-' + index + '-' + part;
     // Each press says where focus goes next, the first of focus that is
     // there: the link that undoes it, or the reading's first action again.
-    const set = (edit, ...focus) => { editCreditField(account, 'reading', edit); renderAll(); focusFirst(...focus); };
+    const set = (edit, ...focus) => { editCreditFieldOf(lane, account, 'reading', edit); renderAll(); focusFirst(...focus); };
     const atRest = [idOf('reading-change'), idOf('reading-add'), idOf('reading-clear')];
     if (reading.edit && reading.edit.kind === 'set') {
       const edit = reading.edit;
       const amount = h('input', {id: idOf('amount'), type: 'text', inputmode: 'decimal', value: reading.amount.text, disabled: busy, spellcheck: 'false', autocomplete: 'off',
         'aria-labelledby': [idOf('name'), idOf('amount-label')].join(' '), 'aria-describedby': idOf('reading-caps'),
-        on: {input: event => { editCreditField(account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {amount: event.target.value})); updateCredits(); }}});
+        on: {input: event => { editCreditFieldOf(lane, account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {amount: event.target.value})); updateCreditsOf(lane); }}});
       const at = h('input', {id: idOf('at'), type: 'datetime-local', value: edit.at, min: localInputValue(now - READING_PICK_AGE), max: localInputValue(now + READING_MAX_AHEAD), disabled: busy,
         'aria-labelledby': [idOf('name'), idOf('reading-label'), idOf('at-label')].join(' '), 'aria-describedby': idOf('reading-caps'),
-        on: {input: event => { editCreditField(account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {at: event.target.value})); updateCredits(); }}});
-      return h('div', {class: 'field'}, h('span', {class: 'label', id: idOf('reading-label')}, 'Console reading'),
+        on: {input: event => { editCreditFieldOf(lane, account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {at: event.target.value})); updateCreditsOf(lane); }}});
+      return h('div', {class: 'field'}, h('span', {class: 'label', id: idOf('reading-label')}, p.readingNoun),
         h('div', {class: 'reading-fields'},
-          h('div', null, h('label', {class: 'sublabel', for: idOf('amount'), id: idOf('amount-label')}, 'Left in Console'), box(' is-changed', '$', amount)),
+          h('div', null, h('label', {class: 'sublabel', for: idOf('amount'), id: idOf('amount-label')}, p.readingLeft), box(' is-changed', '$', amount)),
           h('div', null, h('label', {class: 'sublabel', for: idOf('at'), id: idOf('at-label')}, 'at, your time'), box(' when is-changed', null, at))),
         h('span', {id: idOf('reading-caps'), class: 'caps', 'data-caps': 'reading'}),
-        h('span', {class: 'cap'}, link(reading.stored ? 'Keep the saved one' : 'Cancel', () => set(undefined, ...atRest), {id: idOf('reading-cancel'), disabled: busy, 'aria-label': (reading.stored ? 'Keep the saved one: Console reading for ' : 'Cancel the new Console reading for ') + creditName(account)})),
-        h('span', {class: 'cap help'}, 'From Console → Settings → Billing, Promotional credits: the amount left.'));
+        h('span', {class: 'cap'}, link(reading.stored ? 'Keep the saved one' : 'Cancel', () => set(undefined, ...atRest), {id: idOf('reading-cancel'), disabled: busy, 'aria-label': (reading.stored ? 'Keep the saved one: ' + p.readingNoun + ' for ' : 'Cancel the new ' + p.readingNoun + ' for ') + creditName(account)})),
+        h('span', {class: 'cap help'}, p.readingHelp));
     }
     const stored = reading.stored;
     const change = () => { set({kind: 'set', amount: stored ? stored.remainingUsd : '', at: localInputValue(stored ? stored.atEpoch : nowSeconds())}); focusLater(idOf('amount')); };
     const add = () => { set({kind: 'set', amount: '', at: localInputValue(nowSeconds())}); focusLater(idOf('amount')); };
     let line;
     if (reading.edit && reading.edit.kind === 'clear') line = [h('span', {class: 'dirty'}, 'cleared'), sep(), link('Undo', () => set(undefined, ...atRest), {id: idOf('reading-undo'), disabled: busy})];
-    else if (!stored) line = ['None this cycle', sep(), link('Add', add, {id: idOf('reading-add'), disabled: busy, 'aria-label': 'Add a Console reading for ' + creditName(account)})];
+    else if (!stored) line = ['None this cycle', sep(), link('Add', add, {id: idOf('reading-add'), disabled: busy, 'aria-label': 'Add ' + p.aReading + ' for ' + creditName(account)})];
     else {
-      line = [h('b', {class: 'num'}, moneyText(stored.remainingUsd)), ' ', reading.unusedReason === '' ? 'at ' + localDateTime(stored.atEpoch) + ' · ' + utcStamp(stored.atEpoch) : unusedText(reading.unusedReason, stored.atEpoch)];
-      if (reading.unusedReason === '') line.push(sep(), link('Change', change, {id: idOf('reading-change'), disabled: busy, 'aria-label': 'Change the Console reading for ' + creditName(account)}));
-      line.push(sep(), link('Clear', () => set({kind: 'clear'}, idOf('reading-undo')), {id: idOf('reading-clear'), disabled: busy, 'aria-label': 'Clear the Console reading for ' + creditName(account)}));
+      line = [h('b', {class: 'num'}, moneyText(stored.remainingUsd)), ' ', reading.unusedReason === '' ? 'at ' + localDateTime(stored.atEpoch) + ' · ' + utcStamp(stored.atEpoch) : unusedText(reading.unusedReason, stored.atEpoch, p)];
+      if (reading.unusedReason === '') line.push(sep(), link('Change', change, {id: idOf('reading-change'), disabled: busy, 'aria-label': 'Change the ' + p.readingNoun + ' for ' + creditName(account)}));
+      line.push(sep(), link('Clear', () => set({kind: 'clear'}, idOf('reading-undo')), {id: idOf('reading-clear'), disabled: busy, 'aria-label': 'Clear the ' + p.readingNoun + ' for ' + creditName(account)}));
     }
-    return h('div', {class: 'field'}, h('span', {class: 'label'}, 'Console reading'), h('span', {class: 'cap'}, line), h('span', {class: 'caps', 'data-caps': 'reading'}));
+    return h('div', {class: 'field'}, h('span', {class: 'label'}, p.readingNoun), h('span', {class: 'cap'}, line), h('span', {class: 'caps', 'data-caps': 'reading'}));
   }
   // Under a money or date field: where its value comes from, or what is
-  // about to happen to it (Quota Glance's FieldCap).
-  function fieldCaps(account, key, state, kind, busy, hint) {
+  // about to happen to it (Quota Glance's FieldCap), then hints, the
+  // captions that say what to enter.
+  function fieldCapsOf(lane, account, key, state, kind, busy, hints) {
+    const {p} = lane;
     const shown = value => (kind === 'money' ? moneyText(value) : utcDay(dateEpoch(value)));
-    const index = accountsOf(creditDocument()).findIndex(item => item.id === account.id);
-    const input = 'qc-credit-' + index + '-' + (key === 'monthlyUsd' ? 'monthly' : 'refill');
-    const edit = next => { editCreditField(account, key, next); renderAll(); focusLater(input); };
+    const index = accountsOf(creditDocumentOf(lane)).findIndex(item => item.id === account.id);
+    const input = p.ids.credit + '-' + index + '-' + (key === 'monthlyUsd' ? 'monthly' : 'refill');
+    const edit = next => { editCreditFieldOf(lane, account, key, next); renderAll(); focusLater(input); };
     const undo = () => link('Undo', () => edit(undefined), {disabled: busy});
     const clear = () => link('Clear', () => edit({kind: 'drop'}), {disabled: busy, 'aria-label': 'Clear the ' + (kind === 'money' ? 'monthly credit' : 'refill date') + ' for ' + creditName(account)});
-    const mark = markOf(account.id, key);
+    const mark = markOf(lane, account.id, key);
     const out = [];
     if (state.error !== null) {
       out.push(h('span', {class: 'cap bad'}, state.ambiguous
@@ -1721,18 +1977,19 @@
     } else {
       out.push(h('span', {class: 'cap'}, 'not set'));
     }
-    if (hint) out.push(hint);
+    out.push(...hints);
     return out;
   }
-  function readingCaps(account, reading) {
+  function readingCapsOf(lane, account, reading) {
+    const {p, credits} = lane;
     const out = [];
     const edit = reading.edit;
-    const mark = markOf(account.id, 'reading.remainingUsd') || markOf(account.id, 'reading.at');
+    const mark = markOf(lane, account.id, 'reading.remainingUsd') || markOf(lane, account.id, 'reading.at');
     if (edit && edit.kind === 'set') {
-      const index = accountsOf(creditDocument()).findIndex(item => item.id === account.id);
+      const index = accountsOf(creditDocumentOf(lane)).findIndex(item => item.id === account.id);
       // The reading as the draft holds it when pressed: the node stays while
       // its time is typed (settle).
-      const pick = value => { editCreditField(account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {amount: value})); renderAll(); focusLater('qc-credit-' + index + '-amount'); };
+      const pick = value => { editCreditFieldOf(lane, account, 'reading', Object.assign({}, credits.draft.rows[account.id].reading, {amount: value})); renderAll(); focusLater(p.ids.credit + '-' + index + '-amount'); };
       if (reading.at !== null) out.push(h('span', {class: 'cap'}, h('span', {class: 'num'}, '= ' + utcDay(reading.at) + ', ' + utcClock(reading.at))));
       if (reading.amount.error !== null) {
         out.push(h('span', {class: 'cap bad'}, reading.amount.ambiguous
@@ -1740,45 +1997,49 @@
           : reading.amount.error));
       }
       if (reading.atError !== null) out.push(h('span', {class: 'cap bad'}, reading.atError));
-      if (reading.onRefillDay) out.push(h('span', {class: 'cap warn'}, 'Today is the refill day. Enter the reading after the new credit shows in Console.'));
+      if (reading.onRefillDay) out.push(h('span', {class: 'cap warn'}, p.refillDay));
     }
     if (mark) out.push(h('span', {class: 'cap ' + mark.tone}, mark.text));
     return out;
   }
   // Fills every caption, box and the foot from the draft; the inputs stay.
-  function fillCredits(root, plan) {
-    const accounts = accountsOf(creditDocument());
+  function fillCreditsOf(lane, root, plan) {
+    const {p, credits} = lane;
+    const accounts = accountsOf(creditDocumentOf(lane));
     const now = nowSeconds();
     const busy = credits.saving;
+    // What to enter in a field, where the provider says (OpenAI's monthly
+    // credit and refill date), on a row with no value of its own there yet.
+    const help = (text, field) => (text && !field.stored ? [h('span', {class: 'cap help'}, text)] : []);
     accounts.forEach((account, index) => {
-      const settings = settingsOf(account);
+      const settings = settingsIn(lane, account);
       if (!settings.editable) return;
       const holder = root.querySelector('[data-account="' + CSS.escape(account.id) + '"]');
       if (!holder) return;
-      const row = creditRow(settings, credits.draft.rows[account.id], now);
+      const row = creditRow(settings, credits.draft.rows[account.id], now, p.words);
       const refillValue = row.renews.error === null ? row.renews.desired || row.renews.text : '';
       const cycle = refillValue ? cycleOn(refillValue, now) : null;
       const rule = refillValue ? refillRule(refillValue) : null;
       const hint = (credits.focused === account.id || row.renews.changed) && (cycle || rule)
-        ? h('span', {class: 'cap help'}, rule, rule && cycle ? h('br') : null, cycle ? cycleText(cycle) : null) : null;
+        ? [h('span', {class: 'cap help'}, rule, rule && cycle ? h('br') : null, cycle ? cycleText(cycle) : null)] : [];
       // Captions keep every node that did not change (settle): focus
       // entering or leaving a refill date, which shows or hides its hint,
       // and the window taking focus again (resync) must not take away the
       // link the reader is on or is pressing.
       const caps = key => holder.querySelector('[data-caps="' + key + '"]');
-      settle(caps('monthlyUsd'), fieldCaps(account, 'monthlyUsd', row.monthlyUsd, 'money', busy, null));
-      settle(caps('renews'), fieldCaps(account, 'renews', row.renews, 'date', busy, hint));
-      settle(caps('reading'), readingCaps(account, row.reading));
+      settle(caps('monthlyUsd'), fieldCapsOf(lane, account, 'monthlyUsd', row.monthlyUsd, 'money', busy, help(p.monthlyHelp, row.monthlyUsd)));
+      settle(caps('renews'), fieldCapsOf(lane, account, 'renews', row.renews, 'date', busy, [...hint, ...help(p.refillHelp, row.renews)]));
+      settle(caps('reading'), readingCapsOf(lane, account, row.reading));
       // A field is bad when the page refuses its value, or when Quota Cache
       // refused it at the last save; its box and aria-invalid say so alike.
-      const refused = key => (markOf(account.id, key) || {}).tone === 'bad';
+      const refused = key => (markOf(lane, account.id, key) || {}).tone === 'bad';
       const state = (field, key) => ({changed: field.changed, dropped: Boolean(field.edit && field.edit.kind === 'drop'), bad: field.error !== null || refused(key), busy});
-      const monthly = within(root, 'qc-credit-' + index + '-monthly');
-      const refill = within(root, 'qc-credit-' + index + '-refill');
+      const monthly = within(root, p.ids.credit + '-' + index + '-monthly');
+      const refill = within(root, p.ids.credit + '-' + index + '-refill');
       if (monthly) fillBox(monthly, '', state(row.monthlyUsd, 'monthlyUsd'));
       if (refill) fillBox(refill, '', state(row.renews, 'renews'));
-      const amount = within(root, 'qc-credit-' + index + '-amount');
-      const at = within(root, 'qc-credit-' + index + '-at');
+      const amount = within(root, p.ids.credit + '-' + index + '-amount');
+      const at = within(root, p.ids.credit + '-' + index + '-at');
       if (amount && row.reading.amount) fillBox(amount, '', {changed: true, bad: row.reading.amount.error !== null || refused('reading.remainingUsd'), busy});
       if (at) fillBox(at, ' when', {changed: true, bad: row.reading.atError !== null || refused('reading.at'), busy});
     });
@@ -1787,21 +2048,26 @@
     const foot = root.querySelector('.edit-foot');
     if (foot) { fillFoot(foot, credits, plan, blocked, session.note || null); return; }
     const slot = root.querySelector('.foot-slot');
-    if (slot) slot.replaceWith(editFoot(credits, 'A refill date repeats on that day every month, at 00:00 UTC. Labels and Organization IDs are edited under Organizations.', plan, blocked, cancelCredits, session.note || null));
+    if (slot) slot.replaceWith(editFoot(credits, p.creditsEditHelp, plan, blocked, () => cancelCreditsOf(lane), session.note || null));
   }
-  function updateCredits() {
-    const section = $('api-credits');
+  function updateCreditsOf(lane) {
+    const {p, credits} = lane;
+    const section = $(p.creditsSection);
     if (!section || !credits.editing) return;
-    const plan = creditsPlanNow();
-    fillCredits(section, plan);
+    const plan = creditsPlanNowOf(lane);
+    fillCreditsOf(lane, section, plan);
     const head = section.querySelector('.section-head');
     const hint = head && head.querySelector('.hint');
     if (hint && plan.unsaved === 0) hint.remove();
     else if (hint) hint.textContent = plan.unsaved + ' unsaved';
     else if (head && plan.unsaved > 0) head.append(h('span', {class: 'hint'}, plan.unsaved + ' unsaved'));
   }
-  async function saveCredits() {
-    const plan = creditsPlanNow();
+  const renderCredits = () => renderCreditsOf(claudeLane);
+  const creditsPlanNow = () => creditsPlanNowOf(claudeLane);
+  const updateCredits = () => updateCreditsOf(claudeLane);
+  async function saveCreditsOf(lane) {
+    const {p, credits} = lane;
+    const plan = creditsPlanNowOf(lane);
     if (plan.batch === null || credits.saving) return;
     credits.saving = true;
     credits.status = null;
@@ -1809,13 +2075,13 @@
     renderAndRefocus(credits);
     const outcome = outcomeOf(await send(plan.batch));
     credits.saving = false;
-    const accounts = accountsOf(creditDocument());
+    const accounts = accountsOf(creditDocumentOf(lane));
     switch (outcome.kind) {
       case 'saved':
         setEditing(credits, false);
         credits.draft = emptyDraft();
         credits.overlay = {};
-        showSaved(credits, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(plan.changes, 'change', 'changes') + '. Quota Glance 0.8.0 or newer shows them from its next read of the cache.');
+        showSaved(credits, outcome.unchanged ? 'Already saved. Nothing needed changing.' : 'Saved ' + plural(plan.changes, 'change', 'changes') + p.creditsSaved);
         page.reload();
         break;
       case 'conflict': {
@@ -1826,7 +2092,7 @@
           const account = accounts.find(item => item.id === id);
           const current = outcome.current[id];
           if (account && isObject(current)) {
-            for (const key of conflictFields(settingsOf(account), current, credits.draft.rows[id])) marks[id + ':' + (key === 'reading' ? 'reading.remainingUsd' : key)] = {text: CONFLICT_FIELD, tone: 'warn'};
+            for (const key of conflictFields(settingsIn(lane, account), current, credits.draft.rows[id])) marks[id + ':' + (key === 'reading' ? 'reading.remainingUsd' : key)] = {text: CONFLICT_FIELD, tone: 'warn'};
             credits.overlay[id] = {settings: current, over: account.settings.revision};
           } else if (!account) orphanAfterConflict(current, credits.gone, credits.revised, id);
         }
@@ -1838,7 +2104,7 @@
         break;
       }
       case 'field':
-        credits.marks = {[outcome.id + ':' + outcome.field]: {text: outcome.text, tone: 'bad'}};
+        credits.marks = {[outcome.id + ':' + outcome.field]: {text: refusalWords(lane, outcome), tone: 'bad'}};
         credits.status = {tone: 'bad', text: FIELD_FOOT};
         credits.failed = true;
         break;
@@ -1918,7 +2184,7 @@
     if (renewals.editing) { keepFocus(() => replaceEdit(section, renewalsEdit())); return; }
     const credentials = credentialsOf(editor);
     const orphans = renewalOrphansOf(editor);
-    const off = unavailableText(editor);
+    const off = unavailableText(editor, claudeLane.p);
     const canEdit = editor.available === true && (credentials.some(c => c.renewal_editable === true) || orphans.length > 0);
     const now = nowSeconds();
     const head = h('div', {class: 'section-head'},
@@ -2103,6 +2369,8 @@
     renderOrganizations();
     renderCredits();
     renderRenewals();
+    renderOrganizationsOf(openaiLane);
+    renderCreditsOf(openaiLane);
   }
   // Every card at rest, for a timer, a dismissal or the same status drawn
   // again, which change only what those show. A card being
@@ -2112,12 +2380,15 @@
     if (!orgs.editing) renderOrganizations();
     if (!credits.editing) renderCredits();
     if (!renewals.editing) renderRenewals();
+    if (!openaiOrgs.editing) renderOrganizationsOf(openaiLane);
+    if (!openaiCredits.editing) renderCreditsOf(openaiLane);
   }
   // A new status: a card being edited keeps its draft, minus rows the status
-  // no longer lists, which are dropped and said so. The Organizations card,
+  // no longer lists, which are dropped and said so. An organizations card,
   // whose revision covers its whole list, keeps the list its renames and
   // removals were made against instead, so its Save meets the conflict
-  // (organizationsHeld). The same status drawn again, as when the Accounts
+  // (organizationsHeld). Each lane's cards are judged against that lane's
+  // part of the status. The same status drawn again, as when the Accounts
   // table's provider filter changes, changes nothing a card shows, so a card
   // being edited is not rebuilt.
   //
@@ -2133,20 +2404,23 @@
     const holder = active ? cards.find(one => !one.editing && $(one.section) && $(one.section).contains(active)) : undefined;
     if (next === status) renderAtRest();
     else {
-      const before = organizationsInfo();
+      const before = lanes.map(organizationsInfoOf);
       status = next;
-      if (credits.editing) {
-        const held = reconcileCredits(credits.draft, accountsOf(creditDocument()), creditOrphans());
-        credits.draft = held.draft;
-        if (held.dropped.length) credits.status = {tone: 'warn', text: held.dropped.join(' ')};
+      for (const lane of lanes) {
+        if (!lane.credits.editing) continue;
+        const held = reconcileCredits(lane.credits.draft, accountsOf(creditDocumentOf(lane)), orphansOf(lane), lane.p.listedUnder);
+        lane.credits.draft = held.draft;
+        if (held.dropped.length) lane.credits.status = {tone: 'warn', text: held.dropped.join(' ')};
       }
       if (renewals.editing) {
         const held = reconcileRenewals(renewals.draft, credentialsOf(editorInfo()), renewalOrphansOf(editorInfo()));
         renewals.draft = held.draft;
         if (held.dropped.length) renewals.status = {tone: 'warn', text: held.dropped.join(' ')};
       }
-      if (!orgs.editing) orgs.base = null;
-      else if (orgs.base === null) orgs.base = organizationsHeld(before, organizationsInfo(), orgs.draft);
+      lanes.forEach((lane, i) => {
+        if (!lane.orgs.editing) lane.orgs.base = null;
+        else if (lane.orgs.base === null) lane.orgs.base = organizationsHeld(before[i], organizationsInfoOf(lane), lane.orgs.draft);
+      });
       renderAll();
     }
     const lost = document.activeElement === null || document.activeElement === document.body;
@@ -2154,7 +2428,7 @@
     // A link from Quota Glance names a section by its fragment, which exists
     // only once a status has drawn it, and can be scrolled to only once the
     // view around it is shown. Until then it is tried again at each render.
-    if (!scrolled && /^#(organizations|api-credits|renewals)$/.test(location.hash)) {
+    if (!scrolled && /^#(organizations|api-credits|renewals|openai-organizations|openai-api-credits)$/.test(location.hash)) {
       const target = $(location.hash.slice(1));
       if (target && !target.hidden && target.getClientRects().length > 0) {
         scrolled = true;
@@ -2164,12 +2438,16 @@
   }
   // Leaving with unsaved edits asks first, those still to fix included.
   window.addEventListener('beforeunload', event => {
-    const unsaved = (orgs.editing && organizationsPlanNow().unsaved > 0) || (credits.editing && creditsPlanNow().unsaved > 0) || (renewals.editing && renewalsPlanNow().unsaved > 0);
+    const unsaved = (orgs.editing && organizationsPlanNow().unsaved > 0) || (credits.editing && creditsPlanNow().unsaved > 0) || (renewals.editing && renewalsPlanNow().unsaved > 0) ||
+      (openaiOrgs.editing && organizationsPlanNowOf(openaiLane).unsaved > 0) || (openaiCredits.editing && creditsPlanNowOf(openaiLane).unsaved > 0);
     if (unsaved) { event.preventDefault(); event.returnValue = ''; }
   });
   // Save follows the console's session: signing in again with another key in
   // another tab turns it back on without a reload.
-  const resync = () => { if (orgs.editing) updateOrganizations(); if (credits.editing) updateCredits(); if (renewals.editing) updateRenewals(); };
+  const resync = () => {
+    if (orgs.editing) updateOrganizations(); if (credits.editing) updateCredits(); if (renewals.editing) updateRenewals();
+    if (openaiOrgs.editing) updateOrganizationsOf(openaiLane); if (openaiCredits.editing) updateCreditsOf(openaiLane);
+  };
   window.addEventListener('focus', resync);
   window.addEventListener('storage', resync);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) resync(); });

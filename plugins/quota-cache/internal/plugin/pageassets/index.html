@@ -32,6 +32,8 @@
     <section id="organizations" class="section" aria-labelledby="organizations-heading" hidden></section>
     <section id="api-credits" class="section" aria-labelledby="api-credits-heading" hidden></section>
     <section id="renewals" class="section" aria-labelledby="renewals-heading" hidden></section>
+    <section id="openai-organizations" class="section" aria-labelledby="openai-organizations-heading" hidden></section>
+    <section id="openai-api-credits" class="section" aria-labelledby="openai-api-credits-heading" hidden></section>
     <section class="section" aria-labelledby="accounts-heading">
       <div class="section-head"><h2 id="accounts-heading">Accounts</h2><span id="account-count" class="hint"></span><label class="filter">Provider <select id="provider"><option value="all">All providers</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="xai">Grok</option><option value="openrouter">OpenRouter</option><option value="anthropic-api">Claude API credits</option></select></label></div>
       <div class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Account observations">
@@ -46,6 +48,16 @@
         <ul id="meter-gaps" class="meter-list"></ul><p id="meter-gaps-empty" class="empty" hidden>No gaps recorded: the meter has counted without a stop since it began.</p>
         <h3>Organizations not listed</h3>
         <ul id="meter-unlinked" class="meter-list"></ul><p id="meter-unlinked-empty" class="empty" hidden>None seen. An organization listed here sent Claude API-key traffic through CPA while it was not listed under Organizations.</p>
+      </div>
+    </section>
+    <section id="openai-meter-section" class="section" aria-labelledby="openai-meter-heading" hidden>
+      <div class="section-head"><h2 id="openai-meter-heading">OpenAI API meter</h2><span id="openai-meter-status" class="hint"></span></div>
+      <div class="card settings">
+        <dl id="openai-meter" class="detail-grid"></dl>
+        <h3>Gaps</h3>
+        <ul id="openai-meter-gaps" class="meter-list"></ul><p id="openai-meter-gaps-empty" class="empty" hidden>No gaps recorded: the meter has counted without a stop since it began.</p>
+        <h3>Organizations not listed</h3>
+        <ul id="openai-meter-unlinked" class="meter-list"></ul><p id="openai-meter-unlinked-empty" class="empty" hidden>None seen. An organization listed here sent traffic through an openai-compatibility entry while it was not listed under OpenAI organizations.</p>
       </div>
     </section>
     <section class="section" aria-labelledby="history-heading">
@@ -63,7 +75,8 @@
       <p>Account Health and Reset Priority opt in through their configuration and wait when fresh data is unavailable. Their direct file reads cannot be counted here. CPA’s stock quota dashboard polls independently.</p>
       <p>The latest 100 completed polls and cumulative totals persist across restarts. No credentials, request headers, or provider response bodies are stored in this history.</p>
       <p>Claude API credit organizations are never polled. The Claude API meter counts the tokens of Claude API-key traffic CPA serves, per Console organization, from CPA's usage records, and sends nothing to Anthropic. Quota Cache prices them at Anthropic's list prices for Claude API credits above; Quota Glance 0.8.0 or newer and Reset Priority 0.2.0 or newer read the same figures.</p>
-      <p>Organizations, monthly credits, refill dates, Console readings and Claude renewal dates are saved through CPA's management API with the console session this page reads with, and kept in files beside the cache. After a refusal, this page sends the remembered key again only when you select Refresh view, or Save when the refusal was not about the key. Nothing is retried on its own, and each refused try counts toward CPA's limit of five failed sign-ins.</p>
+      <p>The OpenAI API meter counts the tokens of openai-compatibility traffic CPA serves whose responses name an OpenAI organization, from CPA's usage records, and sends nothing to OpenAI. Codex API-key traffic (codex-api-key entries) is not counted: OpenAI says Codex usage through API keys is not covered by this credit. Quota Glance 0.11.0 or newer shows these figures; Reset Priority does not route on them.</p>
+      <p>Organizations, monthly credits, refill dates, Console and API Platform readings, and Claude renewal dates are saved through CPA's management API with the console session this page reads with, and kept in files beside the cache. After a refusal, this page sends the remembered key again only when you select Refresh view, or Save when the refusal was not about the key. Nothing is retried on its own, and each refused try counts toward CPA's limit of five failed sign-ins.</p>
     </footer>
   </div>
 </main>

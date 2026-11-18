@@ -1,4 +1,4 @@
-// Package source reads the quota-cache snapshot, the credit state quota-cache
+// Package source reads the quota-cache snapshot, the credit states quota-cache
 // publishes beside it, and the host's credential roster. It makes no network
 // request of any kind: quota-cache is the only component in this system that
 // ever contacts a provider, and a second poller would compete for the exact
@@ -40,6 +40,14 @@ type Result struct {
 	// renewal dates depend on it, and the card says so itself.
 	Credits      *qc.CreditState
 	CreditsError string
+	// OpenAICredits is quota-cache's published OpenAI API credit state, from
+	// its own file beside the snapshot, read and judged abandoned exactly as
+	// Credits is, with OpenAICreditsError saying why it cannot be shown.
+	// Missing is the ordinary value for an install that counts only Claude:
+	// Quota Cache writes the file once an OpenAI organization is listed, and a
+	// Quota Cache older than 0.6.0 never does. It never sets Reason either.
+	OpenAICredits      *qc.CreditState
+	OpenAICreditsError string
 }
 
 var ErrUnreadable = errors.New("quota-cache snapshot cannot be read at the configured cache-path")
@@ -89,7 +97,7 @@ func snapshotSchema(path string) (int, bool) {
 	return envelope.Schema, true
 }
 
-// Read loads the snapshot, the credit state beside it, and the roster.
+// Read loads the snapshot, the credit states beside it, and the roster.
 //
 // qc.Load is used deliberately in place of qc.ReadFresh. ReadFresh reports
 // unavailable when an entry is stale, carries an error, or has a reset in the
@@ -102,6 +110,7 @@ func Read(ctx context.Context, host Host, path string) Result {
 		result.Warmup = state
 	}
 	result.Credits, result.CreditsError = creditsAt(path)
+	result.OpenAICredits, result.OpenAICreditsError = openAICreditsAt(path)
 	snapshot, err := qc.Load(path)
 	if err != nil {
 		// Only a positive, different version is a version bump. A file with no
@@ -118,6 +127,9 @@ func Read(ctx context.Context, host Host, path string) Result {
 		if result.CreditsError == "" && Abandoned(snapshot, result.Credits) {
 			result.CreditsError = aggregate.CreditsAbandoned
 		}
+		if result.OpenAICreditsError == "" && Abandoned(snapshot, result.OpenAICredits) {
+			result.OpenAICreditsError = aggregate.CreditsAbandoned
+		}
 	}
 	identities, rosterErr := identities(ctx, host)
 	result.Identities = identities
@@ -132,10 +144,24 @@ func Read(ctx context.Context, host Host, path string) Result {
 }
 
 // creditsAt reads the credit state quota-cache publishes beside the snapshot
-// at path. qc.LoadCredits refuses anything that is not a regular file before
-// opening it, so a FIFO there cannot wedge the watcher goroutine this runs on.
+// at path.
 func creditsAt(path string) (*qc.CreditState, string) {
-	state, err := qc.LoadCredits(qc.CreditsPath(path))
+	return stateAt(qc.CreditsPath(path))
+}
+
+// openAICreditsAt reads the OpenAI API credit state quota-cache 0.6.0 and
+// newer publishes beside the snapshot at path. It is a credit state of its
+// own, with its own computed_at and valid_until, so every rule creditsAt's
+// state is read and judged by applies to it on its own.
+func openAICreditsAt(path string) (*qc.CreditState, string) {
+	return stateAt(qc.OpenAICreditsPath(path))
+}
+
+// stateAt reads one published credit state file. qc.LoadCredits refuses
+// anything that is not a regular file before opening it, so a FIFO there
+// cannot wedge the watcher goroutine this runs on.
+func stateAt(file string) (*qc.CreditState, string) {
+	state, err := qc.LoadCredits(file)
 	switch {
 	case errors.Is(err, qc.ErrCreditsMissing):
 		return nil, aggregate.CreditsMissing

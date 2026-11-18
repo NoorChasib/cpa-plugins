@@ -5,6 +5,8 @@ import { Flags, FoldButton } from "./Fold"
 import { PoolBar } from "./WindowCard"
 import {
   anySetHere,
+  CLAUDE_COPY,
+  type CreditCopy,
   type CreditLink,
   type CreditNote,
   creditBar,
@@ -124,19 +126,18 @@ function Refill({ account, now }: { account: APICreditAccount; now: number }) {
   )
 }
 
-/** What a line's link to Quota Cache's page says. */
-const LINK_TEXT: Record<CreditLink, string> = {
-  reading: "Enter Console reading in Quota Cache",
-  settings: "Set in Quota Cache",
+/** What a line's link to Quota Cache's page says: a reading in `copy`'s words, or a setting. */
+function linkText(link: CreditLink, copy: CreditCopy): string {
+  return link === "reading" ? copy.readingLink : "Set in Quota Cache"
 }
 
 /**
  * A line under a row or the pool, its tone a dot ahead of the words. A
- * refusal's time follows the sentence; a line that asks for a Console
- * reading or a setting ends with a link to Quota Cache's page, where it is
- * entered, while this browser may follow one (`link`).
+ * refusal's time follows the sentence; a line that asks for a reading or a
+ * setting ends with a link to Quota Cache's page, where it is entered, while
+ * this browser may follow one (`link`).
  */
-function Note({ note, now, link }: { note: CreditNote; now: number; link: string | null }) {
+function Note({ note, now, link, copy }: { note: CreditNote; now: number; link: string | null; copy: CreditCopy }) {
   return (
     <p className={`qg-cnote is-${note.tone}`}>
       {noteText(note, now)}
@@ -144,7 +145,7 @@ function Note({ note, now, link }: { note: CreditNote; now: number; link: string
       {note.link && link !== null && (
         <>
           {" "}
-          <QuotaCacheLink url={link}>{LINK_TEXT[note.link]}</QuotaCacheLink>
+          <QuotaCacheLink url={link}>{linkText(note.link, copy)}</QuotaCacheLink>
         </>
       )}
     </p>
@@ -152,11 +153,11 @@ function Note({ note, now, link }: { note: CreditNote; now: number; link: string
 }
 
 /** The bar's hover: what the estimate starts from. */
-function basisTitle(account: APICreditAccount): string | undefined {
+function basisTitle(account: APICreditAccount, copy: CreditCopy): string | undefined {
   const basis = creditBasis(account)
   if (!basis) return undefined
   return basis.kind === "reading"
-    ? `From your Console reading of ${basis.remainingText} on ${dateTime(basis.atEpoch)} (${formatUTCDate(basis.atEpoch)}, ${formatUTCClock(basis.atEpoch)}), less ≈ ${basis.spentSinceText} since`
+    ? `From your ${copy.readingNoun} of ${basis.remainingText} on ${dateTime(basis.atEpoch)} (${formatUTCDate(basis.atEpoch)}, ${formatUTCClock(basis.atEpoch)}), less ≈ ${basis.spentSinceText} since`
     : `Monthly credit ${basis.monthlyCreditText} less ≈ ${basis.spentText} metered this cycle`
 }
 
@@ -178,6 +179,7 @@ function CreditRow({
   saidOnce,
   now,
   link,
+  copy,
 }: {
   account: APICreditAccount
   meter: APICredits["meter"]
@@ -186,6 +188,7 @@ function CreditRow({
   now: number
   /** Quota Cache's page, for a line's link; null for none. */
   link: string | null
+  copy: CreditCopy
 }) {
   const level = creditLevel(account)
   const marked = creditCondition(account, meter)
@@ -222,7 +225,7 @@ function CreditRow({
                 }`
               : "no estimate"
           }
-          title={basisTitle(account)}
+          title={basisTitle(account, copy)}
         >
           <i style={{ width: `${bar.fraction * 100}%` }} />
         </span>
@@ -272,7 +275,7 @@ function CreditRow({
       </span>
 
       {notes.map((note, index) => (
-        <Note key={index} note={note} now={now} link={link} />
+        <Note key={index} note={note} now={now} link={link} copy={copy} />
       ))}
     </div>
   )
@@ -280,7 +283,10 @@ function CreditRow({
 
 /**
  * The Claude API credit a Max or Team plan deposits each month into its
- * Console organization, pooled across every organization Quota Cache meters.
+ * Console organization, pooled across every organization Quota Cache meters;
+ * or, in `copy`'s words, the OpenAI API credit a ChatGPT Pro or Business plan
+ * grants an OpenAI API organization, which is the same figures in the same
+ * shape (OPENAI_COPY).
  *
  * Drawn like a window card — what is left, what the next refill restores,
  * when — because it is read the same way, but in money, and marked as an
@@ -298,12 +304,15 @@ export function APICreditsCard({
   open,
   onToggle,
   link,
+  copy = CLAUDE_COPY,
 }: {
   credits: APICredits
   open: boolean
   onToggle: () => void
   /** Quota Cache's page at its API credit section, or null where no link may be drawn. */
   link: string | null
+  /** The words that depend on whose credit it is; the Claude credit's by default. */
+  copy?: CreditCopy
 }) {
   const now = useNowSeconds()
   const bodyID = useId()
@@ -321,7 +330,7 @@ export function APICreditsCard({
   const distance = when && when.kind !== "due" ? refillDistance(when) : ""
   const whenText = distance ? `in ${distance}` : "now"
   const shared = sharedIssues(accounts)
-  const notes = poolNotes(credits, now, shared)
+  const notes = poolNotes(credits, now, shared, copy)
   const saidOnce = conditionsSaidOnce(accounts, meter, shared)
   const flags = creditFlags(accounts, meter, (since) => formatDuration(now - since))
   const source = meterLine(meter, now)
@@ -346,10 +355,10 @@ export function APICreditsCard({
   const trouble = editingTrouble(editing)
 
   return (
-    <article className={`qg-win qg-api ${pool.level === "critical" ? "is-crit" : ""}`} aria-label="Monthly API Credit">
+    <article className={`qg-win qg-api ${pool.level === "critical" ? "is-crit" : ""}`} aria-label={copy.heading}>
       <div className="qg-whead">
         <h3 id={titleID} className="qg-wtitle">
-          Monthly API Credit
+          {copy.heading}
         </h3>
         <span className={`qg-src ${source.kind === "stale" || source.kind === "stopped" ? "text-warn" : ""}`}>
           Estimated from CPA traffic
@@ -444,7 +453,7 @@ export function APICreditsCard({
       )}
 
       {notes.map((note, index) => (
-        <Note key={index} note={note} now={now} link={link} />
+        <Note key={index} note={note} now={now} link={link} copy={copy} />
       ))}
 
       <FoldButton open={open} controls={bodyID} labelledBy={`${titleID} ${countID}`} onToggle={onToggle}>
@@ -475,6 +484,7 @@ export function APICreditsCard({
                 saidOnce={saidOnce}
                 now={now}
                 link={link}
+                copy={copy}
               />
             ))}
             <div className="qg-afoot">
@@ -487,8 +497,14 @@ export function APICreditsCard({
                     {" · "}
                   </>
                 )}
-                Credits, refill dates and Console readings are set in Quota Cache
-                {pricedOn && <> · spend is estimated from CPA traffic at Anthropic's list prices of {pricedOn}</>}
+                {copy.foot}
+                {pricedOn && <> · spend is estimated from CPA traffic at {copy.prices} of {pricedOn}</>}
+                {copy.notCounted && (
+                  <>
+                    <br />
+                    {copy.notCounted}
+                  </>
+                )}
                 {trouble && (
                   <>
                     <br />

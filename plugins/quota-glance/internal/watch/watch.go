@@ -2,9 +2,9 @@
 //
 // Mostly that means turning quota-cache's writes into reload events: there is
 // no event bus between CPA plugins and no host callback that reports a cache
-// refresh, so the files themselves are the signal. quota-cache writes two that
-// this reads, the snapshot and the credit state it publishes beside it, and a
-// write to either reloads. The
+// refresh, so the files themselves are the signal. quota-cache writes three
+// that this reads, the snapshot and the Claude and OpenAI API credit states it
+// publishes beside it, and a write to any of them reloads. The
 // heartbeat covers the half of the document the files do not carry — request
 // activity, which the host roster reports and which moves between writes.
 package watch
@@ -61,10 +61,15 @@ type Options struct {
 	// write to Path does. Optional. Only Path's directory is watched, so a
 	// file anywhere else is noticed by the backstop alone.
 	CreditsPath string
-	WarmupPath  string
-	Debounce    time.Duration
-	Backstop    time.Duration
-	Heartbeat   time.Duration
+	// OpenAICreditsPath is quota-cache's published OpenAI API credit state,
+	// a file of its own beside the snapshot, written on the same schedule as
+	// CreditsPath and reloading in the same way. Optional, and often absent:
+	// Quota Cache writes it only once an OpenAI organization is listed.
+	OpenAICreditsPath string
+	WarmupPath        string
+	Debounce          time.Duration
+	Backstop          time.Duration
+	Heartbeat         time.Duration
 	// OnChange runs off the watch goroutine's event loop, one call per
 	// debounced change. It must not block for long.
 	OnChange func()
@@ -128,6 +133,11 @@ func Start(opts Options) (*Watcher, error) {
 	opts.Path = path
 	if opts.CreditsPath != "" {
 		if opts.CreditsPath, err = filepath.Abs(opts.CreditsPath); err != nil {
+			return nil, errors.New("credit state path cannot be resolved")
+		}
+	}
+	if opts.OpenAICreditsPath != "" {
+		if opts.OpenAICreditsPath, err = filepath.Abs(opts.OpenAICreditsPath); err != nil {
 			return nil, errors.New("credit state path cannot be resolved")
 		}
 	}
@@ -224,17 +234,21 @@ func fingerprintOf(path string) fingerprint {
 }
 
 // fingerprints is every watched file's version at once, so the backstop
-// notices a missed write to either.
-type fingerprints struct{ snapshot, credits, warmup fingerprint }
+// notices a missed write to any of them.
+type fingerprints struct{ snapshot, credits, openaiCredits, warmup fingerprint }
 
 func (w *Watcher) fingerprints() fingerprints {
-	return fingerprints{snapshot: fingerprintOf(w.opts.Path), credits: fingerprintOf(w.opts.CreditsPath), warmup: fingerprintOf(w.opts.WarmupPath)}
+	return fingerprints{
+		snapshot: fingerprintOf(w.opts.Path), credits: fingerprintOf(w.opts.CreditsPath),
+		openaiCredits: fingerprintOf(w.opts.OpenAICreditsPath), warmup: fingerprintOf(w.opts.WarmupPath),
+	}
 }
 
 // watched reports whether an event names one of the watched files.
 func (w *Watcher) watched(name string) bool {
 	name = filepath.Clean(name)
-	return name == w.opts.Path || (w.opts.CreditsPath != "" && name == w.opts.CreditsPath) || (w.opts.WarmupPath != "" && name == w.opts.WarmupPath)
+	return name == w.opts.Path || (w.opts.CreditsPath != "" && name == w.opts.CreditsPath) ||
+		(w.opts.OpenAICreditsPath != "" && name == w.opts.OpenAICreditsPath) || (w.opts.WarmupPath != "" && name == w.opts.WarmupPath)
 }
 
 func (w *Watcher) run() {
@@ -288,10 +302,10 @@ func (w *Watcher) run() {
 				continue
 			}
 			// A rename surfaces as Create on the destination, and can arrive
-			// alongside Chmod and Write. Anything touching either file
+			// alongside Chmod and Write. Anything touching these files
 			// collapses into one debounced reload: quota-cache can save the
-			// snapshot and the credit state within the same moment, and one
-			// rebuild reads both.
+			// snapshot and its credit states within the same moment, and one
+			// rebuild reads them all.
 			if !w.watched(event.Name) {
 				continue
 			}

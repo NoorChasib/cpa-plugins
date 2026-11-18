@@ -51,7 +51,7 @@ func newTestPublisher(t *testing.T) *testPublisher {
 	store := settings.Open(path)
 	items := []creditItem{{id: alphaAccount, credit: client.APICredit{Label: "alpha", OrganizationID: fakeOrgA}}}
 	source := client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: "1"}
-	tp.publisher = newPublisher(path, "test", store, func() ([]creditItem, client.CreditOrganizations) { return items, source }, func(level, message string, fields map[string]any) {
+	tp.publisher = newPublisher(path, "test", claudeSpec, store, func() ([]creditItem, client.CreditOrganizations) { return items, source }, func(level, message string, fields map[string]any) {
 		tp.mu.Lock()
 		defer tp.mu.Unlock()
 		tp.lines = append(tp.lines, logLine{level, message, fields})
@@ -414,7 +414,7 @@ func (p *meterPlugin) traceStops() func() []string {
 		steps = append(steps, step)
 	}
 	p.mu.Lock()
-	publisher, store, organizations := p.publisher, p.store, p.organizations
+	publisher, store, organizations := p.claude.publisher, p.claude.store, p.claude.organizations
 	closed := false
 	p.trace = func(step string) {
 		if !closed {

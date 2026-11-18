@@ -2,13 +2,17 @@
 // organization quota-cache lists: the amounts, the cycle and the refill, the
 // out and stale states, and the issues. Compute turns its inputs into the
 // credit state quota-cache publishes beside its snapshot (client.CreditState).
+// It works out the monthly OpenAI API credit of the OpenAI API organizations
+// quota-cache lists the same way, into a credit state of its own
+// (Input.Provider OpenAI).
 //
 // Everything here is pure: Compute takes the current instant as an input and
 // nothing in this package calls time.Now(). That is what makes the golden
 // states meaningful, and it is enforced by a test.
 //
-// The logic and the price table came from Quota Glance's aggregate package
-// unchanged, so the published figures are the ones Quota Glance showed.
+// The logic and the Claude price table came from Quota Glance's aggregate
+// package unchanged, so the published figures are the ones Quota Glance
+// showed.
 package credits
 
 import (
@@ -21,8 +25,11 @@ import (
 // Item is one Claude Console organization quota-cache lists: its account id
 // and the organization, as the anthropic-api snapshot entry for it carries
 // them. Its credit and refill date are the settings file's, never the item's.
+// An OpenAI API organization is an item the same way, though no snapshot
+// entry carries it.
 type Item struct {
-	// ID is client.APICreditOrgAccount of the organization.
+	// ID is client.APICreditOrgAccount of the organization, or for an OpenAI
+	// organization client.OpenAICreditOrgAccount of its slug.
 	ID string
 	// Credit is the organization's label, position and Organization ID, from
 	// the page's list, so quota-cache always sets it, with an Organization ID
@@ -35,6 +42,10 @@ type Item struct {
 // Input is everything Compute needs. It holds no clock and no file handle: the
 // caller reads the files and passes them in.
 type Input struct {
+	// Provider is which credit the state is for, nil for Claude. Every other
+	// field is that provider's: its items, its meter, its settings and its
+	// organizations file.
+	Provider *Provider
 	// Now is the instant to compute at, truncated to the second by Compute.
 	Now time.Time
 	// Snapshot is the snapshot the state is published beside. Only its

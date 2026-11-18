@@ -6,6 +6,7 @@ import { BalanceSections } from "./components/BalanceSections"
 import { Banners } from "./components/Banner"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
+import { OpenAICreditsSection } from "./components/OpenAICreditsSection"
 import { SignIn } from "./components/SignIn"
 import { ProviderSection } from "./components/ProviderSection"
 import { Skeleton } from "./components/Skeleton"
@@ -74,6 +75,13 @@ function Body({
         onRedeemed={onRedeemed}
       />
     ) : null
+  // The monthly OpenAI API credit is no provider's: its own section, after
+  // the providers and before the balances, whether or not there are any
+  // providers. Never under Codex, whose credentials are ChatGPT sign-ins this
+  // credit does not cover. Absent from an older plugin and while Quota Cache
+  // lists no OpenAI organization.
+  const openAICredits = summary.openaiApiCredits ?? null
+  const openAI = <OpenAICreditsSection credits={openAICredits} />
   // Below the quota providers, and whether or not there are any: a prepaid
   // balance belongs to no CPA credential, so an install with none still has
   // one to show.
@@ -84,10 +92,11 @@ function Body({
     // it is an ordinary state on a fresh install.
     return (
       <>
-        <p className={`qg-empty ${held.length > 0 || creditsOnly ? "mb-[30px]" : ""}`}>
+        <p className={`qg-empty ${held.length > 0 || creditsOnly || openAICredits ? "mb-[30px]" : ""}`}>
           No credentials with a quota provider yet. Once quota-cache polls one, its windows appear here.
         </p>
         {creditsOnly}
+        {openAI}
         {balances}
       </>
     )
@@ -105,6 +114,7 @@ function Body({
         />
       ))}
       {creditsOnly}
+      {openAI}
       {balances}
     </>
   )

@@ -67,6 +67,12 @@ type Health struct {
 	Watcher             WatcherState      `json:"watcher"`
 	Meter               MeterHealth       `json:"meter"`
 	CreditState         CreditStateHealth `json:"credit_state"`
+	// OpenAIMeter and OpenAICreditState are the same for the OpenAI API
+	// credit, from its own state. "missing" is their ordinary value on an
+	// install that lists no OpenAI organization, or a Quota Cache older than
+	// 0.6.0.
+	OpenAIMeter       MeterHealth       `json:"openai_meter"`
+	OpenAICreditState CreditStateHealth `json:"openai_credit_state"`
 }
 
 // MeterHealth is quota-cache's API meter as its published credit state

@@ -34,9 +34,10 @@ type creditCycle struct {
 // creditAccount is one account while the pool is worked out: the document's
 // view of it, and the exact amounts its float fields are converted from.
 type creditAccount struct {
-	out    client.CreditAccount
-	entry  client.Entry
-	credit *client.APICredit
+	provider *Provider
+	out      client.CreditAccount
+	entry    client.Entry
+	credit   *client.APICredit
 
 	grant    *big.Rat
 	cycle    creditCycle
@@ -52,13 +53,18 @@ type creditAccount struct {
 
 // apiCreditsOf pools every item quota-cache lists, and is nil when there is
 // none. Nothing comes from the roster: these are Console organizations from
-// quota-cache's own list, so the item is what says the account exists. Each is
-// taken as the anthropic-api entry the cache writes for it.
+// quota-cache's own list, or OpenAI API organizations from its OpenAI list, so
+// the item is what says the account exists. Each is taken as the entry of the
+// provider's kind (anthropic-api for Claude) the cache would write for it.
 func apiCreditsOf(in Input, now time.Time) *client.CreditDocument {
+	provider := in.Provider
+	if provider == nil {
+		provider = Claude
+	}
 	accounts := []*creditAccount{}
 	for _, item := range in.Items {
-		entry := client.Entry{Provider: client.ProviderAnthropicAPI, AuthIndex: item.ID, APICredit: item.Credit}
-		accounts = append(accounts, &creditAccount{entry: entry, credit: entry.APICredit, issues: map[string]bool{}})
+		entry := client.Entry{Provider: provider.entryProvider, AuthIndex: item.ID, APICredit: item.Credit}
+		accounts = append(accounts, &creditAccount{provider: provider, entry: entry, credit: entry.APICredit, issues: map[string]bool{}})
 	}
 	if len(accounts) == 0 {
 		return nil
@@ -87,9 +93,10 @@ func apiCreditsOf(in Input, now time.Time) *client.CreditDocument {
 	})
 	editing := editingOf(in)
 	credits := &client.CreditDocument{
-		Title:    "Monthly API Credit",
+		Provider: provider.id,
+		Title:    provider.title,
 		Currency: "USD",
-		Pricing:  client.CreditPricing{AsOf: pricingAsOf, Source: pricingSource, CacheWrites: pricingCacheWrites},
+		Pricing:  provider.pricing,
 		Meter:    creditMeterOf(in, now),
 		Editing:  editing,
 		Accounts: make([]client.CreditAccount, 0, len(accounts)),
@@ -193,10 +200,10 @@ func (a *creditAccount) judge(in Input, editing client.CreditEditing, now time.T
 	// day's usage less the baseline taken when it was saved.
 	var cycleCosts, readingCosts costs
 	if a.cycle.OK {
-		cycleCosts = priceUsage(org.UsageFromDay(a.cycle.Start))
+		cycleCosts = a.provider.price(org.UsageFromDay(a.cycle.Start))
 	}
 	if a.reading != nil {
-		readingCosts = priceUsage(org.UsageFromDay(a.reading.Baseline.DayStart)).minus(priceUsage(a.reading.Baseline.Usage))
+		readingCosts = a.provider.price(org.UsageFromDay(a.reading.Baseline.DayStart)).minus(a.provider.price(a.reading.Baseline.Usage))
 	}
 	var anchor time.Time
 	var window *costs
@@ -400,7 +407,7 @@ func (a *creditAccount) settingsOf(stored settings.APICredit, hasStored bool, ed
 	// Only an organization's own id keys stored values: a 0.1.13 entry's
 	// "label-" id names a label, which is exactly what must not carry an
 	// override over to another organization.
-	case !strings.HasPrefix(id, "org-") || c == nil || (c.Problem == "" && c.OrganizationID == ""):
+	case !strings.HasPrefix(id, a.provider.accountPrefix) || c == nil || (c.Problem == "" && c.OrganizationID == ""):
 		s.NotEditableReason = client.CreditNotEditableCacheTooOld
 	case !editing.Available:
 		s.NotEditableReason = editing.Reason
@@ -420,8 +427,19 @@ func (a *creditAccount) finish(c *client.APICredit) {
 		}
 	}
 	if len(out.DataIssues) > 0 {
-		out.Issue = a.sentenceOf(out.DataIssues[0], c)
+		out.Issue = a.issueSentenceOf(out.DataIssues[0], c)
 	}
+}
+
+// issueSentenceOf is the provider's own sentence for the issue when it has
+// one, else sentenceOf's.
+func (a *creditAccount) issueSentenceOf(issue string, c *client.APICredit) string {
+	if a.provider.sentence != nil {
+		if sentence, ok := a.provider.sentence(a, issue); ok {
+			return sentence
+		}
+	}
+	return a.sentenceOf(issue, c)
 }
 
 func (a *creditAccount) flag(set bool, issue string) {

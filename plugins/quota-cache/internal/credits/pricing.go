@@ -66,7 +66,8 @@ var priceTable = []priceRow{
 }
 
 // rates is one row parsed: exact dollars per token, so a cost is a plain sum
-// of products with nothing left to divide.
+// of products with nothing left to divide. For OpenAI, write5m, write1h, at5m
+// and at1h are all the 30-minute write rate and figure.
 type rates struct {
 	input, write5m, write1h, read, out *big.Rat
 }
@@ -148,7 +149,9 @@ func ratesOf(model, prompt string) (rates, bool) {
 // costs is what one window of usage comes to: exact dollars at the 5-minute
 // cache-write rate every amount uses, the same window at the 1-hour rate, and
 // the tokens of every model the table has no price for, by model as the meter
-// named it.
+// named it. For OpenAI, write5m, write1h, at5m and at1h are all the 30-minute
+// write rate and figure, and an unpriced entry is named by
+// openAIUnpricedLabel.
 type costs struct {
 	at5m, at1h *big.Rat
 	unpriced   map[string]uint64

@@ -346,14 +346,16 @@ The meter never prices its tokens. Do not price them yourself: read the organiza
 
 ### Operator data beside the snapshot
 
-Quota Cache 0.2.0 keeps two files of operator data in the snapshot's directory, beside the meter. They are written only while Quota Cache holds the cache's writer lock, the way the snapshot is (a temporary file `.<name>-*` at 0600, fsync, rename, a directory fsync), and only after the bytes about to be written pass the file's own load rules. A file that fails its rules is never written over. For `cache-path` P, with a final `.json` removed:
+Quota Cache 0.2.0 keeps two files of operator data in the snapshot's directory, beside the meter, and 0.6.0 keeps two more for the [OpenAI API credit](#openai-api-credits). They are written only while Quota Cache holds the cache's writer lock, the way the snapshot is (a temporary file `.<name>-*` at 0600, fsync, rename, a directory fsync), and only after the bytes about to be written pass the file's own load rules. A file that fails its rules is never written over. For `cache-path` P, with a final `.json` removed:
 
 | File | Path | Written |
 | --- | --- | --- |
 | Organizations | P + `.organizations.json` (`client.OrganizationsPath`) | on each organizations save on the page |
 | Settings | P + `.settings.json` | on each save on the page |
+| OpenAI organizations | P + `.openai-organizations.json` (`client.OpenAIOrganizationsPath`) | on each OpenAI organizations save on the page |
+| OpenAI settings | P + `.openai-settings.json` (`client.OpenAISettingsPath`) | on each OpenAI API credits save on the page |
 
-These are operator data, not cache: **they must move with `cache-path`**. A new location without the organizations file starts with no organizations, and they have to be added on the page again. One without the settings file starts with no saved values, and they have to be entered on the page again. [Credit settings](credit-settings.md) gives the rules in full.
+These are operator data, not cache: **they must move with `cache-path`**, the OpenAI ones too. A new location without an organizations file starts with none of its organizations, and they have to be added on the page again. One without a settings file starts with none of its saved values, and they have to be entered on the page again. [Credit settings](credit-settings.md) gives the rules in full.
 
 Each tick of the publisher (every 10 seconds) compares each file's size, modification time, mode and inode with what it last read, and reads one that changed or is gone again, so moving a file aside takes effect within seconds, with no configure. A file that could not be opened or read last time, such as one owned by another user, is read again at every tick whatever the comparison says, so fixing its owner or permissions is enough. A save makes the same comparison first, so it is judged against the file as it is then, never written over one replaced since the tick.
 
@@ -417,7 +419,64 @@ fresh := state.Current(now, 3*time.Minute) // computed recently, and before vali
 
 `client.CreditsAt` is the state as a reader sees it at `now`. It never changes the state it is given. It recomputes the countdowns, and re-applies the only rules that move with the clock alone: the state is stale when it, or its meter's last save, is older than the reader's `staleAfter`, or when `now` is past `valid_until` plus 2 minutes; and the estimate is a lower bound, with the `meterGap` issue, from 5 minutes after a meter stop. Stale changes labels and lower-bound flags, never an amount. Every other figure is Quota Cache's: do not price the meter yourself, so that every consumer shows the same numbers.
 
+The OpenAI API credit has a credit state file of its own, `client.OpenAICreditsPath(path)`, P + `.openai-credits.json`, read with the same functions and the same rules: `client.LoadCredits(client.OpenAICreditsPath(path))`, then `client.CreditsAt` on what it returns. Its `api_credits` names its provider, `openai-api`, where Claude's names none. `client.ErrCreditsMissing` is the normal answer of an install that lists no OpenAI organization ([OpenAI API credits](#openai-api-credits)).
+
 Readers judge freshness to their own needs. Quota Glance uses its `stale-after` (`client.DefaultCreditStaleAfter`, 45 minutes, by default), as Quota Cache's own page does. A reader that acts on the figures, as Reset Priority's router does, should also require `state.Current` with a short limit. A snapshot written more than `client.CreditPublishLagLimit` (5 minutes) after the state's `computed_at` means the snapshot's writer runs but no publisher does, for example after a rollback below 0.2.0: treat the file as abandoned.
+
+## OpenAI API credits
+
+From 0.6.0 Quota Cache also counts the monthly OpenAI API credit a ChatGPT Pro or Business plan grants to one OpenAI API organization, from the traffic of CPA's `openai-compatibility` entries. [OpenAI API credits](openai-credits.md) says what is counted, how it is priced and what is kept. It keeps four files of its own beside the snapshot, each with the schema, the write rules and the load rules of its Claude twin, read by the same client functions. None of Claude's files changes: `snapshot.json` lists no OpenAI organization, and Claude's meter, settings and credit state hold nothing of OpenAI's.
+
+| File | Path | Its Claude twin |
+| --- | --- | --- |
+| OpenAI meter | P + `.openai-meter.json` (`client.OpenAIMeterPath`) | [the meter file](#the-meter-file) |
+| OpenAI organizations | P + `.openai-organizations.json` (`client.OpenAIOrganizationsPath`) | [organizations file](#organizations-file) |
+| OpenAI settings | P + `.openai-settings.json` (`client.OpenAISettingsPath`) | [settings file](#settings-file) |
+| OpenAI credit state | P + `.openai-credits.json` (`client.OpenAICreditsPath`) | [credit state file](#credit-state-file) |
+
+An organization is named everywhere as OpenAI's `openai-organization` response header names it, such as `user-` and 24 letters and digits for a personal organization: trimmed, 1 to 64 ASCII letters, digits, dots, underscores or dashes, the first a letter or digit, in its case (`client.NormalizeOpenAIOrganization`). Two names that differ only in case are two organizations. Its account id is `oai-` and the first 12 hex digits of the SHA-256 of the name (`client.OpenAICreditOrgAccount`).
+
+### The OpenAI meter file
+
+`client.LoadMeter` reads it, schema 1, with the meter file's caps: 32 organizations, 6,000 usage entries, 8 unlinked, 64 auths and 2 MiB. It differs in what it holds:
+
+- `organizations`, `unlinked[].organization_id` and `auths[].organization_id` hold organization names, in their case.
+- A usage entry may carry `tier` after `prompt`: `flex`, `fast`, `ultrafast` or `unknown`, from the response's service tier, and absent for Standard. Buckets are keyed by model, prompt and tier, and sorted in that order. `prompt` is `over_272k` for a request whose input, cached and written tokens included, is over 272,000 (`client.OpenAIMeterPromptClass`), and absent otherwise.
+- `input` excludes cache reads and writes, which OpenAI counts inside its input tokens; `output` includes reasoning; `cache_write` is every write, at whatever lifetime.
+- `refusals` and `last_refusal_at` are `credit_balance_exhausted` refusals. `claude_code_refusals` is never set.
+- `foreign`, `unattributed`, `last_unattributed_at` and `auth_ids_since` are always absent, and `auth_ids` is always `{}`: the OpenAI meter counts nothing as foreign or unattributed, and keeps no auth ID.
+- `received` counts every record CPA delivered while it counted, Claude's included.
+
+The OpenAI meter runs whenever the cache runs and its last configure was accepted, with or without an OpenAI organization listed, so it never stops with `no_items`. With none listed it watches: an organization a response names is noted under `unlinked`, and nothing is bucketed for an organization that was never listed. One removed from the page stays dormant, as a Claude one does. The file is written only once the meter has noted an organization, so a missing file means no response through CPA has named one yet; a stop before then is not recorded anywhere. An organization added while the meter runs gets its own `since` at the add, and its traffic before then is not counted.
+
+### The OpenAI organizations and settings files
+
+They have exactly the [organizations file](#organizations-file)'s and the [settings file](#settings-file)'s schemas and rules, with these differences:
+
+- In the organizations file, `organization_id` is an organization name, unique by exact match.
+- In the settings file, `apiCredits` is keyed by `oai-` account ids, and a reading's `organizationId` is the organization's name exactly. A baseline usage entry's `prompt` is absent or `over_272k`, and its `tier` absent or one of `flex`, `fast`, `ultrafast` and `unknown`.
+- `renewals` is always written `{}`: Claude renewal dates are Claude's settings file's. An OpenAI settings file with any renewal date is unreadable.
+
+From 0.6.0, Claude's settings file refuses a baseline usage entry with a `tier`, as 0.5.0 refused the key; an empty `tier` loads.
+
+An OpenAI file that cannot be read is handled as Claude's is, for its own lane alone: CPA's log says `quota-cache cannot read its saved OpenAI API credit settings; none apply until the file is moved aside` for the settings file, and the page's OpenAI cards say what to do.
+
+### The OpenAI credit state file
+
+A full credit state, schema 1, read by `client.LoadCredits` with the 1 MiB cap, whose `valid_until`, `inputs`, `settings` and `organizations` are the OpenAI lane's own. Its `api_credits` differs from Claude's:
+
+- `provider` is `openai-api`, its first key; Claude's `api_credits` has no `provider`.
+- `title` is `Monthly OpenAI API Credit`, and `pricing` is `{"asOf":"2026-11-18","source":"https://developers.openai.com/api/docs/pricing","cacheWrites":"30m"}`.
+- Accounts have `oai-` ids, and `organizationId` is the organization's name.
+- `cacheWriteExtra` is always 0, with no `cacheWriteExtraText`: writes are priced at the 30-minute rate only.
+- `unpriced[].model` names what was not priced, which may be a model with its tier and context, such as `gpt-5.5 fast over 272K`, rather than a model id.
+- The issues `claudeCodeRefused`, `refusedNearlySpent`, `cacheTooOld`, `misconfigured` and `meterUnattributed` never appear, and no `unlinked` entry has the reason `overLimit`.
+
+`renewals` is always `{}`, and `organizations.config_items_ignored` always 0.
+
+Quota Cache writes nothing to it while neither the OpenAI organizations file nor the OpenAI settings file exists, so an install that does not use the OpenAI API credit never has one. If both are deleted later, the last state written stays where it is, unmaintained, and readers age it out by its `computed_at` as they would any abandoned state. The sidebar's status route adds the OpenAI meter, state and editor as `openai_meter`, `openai_credits` and `openai_editor`, beside Claude's `api_meter`, `credit_state` and `editor`.
+
+Quota Glance 0.11.0 or newer shows the OpenAI state. Reset Priority reads none of these files. Quota Cache 0.5.0 never opens them and leaves them in place.
 
 ## Reading from a new plugin
 

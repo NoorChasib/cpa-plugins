@@ -41,10 +41,11 @@ const (
 	publishFinal
 )
 
-// publisher computes the credit state beside one snapshot and writes it to
-// client.CreditsPath, for as long as the cache that holds the snapshot's
-// writer lock runs: every file it writes is written under that lock, because
-// it is stopped before the cache closes.
+// publisher computes one lane's credit state beside one snapshot and writes
+// it to the lane's credits path, client.CreditsPath for Claude and
+// client.OpenAICreditsPath for OpenAI, for as long as the cache that holds the
+// snapshot's writer lock runs: every file it writes is written under that
+// lock, because it is stopped before the cache closes.
 //
 // Locks: publishMu is held across one compute and its write. It is taken
 // after the plugin's mu and linkMu when those are held, never before them, and
@@ -54,7 +55,10 @@ const (
 type publisher struct {
 	// path is the snapshot's, and version quota-cache's, published.
 	path, version string
-	store         *settings.Store
+	// spec is the lane's: which meter file it reads, how it prices, and
+	// where it writes.
+	spec  *laneSpec
+	store *settings.Store
 	// items is the item list to compute from and the organizations block
 	// published with it.
 	items func() ([]creditItem, client.CreditOrganizations)
@@ -66,8 +70,9 @@ type publisher struct {
 	// Nil in a test that needs none.
 	prepare func(now time.Time) bool
 	log     func(level, message string, fields map[string]any)
-	// watched are the files whose change makes a tick compute: the snapshot,
-	// the meter, the settings file and the organizations file.
+	// watched are the files whose change makes a tick compute, in this
+	// order: the snapshot, the lane's meter, its settings file and its
+	// organizations file.
 	watched []string
 	// limit is the largest encoding written, client.MaxCreditsBytes; write
 	// commits a file. Tests lower the one and replace the other.
@@ -102,10 +107,10 @@ type publisher struct {
 	exited  chan struct{}
 }
 
-func newPublisher(snapshotPath, version string, store *settings.Store, items func() ([]creditItem, client.CreditOrganizations), log func(string, string, map[string]any)) *publisher {
-	watched := []string{snapshotPath, client.MeterPath(snapshotPath), settings.FilePath(snapshotPath), client.OrganizationsPath(snapshotPath)}
+func newPublisher(snapshotPath, version string, spec *laneSpec, store *settings.Store, items func() ([]creditItem, client.CreditOrganizations), log func(string, string, map[string]any)) *publisher {
+	watched := []string{snapshotPath, spec.meterPath(snapshotPath), store.Path(), spec.settings.OrganizationsPath(snapshotPath)}
 	return &publisher{
-		path: snapshotPath, version: version, store: store, items: items, log: log, watched: watched,
+		path: snapshotPath, version: version, spec: spec, store: store, items: items, log: log, watched: watched,
 		limit: client.MaxCreditsBytes, write: writeCreditsFile,
 		done: make(chan struct{}), exited: make(chan struct{}),
 	}
@@ -188,8 +193,9 @@ func (p *publisher) Stop() {
 func (p *publisher) LastState() *client.CreditState { return p.lastState.Load() }
 
 // LastMeter is the meter file the last compute read, nil when there was none
-// or it could not be read. A new Console reading takes its baseline from it,
-// so the spend since the reading is computed from the same file.
+// or it could not be read. A new Console or API Platform reading takes its
+// baseline from it, so the spend since the reading is computed from the same
+// file.
 func (p *publisher) LastMeter() *client.APIMeter { return p.lastMeter.Load() }
 
 // guarded runs f, the publish at now, and turns a panic into a warning: in a
@@ -217,7 +223,7 @@ func (p *publisher) warn(reason string, now time.Time) {
 	}
 	p.warnMu.Unlock()
 	if due && p.log != nil {
-		p.log("warn", "quota-cache could not publish its credit state", map[string]any{"reason": reason})
+		p.log("warn", p.spec.publishWarning, map[string]any{"reason": reason})
 	}
 }
 
@@ -225,6 +231,15 @@ func (p *publisher) warn(reason string, now time.Time) {
 func (p *publisher) publishLocked(now time.Time, mode publishMode) {
 	now = now.UTC().Truncate(time.Second)
 	stamps := p.stamps()
+	// An optional lane with neither a settings file nor an organizations
+	// file has had no organization listed and no value saved: it publishes
+	// nothing, so an install that never uses it gains no file, and the
+	// status route shows no state for it.
+	if p.spec.optional && !stamps[2].exists && !stamps[3].exists {
+		p.seen = stamps
+		p.lastState.Store(nil)
+		return
+	}
 	last := p.lastState.Load()
 	heartbeat := p.writtenAt.IsZero() || now.Sub(p.writtenAt) >= heartbeatEvery
 	expired := last != nil && last.ValidUntil != nil && !now.Before(*last.ValidUntil)
@@ -256,7 +271,7 @@ func (p *publisher) publishLocked(now time.Time, mode publishMode) {
 		p.warn("too_large", now)
 		return
 	}
-	if err := p.write(client.CreditsPath(p.path), raw); err != nil {
+	if err := p.write(p.spec.creditsPath(p.path), raw); err != nil {
 		p.warn("unwritable", now)
 		return
 	}
@@ -273,7 +288,7 @@ func (p *publisher) compute(now time.Time) (*client.CreditState, bool) {
 	} else if !p.haveSnapshot {
 		return nil, false
 	}
-	meter, err := client.LoadMeter(client.MeterPath(p.path))
+	meter, err := client.LoadMeter(p.spec.meterPath(p.path))
 	meterError := ""
 	switch {
 	case errors.Is(err, client.ErrMeterMissing):
@@ -285,7 +300,7 @@ func (p *publisher) compute(now time.Time) (*client.CreditState, bool) {
 	values, status := p.store.Snapshot()
 	items, organizations := p.items()
 	in := credits.Input{
-		Now: now, Snapshot: client.Snapshot{WrittenAt: p.snapshotAt}, Meter: meter, MeterError: meterError,
+		Provider: p.spec.credits, Now: now, Snapshot: client.Snapshot{WrittenAt: p.snapshotAt}, Meter: meter, MeterError: meterError,
 		Settings: values, SettingsState: status.State, Organizations: organizations, Version: p.version,
 	}
 	for _, item := range items {

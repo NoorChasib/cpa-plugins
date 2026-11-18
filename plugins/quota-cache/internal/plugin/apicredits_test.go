@@ -40,7 +40,7 @@ func configuredItems(t *testing.T, config string) (int64, []creditItem, error) {
 	if _, err := p.Handle(protocol.MethodPluginRegister, raw); err != nil {
 		return 0, nil, err
 	}
-	return p.configItems.Load(), *p.apiCredits.Load(), nil
+	return p.configItems.Load(), *p.claude.apiCredits.Load(), nil
 }
 
 // item renders one claude-api-credits item from the four fields, each a raw
@@ -105,7 +105,7 @@ func fetcherWithOrganizations(host Host, organizations ...[2]string) hostFetcher
 	for _, o := range organizations {
 		listed.Items = append(listed.Items, settings.Organization{Label: o[0], OrganizationID: o[1]})
 	}
-	items, _ := itemsOf(listed, 0)
+	items, _ := itemsOf(listed, 0, settings.Claude)
 	f := fetcherWith(host, "")
 	f.apiCredits = &atomic.Pointer[[]creditItem]{}
 	f.apiCredits.Store(&items)
@@ -255,20 +255,20 @@ const oneCredit = "claude-api-credits:\n  - label: sierra\n    organization-id: 
 // its file stays; disabled stops it with disabled. Routes are unchanged.
 func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 	p := newMeterPlugin(t)
-	if reg := p.configure(protocol.MethodPluginRegister, ""); !reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.meter.Load() != nil {
-		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	if reg := p.configure(protocol.MethodPluginRegister, ""); !reg.Capabilities.UsagePlugin || !reg.Capabilities.ManagementAPI || p.claude.meter.Load() != nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.claude.meter.Load())
 	}
 	if _, err := os.Lstat(client.MeterPath(p.path)); !os.IsNotExist(err) {
 		t.Fatal("a meter file exists with no organization")
 	}
 	// Listed in the configuration, it is not counted: the meter waits for
 	// the page.
-	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.meter.Load() != nil {
-		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.meter.Load())
+	if reg := p.configure(protocol.MethodPluginReconfigure, oneCredit); !reg.Capabilities.UsagePlugin || p.claude.meter.Load() != nil {
+		t.Fatalf("registration=%+v meter=%v", reg.Capabilities, p.claude.meter.Load())
 	}
 	// Added on the page, it starts the meter with no configure.
 	p.organizationOps(addOp("sierra", fakeOrgA))
-	m := p.meter.Load()
+	m := p.claude.meter.Load()
 	if m == nil {
 		t.Fatal("adding an organization did not start the meter")
 	}
@@ -277,12 +277,12 @@ func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 	// configuration that no longer lists the organization.
 	p.configure(protocol.MethodPluginReconfigure, oneCredit)
 	p.configure(protocol.MethodPluginReconfigure, "poll-interval: 30m\n"+oneCredit)
-	if reg := p.configure(protocol.MethodPluginReconfigure, ""); !reg.Capabilities.UsagePlugin || p.meter.Load() != m {
+	if reg := p.configure(protocol.MethodPluginReconfigure, ""); !reg.Capabilities.UsagePlugin || p.claude.meter.Load() != m {
 		t.Fatalf("registration=%+v; a reconfigure replaced the meter", reg.Capabilities)
 	}
 	// Removing the last organization on the page stops it, with no configure.
 	p.removeAll()
-	if p.meter.Load() != nil {
+	if p.claude.meter.Load() != nil {
 		t.Fatal("the meter outlived the last organization")
 	}
 	file := p.meterFile()
@@ -291,11 +291,11 @@ func TestUsagePluginIsDeclaredWhileTheCacheRuns(t *testing.T) {
 	}
 	// An organization again: the meter carries on from the file, with a gap.
 	p.organizationOps(addOp("sierra", fakeOrgA))
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("adding an organization did not start the meter")
 	}
-	if reg := p.configure(protocol.MethodPluginReconfigure, "enabled: false\n"+oneCredit); reg.Capabilities.UsagePlugin || p.meter.Load() != nil || p.cache != nil {
-		t.Fatalf("registration=%+v meter=%v cache=%v", reg.Capabilities, p.meter.Load(), p.cache)
+	if reg := p.configure(protocol.MethodPluginReconfigure, "enabled: false\n"+oneCredit); reg.Capabilities.UsagePlugin || p.claude.meter.Load() != nil || p.cache != nil {
+		t.Fatalf("registration=%+v meter=%v cache=%v", reg.Capabilities, p.claude.meter.Load(), p.cache)
 	}
 	file = p.meterFile()
 	if file.StopReason != client.MeterStopDisabled || len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopNoItems || file.Restarts != 1 || file.Counted != 1 {
@@ -347,7 +347,7 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 	p.usage(nil)
 	// Stopping the meter writes it; the snapshot is not touched by that.
 	// The organizations are unchanged, so no scan rewrites it either.
-	p.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
+	p.claude.meter.Load().Stop(client.MeterStopQuiesce, time.Now().UTC())
 	file := p.meterFile()
 	if file.Received != 4 || file.Counted != 1 || file.Rejected != 2 || len(file.Unlinked) != 0 || file.Organizations[fakeOrgA].ClaudeCodeRefusals != 1 {
 		t.Fatalf("meter file: %+v", file)
@@ -364,13 +364,13 @@ func TestUsageRecordsAreMeteredAndSecretsNeverEscape(t *testing.T) {
 		t.Fatalf("status %d: %s", code, status)
 	}
 	rawMeter, _ := os.ReadFile(client.MeterPath(p.path))
-	p.publisher.PublishNow()
+	p.claude.publisher.PublishNow()
 	rawCredits, err := os.ReadFile(client.CreditsPath(p.path))
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := p.host.logged()
-	items := *p.apiCredits.Load()
+	items := *p.claude.apiCredits.Load()
 	for name, text := range map[string]string{
 		"snapshot": string(before), "meter": string(rawMeter), "credits": string(rawCredits), "status": status,
 		"logs": fmt.Sprintf("%v %+v %#v", lines, lines, lines), "items": fmt.Sprintf("%v %+v %#v", items, items, items),
@@ -444,8 +444,8 @@ func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
 	if _, err := p.Handle(protocol.MethodPluginQuiesce, nil); err != nil {
 		t.Fatal(err)
 	}
-	if file := p.meterFile(); file.StopReason != client.MeterStopQuiesce || file.Counted != 1 || p.meter.Load() != nil {
-		t.Fatalf("after quiesce: %+v meter=%v", file, p.meter.Load())
+	if file := p.meterFile(); file.StopReason != client.MeterStopQuiesce || file.Counted != 1 || p.claude.meter.Load() != nil {
+		t.Fatalf("after quiesce: %+v meter=%v", file, p.claude.meter.Load())
 	}
 	p.configure(protocol.MethodPluginRegister, "")
 	p.usage(goldenRecord(t))
@@ -454,7 +454,7 @@ func TestQuiesceAndShutdownAreRecordedForTheNextStart(t *testing.T) {
 	if file.StopReason != client.MeterStopShutdown || len(file.Gaps) != 1 || file.Gaps[0].Reason != client.MeterStopQuiesce || !file.Gaps[0].Brief() || file.Restarts != 1 || file.Counted != 2 {
 		t.Fatalf("after shutdown: %+v", file)
 	}
-	if p.meter.Load() != nil {
+	if p.claude.meter.Load() != nil {
 		t.Fatal("the meter outlived shutdown")
 	}
 }
@@ -487,11 +487,11 @@ func TestAStartWithNoOrganizationKeepsTheStopItFinds(t *testing.T) {
 	p = &meterPlugin{Plugin: New(host), t: t, host: host, path: updated.path}
 	t.Cleanup(p.Shutdown)
 	p.configure(protocol.MethodPluginRegister, alphaCredit)
-	if file := p.meterFile(); p.meter.Load() != nil || file.StopReason != client.MeterStopQuiesce || !file.StoppedAt.Equal(*stopped.StoppedAt) || file.Restarts != stopped.Restarts {
-		t.Fatalf("with no organization: %+v, meter %v", file, p.meter.Load())
+	if file := p.meterFile(); p.claude.meter.Load() != nil || file.StopReason != client.MeterStopQuiesce || !file.StoppedAt.Equal(*stopped.StoppedAt) || file.Restarts != stopped.Restarts {
+		t.Fatalf("with no organization: %+v, meter %v", file, p.claude.meter.Load())
 	}
 	p.organizationOps(addOp("alpha", fakeOrgA))
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("adding alpha did not start the meter")
 	}
 	p.Shutdown()
@@ -507,19 +507,19 @@ func TestAFailedMeterIsReplacedAtTheNextConfigure(t *testing.T) {
 	p := newMeterPlugin(t)
 	p.writeOrganizations([2]string{"sierra", fakeOrgA})
 	p.configure(protocol.MethodPluginRegister, "")
-	failed := p.meter.Load()
+	failed := p.claude.meter.Load()
 	failed.Stop(client.MeterStopFailed, time.Now().UTC())
 	if !failed.Failed() {
 		t.Fatal("not failed")
 	}
 	// A change on the page leaves it stopped: only a configure replaces it.
 	p.organizationOps(addOp("after", fakeOrgC))
-	if p.meter.Load() != failed {
+	if p.claude.meter.Load() != failed {
 		t.Fatal("a change on the page replaced a failed meter")
 	}
 	p.organizationOps(removeOp(fakeOrgC))
 	p.configure(protocol.MethodPluginReconfigure, "")
-	replaced := p.meter.Load()
+	replaced := p.claude.meter.Load()
 	if replaced == nil || replaced == failed || replaced.Failed() {
 		t.Fatalf("meter=%v", replaced)
 	}
@@ -560,7 +560,7 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 		{"an old schema", 3, good},
 	}
 	for i, bad := range rejections {
-		running := p.meter.Load()
+		running := p.claude.meter.Load()
 		if running == nil {
 			t.Fatalf("%s: no meter was running", bad.name)
 		}
@@ -568,8 +568,8 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 		if err := attempt(bad.schema, bad.yaml); err == nil {
 			t.Fatalf("%s was accepted", bad.name)
 		}
-		if p.meter.Load() != nil || p.cache == nil {
-			t.Fatalf("%s: meter running=%t cache running=%t", bad.name, p.meter.Load() != nil, p.cache != nil)
+		if p.claude.meter.Load() != nil || p.cache == nil {
+			t.Fatalf("%s: meter running=%t cache running=%t", bad.name, p.claude.meter.Load() != nil, p.cache != nil)
 		}
 		file := p.meterFile()
 		if file.StopReason != client.MeterStopDisabled || file.StoppedAt == nil || file.Counted != uint64(i+1) || len(file.Gaps) != i {
@@ -582,14 +582,14 @@ func TestARejectedConfigureStopsTheMeterUntilTheNextGoodOne(t *testing.T) {
 		if i == 0 {
 			p.organizationOps(addOp("after", fakeOrgC))
 			p.organizationOps(removeOp(fakeOrgC))
-			if p.meter.Load() != nil {
+			if p.claude.meter.Load() != nil {
 				t.Fatalf("%s: a change on the page restarted the meter", bad.name)
 			}
 		}
 		if err := attempt(6, good); err != nil {
 			t.Fatalf("%s: the fix was rejected: %v", bad.name, err)
 		}
-		if m := p.meter.Load(); m == nil || m == running {
+		if m := p.claude.meter.Load(); m == nil || m == running {
 			t.Fatalf("%s: meter after the fix: %v", bad.name, m)
 		}
 	}

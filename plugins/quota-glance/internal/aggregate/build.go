@@ -78,6 +78,12 @@ type Input struct {
 	// CreditsUnreadable or CreditsAbandoned. The card then lists the
 	// snapshot's organizations without figures.
 	CreditsError string
+	// OpenAICredits is Quota Cache's published OpenAI API credit state, from
+	// its own file beside the snapshot. It is used only while
+	// OpenAICreditsError, which takes the same values as CreditsError, is "".
+	// It decides the OpenAI API credit card and nothing else.
+	OpenAICredits      *qc.CreditState
+	OpenAICreditsError string
 }
 
 // remainingOf is the single conversion from quota-cache's USED percentage on
@@ -440,6 +446,7 @@ func Build(in Input, now time.Time) Document {
 		Providers:        []Provider{},
 		Balances:         balancesOf(in, now),
 		APICredits:       apiCreditsOf(in, now),
+		OpenAIAPICredits: openAIAPICreditsOf(in, now),
 		RenewalOrphans:   renewalOrphansOf(in),
 	}
 	renewals := renewalsOf(in)
@@ -579,8 +586,8 @@ func Build(in Input, now time.Time) Document {
 	return doc
 }
 
-// WithCredits is doc with every part Quota Cache's published state decides
-// taken from fresh: the API credit card, the renewal orphans, and each
+// WithCredits is doc with every part Quota Cache's published states decide
+// taken from fresh: both API credit cards, the renewal orphans, and each
 // credential's renewal. doc is a document served again while its source is
 // failing, and fresh is built from the same snapshot and roster with the
 // credit state as it is now, so a value entered on Quota Cache's page
@@ -590,6 +597,7 @@ func WithCredits(doc, fresh Document) Document {
 	// while the quota snapshot cannot be read.
 	doc.Warmup = fresh.Warmup
 	doc.APICredits = fresh.APICredits
+	doc.OpenAIAPICredits = fresh.OpenAIAPICredits
 	doc.RenewalOrphans = fresh.RenewalOrphans
 	now := make(map[string]Credential, len(fresh.Credentials))
 	for _, credential := range fresh.Credentials {

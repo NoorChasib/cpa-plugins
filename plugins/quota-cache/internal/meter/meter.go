@@ -1,7 +1,10 @@
-// Package meter counts Claude API-key traffic per Console organization from
-// the usage records CPA hands its usage plugins, and keeps the count in the
-// file beside the snapshot that client.MeterPath names. It prices nothing and
-// sends nothing: a consumer prices the tokens with its own table.
+// Package meter counts API-key traffic per organization from the usage
+// records CPA hands its usage plugins, and keeps the count in a file beside
+// the snapshot. A Source says what one meter counts: Claude, Claude API-key
+// traffic per Console organization in the file client.MeterPath names, or
+// OpenAI, openai-compatibility traffic per OpenAI API organization in the
+// file client.OpenAIMeterPath names. It prices nothing and sends nothing: a
+// consumer prices the tokens with its own table.
 package meter
 
 import (
@@ -99,26 +102,76 @@ func (c *configAuthID) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// event is what the worker counts: one Claude API-key attempt, reduced to
-// the facts the meter keeps. The failure body, the session id and the
-// headers are gone by the time one exists.
+// event is what the worker counts: one API-key attempt of the meter's
+// source, reduced to the facts the meter keeps. The failure body, the session
+// id and the headers are gone by the time one exists.
 type event struct {
 	at                                   time.Time // completion time, clamped to the received time, truncated to the second
 	authIndex                            string    // CPA's auth index, "" when absent or over maxAuthIndex bytes
-	authID                               string    // CPA's auth ID when it has the config API-key shape, else ""
-	org                                  string    // the organization header, normalized; "" when absent or invalid
-	model                                string    // client.NormalizeMeterModel(Model, ResponseModel)
-	prompt                               string    // client.MeterPromptClass(model, input+cacheRead+cacheWrite)
-	failed, refusal, claudeCode          bool
-	cancelled                            bool // a failure with status 499: the client went away
+	authID                               string    // CPA's auth ID when it has the config API-key shape, else ""; always "" for OpenAI
+	org                                  string    // the organization header, normalized; "" when absent (or, for Claude, invalid)
+	model                                string    // client.NormalizeMeterModel(Model, ResponseModel), or openAIMeterModel's for OpenAI
+	prompt                               string    // client.MeterPromptClass(model, input+cacheRead+cacheWrite), or OpenAIMeterPromptClass of the whole input
+	tier                                 string    // OpenAI's service tier, client.NormalizeOpenAIServiceTier; always "" for Claude
+	failed, refusal, claudeCode          bool      // claudeCode is always false for OpenAI
+	cancelled                            bool      // a failure with status 499: the client went away
 	input, output, cacheRead, cacheWrite uint64
 }
+
+// Source is what one meter counts and how it names itself in CPA's log. The
+// count, its file and the machinery that keeps them are the same for every
+// source; the decode, the attribution and the auth-ID map are what differ.
+type Source struct {
+	// decode reads one record: e, keep and rejected as decode returns them.
+	decode func(raw []byte, received time.Time) (e event, keep, rejected bool)
+	// headerOnly attributes an event by its organization header, else by the
+	// auth map for a failure only, else not at all (attributeOpenAILocked),
+	// and never counts one as foreign or unattributed.
+	headerOnly bool
+	// authIDs records config API-key auth IDs, and the file's
+	// auth_ids_since.
+	authIDs bool
+	// lazyFile writes no file until the meter has an organization to keep,
+	// linked, dormant or unlinked, so a meter that runs with none listed and
+	// has seen none leaves nothing beside the snapshot.
+	lazyFile bool
+	logs     sourceLogs
+}
+
+// sourceLogs are a source's lines in CPA's log: when it starts, when its file
+// cannot be read, when it stops itself, when it drops records and when it
+// cannot save.
+type sourceLogs struct{ started, unreadable, failed, dropping, unsaved string }
+
+// Claude counts Claude API-key traffic per Console organization. Open starts
+// a meter of it.
+var Claude = Source{decode: decode, authIDs: true, logs: sourceLogs{
+	started:    "quota-cache API meter counting Claude API-key traffic",
+	unreadable: "quota-cache could not read its API meter file and starts counting again",
+	failed:     "quota-cache API meter stopped after an internal error; Claude API credit estimates are incomplete until Quota Cache reloads",
+	dropping:   "quota-cache API meter is dropping usage records; Claude API credit estimates will be low",
+	unsaved:    "quota-cache cannot save its API meter; Claude API credit estimates may lose recent spend",
+}}
+
+// OpenAI counts openai-compatibility API-key traffic per OpenAI API
+// organization, as the openai-organization response header names it. A meter
+// of it may run with no organization listed: it then counts nothing and notes
+// each organization it sees as unlinked, so the page can offer it, and it
+// writes its file only once it has noted one.
+var OpenAI = Source{decode: decodeOpenAI, headerOnly: true, lazyFile: true, logs: sourceLogs{
+	started:    "quota-cache OpenAI API meter counting openai-compatibility traffic",
+	unreadable: "quota-cache could not read its OpenAI API meter file and starts counting again",
+	failed:     "quota-cache OpenAI API meter stopped after an internal error; OpenAI API credit estimates are incomplete until Quota Cache reloads",
+	dropping:   "quota-cache OpenAI API meter is dropping usage records; OpenAI API credit estimates will be low",
+	unsaved:    "quota-cache cannot save its OpenAI API meter; OpenAI API credit estimates may lose recent spend",
+}}
 
 // Meter is one running count. Offer runs on CPA's usage goroutine and only
 // decodes and enqueues; the worker owns the count, the file and the ticker.
 type Meter struct {
-	path string
-	log  Logger
+	path   string
+	log    Logger
+	source Source
 
 	// stopped is read by Offer without a lock; once set, nothing is taken
 	// in. The counters below are Offer's alone, folded into the file at
@@ -149,24 +202,38 @@ type Meter struct {
 	lastSaveWarn  time.Time
 	lastDropWarn  time.Time
 	warnedDropped uint64
-	beforeApply   func(*event) // a test hook, nil in production
+	// noFile is set while a lazy source's file did not exist at restore and
+	// has not been written since.
+	noFile      bool
+	beforeApply func(*event) // a test hook, nil in production
 }
 
-// Open starts counting into the meter file at path, carrying on from the
-// file when there is one. linked names the organizations listed on
-// quota-cache's page, from its organizations file; now is the start time. It
-// never fails: a file that cannot be read is replaced at the first save, and
-// one warning says so.
+// Open starts counting Claude API-key traffic into the meter file at path,
+// carrying on from the file when there is one. linked names the organizations
+// listed on quota-cache's page, from its organizations file; now is the start
+// time. It never fails: a file that cannot be read is replaced at the first
+// save, and one warning says so.
 func Open(path string, linked []string, now time.Time, log Logger) *Meter {
-	m := newMeter(path, log)
+	return OpenFor(Claude, path, linked, now, log)
+}
+
+// OpenFor is Open for the traffic source counts, with linked naming that
+// source's organizations. A lazy source with no file yet creates none until
+// it has an organization to keep.
+func OpenFor(source Source, path string, linked []string, now time.Time, log Logger) *Meter {
+	m := newMeterFor(source, path, log)
 	m.restore(linked, now)
-	m.log.Log(context.Background(), "info", "quota-cache API meter counting Claude API-key traffic", map[string]any{"organizations": len(linked)})
+	m.log.Log(context.Background(), "info", m.source.logs.started, map[string]any{"organizations": len(linked)})
 	go m.work()
 	return m
 }
 
 func newMeter(path string, log Logger) *Meter {
-	return &Meter{path: path, log: log, intake: make(chan event, intakeSize), done: make(chan struct{}), exited: make(chan struct{})}
+	return newMeterFor(Claude, path, log)
+}
+
+func newMeterFor(source Source, path string, log Logger) *Meter {
+	return &Meter{path: path, log: log, source: source, intake: make(chan event, intakeSize), done: make(chan struct{}), exited: make(chan struct{})}
 }
 
 // restore loads the file and turns the stop it recorded, or the save it was
@@ -192,16 +259,18 @@ func (m *Meter) restore(linked []string, now time.Time) {
 		m.data.StoppedAt, m.data.StopReason = nil, ""
 		m.data.Restarts = addSaturating(m.data.Restarts, 1)
 		// A file an older quota-cache wrote begins recording auth IDs now;
-		// one that already does keeps its first start.
-		if m.data.AuthIDsSince == nil {
+		// one that already does keeps its first start. A source that records
+		// none leaves it unset.
+		if m.source.authIDs && m.data.AuthIDsSince == nil {
 			since := now
 			m.data.AuthIDsSince = &since
 		}
 	case errors.Is(err, client.ErrMeterMissing):
-		m.data = fresh(now)
+		m.data = fresh(now, m.source.authIDs)
+		m.noFile = m.source.lazyFile
 	default:
-		m.log.Log(context.Background(), "warn", "quota-cache could not read its API meter file and starts counting again", nil)
-		m.data = fresh(now)
+		m.log.Log(context.Background(), "warn", m.source.logs.unreadable, nil)
+		m.data = fresh(now, m.source.authIDs)
 	}
 	m.data.StartedAt = now
 	m.received.Store(m.data.Received)
@@ -218,10 +287,16 @@ func (m *Meter) restore(linked []string, now time.Time) {
 	m.dirty = true
 }
 
-func fresh(now time.Time) client.APIMeter {
-	return client.APIMeter{Schema: client.MeterSchema, Since: now, StartedAt: now,
+// fresh is an empty count starting at now. authIDs sets AuthIDsSince; the
+// AuthIDs map is never null either way.
+func fresh(now time.Time, authIDs bool) client.APIMeter {
+	data := client.APIMeter{Schema: client.MeterSchema, Since: now, StartedAt: now,
 		Gaps: []client.MeterGap{}, Organizations: map[string]client.MeterOrganization{}, Unlinked: []client.MeterUnlinked{}, Auths: map[string]client.MeterAuth{},
-		AuthIDsSince: &now, AuthIDs: map[string]client.MeterAuthID{}}
+		AuthIDs: map[string]client.MeterAuthID{}}
+	if authIDs {
+		data.AuthIDsSince = &now
+	}
+	return data
 }
 
 // Offer takes one usage record as CPA sent it. It runs on CPA's single usage
@@ -233,7 +308,7 @@ func (m *Meter) Offer(raw []byte, received time.Time) {
 	}
 	m.received.Add(1)
 	received = received.UTC().Truncate(time.Second)
-	e, keep, rejected := decode(raw, received)
+	e, keep, rejected := m.source.decode(raw, received)
 	if rejected {
 		m.rejected.Add(1)
 		m.lastRejectedAt.Store(received.Unix())
@@ -352,7 +427,7 @@ func (m *Meter) fail(now time.Time) {
 		defer func() { _ = recover() }()
 		_ = m.flush(now)
 	}()
-	m.log.Log(context.Background(), "error", "quota-cache API meter stopped after an internal error; Claude API credit estimates are incomplete until Quota Cache reloads", nil)
+	m.log.Log(context.Background(), "error", m.source.logs.failed, nil)
 }
 
 // drain applies every event still buffered, without blocking.
@@ -464,7 +539,12 @@ func (m *Meter) apply(e event) {
 	if e.authID != "" && e.authIndex != "" {
 		m.learnAuthIDLocked(e)
 	}
-	org := m.attributeLocked(e)
+	var org string
+	if m.source.headerOnly {
+		org = m.attributeOpenAILocked(e)
+	} else {
+		org = m.attributeLocked(e)
+	}
 	if org == "" {
 		m.dirty = true
 		return
@@ -534,6 +614,37 @@ func (m *Meter) attributeLocked(e event) string {
 		m.data.LastUnattributedAt = latest(m.data.LastUnattributedAt, e.at)
 	}
 	return ""
+}
+
+// attributeOpenAILocked names an OpenAI event's organization, teaching the
+// auth map from a headed record, or "" when the event is no organization's.
+// A failure without the header goes to the organization a headed record last
+// showed on its auth, so a refusal that lacks the header still lands. Any
+// other headerless record is ignored, a success on a known auth included, and
+// is counted as neither foreign nor unattributed: openai-compatibility
+// entries also serve upstreams that never send the header, CPA records
+// OpenAI's headers on every success, and CPA keys an auth by base URL and key
+// alone, so behind a gateway that mixes upstreams a headerless success is
+// another upstream's and would be priced at OpenAI's rates.
+func (m *Meter) attributeOpenAILocked(e event) string {
+	if e.org != "" {
+		if e.authIndex != "" {
+			m.learnAuthLocked(e.authIndex, e.org, e.at)
+		}
+		return e.org
+	}
+	if !e.failed || e.authIndex == "" {
+		return ""
+	}
+	a, known := m.data.Auths[e.authIndex]
+	if !known || a.OrganizationID == "" {
+		return ""
+	}
+	if e.at.After(a.SeenAt) {
+		a.SeenAt = e.at
+		m.data.Auths[e.authIndex] = a
+	}
+	return a.OrganizationID
 }
 
 func (m *Meter) learnAuthLocked(index, org string, at time.Time) {
@@ -639,7 +750,7 @@ func (m *Meter) bucketLocked(o *client.MeterOrganization, e event) {
 	}
 	day, dayNew := bucketAt(&o.Days, dayStart)
 	hour, hourNew := bucketAt(&o.Hours, hourStart)
-	key := client.MeterUsage{Model: e.model, Prompt: e.prompt}
+	key := client.MeterUsage{Model: e.model, Prompt: e.prompt, Tier: e.tier}
 	if (!hasUsage(o.Days[day], key) && len(o.Days[day].Usage) >= client.MaxMeterUsagePerBucket) ||
 		(!hasUsage(o.Hours[hour], key) && len(o.Hours[hour].Usage) >= client.MaxMeterUsagePerBucket) {
 		key = client.MeterUsage{Model: client.MeterOtherModel}
@@ -685,7 +796,9 @@ func bucketAt(buckets *[]client.MeterBucket, start time.Time) (index int, create
 }
 
 func hasUsage(b client.MeterBucket, key client.MeterUsage) bool {
-	return slices.ContainsFunc(b.Usage, func(u client.MeterUsage) bool { return u.Model == key.Model && u.Prompt == key.Prompt })
+	return slices.ContainsFunc(b.Usage, func(u client.MeterUsage) bool {
+		return u.Model == key.Model && u.Prompt == key.Prompt && u.Tier == key.Tier
+	})
 }
 
 func (m *Meter) dayCutoff() time.Time {
@@ -792,7 +905,7 @@ func capGaps(gaps []client.MeterGap) []client.MeterGap {
 func (m *Meter) flushIfDue(now time.Time) {
 	if dropped := m.dropped.Load(); dropped != m.warnedDropped && now.Sub(m.lastDropWarn) >= warnEvery {
 		m.warnedDropped, m.lastDropWarn = dropped, now
-		m.log.Log(context.Background(), "warn", "quota-cache API meter is dropping usage records; Claude API credit estimates will be low", map[string]any{"dropped": dropped})
+		m.log.Log(context.Background(), "warn", m.source.logs.dropping, map[string]any{"dropped": dropped})
 	}
 	m.mu.Lock()
 	dirty := m.dirty
@@ -807,15 +920,20 @@ func (m *Meter) flushIfDue(now time.Time) {
 func (m *Meter) save(now time.Time) {
 	if err := m.flush(now); err != nil && now.Sub(m.lastSaveWarn) >= warnEvery {
 		m.lastSaveWarn = now
-		m.log.Log(context.Background(), "warn", "quota-cache cannot save its API meter; Claude API credit estimates may lose recent spend", nil)
+		m.log.Log(context.Background(), "warn", m.source.logs.unsaved, nil)
 	}
 }
 
 // flush encodes the count under mu and writes it with mu released: a temp
 // file in the directory, write, fsync, rename, fsync the directory, as the
 // snapshot is written. A failed write leaves the count dirty for the next
-// try.
+// try. A lazy source with no file yet writes nothing while it has no
+// organization to keep, so a stop then leaves no file and no gap: there is
+// nothing to carry on from.
 func (m *Meter) flush(now time.Time) error {
+	if m.awaitingFile() {
+		return nil
+	}
 	raw := m.exportLimited(now, client.MaxMeterBytes)
 	if err := writeFile(m.path, raw); err != nil {
 		m.mu.Lock()
@@ -823,8 +941,19 @@ func (m *Meter) flush(now time.Time) error {
 		m.mu.Unlock()
 		return err
 	}
-	m.lastSaved = now
+	m.lastSaved, m.noFile = now, false
 	return nil
+}
+
+// awaitingFile is whether a lazy source's meter still has no file and nothing
+// to put in one: no organization, linked or dormant, and no unlinked one.
+func (m *Meter) awaitingFile() bool {
+	if !m.noFile {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.data.Organizations) == 0 && len(m.data.Unlinked) == 0
 }
 
 // exportLimited is the file's bytes at now, held within limit by the

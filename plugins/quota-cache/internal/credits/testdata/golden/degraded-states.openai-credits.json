@@ -1,0 +1,299 @@
+{
+  "schema": 1,
+  "quota_cache_version": "0.6.0",
+  "computed_at": "2026-09-10T04:00:00Z",
+  "valid_until": "2026-09-28T00:00:00Z",
+  "inputs": {
+    "snapshot_written_at": "2026-09-10T03:55:00Z",
+    "meter_flushed_at": "2026-09-10T03:59:00Z",
+    "meter_error": "",
+    "settings_revision": "5"
+  },
+  "settings": {
+    "state": "ok",
+    "editable": true,
+    "revision": "5"
+  },
+  "api_credits": {
+    "provider": "openai-api",
+    "title": "Monthly OpenAI API Credit",
+    "currency": "USD",
+    "pricing": {
+      "asOf": "2026-11-18",
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "cacheWrites": "30m"
+    },
+    "meter": {
+      "sinceEpoch": 1787184000,
+      "updatedAtEpoch": 1789012740,
+      "stale": false,
+      "stoppedAtEpoch": null,
+      "stopReason": "",
+      "dropped": 0,
+      "lastDroppedEpoch": null,
+      "unattributed": 0,
+      "lastUnattributedEpoch": null,
+      "rejected": 0,
+      "lastRejectedEpoch": null,
+      "foreign": 0,
+      "gaps": [
+        {
+          "fromEpoch": 1787565600,
+          "toEpoch": 1787572800,
+          "reason": "unclean_stop"
+        }
+      ]
+    },
+    "editing": {
+      "available": true,
+      "reason": ""
+    },
+    "pool": {
+      "hasEstimate": true,
+      "lowerBound": true,
+      "monthlyCredit": 460,
+      "monthlyCreditText": "$460.00",
+      "used": 304.26,
+      "usedText": "$304.26",
+      "left": 155.74,
+      "leftText": "$155.74",
+      "overage": 0,
+      "overageText": "$0.00",
+      "remainingFraction": 0.33856521739130435,
+      "remainingPercent": 34,
+      "level": "low",
+      "nextRefill": {
+        "accountIds": [
+          "oai-dd79fc440924"
+        ],
+        "refillAtEpoch": 1790553600,
+        "refillInSeconds": 1540800,
+        "gain": 44.26,
+        "gainText": "$44.26",
+        "gainFraction": 0.09621739130434782,
+        "gainPercent": 10
+      },
+      "fullAtEpoch": 1790812800,
+      "fullInSeconds": 1800000,
+      "accountCount": 3,
+      "countedCount": 2,
+      "missingCount": 1
+    },
+    "accounts": [
+      {
+        "id": "oai-dd79fc440924",
+        "label": "Pro",
+        "order": 0,
+        "organizationId": "user-AbCdEfGhIjKlMnOpQrStUvWx",
+        "state": "ok",
+        "counted": true,
+        "hasEstimate": true,
+        "basis": "credit",
+        "lowerBound": false,
+        "monthlyCredit": 200,
+        "monthlyCreditText": "$200.00",
+        "monthlyCreditSource": "dashboard",
+        "spent": 44.26,
+        "spentText": "$44.26",
+        "spentSinceEpoch": 1787875200,
+        "used": 44.26,
+        "usedText": "$44.26",
+        "left": 155.74,
+        "leftText": "$155.74",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0.7787,
+        "remainingPercent": 78,
+        "level": "ok",
+        "cycleStartEpoch": 1787875200,
+        "renewsAtEpoch": 1790553600,
+        "renewsInSeconds": 1540800,
+        "renewsSource": "dashboard",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1787184000,
+        "lastSeenEpoch": 1789009200,
+        "dataIssues": [],
+        "issue": "",
+        "settings": {
+          "editable": true,
+          "notEditableReason": "",
+          "revision": "4",
+          "monthlyUsd": "200",
+          "configMonthlyUsd": "",
+          "configMonthlyUsdInvalid": false,
+          "renews": "2026-08-28",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": 1787907600
+        }
+      },
+      {
+        "id": "oai-ed5b51206e7d",
+        "label": "Business",
+        "order": 1,
+        "organizationId": "acme-x1wegt",
+        "state": "out",
+        "counted": true,
+        "hasEstimate": true,
+        "basis": "credit",
+        "lowerBound": true,
+        "monthlyCredit": 260,
+        "monthlyCreditText": "$260.00",
+        "monthlyCreditSource": "dashboard",
+        "spent": 186,
+        "spentText": "$186.00",
+        "spentSinceEpoch": 1788220800,
+        "used": 260,
+        "usedText": "$260.00",
+        "left": 0,
+        "leftText": "$0.00",
+        "estimateLeftText": "$74.00",
+        "overage": 0,
+        "overageText": "$0.00",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "critical",
+        "cycleStartEpoch": 1788220800,
+        "renewsAtEpoch": 1790812800,
+        "renewsInSeconds": 1800000,
+        "renewsSource": "dashboard",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [
+          {
+            "model": "gpt-image-2",
+            "tokens": 700000
+          }
+        ],
+        "refusals": {
+          "total": 2,
+          "lastAtEpoch": 1788992100,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": 1787184000,
+        "lastSeenEpoch": 1788992100,
+        "dataIssues": [
+          "refused",
+          "unpricedModel"
+        ],
+        "issue": "OpenAI refused a request with credit_balance_exhausted, so this credit is spent. The estimate had $74.00 left; enter an API Platform reading to correct it.",
+        "settings": {
+          "editable": true,
+          "notEditableReason": "",
+          "revision": "5",
+          "monthlyUsd": "260",
+          "configMonthlyUsd": "",
+          "configMonthlyUsdInvalid": false,
+          "renews": "2026-09-01",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": 1788256800
+        }
+      },
+      {
+        "id": "oai-e185685ba9a3",
+        "label": "Side project",
+        "order": 2,
+        "organizationId": "side-k2m9qz",
+        "state": "pending",
+        "counted": false,
+        "hasEstimate": false,
+        "basis": "",
+        "lowerBound": false,
+        "monthlyCredit": 0,
+        "monthlyCreditText": "",
+        "monthlyCreditSource": "none",
+        "spent": 0,
+        "spentText": "",
+        "spentSinceEpoch": null,
+        "used": 0,
+        "usedText": "",
+        "left": 0,
+        "leftText": "",
+        "estimateLeftText": "",
+        "overage": 0,
+        "overageText": "",
+        "remainingFraction": 0,
+        "remainingPercent": 0,
+        "level": "",
+        "cycleStartEpoch": null,
+        "renewsAtEpoch": null,
+        "renewsInSeconds": null,
+        "renewsSource": "none",
+        "reading": null,
+        "cacheWriteExtra": 0,
+        "cacheWriteExtraText": "",
+        "unpriced": [],
+        "refusals": {
+          "total": 0,
+          "lastAtEpoch": null,
+          "claudeCodeTotal": 0,
+          "claudeCodeLastAtEpoch": null
+        },
+        "meterSinceEpoch": null,
+        "lastSeenEpoch": null,
+        "dataIssues": [
+          "orgNotCounted",
+          "needsCredit",
+          "needsRefillDate"
+        ],
+        "issue": "Counting starts at Quota Cache's next save.",
+        "settings": {
+          "editable": true,
+          "notEditableReason": "",
+          "revision": "",
+          "monthlyUsd": "",
+          "configMonthlyUsd": "",
+          "configMonthlyUsdInvalid": false,
+          "renews": "",
+          "configRenews": "",
+          "configRenewsInvalid": false,
+          "reading": null,
+          "readingUnusedReason": "",
+          "updatedAtEpoch": null
+        }
+      }
+    ],
+    "unlinked": [
+      {
+        "organizationId": "user-ZyXwVuTsRqPoNmLkJiHgFeDc",
+        "firstSeenEpoch": 1788940800,
+        "lastSeenEpoch": 1789009200,
+        "requests": 7,
+        "reason": "notConfigured"
+      }
+    ],
+    "orphans": [
+      {
+        "id": "oai-c3a38df85b55",
+        "monthlyUsd": "100",
+        "renews": "",
+        "hasReading": false,
+        "revision": "2",
+        "updatedAtEpoch": 1787216700
+      }
+    ]
+  },
+  "renewals": {},
+  "organizations": {
+    "state": "ok",
+    "revision": "3",
+    "config_items_ignored": 0
+  }
+}

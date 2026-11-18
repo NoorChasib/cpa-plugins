@@ -20,6 +20,7 @@ import { describe, test } from "node:test"
 import {
   anySetHere,
   BRIEF_GAP_SECONDS,
+  CLAUDE_COPY,
   creditAnchor,
   creditBar,
   creditBasis,
@@ -41,6 +42,7 @@ import {
   meterStopped,
   moneyText,
   notEditableText,
+  OPENAI_COPY,
   poolNotes,
   refillWhen,
   setHere,
@@ -918,4 +920,95 @@ test("a brief gap sent by an older document is still ignored by pool notes", () 
   assert.equal(poolNotes(credits, NOW).some((note) => note.text.includes("not counting")), false)
   credits.meter!.gaps[0]!.fromEpoch--
   assert.equal(poolNotes(credits, NOW).some((note) => note.text.includes("not counting")), true)
+})
+
+describe("the OpenAI API credit: the same card in OpenAI's words", () => {
+  const openAI = (() => {
+    const doc = document("summary-degraded")
+    assert.ok(doc.openaiApiCredits, "summary-degraded")
+    return doc.openaiApiCredits
+  })()
+
+  test("the degraded document carries it beside the Claude credit, naming its provider", () => {
+    assert.equal(openAI.provider, "openai-api")
+    assert.equal(openAI.title, "Monthly OpenAI API Credit")
+    assert.equal(degraded.provider, undefined)
+    // The happy-path document lists no OpenAI organization, so it has no key at all.
+    assert.equal("openaiApiCredits" in document("summary"), false)
+  })
+
+  test("its words", () => {
+    const { shortOrganization: _short, ...words } = OPENAI_COPY
+    assert.deepEqual(words, {
+      heading: "Monthly OpenAI API Credit",
+      readingNoun: "API Platform reading",
+      readingLink: "Enter API Platform reading in Quota Cache",
+      organizationNoun: "OpenAI organization",
+      foot: "Credits, refill dates and API Platform readings are set in Quota Cache",
+      prices: "OpenAI's list prices",
+      notCounted:
+        "Built-in tool calls, storage and the 10% regional-processing uplift are not counted; complimentary data-sharing tokens are counted as if billed.",
+    })
+    for (const [field, text] of Object.entries(words)) assert.doesNotMatch(text, /Console|Anthropic|Claude/, field)
+  })
+
+  test("the Claude credit keeps the words it always had", () => {
+    const { shortOrganization: short, ...words } = CLAUDE_COPY
+    assert.equal(short, shortOrganization)
+    assert.deepEqual(words, {
+      heading: "Monthly API Credit",
+      readingNoun: "Console reading",
+      readingLink: "Enter Console reading in Quota Cache",
+      organizationNoun: "Console organization",
+      foot: "Credits, refill dates and Console readings are set in Quota Cache",
+      prices: "Anthropic's list prices",
+      notCounted: "",
+    })
+    assert.deepEqual(poolNotes(degraded, NOW, sharedIssues(degraded.accounts), CLAUDE_COPY), poolNotes(degraded, NOW))
+  })
+
+  test("an organization is named by its slug: a long one by its first nine and last four characters", () => {
+    assert.equal(OPENAI_COPY.shortOrganization("user-AbCdEfGhIjKlMnOpQrStUvWx"), "user-AbCd…UvWx")
+    assert.equal(OPENAI_COPY.shortOrganization("user-ZyXwVuTsRqPoNmLkJiHgFeDc"), "user-ZyXw…FeDc")
+    // Sixteen characters or fewer are shown whole, case and all.
+    assert.equal(OPENAI_COPY.shortOrganization("acme-x1wegt"), "acme-x1wegt")
+    assert.equal(OPENAI_COPY.shortOrganization("Acme-Corp-x1wegt"), "Acme-Corp-x1wegt")
+    assert.equal(OPENAI_COPY.shortOrganization("Acme-Corp-x1wegt7"), "Acme-Corp…egt7")
+  })
+
+  test("the pool names the organization OpenAI's responses named that nothing in Quota Cache does", () => {
+    assert.deepEqual(poolNotes(openAI, NOW, sharedIssues(openAI.accounts), OPENAI_COPY), [
+      { text: "counts 2 of 3 accounts · Side project is left out: it is not counted yet", tone: "warn" },
+      {
+        text: "CPA sent traffic from OpenAI organization user-ZyXw…FeDc (7 requests, last {age} ago), which no organization in Quota Cache names. If it is yours, add it on Quota Cache's page.",
+        tone: "warn",
+        since: openAI.unlinked[0]!.lastSeenEpoch,
+      },
+    ])
+  })
+
+  test("its rows earn no cache-write line: every write is priced at the one rate Quota Cache uses for OpenAI", () => {
+    assert.equal(openAI.pricing.cacheWrites, "30m")
+    for (const item of openAI.accounts) {
+      assert.equal(item.cacheWriteExtraText, "", item.label)
+      assert.ok(creditNotes(item).every((note) => !note.text.includes("Cache writes")), item.label)
+    }
+  })
+
+  test("an organization OpenAI refused is out, dated by its refusal, and asks for a reading", () => {
+    const business = account(openAI, "Business")
+    assert.equal(business.state, "out")
+    assert.deepEqual(creditNotes(business), [
+      { text: business.issue, tone: "bad", at: business.refusals.lastAtEpoch!, link: "reading" },
+    ])
+    assert.doesNotMatch(business.issue, /Console|Anthropic/)
+  })
+
+  test("nothing on it is editable here either", () => {
+    assert.deepEqual(openAI.editing, { available: false, reason: "quotaCache" })
+    for (const item of openAI.accounts) {
+      assert.equal(item.settings.editable, false, item.label)
+      assert.equal(editsInQuotaCache(item), true, item.label)
+    }
+  })
 })

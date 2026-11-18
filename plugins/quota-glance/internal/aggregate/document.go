@@ -152,6 +152,15 @@ type Document struct {
 	// the header instants, the counters, or staleReason; each account carries
 	// its own.
 	APICredits *APICredits `json:"apiCredits"`
+	// OpenAIAPICredits is the monthly OpenAI API credit of the OpenAI
+	// organizations Quota Cache lists, as it publishes it in
+	// snapshot.openai-credits.json, read-only: the same shape as APICredits,
+	// with provider "openai-api". Absent rather than null when Quota Cache
+	// lists none or there is no usable OpenAI state, because there is no
+	// fallback card to stand in for it and a client older than the key reads
+	// the document as it always has. Like APICredits it takes part in no
+	// counter or header instant, and adding it did not bump SchemaVersion.
+	OpenAIAPICredits *APICredits `json:"openaiApiCredits,omitempty"`
 	// RenewalOrphans are renewal dates Quota Cache stores for credentials the
 	// roster no longer lists, oldest updatedAt first. Always an array.
 	RenewalOrphans []RenewalOrphan `json:"renewalOrphans"`

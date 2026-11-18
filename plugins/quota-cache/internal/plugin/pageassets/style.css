@@ -90,6 +90,11 @@ form.card>:last-child{border-radius:0 0 9px 9px}
 .orgs-grid .org-id,.orgs-grid .row-acts{padding-top:9px}
 .org-id{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .org-add{background:var(--neutral-bg)}
+.seen{padding:12px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+.seen h3{font-size:13px;font-weight:600;color:var(--text);margin:0 0 6px}
+.seen p{margin:0}
+.seen .num{color:var(--text)}
+form .seen{border-top:0;border-bottom:1px solid var(--border)}
 .org-add .box.id{max-width:400px}
 .box.is-removed{border-style:dashed;background:var(--neutral-bg)}
 .box.is-removed input{color:var(--muted);text-decoration:line-through}

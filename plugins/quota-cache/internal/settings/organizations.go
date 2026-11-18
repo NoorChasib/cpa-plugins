@@ -27,6 +27,11 @@ import (
 // Like the settings file, it loads all or nothing. A file that fails a load
 // rule is never overwritten: no organization is listed, editing is
 // unavailable, and the page says why, until the operator moves it aside.
+//
+// The OpenAI API organizations have a file of their own with the same schema
+// and rules (client.OpenAIOrganizationsPath), each organization named as the
+// openai-organization response header names it, case kept, and keyed by
+// client.OpenAICreditOrgAccount: OpenOrganizationsFor(OpenAI, snapshotPath).
 
 const (
 	// organizationsSchema is the only organizations schema this build reads
@@ -83,19 +88,23 @@ type Organizations struct {
 	Items []Organization
 }
 
-// Organization is one Claude Console organization.
+// Organization is one Claude Console organization, or one OpenAI API
+// organization in the OpenAI file.
 type Organization struct {
 	// Label is the operator's display name: trimmed, at most
 	// MaxOrganizationLabelRunes printable characters, unique ignoring case.
 	Label string
-	// OrganizationID is as client.NormalizeOrganizationID returns it, and
-	// unique. It never changes: a different ID is a different organization.
+	// OrganizationID is as the provider's normalizer returns it
+	// (client.NormalizeOrganizationID, or client.NormalizeOpenAIOrganization
+	// for OpenAI's), and unique. It never changes: a different ID is a
+	// different organization.
 	OrganizationID string
 	Rev            uint64
 	UpdatedAt      time.Time
 }
 
-// ID is the organization's account id, client.APICreditOrgAccount.
+// ID is the organization's Claude account id, client.APICreditOrgAccount.
+// Provider.AccountOf gives any provider's.
 func (o Organization) ID() string { return client.APICreditOrgAccount(o.OrganizationID) }
 
 // APICredits are the organizations as the snapshot's anthropic-api entries
@@ -141,13 +150,19 @@ type organizationDoc struct {
 	UpdatedAt      *string `json:"updated_at"`
 }
 
-// decodeOrganizations reads the organizations file and applies its load
+// decodeOrganizations reads the Claude organizations file:
+// decodeOrganizationsFor(Claude, raw).
+func decodeOrganizations(raw []byte) (Organizations, error) {
+	return decodeOrganizationsFor(Claude, raw)
+}
+
+// decodeOrganizationsFor reads p's organizations file and applies its load
 // rules, all or nothing: at most MaxOrganizationsBytes, no unknown key, no
 // trailing data, schema 1, a revision and a list, at most MaxOrganizations
 // entries, each with a valid label unique ignoring case, an Organization ID
-// in its normalized form and unique, a rev in [1, revision], and an
+// in p's normalized form and unique, a rev in [1, revision], and an
 // updated_at in the one instant form.
-func decodeOrganizations(raw []byte) (Organizations, error) {
+func decodeOrganizationsFor(p *Provider, raw []byte) (Organizations, error) {
 	if len(raw) > MaxOrganizationsBytes {
 		return Organizations{}, errShape
 	}
@@ -171,7 +186,7 @@ func decodeOrganizations(raw []byte) (Organizations, error) {
 			return Organizations{}, errShape
 		}
 		item := Organization{Label: *entry.Label, OrganizationID: *entry.OrganizationID, Rev: rev, UpdatedAt: updated}
-		if !fits(item, o.Items) {
+		if !fits(p, item, o.Items) {
 			return Organizations{}, errShape
 		}
 		o.Items = append(o.Items, item)
@@ -180,13 +195,15 @@ func decodeOrganizations(raw []byte) (Organizations, error) {
 }
 
 // fits reports whether item may join list: a valid label no entry has,
-// ignoring case; a normalized Organization ID no entry has; and room under
-// MaxOrganizations.
-func fits(item Organization, list []Organization) bool {
+// ignoring case; an Organization ID in p's normalized form that no entry
+// has, matched exactly; and room under MaxOrganizations. Two OpenAI
+// organizations that differ only in case are two, as the header names them;
+// Claude's are lower-case.
+func fits(p *Provider, item Organization, list []Organization) bool {
 	if len(list) >= MaxOrganizations || !ValidOrganizationLabel(item.Label) {
 		return false
 	}
-	if org, ok := client.NormalizeOrganizationID(item.OrganizationID); !ok || org != item.OrganizationID {
+	if org, ok := p.normalizeOrganization(item.OrganizationID); !ok || org != item.OrganizationID {
 		return false
 	}
 	return labelAt(list, item.Label, -1) < 0 && organizationAt(list, item.OrganizationID) < 0
@@ -212,9 +229,10 @@ func organizationAt(list []Organization, organizationID string) int {
 	return -1
 }
 
-func idAt(list []Organization, id string) int {
+// idAt is the index of the entry whose account id, p's, is id, or -1.
+func idAt(p *Provider, list []Organization, id string) int {
 	for i, item := range list {
-		if item.ID() == id {
+		if p.AccountOf(item) == id {
 			return i
 		}
 	}
@@ -248,33 +266,41 @@ func encodeOrganizations(o Organizations) ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-// LoadOrganizations reads one organizations file: missing when there is none,
-// and unreadable when it fails a load rule or cannot be opened or read.
-func LoadOrganizations(path string) Organizations {
+// LoadOrganizations reads one Claude organizations file:
+// LoadOrganizationsFor(Claude, path).
+func LoadOrganizations(path string) Organizations { return LoadOrganizationsFor(Claude, path) }
+
+// LoadOrganizationsFor reads one of p's organizations files: missing when
+// there is none, and unreadable when it fails a load rule or cannot be
+// opened or read.
+func LoadOrganizationsFor(p *Provider, path string) Organizations {
 	raw, stamp, ok := readRegular(path, MaxOrganizationsBytes)
-	return organizationsOf(raw, stamp, ok)
+	return organizationsOf(p, raw, stamp, ok)
 }
 
-// organizationsOf is what one read of the file gives: raw and ok are
+// organizationsOf is what one read of p's file gives: raw and ok are
 // readStamped's for a file Lstat gave stamp.
-func organizationsOf(raw []byte, stamp fileStamp, ok bool) Organizations {
+func organizationsOf(p *Provider, raw []byte, stamp fileStamp, ok bool) Organizations {
 	if !stamp.exists {
 		return Organizations{State: client.OrganizationsStateMissing, Items: []Organization{}}
 	}
-	o, err := decodeOrganizations(raw)
+	o, err := decodeOrganizationsFor(p, raw)
 	if !ok || err != nil {
 		return Organizations{State: client.OrganizationsStateUnreadable, Items: []Organization{}}
 	}
 	return o
 }
 
-// OrganizationStore is the organizations file beside one snapshot.
+// OrganizationStore is one provider's organizations file beside one snapshot.
 //
 // Its mutex is a leaf lock, like Store's: nothing else is acquired while it
 // is held, and no caller may publish, log or call into the host while
 // holding it. Readers never take it.
 type OrganizationStore struct {
 	path string
+	// provider gives the file's load rules and the organizations' account
+	// ids, which a rename or remove names.
+	provider *Provider
 
 	mu     sync.Mutex
 	writes writeLog
@@ -303,10 +329,16 @@ type OrganizationStore struct {
 	read    func(path string, stamp fileStamp, limit int64) (raw []byte, settled, ok bool)
 }
 
-// OpenOrganizations loads the organizations file beside the snapshot at
-// snapshotPath. It never fails for the file's sake, and writes nothing.
+// OpenOrganizations loads the Claude organizations file beside the snapshot
+// at snapshotPath: OpenOrganizationsFor(Claude, snapshotPath).
 func OpenOrganizations(snapshotPath string) *OrganizationStore {
-	s := &OrganizationStore{path: client.OrganizationsPath(snapshotPath), write: writeFile, syncDir: syncDirectory, read: readStamped}
+	return OpenOrganizationsFor(Claude, snapshotPath)
+}
+
+// OpenOrganizationsFor loads p's organizations file beside the snapshot at
+// snapshotPath. It never fails for the file's sake, and writes nothing.
+func OpenOrganizationsFor(p *Provider, snapshotPath string) *OrganizationStore {
+	s := &OrganizationStore{path: p.OrganizationsPath(snapshotPath), provider: p, write: writeFile, syncDir: syncDirectory, read: readStamped}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.load()
@@ -322,7 +354,7 @@ func (s *OrganizationStore) load() {
 		raw, settled, ok = s.read(s.path, s.stamp, MaxOrganizationsBytes)
 	}
 	s.retry = !settled
-	o := organizationsOf(raw, s.stamp, ok)
+	o := organizationsOf(s.provider, raw, s.stamp, ok)
 	s.seen = max(s.seen, o.Revision)
 	s.current.Store(&o)
 }
@@ -404,7 +436,7 @@ func (s *OrganizationStore) commit(next Organizations) error {
 		return ErrUnwritable
 	}
 	if err := commitFile(s.path, raw, func(raw []byte) error {
-		_, err := decodeOrganizations(raw)
+		_, err := decodeOrganizationsFor(s.provider, raw)
 		return err
 	}, s.write, s.syncDir); err != nil {
 		return err
@@ -431,12 +463,19 @@ type OrganizationOp struct {
 	OrganizationID string
 }
 
-// ParseOrganizationsBatch reads an organizations batch from JSON: an object
-// with exactly kind "organizations", baseRevision and ops, between one op and
-// MaxOrganizationOps, each with exactly its operation's keys, every one a
-// string. Anything else is ErrInvalidRequest. The values themselves are
-// judged by Apply.
+// ParseOrganizationsBatch reads a Claude organizations batch, kind
+// "organizations": ParseOrganizationsBatchFor(Claude, raw).
 func ParseOrganizationsBatch(raw []byte) (OrganizationsBatch, error) {
+	return ParseOrganizationsBatchFor(Claude, raw)
+}
+
+// ParseOrganizationsBatchFor reads a batch for p's organizations card from
+// JSON: an object with exactly kind, p's ("organizations" or
+// "openaiOrganizations"), baseRevision and ops, between one op and
+// MaxOrganizationOps, each with exactly its operation's keys, every one a
+// string. Anything else, another provider's kind included, is
+// ErrInvalidRequest. The values themselves are judged by Apply.
+func ParseOrganizationsBatchFor(p *Provider, raw []byte) (OrganizationsBatch, error) {
 	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
 		return OrganizationsBatch{}, ErrInvalidRequest
 	}
@@ -445,7 +484,7 @@ func ParseOrganizationsBatch(raw []byte) (OrganizationsBatch, error) {
 		BaseRevision required          `json:"baseRevision"`
 		Ops          []json.RawMessage `json:"ops"`
 	}
-	if strictDecode(raw, &envelope) != nil || !envelope.Kind.set || envelope.Kind.value != KindOrganizations ||
+	if strictDecode(raw, &envelope) != nil || !envelope.Kind.set || envelope.Kind.value != p.organizationsKind ||
 		!envelope.BaseRevision.set || !revisionShape.MatchString(envelope.BaseRevision.value) ||
 		len(envelope.Ops) == 0 || len(envelope.Ops) > MaxOrganizationOps {
 		return OrganizationsBatch{}, ErrInvalidRequest
@@ -567,7 +606,7 @@ func (s *OrganizationStore) Apply(b OrganizationsBatch, now time.Time) (Organiza
 		return OrganizationsResult{}, &OrganizationsConflictError{Revision: RevisionText(current.Revision), Organizations: current.clone()}
 	}
 	revision := s.nextRevision(current, now)
-	list, result, fail := b.apply(current.Items, revision, now)
+	list, result, fail := b.apply(s.provider, current.Items, revision, now)
 	if fail != nil {
 		return OrganizationsResult{}, fail
 	}
@@ -588,8 +627,9 @@ func (s *OrganizationStore) Apply(b OrganizationsBatch, now time.Time) (Organiza
 
 // apply runs the ops in order on a copy of list, stamping what they change
 // with revision and now, and returns the new list, or the first op the rules
-// refuse.
-func (b OrganizationsBatch) apply(list []Organization, revision uint64, now time.Time) ([]Organization, OrganizationsResult, *OpError) {
+// refuse. An add takes the Organization ID in p's normalized form; a rename
+// or remove names the entry by p's account id.
+func (b OrganizationsBatch) apply(p *Provider, list []Organization, revision uint64, now time.Time) ([]Organization, OrganizationsResult, *OpError) {
 	list = slices.Clone(list)
 	var result OrganizationsResult
 	for i, op := range b.Ops {
@@ -599,7 +639,7 @@ func (b OrganizationsBatch) apply(list []Organization, revision uint64, now time
 		switch op.Op {
 		case OpAdd:
 			label := strings.TrimSpace(op.Label)
-			switch org, ok := client.NormalizeOrganizationID(op.OrganizationID); {
+			switch org, ok := p.normalizeOrganization(op.OrganizationID); {
 			case !ValidOrganizationLabel(label):
 				return fail(CodeInvalidLabel, "label")
 			case labelAt(list, label, -1) >= 0:
@@ -615,7 +655,7 @@ func (b OrganizationsBatch) apply(list []Organization, revision uint64, now time
 				result.Added++
 			}
 		case OpRename:
-			at, label := idAt(list, op.ID), strings.TrimSpace(op.Label)
+			at, label := idAt(p, list, op.ID), strings.TrimSpace(op.Label)
 			switch {
 			case at < 0:
 				return fail(CodeUnknownID, "id")
@@ -628,7 +668,7 @@ func (b OrganizationsBatch) apply(list []Organization, revision uint64, now time
 				result.Renamed++
 			}
 		case OpRemove:
-			at := idAt(list, op.ID)
+			at := idAt(p, list, op.ID)
 			if at < 0 {
 				return fail(CodeUnknownID, "id")
 			}

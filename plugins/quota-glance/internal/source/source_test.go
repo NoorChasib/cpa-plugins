@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,5 +304,53 @@ func TestAnAbandonedStateIsToldApart(t *testing.T) {
 				t.Fatalf("reason %q error %q state %v; want error %q with the state kept", got.Reason, got.CreditsError, got.Credits, tc.want)
 			}
 		})
+	}
+}
+
+// The OpenAI API credit state is its own file beside the snapshot, read on
+// every read and judged as the Claude state is: missing, which an install
+// listing no OpenAI organization always is, unreadable, shown, or abandoned
+// and kept only for health. It never makes the snapshot a source failure,
+// and neither state decides the other's error.
+func TestReadsTheOpenAICreditState(t *testing.T) {
+	path := write(t, `{"schema":1,"written_at":"2026-10-09T12:00:00Z","entries":{},"provider_cooldown":{}}`)
+	openAIPath := filepath.Join(filepath.Dir(path), "snapshot.openai-credits.json")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "snapshot.credits.json"), []byte(creditsBody("2026-10-09T12:00:00Z")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Read(context.Background(), fakeHost{}, path)
+	if got.Reason != "" || got.OpenAICredits != nil || got.OpenAICreditsError != aggregate.CreditsMissing || got.CreditsError != "" {
+		t.Fatalf("no OpenAI state: reason %q state %v error %q, Claude error %q", got.Reason, got.OpenAICredits, got.OpenAICreditsError, got.CreditsError)
+	}
+
+	for name, body := range map[string]string{"corrupt": `{"schema":1,`, "schema 2": `{"schema":2}`} {
+		if err := os.WriteFile(openAIPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got = Read(context.Background(), fakeHost{}, path)
+		if got.Reason != "" || got.OpenAICredits != nil || got.OpenAICreditsError != aggregate.CreditsUnreadable || got.CreditsError != "" || got.Credits == nil {
+			t.Fatalf("%s OpenAI state: reason %q state %v error %q, Claude error %q", name, got.Reason, got.OpenAICredits, got.OpenAICreditsError, got.CreditsError)
+		}
+	}
+
+	body := strings.Replace(creditsBody("2026-10-09T11:59:30Z"), `"quota_cache_version":"0.2.0"`, `"quota_cache_version":"0.6.0"`, 1)
+	if err := os.WriteFile(openAIPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = Read(context.Background(), fakeHost{}, path)
+	if got.OpenAICreditsError != "" || got.OpenAICredits == nil || got.OpenAICredits.QuotaCacheVersion != "0.6.0" || got.Credits.QuotaCacheVersion != "0.2.0" {
+		t.Fatalf("OpenAI state = %+v, error %q", got.OpenAICredits, got.OpenAICreditsError)
+	}
+
+	// Abandoned by its own computed_at, as after both OpenAI files Quota
+	// Cache keeps were removed, or a rollback below 0.6.0: the Claude state
+	// beside it is still current.
+	if err := os.WriteFile(openAIPath, []byte(creditsBody("2026-10-09T11:54:59Z")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = Read(context.Background(), fakeHost{}, path)
+	if got.OpenAICreditsError != aggregate.CreditsAbandoned || got.OpenAICredits == nil || got.CreditsError != "" {
+		t.Fatalf("abandoned OpenAI state: error %q state %v, Claude error %q", got.OpenAICreditsError, got.OpenAICredits, got.CreditsError)
 	}
 }

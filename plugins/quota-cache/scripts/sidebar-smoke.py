@@ -151,6 +151,48 @@ def editor_state():
                  'renewal_at_epoch': None, 'renewal_source': '', 'renewal_estimate_at_epoch': None}],
             'renewal_orphans': [orphan_renewal], 'api_credit_orphans': [], 'held_api_credits': [],
             'organizations': {'available': True, 'reason': '', 'revision': '4', 'max_items': 16, 'max_ops': 16, 'items': organizations}},
+        **openai_state(),
+    }
+# The OpenAI API credit's part of the editor's status, as Quota Cache 0.6.0
+# publishes it: one OpenAI organization listed and counted, and one its meter
+# saw in traffic that none lists, which the OpenAI organizations card offers
+# to add. The organizations are placeholders, named as OpenAI's responses
+# name them, and their accounts are oai- and 12 hex digits of the SHA-256 of
+# the name, case kept.
+OPENAI_LISTED, OPENAI_SEEN = 'user-AbCdEfGhIjKlMnOpQrStUvWx', 'acme-x1wegt'
+oai_account = lambda organization: 'oai-' + hashlib.sha256(organization.encode()).hexdigest()[:12]
+def openai_account(order, label, organization, state_, **values):
+    return dict(account(order, label, organization, state_, **values), id=oai_account(organization))
+def openai_state():
+    listed = openai_account(0, 'Pro', OPENAI_LISTED, 'ok', monthly='200', renews='2026-09-28', revision='4')
+    seen_at = now - timedelta(minutes=20)
+    return {
+        'openai_credits': {'schema': 1, 'quota_cache_version': '0.6.0', 'computed_at': iso(now), 'valid_until': None,
+            'inputs': {'snapshot_written_at': iso(now), 'meter_flushed_at': iso(now - timedelta(minutes=2)), 'meter_error': '', 'settings_revision': '4'},
+            'settings': {'state': 'ok', 'editable': True, 'revision': '4'},
+            'api_credits': {'provider': 'openai-api', 'title': 'Monthly OpenAI API Credit', 'currency': 'USD',
+                'pricing': {'asOf': '2026-11-18', 'source': 'https://developers.openai.com/api/docs/pricing', 'cacheWrites': '30m'},
+                'meter': None, 'editing': {'available': True, 'reason': ''},
+                'pool': {'hasEstimate': True, 'lowerBound': False, 'monthlyCredit': 0, 'monthlyCreditText': '$200.00', 'used': 0, 'usedText': '$40.00', 'left': 0,
+                    'leftText': '$160.00', 'overage': 0, 'overageText': '$0.00', 'remainingFraction': .8, 'remainingPercent': 80, 'level': 'ok',
+                    'nextRefill': {'accountIds': [listed['id']], 'refillAtEpoch': listed['renewsAtEpoch'], 'refillInSeconds': 0, 'gain': 0, 'gainText': '$40.00', 'gainFraction': .2, 'gainPercent': 20},
+                    'fullAtEpoch': listed['renewsAtEpoch'], 'fullInSeconds': 0, 'accountCount': 1, 'countedCount': 1, 'missingCount': 0},
+                'accounts': [listed],
+                'unlinked': [{'organizationId': OPENAI_SEEN, 'firstSeenEpoch': epoch(now - timedelta(days=1)), 'lastSeenEpoch': epoch(seen_at), 'requests': 7, 'reason': 'notConfigured'}],
+                'orphans': []},
+            'renewals': {}, 'organizations': {'state': 'ok', 'revision': '3', 'config_items_ignored': 0}},
+        'openai_editor': {'available': True, 'reason': '', 'revision': '4', 'max_api_credit_items': 16, 'max_renewal_items': 0, 'max_batch_bytes': 4096,
+            'credentials': [], 'renewal_orphans': [], 'api_credit_orphans': [], 'held_api_credits': [],
+            'organizations': {'available': True, 'reason': '', 'revision': '3', 'max_items': 16, 'max_ops': 16,
+                'items': [{'id': listed['id'], 'label': 'Pro', 'organization_id': OPENAI_LISTED}]}},
+        'openai_meter': {'schema': 1, 'since': iso(now - timedelta(days=3)), 'started_at': iso(now - timedelta(hours=2)), 'flushed_at': iso(now - timedelta(minutes=2)),
+            'restarts': 1, 'received': 140, 'counted': 30, 'rejected': 0,
+            'gaps': [{'from': iso(now - timedelta(hours=3)), 'to': iso(now - timedelta(hours=2)), 'reason': 'shutdown'}],
+            'organizations': {OPENAI_LISTED: {'since': iso(now - timedelta(days=3)), 'last_seen_at': iso(now - timedelta(minutes=5)), 'last_success_at': iso(now - timedelta(minutes=5)),
+                'days': [{'start': iso(midnight), 'usage': [{'model': 'gpt-6-sol', 'tier': 'flex', 'requests': 30, 'input': 9000, 'output': 900}]}],
+                'hours': [{'start': iso(this_hour), 'usage': [{'model': 'gpt-6-sol', 'tier': 'flex', 'requests': 30, 'input': 9000, 'output': 900}]}]}},
+            'unlinked': [{'organization_id': OPENAI_SEEN, 'first_seen_at': iso(now - timedelta(days=1)), 'last_seen_at': iso(seen_at), 'requests': 7}],
+            'auths': {'fedcba9876543210': {'organization_id': OPENAI_LISTED, 'seen_at': iso(now - timedelta(minutes=5))}}, 'auth_ids': {}},
     }
 editor = editor_state()
 plans = {'5f2b8c41d09e7a36': 'max_20x', '0a1b2c3d4e5f6071': 'team'}
@@ -195,6 +237,30 @@ def saved(raw):
                     blocks[item['id']] = c['renewal']
             editor['editor']['renewal_orphans'] = [o for o in editor['editor']['renewal_orphans'] if o['id'] != item['id']]
         return 200, {'ok': True, 'unchanged': False, 'revision': '13', 'settings': blocks}
+    if body['kind'] == 'openaiApiCredits':
+        blocks = {}
+        for item in body['items']:
+            for found in editor['openai_credits']['api_credits']['accounts']:
+                if found['id'] == item['id']:
+                    found['settings'].update(monthlyUsd=item['monthlyUsd'] or '', revision='5')
+                    found['monthlyCreditSource'] = 'dashboard' if item['monthlyUsd'] else 'none'
+                    blocks[item['id']] = found['settings']
+        return 200, {'ok': True, 'unchanged': False, 'revision': '5', 'settings': blocks}
+    if body['kind'] == 'openaiOrganizations':
+        # Only adds: one is listed, and the credit state lists it at once,
+        # as a publish after the save does, no longer seen unlisted.
+        organizations = editor['openai_editor']['organizations']
+        if body['baseRevision'] != organizations['revision']:
+            return 409, {'error': 'conflict', 'revision': organizations['revision'], 'organizations': organizations['items']}
+        doc = editor['openai_credits']['api_credits']
+        for op in body['ops']:
+            organizations['items'].append({'id': oai_account(op['organizationId']), 'label': op['label'], 'organization_id': op['organizationId']})
+            doc['accounts'].append(openai_account(len(doc['accounts']), op['label'], op['organizationId'], 'needsSettings', estimate=False,
+                                                  issue='Set the monthly credit and refill date.', issues=['needsCredit', 'needsRefillDate']))
+            doc['unlinked'] = [u for u in doc['unlinked'] if u['organizationId'] != op['organizationId']]
+        doc['pool']['accountCount'] = len(doc['accounts'])
+        organizations['revision'] = str(int(organizations['revision'] or '0') + 1)
+        return 200, {'ok': True, 'unchanged': False, 'revision': organizations['revision'], 'organizations': organizations['items']}
     organizations = editor['editor']['organizations']
     if body['baseRevision'] != organizations['revision']:
         return 409, {'error': 'conflict', 'revision': organizations['revision'], 'organizations': organizations['items']}
@@ -1111,6 +1177,107 @@ def editor_checks():
     press('#api-credits .edit-foot', 'Cancel')
     assert browser('errors').get('errors', []) == [], 'the page threw'
     assert len(state['posts']) == 28 and all(p['auth'] == 'Bearer synthetic-sidebar-key' and p['type'] == 'application/json' for p in state['posts']), state['posts']
+    openai_editor_checks(screenshot, audit)
+
+def openai_editor_checks(screenshot, audit):
+    """The OpenAI API credit's cards and meter panel, against the editor status."""
+    global editor
+    editor = editor_state()
+    browser('set', 'viewport', '1280', '900')
+    browser('set', 'media', 'light')
+    state.update(mode='editor', escaped=False, answers=[])
+    posts = len(state['posts'])
+    refreshed()
+    # Both cards and the meter panel, after Claude's, in OpenAI's words.
+    check("!document.querySelector('#openai-organizations').hidden && !document.querySelector('#openai-api-credits').hidden && !document.querySelector('#openai-meter-section').hidden")
+    check("(t => t.includes('1 OpenAI API organization') && t.includes('Organization in responses') && t.includes('user-AbCd…UvWx') && t.includes('Seen in traffic') && t.includes('acme-x1wegt·7 requests·last seen') && !t.includes('Console'))(%s)" % text_of('#openai-organizations'))
+    check("document.querySelector('#openai-organizations span.org-id').title === %s" % json.dumps(OPENAI_LISTED))
+    check("(t => t.includes('OpenAI API credits') && t.includes('$200.00') && t.includes('API Platform reading') && t.includes('OpenAI’s list prices of Nov 18') && t.includes('Quota Glance 0.11.0 or newer shows these figures; Reset Priority does not route on them.') && !t.includes('Console'))(%s)" % text_of('#openai-api-credits'))
+    check("(t => t.includes('Records received') && t.includes('140') && t.includes('shutdown') && t.includes('acme-x1wegt') && !t.includes('Foreign') && !t.includes('Unattributed'))(%s)" % text_of('#openai-meter-section'))
+    screenshot('openai-rest.png')
+    audit('openai-rest')
+    # Quota Glance links to either OpenAI card by its fragment.
+    browser('set', 'viewport', '1280', '600')
+    for section in ('openai-organizations', 'openai-api-credits'):
+        browser('eval', "scrollTo(0, 0); history.replaceState(null, '', location.pathname + '#%s')" % section)
+        browser('reload')
+        check("!document.querySelector('#content').hidden && scrollY > 0 && document.querySelector('#%s').getBoundingClientRect().top < innerHeight / 2" % section)
+    browser('eval', "history.replaceState(null, '', location.pathname); scrollTo(0, 0)")
+    browser('set', 'viewport', '1280', '900')
+
+    # Add, from Seen in traffic, opens the card with the organization on its
+    # add row and focus on its label; the help says where it came from, and
+    # the label not yet typed in is not marked to fix.
+    press('#openai-organizations', 'Add ' + OPENAI_SEEN)
+    check("document.querySelector('#openai-organizations form') && document.querySelector('#qc-oai-org-add-id').value === %s && document.activeElement === document.querySelector('#qc-oai-org-add-label')" % json.dumps(OPENAI_SEEN))
+    check("%s.includes('Pick one seen in traffic below, or type it.')" % text_of('#qc-oai-org-add-id-caps'))
+    check("document.querySelector('#qc-oai-org-add-label').getAttribute('aria-invalid') !== 'true' && !%s.includes('Enter a label')" % text_of('#qc-oai-org-add-label-caps'))
+    # An Organization ID is warned about, never refused.
+    browser('fill', '#qc-oai-org-add-label', 'Business')
+    browser('fill', '#qc-oai-org-add-id', 'org-AbCdEfGhIjKlMnOpQrStUvWx')
+    check("%s.includes('This looks like the Organization ID from API Platform settings.') && !document.querySelector('#openai-organizations button.save').disabled" % text_of('#qc-oai-org-add-id-caps'))
+    browser('fill', '#qc-oai-org-add-id', 'acme x1wegt')
+    check("%s.includes('Enter the organization as OpenAI’s responses name it') && document.querySelector('#openai-organizations button.save').disabled" % text_of('#qc-oai-org-add-id-caps'))
+    press('#openai-organizations', 'Add ' + OPENAI_SEEN)
+    check("document.querySelector('#qc-oai-org-add-id').value === %s && document.querySelector('#qc-oai-org-add-label').value === 'Business' && %s.includes('1 change')" % (json.dumps(OPENAI_SEEN), text_of('#openai-organizations .edit-foot')))
+    screenshot('openai-organizations.png')
+    audit('openai-organizations')
+    press('#openai-organizations', 'Save')
+    post = posted(posts + 1, 'the OpenAI organizations save was not sent once')
+    assert post['body'] == {'kind': 'openaiOrganizations', 'baseRevision': '3', 'ops': [{'op': 'add', 'label': 'Business', 'organizationId': OPENAI_SEEN}]}, post['body']
+    check("!document.querySelector('#openai-organizations form') && %s.includes('Saved 1 change. OpenAI API credits below lists them from the next view update.')" % text_of('#openai-organizations'))
+    check("(t => t.includes('Business') && t.includes(%s) && !t.includes('Seen in traffic'))(%s)" % (json.dumps(OPENAI_SEEN), text_of('#openai-organizations')))
+
+    # Its monthly credit, saved on the OpenAI API credit card.
+    press('#openai-api-credits', 'Edit credits and dates')
+    check("document.activeElement === document.querySelector('#qc-oai-credit-0-monthly')")
+    # What to enter is said under a row's field while it has no value yet.
+    check("(t => t.includes('Pro: $100, $200 or $500 by plan.') && t.includes('The day your ChatGPT subscription renews'))(%s + %s)" % (text_of('#qc-oai-credit-1-monthly-caps'), text_of('#qc-oai-credit-1-refill-caps')))
+    check("(t => !t.includes('Pro: $100') && !t.includes('The day your ChatGPT subscription renews'))(%s + %s)" % (text_of('#qc-oai-credit-0-monthly-caps'), text_of('#qc-oai-credit-0-refill-caps')))
+    browser('fill', '#qc-oai-credit-1-monthly', '260')
+    screenshot('openai-credits.png')
+    audit('openai-credits')
+    press('#openai-api-credits', 'Save')
+    post = posted(posts + 2, 'the OpenAI API credit save was not sent once')
+    assert post['body'] == {'kind': 'openaiApiCredits', 'items': [{'id': oai_account(OPENAI_SEEN), 'baseRevision': '', 'monthlyUsd': '260', 'renews': None, 'reading': None}]}, post['body']
+    check("!document.querySelector('#openai-api-credits form') && %s.includes('Quota Glance 0.11.0 or newer shows them from its next read of the cache.')" % text_of('#openai-api-credits'))
+
+    # Watching: no OpenAI organization listed and nothing published, so the
+    # API credit card waits, and the organizations card offers what the
+    # meter file saw.
+    editor['openai_credits'] = None
+    editor['openai_editor']['organizations'].update(items=[], revision='')
+    refreshed()
+    check("document.querySelector('#openai-api-credits').hidden && (t => t.includes('No OpenAI API organizations yet. Send a request through the openai-compatibility entry that uses your OpenAI API key') && t.includes('Seen in traffic') && t.includes(%s) && t.includes('but OpenAI does not document it'))(%s)"
+          % (json.dumps(OPENAI_SEEN), text_of('#openai-organizations')))
+    screenshot('openai-watching.png')
+    audit('openai-watching')
+    # Nothing seen yet: no meter file.
+    del editor['openai_meter']
+    refreshed()
+    check("document.querySelector('#openai-meter-section').hidden && %s.includes('Nothing seen yet.')" % text_of('#openai-organizations'))
+    browser('focus', '#qc-oai-orgs-add')
+    browser('press', 'Enter')
+    check("document.activeElement === document.querySelector('#qc-oai-org-add-label') && !%s.includes('seen in traffic')" % text_of('#qc-oai-org-add-id-caps'))
+    press('#openai-organizations .edit-foot', 'Cancel')
+    check("!document.querySelector('#openai-organizations form') && document.activeElement === document.querySelector('#qc-oai-orgs-add')")
+
+    # Dark and narrow.
+    editor = editor_state()
+    refreshed()
+    browser('set', 'media', 'dark')
+    screenshot('openai-dark.png')
+    audit('openai-dark')
+    browser('set', 'viewport', '390', '844')
+    check('document.documentElement.scrollWidth <= innerWidth')
+    browser('eval', "document.querySelector('#openai-organizations').scrollIntoView()")
+    screenshot('openai-mobile.png')
+    press('#openai-organizations', 'Add ' + OPENAI_SEEN)
+    check('document.documentElement.scrollWidth <= innerWidth')
+    screenshot('openai-mobile-edit.png')
+    press('#openai-organizations .edit-foot', 'Cancel')
+    assert browser('errors').get('errors', []) == [], 'the page threw'
+    assert len(state['posts']) == posts + 2 and all(p['auth'] == 'Bearer synthetic-sidebar-key' and p['type'] == 'application/json' for p in state['posts']), state['posts']
 
 try:
     if args.serve_only:
@@ -1312,7 +1479,7 @@ try:
     check("!document.querySelector('#content').hidden && document.querySelector('#error').hidden")
     editor_checks()
     assert state['keyless'] == 0, 'the page sent a management request without a key'
-    print('PASS: native sidebar, strict session reading, no keyless requests, refusal and lockout stop with a persistent record (kept per CPA prefix, and in the tab when the origin storage is full), no automatic retry after a request gets no answer, provider filters, Claude API credits, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh; editor: organizations, API credits, renewal dates, saves only from a press with the remembered key, no retry after a refusal or a lost answer, conflicts (organizations across a newer status too), fields judged by the page and never blocked by the browser, a field Quota Cache refused marked on the field and read with it, focus on opening every card, keyboard focus never hidden under a pinned foot, caption links kept while focus moves and the window takes focus again, escaped strings')
+    print('PASS: native sidebar, strict session reading, no keyless requests, refusal and lockout stop with a persistent record (kept per CPA prefix, and in the tab when the origin storage is full), no automatic retry after a request gets no answer, provider filters, Claude API credits, cooldown/history, empty/error states, safe text rendering, light/dark/mobile, cache-only view refresh; editor: organizations, API credits, renewal dates, saves only from a press with the remembered key, no retry after a refusal or a lost answer, conflicts (organizations across a newer status too), fields judged by the page and never blocked by the browser, a field Quota Cache refused marked on the field and read with it, focus on opening every card, keyboard focus never hidden under a pinned foot, caption links kept while focus moves and the window takes focus again, escaped strings; OpenAI API credit: both cards and the meter panel, Seen in traffic with Add, watching with none listed, its two saves')
 finally:
     if not args.serve_only:
         subprocess.run([binary,'--session',session,'close'],stdout=subprocess.DEVNULL,check=False,timeout=30)

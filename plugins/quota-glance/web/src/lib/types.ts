@@ -416,6 +416,13 @@ export interface Summary {
    */
   apiCredits?: APICredits | null
   /**
+   * The pooled monthly OpenAI API credit of the OpenAI organizations Quota
+   * Cache lists, in the same shape, with `provider: "openai-api"`. Absent,
+   * never null, when it lists none or there is no usable OpenAI state, and
+   * from a plugin older than 0.11.0.
+   */
+  openaiApiCredits?: APICredits | null
+  /**
    * Renewal dates stored for credentials no longer listed, oldest first.
    * Quota Cache's page clears them; this page does not list them. Absent from
    * an older plugin.
@@ -445,7 +452,7 @@ export interface APICreditPricing {
   /** The day the table was read, "2026-10-09". */
   asOf: string
   source: string
-  /** "5m": every cache write is priced at the 5-minute rate. */
+  /** "5m": every cache write is priced at the 5-minute rate; "30m" on the OpenAI credit, at the 30-minute one. */
   cacheWrites: string
 }
 
@@ -679,8 +686,10 @@ export interface APICreditOrphan {
   updatedAtEpoch: number
 }
 
-/** The monthly Claude API credit across every Console organization Quota Cache lists. */
+/** The monthly Claude API credit across every Console organization Quota Cache lists, or the OpenAI one across its OpenAI organizations. */
 export interface APICredits {
+  /** "openai-api" on the OpenAI credit; absent on the Claude one, which never carried it. */
+  provider?: string
   title: string
   currency: string
   pricing: APICreditPricing

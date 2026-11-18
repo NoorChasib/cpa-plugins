@@ -167,6 +167,65 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 	}
 }
 
+// The OpenAI API credit has cards and a meter panel of its own beside
+// Claude's, and a link from Quota Glance scrolls to either card. The panel
+// prints the meter's counts as counted, without adding them up, and has no
+// Foreign or Unattributed row, which the OpenAI meter never counts. Both
+// cards read the status's OpenAI keys and save the OpenAI kinds.
+func TestStatusPageShowsOpenAIAPICredits(t *testing.T) {
+	for _, rule := range []string{
+		`<section id="openai-organizations" class="section" aria-labelledby="openai-organizations-heading" hidden></section>`,
+		`<section id="openai-api-credits" class="section" aria-labelledby="openai-api-credits-heading" hidden></section>`,
+		`<section id="openai-meter-section"`, `>OpenAI API meter</h2>`, `<span id="openai-meter-status" class="hint">`,
+		`<dl id="openai-meter"`, `<ul id="openai-meter-gaps"`, `<p id="openai-meter-gaps-empty"`, `<ul id="openai-meter-unlinked"`, `<p id="openai-meter-unlinked-empty"`,
+		"Codex API-key traffic (codex-api-key entries) is not counted",
+	} {
+		if !strings.Contains(sidebarHTML, rule) {
+			t.Fatalf("the page lost %q", rule)
+		}
+	}
+	// The OpenAI cards follow Claude's, before Accounts, and the OpenAI meter
+	// panel follows Claude's.
+	order := []int{strings.Index(sidebarHTML, `id="renewals"`), strings.Index(sidebarHTML, `id="openai-organizations"`), strings.Index(sidebarHTML, `id="openai-api-credits"`), strings.Index(sidebarHTML, `id="accounts-heading"`),
+		strings.Index(sidebarHTML, `id="meter-section"`), strings.Index(sidebarHTML, `id="openai-meter-section"`), strings.Index(sidebarHTML, `id="history-heading"`)}
+	for i := 1; i < len(order); i++ {
+		if order[i] <= order[i-1] {
+			t.Fatalf("the OpenAI sections are out of order: %v", order)
+		}
+	}
+	script := sidebarApp
+	if !strings.Contains(script, "function openAIMeterPanel(s, now)") || !strings.Contains(script, "meterPanel(s, now);\n    openAIMeterPanel(s, now);") {
+		t.Fatal("the page does not draw the OpenAI API meter panel after Claude's")
+	}
+	panel := script[strings.Index(script, "function openAIMeterPanel(s, now)"):strings.Index(script, "function render(")]
+	for _, rule := range []string{"const m = s.openai_meter;", "$('openai-meter-section').hidden = !object(m);", "$('openai-meter-gaps')", "$('openai-meter-unlinked')", "['Records received', String(m.received || 0)], ['Counted', String(m.counted || 0)]"} {
+		if !strings.Contains(panel, rule) {
+			t.Fatalf("the OpenAI API meter panel lost %q", rule)
+		}
+	}
+	for _, gone := range []string{"Number(", "parseFloat", "reduce(", " + Number", "+= ", "Foreign", "Unattributed", "api_meter"} {
+		if strings.Contains(panel, gone) {
+			t.Fatalf("the OpenAI API meter panel has %q", gone)
+		}
+	}
+	editor := sidebarEditor
+	for _, rule := range []string{
+		"/^#(organizations|api-credits|renewals|openai-organizations|openai-api-credits)$/",
+		"stateKey: 'openai_credits', editorKey: 'openai_editor', meterKey: 'openai_meter',",
+		"orgsSection: 'openai-organizations', orgsHeading: 'OpenAI organizations',",
+		"creditsSection: 'openai-api-credits', creditsHeading: 'OpenAI API credits',",
+		"const OPENAI_RULES = Object.freeze({kind: 'openaiOrganizations', normalize: normalizeOpenAIOrganization,",
+		"rules: OPENAI_RULES, creditsKind: 'openaiApiCredits',",
+		"const openaiLane = {p: PROVIDERS.openai, orgs: openaiOrgs, credits: openaiCredits};",
+		"const cards = [orgs, credits, renewals, openaiOrgs, openaiCredits];",
+		"'Nothing seen yet.'",
+	} {
+		if !strings.Contains(editor, rule) {
+			t.Fatalf("the editor lost %q", rule)
+		}
+	}
+}
+
 // The organizations are entered on this page and nothing moves from the
 // configuration, so the page names no configured value, offers none back, and
 // tells of no move; it says when claude-api-credits is ignored, and what an
@@ -348,8 +407,8 @@ func TestEditorSavesOnlyFromAPressWithTheConsoleKey(t *testing.T) {
 	}
 	// Save and Remove are buttons; the forms submit only to Save.
 	for _, rule := range []string{
-		"on: {submit: event => { event.preventDefault(); saveOrganizations(); }}",
-		"on: {submit: event => { event.preventDefault(); saveCredits(); }}",
+		"on: {submit: event => { event.preventDefault(); saveOrganizationsOf(lane); }}",
+		"on: {submit: event => { event.preventDefault(); saveCreditsOf(lane); }}",
 		"on: {submit: event => { event.preventDefault(); saveRenewals(); }}",
 		// Save is off without a session or with a refused key.
 		"if (!page.root || !session) return {block: SIGN_IN_FOOT};",
@@ -361,6 +420,14 @@ func TestEditorSavesOnlyFromAPressWithTheConsoleKey(t *testing.T) {
 	} {
 		if !strings.Contains(script, rule) {
 			t.Fatalf("the editor lost %q", rule)
+		}
+	}
+	// The OpenAI API credit's cards hold unsaved edits as Claude's do.
+	unload := script[strings.Index(script, "window.addEventListener('beforeunload'"):]
+	unload = unload[:strings.Index(unload, "\n  });\n")]
+	for _, rule := range []string{"(openaiOrgs.editing && ", "(openaiCredits.editing && "} {
+		if !strings.Contains(unload, rule) {
+			t.Fatalf("leaving the page no longer asks about %q", rule)
 		}
 	}
 	// The page judges every field itself, so the browser's own checks never

@@ -28,7 +28,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.5.0"
+var Version = "0.6.0"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -55,13 +55,10 @@ type Plugin struct {
 	warmupRunner warmup.Runner
 	warmer       *warmup.CPA
 	cache        *cache.Cache
-	// store, organizations and publisher run while the cache does, and are
-	// nil while it is stopped: the settings the operator saves on the page,
-	// the Claude Console organizations, and the credit state worked out from
-	// them. Each writes only while this plugin holds the cache's writer lock.
-	store         *settings.Store
-	organizations *settings.OrganizationStore
-	publisher     *publisher
+	// claude and openai are the two API credits' lanes: Claude Console
+	// organizations, and OpenAI API organizations. Each lane's stores and
+	// publisher run while the cache does; its meter while it may count.
+	claude, openai lane
 	// refresh follows the refresh requests Quota Glance writes after a
 	// banked reset. The poller owns it while the cache runs; nil otherwise.
 	refresh        *refreshWatch
@@ -84,33 +81,21 @@ type Plugin struct {
 	// configuration, as the last configure read it. They are ignored, and only
 	// counted.
 	configItems atomic.Int64
-	// apiCredits is the item list in force, the organizations file's
-	// (itemsOf), and itemsState is the organizations block published with
-	// it. The fetcher reads apiCredits on every scan, like openRouterKey, so a
-	// change on the page needs no restart.
-	apiCredits atomic.Pointer[[]creditItem]
-	itemsState atomic.Pointer[client.CreditOrganizations]
 	// roster is every Claude credential CPA last listed, for the page's
 	// renewal dates. The fetcher fills it on every scan; it is held in memory
 	// only, never written to a file or a log.
 	roster atomic.Pointer[[]claudeCredential]
-	// meter counts Claude API-key traffic per organization while the cache
-	// runs and at least one organization is linked; nil otherwise.
-	// usage.handle reads it without a lock, since CPA delivers usage records
-	// on its own goroutine and must never wait on a configure.
-	meter atomic.Pointer[meter.Meter]
 
-	// linkMu guards the item list in force and the meter's lifecycle. A
-	// configure and a stop take it under mu; the publisher's ticks and the
-	// save route take it alone, so neither ever waits on mu, which a stop
-	// holds while it waits for the publisher.
+	// linkMu guards each lane's item list in force and its meter's
+	// lifecycle. A configure and a stop take it under mu; the publishers'
+	// ticks and the save route take it alone, so neither ever waits on mu,
+	// which a stop holds while it waits for the publishers.
 	linkMu sync.Mutex
-	// linkOrganizations is the organizations store of the running cache, nil
-	// while it is stopped, and metering is set while a meter may run: the
-	// cache runs and the last configure was accepted. Guarded by linkMu.
-	linkOrganizations *settings.OrganizationStore
-	metering          bool
-	// linkPath is the running cache's snapshot path, beside which the meter
+	// metering is set while a meter may run: the cache runs and the last
+	// configure was accepted. Guarded by linkMu, as each lane's
+	// linkOrganizations is.
+	metering bool
+	// linkPath is the running cache's snapshot path, beside which each meter
 	// keeps its file. Guarded by linkMu.
 	linkPath string
 
@@ -119,7 +104,11 @@ type Plugin struct {
 	trace func(step string)
 }
 
-func New(host Host) *Plugin { return &Plugin{host: host} }
+func New(host Host) *Plugin {
+	p := &Plugin{host: host}
+	p.claude.spec, p.openai.spec = claudeSpec, openAISpec
+	return p
+}
 
 func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	switch method {
@@ -130,11 +119,16 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 		return struct{}{}, nil
 	case protocol.MethodUsageHandle:
 		// CPA calls this once per upstream attempt, synchronously, on the one
-		// goroutine every usage plugin shares; the meter only decodes and
-		// enqueues. A record that arrives while nothing is counting is lost,
-		// which the meter records as a gap at its next start.
-		if m := p.meter.Load(); m != nil {
-			m.Offer(raw, time.Now().UTC())
+		// goroutine every usage plugin shares; each meter only decodes and
+		// enqueues, and keeps only the records of its own source. A record
+		// that arrives while nothing is counting is lost, which the meter
+		// records as a gap at its next start.
+		now := time.Now().UTC()
+		if m := p.claude.meter.Load(); m != nil {
+			m.Offer(raw, now)
+		}
+		if m := p.openai.meter.Load(); m != nil {
+			m.Offer(raw, now)
 		}
 		return struct{}{}, nil
 	case protocol.MethodManagementRegister:
@@ -142,7 +136,7 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 			Routes: []protocol.ManagementRoute{
 				{Method: "GET", Path: "/plugins/" + ID + "/status", Description: "Private cached quota observations and polling activity"},
 				// No Menu: CPA would turn the route into a public resource.
-				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: "Save Claude Console organizations, API credit amounts, refill dates, Console readings and Claude renewal dates; requires the management key"},
+				{Method: "POST", Path: "/plugins/" + ID + "/settings", Description: "Save Claude Console and OpenAI API organizations, API credit amounts, refill dates, billing readings and Claude renewal dates; requires the management key"},
 				{Method: "POST", Path: "/plugins/" + ID + "/warmup", Description: "Queue idle Claude accounts for warm-up; requires warm-up enabled and the management key"},
 			},
 			Resources: []protocol.ResourceRoute{{Path: "/status", Menu: "Quota Cache", Description: "Quota cache status and polling history"}},
@@ -171,10 +165,11 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 }
 
 // status answers the authenticated status route: the snapshot, the polling
-// activity, the meter file, and the credit state and editor the page shows.
+// activity, and for each API credit its meter file, and the credit state and
+// editor the page shows.
 func (p *Plugin) status() protocol.ManagementResponse {
 	p.mu.Lock()
-	opts, current, store, organizations, publisher, refresh, warmer := p.opts, p.cache, p.store, p.organizations, p.publisher, p.refresh, p.warmup
+	opts, current, claude, openai, refresh, warmer := p.opts, p.cache, p.claude.partsLocked(), p.openai.partsLocked(), p.refresh, p.warmup
 	p.mu.Unlock()
 	if current == nil {
 		return response(503, map[string]string{"error": "cache_stopped"})
@@ -189,10 +184,11 @@ func (p *Plugin) status() protocol.ManagementResponse {
 	p.lastStatusRead, p.statusReads = now, p.statusReads+1
 	reads := p.statusReads
 	p.statusMu.Unlock()
-	// The meter file beside the snapshot, when there is one it can read;
+	// The meter files beside the snapshot, when there is one it can read;
 	// the page shows the count and never computes with it.
 	apiMeter, _ := client.LoadMeter(client.MeterPath(opts.Path))
-	state := publisher.LastState()
+	openAIMeter, _ := client.LoadMeter(client.OpenAIMeterPath(opts.Path))
+	state, openAIState := claude.publisher.LastState(), openai.publisher.LastState()
 	return response(200, struct {
 		client.Snapshot
 		GeneratedAt        time.Time        `json:"generated_at"`
@@ -209,6 +205,12 @@ func (p *Plugin) status() protocol.ManagementResponse {
 		// before the first compute.
 		CreditState *client.CreditState `json:"credit_state"`
 		Editor      editorStatus        `json:"editor"`
+		// OpenAIMeter, OpenAICredits and OpenAIEditor are the OpenAI API
+		// credit's, as api_meter, credit_state and editor are Claude's.
+		// openai_credits is null while the OpenAI lane publishes nothing.
+		OpenAIMeter   *client.APIMeter    `json:"openai_meter,omitempty"`
+		OpenAICredits *client.CreditState `json:"openai_credits"`
+		OpenAIEditor  editorStatus        `json:"openai_editor"`
 		// StringsEscaped is set while CPA HTML-escapes this response's
 		// strings, which the page then decodes. A boolean is never escaped.
 		StringsEscaped bool `json:"strings_escaped"`
@@ -216,7 +218,8 @@ func (p *Plugin) status() protocol.ManagementResponse {
 		Refresh refreshStatus       `json:"refresh"`
 		Warmup  *client.WarmupState `json:"warmup,omitempty"`
 	}{snapshot, now, true, opts.Path, opts.Interval.String(), opts.Spacing.String(), current.Activity(), reads, previous, apiMeter,
-		client.CreditsAt(state, now, client.DefaultCreditStaleAfter), p.editorOf(store, organizations, state, snapshot, now),
+		client.CreditsAt(state, now, client.DefaultCreditStaleAfter), p.editorOf(claude, state, snapshot, now),
+		openAIMeter, client.CreditsAt(openAIState, now, client.DefaultCreditStaleAfter), p.editorOf(openai, openAIState, snapshot, now),
 		p.schema.Load() < rawManagementSchema, refreshStatusOf(current, refresh), warmupStatus(warmer, now)})
 }
 
@@ -334,15 +337,19 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	opened := false
 	if p.cache == nil && (cfg.Enabled == nil || *cfg.Enabled) {
-		current, err := cache.Open(opts, hostFetcher{host: gatedHost{p.host, &p.providerGate}, openRouterKey: &p.openRouterKey, apiCredits: &p.apiCredits, roster: &p.roster})
+		// Only Claude's organizations are listed in the snapshot. OpenAI's
+		// are in the OpenAI credit state alone.
+		current, err := cache.Open(opts, hostFetcher{host: gatedHost{p.host, &p.providerGate}, openRouterKey: &p.openRouterKey, apiCredits: &p.claude.apiCredits, roster: &p.roster})
 		if err != nil {
 			return p.reject(err)
 		}
 		p.opts, p.cache, opened = opts, current, true
-		// Neither store fails to open or writes anything when it does.
-		p.store, p.organizations = settings.Open(opts.Path), settings.OpenOrganizations(opts.Path)
-		p.publisher = newPublisher(opts.Path, Version, p.store, p.itemsInForce, p.logLine)
-		p.publisher.prepare = p.prepareTick(p.store, p.organizations)
+		for _, l := range p.lanes() {
+			// Neither store fails to open or writes anything when it does.
+			l.store, l.organizations = settings.OpenFor(l.spec.settings, opts.Path), settings.OpenOrganizationsFor(l.spec.settings, opts.Path)
+			l.publisher = newPublisher(opts.Path, Version, l.spec, l.store, l.itemsInForce, p.logLine)
+			l.publisher.prepare = p.prepareTick(l, l.store, l.organizations)
+		}
 		p.refresh = newRefreshWatch(opts.Path)
 		runner := p.warmupRunner
 		if runner == nil {
@@ -368,19 +375,23 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	}
 	now := time.Now().UTC()
 	if p.cache != nil {
-		p.store.Sync()
-		if p.store.Status().State == client.CreditSettingsUnreadable {
-			p.host.Log(context.Background(), "warn", "quota-cache cannot read its saved API credit settings; none apply until the file is moved aside", nil)
+		for _, l := range p.lanes() {
+			l.store.Sync()
+			if l.store.Status().State == client.CreditSettingsUnreadable {
+				p.host.Log(context.Background(), "warn", l.spec.settingsWarning, nil)
+			}
+			l.organizations.Sync()
 		}
-		p.organizations.Sync()
 	}
-	// The meter runs while the cache does and at least one organization is
-	// linked, and the usage capability is declared whenever the cache runs, so
-	// an organization added on the page is counted from its first request. CPA
-	// rebuilds the capability from each answer. With nothing linked the meter
-	// file stays put, and the next start carries on from it with a gap.
+	// Claude's meter runs while the cache does and at least one organization
+	// is linked; OpenAI's whenever the cache does. The usage capability is
+	// declared whenever the cache runs, so an organization added on the page
+	// is counted from its first request. CPA rebuilds the capability from
+	// each answer. With nothing linked Claude's meter file stays put, and the
+	// next start carries on from it with a gap.
 	p.linkMu.Lock()
-	p.linkOrganizations, p.metering, p.linkPath = p.organizations, p.cache != nil, opts.Path
+	p.claude.linkOrganizations, p.openai.linkOrganizations = p.claude.organizations, p.openai.organizations
+	p.metering, p.linkPath = p.cache != nil, opts.Path
 	p.relinkLocked(now, true)
 	p.linkMu.Unlock()
 	if p.cache != nil && len(cfg.CreditItems) > 0 {
@@ -396,10 +407,14 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		go p.run(ctx, p.cache, p.refresh, p.done, p.wake, spacing)
 		p.warmupDone = make(chan struct{})
 		go func(manager *warmup.Manager, done chan struct{}) { defer close(done); manager.Run(ctx) }(p.warmup, p.warmupDone)
-		p.publisher.start()
+		for _, l := range p.lanes() {
+			l.publisher.start()
+		}
 	}
-	if p.publisher != nil {
-		p.publisher.PublishNow()
+	for _, l := range p.lanes() {
+		if l.publisher != nil {
+			l.publisher.PublishNow()
+		}
 	}
 	// What CPA holds the plugin to from this answer on, so the status says
 	// whether CPA escapes its strings.
@@ -408,78 +423,79 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 		Capabilities: protocol.RegistrationCapabilities{UsagePlugin: p.cache != nil, ManagementAPI: true}}, nil
 }
 
-// relinkLocked puts the item list in force, from the organizations file, and
-// brings the meter in line with it: the organizations it links, a meter opened
-// from its file when one is now linked and none runs, which records the gap,
-// or the running one stopped with no_items when none is. With none linked and
-// none running, the file keeps the stop its last run wrote. Only a configure,
-// with replaceFailed, replaces a meter that stopped itself. While no meter may
-// run, it stops one with disabled. The caller holds linkMu.
+// relinkLocked brings every lane in line with its organizations file
+// (relinkLaneLocked). The caller holds linkMu.
 func (p *Plugin) relinkLocked(now time.Time, replaceFailed bool) {
-	organizations := settings.Organizations{}
-	if p.linkOrganizations != nil {
-		organizations = p.linkOrganizations.Current()
+	for _, l := range p.lanes() {
+		p.relinkLaneLocked(l, now, replaceFailed)
 	}
-	items, state := itemsOf(organizations, int(p.configItems.Load()))
-	p.apiCredits.Store(&items)
-	p.itemsState.Store(&state)
+}
+
+// relinkLaneLocked puts the lane's item list in force, from its organizations
+// file, and brings its meter in line with it: the organizations it links, a
+// meter opened from its file when one may run and none does, which records
+// the gap, or the running one stopped with no_items when none is linked and
+// the lane does not watch without one. With none linked and none running, the
+// file keeps the stop its last run wrote. Only a configure, with
+// replaceFailed, replaces a meter that stopped itself. While no meter may run,
+// it stops one with disabled. The caller holds linkMu.
+func (p *Plugin) relinkLaneLocked(l *lane, now time.Time, replaceFailed bool) {
+	organizations := settings.Organizations{}
+	if l.linkOrganizations != nil {
+		organizations = l.linkOrganizations.Current()
+	}
+	configItems := 0
+	if l.spec.countsConfigItems {
+		configItems = int(p.configItems.Load())
+	}
+	items, state := itemsOf(organizations, configItems, l.spec.settings)
+	l.apiCredits.Store(&items)
+	l.itemsState.Store(&state)
 	linked := linkedOrganizations(items)
-	switch m := p.meter.Load(); {
+	switch m := l.meter.Load(); {
 	case !p.metering:
-		p.stopMeter(client.MeterStopDisabled)
-	case len(linked) == 0:
-		p.stopMeter(client.MeterStopNoItems)
+		l.stopMeter(client.MeterStopDisabled)
+	case len(linked) == 0 && !l.spec.watchesWithoutItems:
+		l.stopMeter(client.MeterStopNoItems)
 	case m == nil || (replaceFailed && m.Failed()):
 		// A meter that stopped itself is replaced from its file, which
 		// records the gap.
-		p.stopMeter(client.MeterStopFailed)
-		p.meter.Store(meter.Open(client.MeterPath(p.linkPath), linked, now, p.host))
+		l.stopMeter(client.MeterStopFailed)
+		l.meter.Store(meter.OpenFor(l.spec.meter, l.spec.meterPath(p.linkPath), linked, now, p.host))
 	default:
 		m.SetLinked(linked, now)
 	}
 }
 
-// itemsInForce is what the publisher computes from: the item list and the
-// organizations block published with it.
-func (p *Plugin) itemsInForce() ([]creditItem, client.CreditOrganizations) {
-	items, state := []creditItem{}, client.CreditOrganizations{State: client.OrganizationsStateMissing}
-	if loaded := p.apiCredits.Load(); loaded != nil {
-		items = *loaded
-	}
-	if loaded := p.itemsState.Load(); loaded != nil {
-		state = *loaded
-	}
-	return items, state
-}
-
-// prepareTick is what each publisher tick does before it looks at the files:
-// the settings store's Sync, which reopens a file that changed, then
-// followOrganizations. It reports whether either may have changed what the
-// state is computed from, so the tick computes even when no file's stamp
-// changed, as when a file that could not be opened opens once its owner is
-// fixed. It never takes mu.
-func (p *Plugin) prepareTick(store *settings.Store, organizations *settings.OrganizationStore) func(time.Time) bool {
+// prepareTick is what each of the lane's publisher ticks does before it looks
+// at the files: the settings store's Sync, which reopens a file that changed,
+// then followOrganizations. store and organizations are the run's, which the
+// tick holds on to rather than read under mu. It reports whether either may
+// have changed what the state is computed from, so the tick computes even
+// when no file's stamp changed, as when a file that could not be opened opens
+// once its owner is fixed. It never takes mu.
+func (p *Plugin) prepareTick(l *lane, store *settings.Store, organizations *settings.OrganizationStore) func(time.Time) bool {
 	return func(now time.Time) bool {
 		synced := store.Sync()
-		return p.followOrganizations(organizations, now) || synced
+		return p.followOrganizations(l, organizations, now) || synced
 	}
 }
 
-// followOrganizations brings the item list in line with the organizations
-// file: the store's Sync, which reopens an unreadable file once it is moved
-// aside and sees a deleted one. When the organizations changed, the item list
-// and the meter follow, with no configure. It reports whether the
-// organizations changed. Each tick runs it, and so does the save route before
-// and after an organizations batch. It never takes mu.
-func (p *Plugin) followOrganizations(organizations *settings.OrganizationStore, now time.Time) bool {
+// followOrganizations brings the lane's item list in line with its
+// organizations file: the store's Sync, which reopens an unreadable file once
+// it is moved aside and sees a deleted one. When the organizations changed,
+// the item list and the meter follow, with no configure. It reports whether
+// the organizations changed. Each tick runs it, and so does the save route
+// before and after an organizations batch. It never takes mu.
+func (p *Plugin) followOrganizations(l *lane, organizations *settings.OrganizationStore, now time.Time) bool {
 	if !organizations.Sync() {
 		return false
 	}
 	p.linkMu.Lock()
 	defer p.linkMu.Unlock()
 	// A stop in progress has already let go of this run's stores.
-	if p.linkOrganizations == organizations {
-		p.relinkLocked(now, false)
+	if l.linkOrganizations == organizations {
+		p.relinkLaneLocked(l, now, false)
 	}
 	return true
 }
@@ -488,21 +504,13 @@ func (p *Plugin) logLine(level, message string, fields map[string]any) {
 	p.host.Log(context.Background(), level, message, fields)
 }
 
-// stopMeter stops the running meter, if any, with reason, and forgets it.
-// The caller holds linkMu.
-func (p *Plugin) stopMeter(reason string) {
-	if m := p.meter.Swap(nil); m != nil {
-		m.Stop(reason, time.Now().UTC())
-	}
-}
-
 // reject answers a configure with the error CPA is given. From that answer
 // until a later configure succeeds, CPA keeps the plugin loaded but delivers
 // it no usage records, so a meter left running would heartbeat as if it
 // counted and the traffic of that window would vanish from the estimate.
-// Instead the meter stops here, and the next good configure reopens it from
-// its file, which records the window as a gap; until then no change on the
-// page reopens it. The reason is disabled, the one of the fixed set that
+// Instead every meter stops here, and the next good configure reopens each
+// from its file, which records the window as a gap; until then no change on
+// the page reopens one. The reason is disabled, the one of the fixed set that
 // fits: to CPA the plugin is as good as switched off. The cache carries on;
 // it needs no usage records. It is called under p.mu.
 func (p *Plugin) reject(err error) (protocol.Registration, error) {
@@ -511,7 +519,9 @@ func (p *Plugin) reject(err error) (protocol.Registration, error) {
 	}
 	p.linkMu.Lock()
 	p.metering = false
-	p.stopMeter(client.MeterStopDisabled)
+	for _, l := range p.lanes() {
+		l.stopMeter(client.MeterStopDisabled)
+	}
 	p.linkMu.Unlock()
 	return protocol.Registration{}, err
 }
@@ -634,33 +644,40 @@ func (p *Plugin) stop(final bool) {
 	}
 	p.linkMu.Lock()
 	p.metering = false
-	p.stopMeter(reason)
+	for _, l := range p.lanes() {
+		l.stopMeter(reason)
+	}
 	p.linkMu.Unlock()
 }
 func (p *Plugin) Shutdown() { p.stop(true) }
 
 // closeLocked stops what the running cache started, in the one order that
-// keeps every write under the cache's writer lock and leaves the last credit
-// state saying the meter stopped:
+// keeps every write under the cache's writer lock and leaves each lane's last
+// credit state saying its meter stopped:
 //
-//  1. the meter, which records the stop with reason and saves;
+//  1. the meters, each recording the stop with reason and saving;
 //  2. the settings and organizations stores, each waiting for a save in
 //     flight, so no later save can write;
 //  3. the poller;
-//  4. the publisher, which writes the state one last time over the stopped
+//  4. the publishers, each writing its state one last time over its stopped
 //     meter's file;
 //  5. the cache, releasing the writer lock.
 //
-// The caller holds p.mu.
+// Each step acts on Claude's lane, then OpenAI's. The caller holds p.mu.
 func (p *Plugin) closeLocked(reason string) {
 	p.step("meter")
 	p.linkMu.Lock()
-	p.linkOrganizations, p.metering = nil, false
-	p.stopMeter(reason)
+	p.metering = false
+	for _, l := range p.lanes() {
+		l.linkOrganizations = nil
+		l.stopMeter(reason)
+	}
 	p.linkMu.Unlock()
 	p.step("settings")
-	p.store.Close()
-	p.organizations.Close()
+	for _, l := range p.lanes() {
+		l.store.Close()
+		l.organizations.Close()
+	}
 	p.step("poller")
 	p.cancel()
 	<-p.done
@@ -668,10 +685,15 @@ func (p *Plugin) closeLocked(reason string) {
 		<-p.warmupDone
 	}
 	p.step("publisher")
-	p.publisher.Stop()
+	for _, l := range p.lanes() {
+		l.publisher.Stop()
+	}
 	p.step("cache")
 	p.cache.Close()
-	p.cache, p.store, p.organizations, p.publisher, p.refresh = nil, nil, nil, nil, nil
+	p.cache, p.refresh = nil, nil
+	for _, l := range p.lanes() {
+		l.store, l.organizations, l.publisher = nil, nil, nil
+	}
 	p.warmup, p.warmupDone = nil, nil
 }
 

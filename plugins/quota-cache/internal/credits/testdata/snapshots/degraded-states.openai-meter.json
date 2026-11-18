@@ -1,0 +1,228 @@
+{
+  "schema": 1,
+  "since": "2026-08-20T00:00:00Z",
+  "started_at": "2026-08-24T12:00:00Z",
+  "flushed_at": "2026-09-10T03:59:00Z",
+  "restarts": 1,
+  "received": 1210,
+  "counted": 590,
+  "gaps": [
+    {
+      "from": "2026-08-24T10:00:00Z",
+      "to": "2026-08-24T12:00:00Z",
+      "reason": "unclean_stop"
+    }
+  ],
+  "organizations": {
+    "acme-x1wegt": {
+      "since": "2026-08-20T00:00:00Z",
+      "last_seen_at": "2026-09-09T22:15:00Z",
+      "last_success_at": "2026-09-09T21:00:00Z",
+      "refusals": 2,
+      "last_refusal_at": "2026-09-09T22:15:00Z",
+      "days": [
+        {
+          "start": "2026-08-30T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.2-astra",
+              "requests": 20,
+              "input": 1000000,
+              "output": 100000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-02T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.2-astra",
+              "requests": 400,
+              "input": 10000000,
+              "output": 1000000,
+              "cache_read": 20000000,
+              "cache_write": 3000000
+            },
+            {
+              "model": "gpt-image-2",
+              "requests": 12,
+              "input": 500000,
+              "output": 200000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-09T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.2-astra",
+              "requests": 40,
+              "failed": 2,
+              "input": 2000000,
+              "output": 300000
+            }
+          ]
+        }
+      ],
+      "hours": [
+        {
+          "start": "2026-09-09T21:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.2-astra",
+              "requests": 40,
+              "input": 2000000,
+              "output": 300000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-09T22:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.2-astra",
+              "failed": 2
+            }
+          ]
+        }
+      ]
+    },
+    "user-AbCdEfGhIjKlMnOpQrStUvWx": {
+      "since": "2026-08-20T00:00:00Z",
+      "last_seen_at": "2026-09-10T03:00:00Z",
+      "last_success_at": "2026-09-10T03:00:00Z",
+      "days": [
+        {
+          "start": "2026-08-22T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6-sol",
+              "requests": 12,
+              "input": 900000,
+              "output": 150000,
+              "cache_read": 1200000
+            }
+          ]
+        },
+        {
+          "start": "2026-08-28T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6-sol-2026-08-01",
+              "requests": 40,
+              "input": 2000000,
+              "output": 400000,
+              "cache_read": 6000000,
+              "cache_write": 2000000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-03T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6.1-terra",
+              "tier": "flex",
+              "requests": 25,
+              "input": 4000000,
+              "output": 1000000,
+              "cache_read": 2000000
+            },
+            {
+              "model": "gpt-6.2-sol",
+              "prompt": "over_272k",
+              "tier": "fast",
+              "requests": 2,
+              "input": 600000,
+              "output": 50000,
+              "cache_read": 400000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-09T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-5.5",
+              "requests": 30,
+              "input": 1000000,
+              "output": 100000,
+              "cache_read": 500000,
+              "cache_write": 1000000
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "tier": "ultrafast",
+              "requests": 4,
+              "input": 200000,
+              "output": 50000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-10T00:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6-sol",
+              "requests": 3,
+              "input": 100000,
+              "output": 20000
+            }
+          ]
+        }
+      ],
+      "hours": [
+        {
+          "start": "2026-09-09T15:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-5.5",
+              "requests": 30,
+              "input": 1000000,
+              "output": 100000,
+              "cache_read": 500000,
+              "cache_write": 1000000
+            },
+            {
+              "model": "gpt-6.1-sol",
+              "tier": "ultrafast",
+              "requests": 4,
+              "input": 200000,
+              "output": 50000
+            }
+          ]
+        },
+        {
+          "start": "2026-09-10T03:00:00Z",
+          "usage": [
+            {
+              "model": "gpt-6-sol",
+              "requests": 3,
+              "input": 100000,
+              "output": 20000
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "unlinked": [
+    {
+      "organization_id": "user-ZyXwVuTsRqPoNmLkJiHgFeDc",
+      "first_seen_at": "2026-09-09T08:00:00Z",
+      "last_seen_at": "2026-09-10T03:00:00Z",
+      "requests": 7
+    }
+  ],
+  "auths": {
+    "1032547698badcfe": {
+      "organization_id": "acme-x1wegt",
+      "seen_at": "2026-09-09T22:15:00Z"
+    },
+    "fedcba9876543210": {
+      "organization_id": "user-AbCdEfGhIjKlMnOpQrStUvWx",
+      "seen_at": "2026-09-10T03:00:00Z"
+    }
+  },
+  "auth_ids": {}
+}

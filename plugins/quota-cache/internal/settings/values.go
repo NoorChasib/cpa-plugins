@@ -4,6 +4,12 @@
 // snapshot.settings.json beside the snapshot, in exactly the schema of Quota
 // Glance's settings.json.
 //
+// The OpenAI API credit's monthly amounts, refill dates and API Platform
+// readings live in snapshot.openai-settings.json, in the same schema with
+// OpenAI's account ids and organizations and never a renewal date. A
+// Provider says which file a function reads: every function without For in
+// its name reads Claude's.
+//
 // Loading checks shape only. A value that was valid when it was saved stays
 // loadable however old it gets: a reading taken before the last refill, or for
 // an organization no longer listed, is still a well-formed reading, and the
@@ -48,10 +54,11 @@ type Values struct {
 	// 0 without a file.
 	Revision uint64
 	// APICredits is keyed by the anthropic-api account id, "org-" and 12 hex
-	// digits.
+	// digits, or in the OpenAI file by the OpenAI account id, "oai-" and 12
+	// hex digits.
 	APICredits map[string]APICredit
 	// Renewals is keyed by a Claude credential's CPA auth index, 16 hex
-	// digits.
+	// digits. It is always empty in the OpenAI file.
 	Renewals map[string]Renewal
 	// Unreadable is set when the settings file exists but failed a shape rule.
 	// Nothing in it applies, the maps are empty, and nothing may be saved
@@ -59,8 +66,8 @@ type Values struct {
 	Unreadable bool
 }
 
-// APICredit is the page's values for one Console organization. An empty
-// string is a value not set.
+// APICredit is the page's values for one Console organization, or one OpenAI
+// API organization in the OpenAI file. An empty string is a value not set.
 type APICredit struct {
 	MonthlyUSD string
 	// Renews is a date, "2026-10-29".
@@ -70,7 +77,8 @@ type APICredit struct {
 	UpdatedAt time.Time
 }
 
-// Reading is what Console showed as left of the credit, and when.
+// Reading is what Console, or API Platform for an OpenAI organization, showed
+// as left of the credit, and when.
 type Reading struct {
 	RemainingUSD string
 	At           time.Time

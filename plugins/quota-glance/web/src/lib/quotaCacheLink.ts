@@ -22,8 +22,12 @@ import type { Env } from "./access"
 /** Quota Cache's sidebar page, from the root every path this page builds starts from. */
 export const QUOTA_CACHE_PAGE = "/v0/resource/plugins/quota-cache/status"
 
-/** The sections of Quota Cache's page a card links to: its element IDs. */
-export type QuotaCacheSection = "api-credits" | "renewals"
+/**
+ * The sections of Quota Cache's page a card links to: its element IDs. The
+ * OpenAI API credit's is on the page of Quota Cache 0.6.0 and newer, the only
+ * Quota Cache that publishes the credit its card shows.
+ */
+export type QuotaCacheSection = "api-credits" | "renewals" | "openai-api-credits"
 
 /** What the link depends on, beyond where this page is. */
 export interface LinkAccess {

@@ -44,6 +44,14 @@ LABEL_B = "O'Brien & Co"
 def account_of(org):
     return 'org-' + hashlib.sha256(org.encode()).hexdigest()[:12]
 
+# A placeholder OpenAI API organization, named as OpenAI's responses name a
+# personal one, and its account id as quota-cache keys it: "oai-" and 12 hex
+# digits of the SHA-256 of the name. Nothing is ever sent to OpenAI.
+OPENAI_ORG = 'user-SmokeSmokeSmokeSmokeSmok'
+
+def openai_account_of(org):
+    return 'oai-' + hashlib.sha256(org.strip().encode()).hexdigest()[:12]
+
 # Placeholder Claude credentials for the refresh leg. Their files carry no
 # token, so each poll fails before it makes a request: nothing reaches a
 # provider.
@@ -378,6 +386,40 @@ plugins:
             print(f'  credits       claude-api-credits ignored and two organizations added on the page; a save published before its answer; '
                   f'415, 403, 400 for an unknown kind and CPA\'s empty 404 as specified; '
                   f'{LABEL_B!r} and {len(sentences)} sentence(s) arrived unescaped')
+        # Quota Cache 0.6.0 also keeps the OpenAI API credit, in files of its
+        # own beside the snapshot. Only a loaded 0.6.0 or newer is asked: an
+        # older one answers the OpenAI kinds 400, and the release smoke of
+        # every other plugin runs against the published Quota Cache. The save
+        # carries the key like every request here, and a refused key fails the
+        # run at once, with no second try toward CPA's ban.
+        openai = publishing and tuple(map(int, records['quota-cache']['metadata']['version'].split('.'))) >= (0, 6, 0)
+        if openai:
+            # The OpenAI meter runs from the first configure, before any
+            # OpenAI organization is listed, and writes no file until a
+            # response names one: this roster sends no OpenAI traffic.
+            assert 'quota-cache OpenAI API meter counting openai-compatibility traffic' in run('docker','logs',container)
+            assert not (data/'snapshot.openai-meter.json').exists(), 'the OpenAI meter wrote a file with nothing seen'
+            code, answer = save({'kind': 'openaiOrganizations', 'baseRevision': '',
+                                 'ops': [{'op': 'add', 'label': 'smoke-openai', 'organizationId': OPENAI_ORG}]})
+            assert code not in (401, 403), f'the management key was refused ({code}); not retried'
+            assert code == 200 and answer['ok'] and answer['organizations'][0]['id'] == openai_account_of(OPENAI_ORG), (code, answer)
+            def openai_published():
+                path = data/'snapshot.openai-credits.json'
+                state = json.loads(path.read_text()) if path.is_file() else None
+                return state if state and state.get('api_credits') else None
+            state = wait_until(openai_published, 15, 'the OpenAI credit state was not published')
+            assert state['api_credits']['provider'] == 'openai-api', state['api_credits']
+            assert list(accounts_of(state)) == [openai_account_of(OPENAI_ORG)], accounts_of(state)
+            # Claude's state is as it was: no provider and no OpenAI account.
+            claude = published()['api_credits']
+            assert 'provider' not in claude and not [id for id in accounts_of(published()) if id.startswith('oai-')], claude
+            print(f'  openai        the meter counting before any organization and no file yet; one OpenAI organization added on the page '
+                  f'as {openai_account_of(OPENAI_ORG)} and published beside the snapshot; Claude\'s state unchanged')
+        else:
+            # A Quota Cache that does not keep it writes none of its files.
+            assert not list(data.glob('snapshot.openai-*.json')), sorted(path.name for path in data.glob('snapshot.openai-*.json'))
+            api_credits = (published() or {}).get('api_credits')
+            assert not api_credits or 'provider' not in api_credits, api_credits
         # Quota Cache 0.2.0 refreshes every account after Quota Glance spends a
         # banked reset. Placeholder Claude credentials give it accounts to
         # poll: CPA picks the files up from its auth directory, and Quota
@@ -505,7 +547,7 @@ plugins:
         (ROOT/'dist').mkdir(exist_ok=True)
         (ROOT/'dist'/'quota-preview-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
         evidence['api_meter'] = 'file, shutdown stop and gap verified' if metered else 'not configured'
-        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, restart' + (', the API meter file with its shutdown gap' if metered else '') + (', organizations, save route and published credit state' if publishing else '') + ' verified with an empty synthetic roster' + ('; the refresh after a banked reset with three tokenless placeholder credentials' if refreshing else ''))
+        print('PASS: pinned CPA v8.0.4 loads every native plugin; authenticated status routes, cache reads, default-volume SQLite/cache, restart' + (', the API meter file with its shutdown gap' if metered else '') + (', organizations, save route and published credit state' if publishing else '') + (', the OpenAI API credit\'s organizations and published state' if openai else '') + ' verified with an empty synthetic roster' + ('; the refresh after a banked reset with three tokenless placeholder credentials' if refreshing else ''))
     except Exception:
         # This container uses only synthetic configuration and an empty auth directory.
         print(run('docker','logs',container)[-6000:])

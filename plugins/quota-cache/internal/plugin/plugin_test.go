@@ -321,13 +321,13 @@ func TestTheEditorWaitsForTheRoster(t *testing.T) {
 	if len(store.Current().Renewals) != 1 {
 		t.Fatalf("the saved date did not load: %+v", store.Current())
 	}
-	editor := p.editorOf(store, organizations, nil, client.Snapshot{}, time.Now())
+	editor := p.editorOf(laneParts{lane: &p.claude, store: store, organizations: organizations}, nil, client.Snapshot{}, time.Now())
 	if len(editor.Credentials) != 0 || len(editor.RenewalOrphans) != 0 || editor.Credentials == nil || editor.RenewalOrphans == nil || editor.APICreditOrphans == nil || !editor.Available || !editor.Organizations.Available {
 		t.Fatalf("editor %+v", editor)
 	}
 	// A roster that does not list it makes it an orphan.
 	p.roster.Store(&[]claudeCredential{{AuthIndex: claudeHexID, Name: claudeEmail}})
-	editor = p.editorOf(store, organizations, nil, client.Snapshot{}, time.Now())
+	editor = p.editorOf(laneParts{lane: &p.claude, store: store, organizations: organizations}, nil, client.Snapshot{}, time.Now())
 	if len(editor.Credentials) != 1 || len(editor.RenewalOrphans) != 1 || editor.RenewalOrphans[0].ID != orphanRenewal {
 		t.Fatalf("after the roster: %+v", editor)
 	}
@@ -338,10 +338,10 @@ func (p *meterPlugin) storesOf() (*settings.Store, *settings.OrganizationStore) 
 	p.t.Helper()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.store == nil || p.organizations == nil {
+	if p.claude.store == nil || p.claude.organizations == nil {
 		p.t.Fatal("the cache is not running")
 	}
-	return p.store, p.organizations
+	return p.claude.store, p.claude.organizations
 }
 
 // storesClosed requires both stores of a stopped cache to refuse every write
@@ -394,7 +394,7 @@ func TestEnabledFalseClosesStoreAndPublisher(t *testing.T) {
 		t.Fatalf("status %d", code)
 	}
 	p.configure(protocol.MethodPluginReconfigure, "")
-	if p.meter.Load() == nil || p.store == store || p.publisher == nil {
+	if p.claude.meter.Load() == nil || p.claude.store == store || p.claude.publisher == nil {
 		t.Fatal("not restarted")
 	}
 	p.published()
@@ -434,8 +434,8 @@ func TestTheConfiguredOrganizationsAreIgnored(t *testing.T) {
 	if _, err := os.Lstat(client.OrganizationsPath(p.path)); !os.IsNotExist(err) {
 		t.Fatal("the configuration wrote an organizations file")
 	}
-	if items := *p.apiCredits.Load(); len(items) != 0 || p.meter.Load() != nil {
-		t.Fatalf("items %+v, meter %v", items, p.meter.Load())
+	if items := *p.claude.apiCredits.Load(); len(items) != 0 || p.claude.meter.Load() != nil {
+		t.Fatalf("items %+v, meter %v", items, p.claude.meter.Load())
 	}
 	state := p.published()
 	if state.APICredits != nil || state.Organizations != (client.CreditOrganizations{State: client.OrganizationsStateMissing, ConfigItemsIgnored: 3}) {
@@ -479,7 +479,7 @@ func TestTheConfiguredOrganizationsAreIgnored(t *testing.T) {
 		state.Organizations != (client.CreditOrganizations{State: client.OrganizationsStateOK, Revision: settings.RevisionText(listed.Revision), ConfigItemsIgnored: 3}) {
 		t.Fatalf("published %+v %+v", state.Organizations, state.APICredits)
 	}
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("adding bravo did not start the meter")
 	}
 	snapshot := waitFor(t, p.path, func(s client.Snapshot) bool {
@@ -519,14 +519,14 @@ func TestTheConfiguredOrganizationsAreIgnored(t *testing.T) {
 // editable again.
 func TestAnUnreadableOrganizationsFileListsNothing(t *testing.T) {
 	p := newRoutePlugin(t)
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("no meter for alpha")
 	}
 	p.configure(protocol.MethodPluginReconfigure, alphaCredit)
 	p.breakOrganizations()
-	p.publisher.tick(time.Now().UTC())
-	if p.meter.Load() != nil || len(*p.apiCredits.Load()) != 0 {
-		t.Fatalf("meter %v, items %+v", p.meter.Load(), *p.apiCredits.Load())
+	p.claude.publisher.tick(time.Now().UTC())
+	if p.claude.meter.Load() != nil || len(*p.claude.apiCredits.Load()) != 0 {
+		t.Fatalf("meter %v, items %+v", p.claude.meter.Load(), *p.claude.apiCredits.Load())
 	}
 	if file := p.meterFile(); file.StopReason != client.MeterStopNoItems {
 		t.Fatalf("meter file %+v", file)
@@ -553,18 +553,18 @@ func TestAnUnreadableOrganizationsFileListsNothing(t *testing.T) {
 	if now := p.saidIgnored(); now != said+1 {
 		t.Fatalf("with the file unreadable, said %d times that the configuration is ignored, want %d", now, said+1)
 	}
-	if p.meter.Load() != nil {
+	if p.claude.meter.Load() != nil {
 		t.Fatal("a configure started the meter")
 	}
 	if err := os.Rename(client.OrganizationsPath(p.path), client.OrganizationsPath(p.path)+".aside"); err != nil {
 		t.Fatal(err)
 	}
-	p.publisher.tick(time.Now().UTC())
+	p.claude.publisher.tick(time.Now().UTC())
 	if state := p.creditsFile(); state.APICredits != nil || state.Organizations != (client.CreditOrganizations{State: client.OrganizationsStateMissing, ConfigItemsIgnored: 1}) {
 		t.Fatalf("moved aside: published %+v", state.Organizations)
 	}
 	p.organizationOps(addOp("alpha", fakeOrgA))
-	if p.meter.Load() == nil {
+	if p.claude.meter.Load() == nil {
 		t.Fatal("adding alpha again did not start the meter")
 	}
 }
@@ -589,7 +589,7 @@ func TestUnreadableFilesReopenAtTheNextTick(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p.publisher.tick(time.Now().UTC())
+	p.claude.publisher.tick(time.Now().UTC())
 	editor = p.statusOf()["editor"].(map[string]any)
 	if editor["available"] != true || editor["organizations"].(map[string]any)["available"] != true {
 		t.Fatalf("editor %v", editor)
@@ -629,16 +629,16 @@ func TestFilesThatOpenAgainArePublishedAtTheNextTick(t *testing.T) {
 			store, organizations := p.storesOf()
 			fixed := unopenable(t, pathOf(p.path))
 			store.Sync()
-			p.followOrganizations(organizations, time.Now().UTC())
+			p.followOrganizations(&p.claude, organizations, time.Now().UTC())
 			// The stamps the state is published from next are those it was
 			// last computed from, while the store has not read its file since
 			// it failed.
 			fixed()
-			p.publisher.PublishNow()
+			p.claude.publisher.PublishNow()
 			if unread := unreadFiles(p.creditsFile()); !slices.Equal(unread, []string{name}) {
 				t.Fatalf("before the tick, published %v as unread", unread)
 			}
-			p.publisher.tick(time.Now().UTC())
+			p.claude.publisher.tick(time.Now().UTC())
 			if unread := unreadFiles(p.creditsFile()); len(unread) != 0 {
 				t.Fatalf("after the tick, published %v as unread", unread)
 			}

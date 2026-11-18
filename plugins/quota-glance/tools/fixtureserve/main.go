@@ -10,8 +10,10 @@
 // Quota Cache's published credit state is read from -credits. By default that
 // is the file beside the snapshot, where the plugin reads it, or, for a
 // fixture with none there, Quota Cache's own committed state for the fixture
-// of the same name. The API credit card is read-only: its values are edited on
-// Quota Cache's page, and the retired settings routes answer 410 here too.
+// of the same name. Its OpenAI API credit state is found the same way, beside
+// the snapshot or else Quota Cache's committed one for the fixture, with no
+// flag of its own. The API credit cards are read-only: their values are edited
+// on Quota Cache's page, and the retired settings routes answer 410 here too.
 package main
 
 import (
@@ -74,15 +76,18 @@ func main() {
 	if creditsError != "" {
 		log.Printf("no usable credit state from Quota Cache (%s); the API credit card lists its organizations without figures", creditsError)
 	}
+	openAICredits, openAICreditsError := openAICreditsFor(*snapshot, result)
 	served := api.New("quota-glance", *token)
 	served.Publish(aggregate.Build(aggregate.Input{
-		Warmup:       result.Warmup,
-		Snapshot:     result.Snapshot,
-		Identities:   result.Identities,
-		StaleAfter:   45 * time.Minute,
-		Redeemable:   stand != nil,
-		Credits:      credits,
-		CreditsError: creditsError,
+		Warmup:             result.Warmup,
+		Snapshot:           result.Snapshot,
+		Identities:         result.Identities,
+		StaleAfter:         45 * time.Minute,
+		Redeemable:         stand != nil,
+		Credits:            credits,
+		CreditsError:       creditsError,
+		OpenAICredits:      openAICredits,
+		OpenAICreditsError: openAICreditsError,
 	}, now), api.Health{Version: "fixtureserve", CachePath: *snapshot, StaleAfter: "45m"})
 	if stand != nil {
 		served.SetRedeemer(stand)
@@ -133,6 +138,26 @@ func creditsFor(snapshotPath, creditsPath string, result source.Result) (*qc.Cre
 		creditsPath = candidate
 	}
 	state, err := qc.LoadCredits(creditsPath)
+	switch {
+	case errors.Is(err, qc.ErrCreditsMissing):
+		return nil, aggregate.CreditsMissing
+	case err != nil:
+		return nil, aggregate.CreditsUnreadable
+	}
+	return state, ""
+}
+
+// openAICreditsFor is the OpenAI API credit state to build with: what
+// source.Read found beside the snapshot unless there was none, else Quota
+// Cache's committed OpenAI state for a fixture of the same name, when there is
+// one. Without either the document has no OpenAI card, as an install that
+// lists no OpenAI organization has none.
+func openAICreditsFor(snapshotPath string, result source.Result) (*qc.CreditState, string) {
+	if result.OpenAICreditsError != aggregate.CreditsMissing {
+		return result.OpenAICredits, result.OpenAICreditsError
+	}
+	name := strings.TrimSuffix(filepath.Base(snapshotPath), ".json") + ".openai-credits.json"
+	state, err := qc.LoadCredits(filepath.Join(filepath.Dir(snapshotPath), "..", "..", "..", "quota-cache", "internal", "credits", "testdata", "golden", name))
 	switch {
 	case errors.Is(err, qc.ErrCreditsMissing):
 		return nil, aggregate.CreditsMissing
