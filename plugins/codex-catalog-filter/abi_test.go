@@ -30,6 +30,14 @@ func (p stubNativePlugin) Shutdown() {
 	}
 }
 
+func install(t *testing.T, p nativePlugin) {
+	t.Helper()
+	gateMu.Lock()
+	globalPlugin, stopping = p, false
+	gateMu.Unlock()
+	t.Cleanup(shutdownNative)
+}
+
 func TestABIEnvelopes(t *testing.T) {
 	raw, err := okEnvelope(map[string]bool{"registered": true})
 	if err != nil {
@@ -62,20 +70,15 @@ func TestDispatchServesFilteredCatalogThroughRealPlugin(t *testing.T) {
 		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-6-sol","visibility":"list"},{"slug":"claude-x","visibility":"list"}]}`))
 	}))
 	defer cpa.Close()
-	globalMu.Lock()
-	globalPlugin = pluginimpl.New()
-	globalMu.Unlock()
-	defer cliproxyPluginShutdown()
+	install(t, pluginimpl.New())
 	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("models: {claude-x: false}\ncpa-url: " + cpa.URL + "\ndata-dir: " + t.TempDir() + "\n"), SchemaVersion: protocol.SchemaVersion})
 	request, _ := json.Marshal(protocol.ManagementRequest{
 		Method: http.MethodGet, Path: pluginimpl.CatalogPath,
 		Headers: http.Header{"Authorization": {"Bearer client-key"}},
 		Query:   url.Values{"client_version": {"0.159.0"}},
 	})
-	globalMu.RLock()
-	_, registered := dispatch(protocol.MethodPluginRegister, config)
-	raw, ok := dispatch(protocol.MethodManagementHandle, request)
-	globalMu.RUnlock()
+	_, registered := handleCall(protocol.MethodPluginRegister, config)
+	raw, ok := handleCall(protocol.MethodManagementHandle, request)
 	var env struct {
 		OK     bool
 		Result protocol.ManagementResponse
@@ -86,44 +89,95 @@ func TestDispatchServesFilteredCatalogThroughRealPlugin(t *testing.T) {
 	}
 }
 
+// The real plugin rewrites a Claude-format list for Claude Code through the
+// native boundary and passes every other response through.
+func TestInterceptRewritesClaudeCodeListThroughRealPlugin(t *testing.T) {
+	install(t, pluginimpl.New())
+	config, _ := json.Marshal(protocol.LifecycleRequest{ConfigYAML: []byte("data-dir: " + t.TempDir() + "\nclaude-code:\n  models: {gpt-6-sol: false}\n"), SchemaVersion: protocol.SchemaVersion})
+	reg, ok := handleCall(protocol.MethodPluginRegister, config)
+	if !ok || !strings.Contains(string(reg), `"response_interceptor":true`) {
+		t.Fatalf("registration = %s", reg)
+	}
+	list := `{"data":[{"id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5"},{"id":"claude-fable-5-dd-los-6-tpg","display_name":"GPT 6.0 Sol"}],"first_id":"claude-sonnet-5-5","has_more":false,"last_id":"claude-fable-5-dd-los-6-tpg"}`
+	request := func(format, agent, model string) []byte {
+		raw, _ := json.Marshal(map[string]any{
+			"RequestID": "r1", "SourceFormat": format, "Model": model, "RequestedModel": "", "Stream": false,
+			"RequestHeaders":  http.Header{"User-Agent": {agent}, "Authorization": {"Bearer secret"}},
+			"ResponseHeaders": http.Header{"Content-Type": {"application/json"}},
+			"OriginalRequest": nil, "RequestBody": nil, "Body": []byte(list), "StatusCode": 200, "Metadata": nil,
+		})
+		return raw
+	}
+	raw, ok := handleCall(protocol.MethodResponseInterceptAfter, request("claude", "claude-code/2.1.327", ""))
+	var env struct {
+		OK     bool
+		Result protocol.ResponseInterceptResponse
+	}
+	if !ok || json.Unmarshal(raw, &env) != nil || !env.OK ||
+		string(env.Result.Body) != `{"data":[{"id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5"}],"first_id":"claude-sonnet-5-5","has_more":false,"last_id":"claude-sonnet-5-5"}` {
+		t.Fatalf("intercept = %s", raw)
+	}
+	for _, other := range [][]byte{
+		request("openai", "claude-code/2.1.327", ""),
+		request("claude", "claude-cli/2.1.327 (external, sdk-cli)", "claude-sonnet-5-5"),
+		request("claude", pluginimpl.ID+"/"+pluginimpl.Version, ""),
+		[]byte("not json"),
+	} {
+		if raw, ok := handleCall(protocol.MethodResponseInterceptAfter, other); !ok || string(raw) != string(interceptPassThrough) {
+			t.Fatalf("not a list for Claude Code, got %s", raw)
+		}
+	}
+}
+
+func TestInterceptCallsAlwaysPassThroughOnFailure(t *testing.T) {
+	// Not initialized.
+	if raw, ok := handleCall(protocol.MethodResponseInterceptAfter, []byte(`{}`)); !ok || string(raw) != string(interceptPassThrough) {
+		t.Fatalf("uninitialized = %s", raw)
+	}
+	install(t, stubNativePlugin{handle: func(string, []byte) (any, error) { panic("boom") }})
+	if raw, ok := handleCall(protocol.MethodResponseInterceptAfter, []byte(`{}`)); !ok || string(raw) != string(interceptPassThrough) {
+		t.Fatalf("panic = %s", raw)
+	}
+	// Oversized: never handed to the plugin.
+	big := make([]byte, protocol.MaxInterceptRequestBytes+1)
+	if raw, ok := handleCall(protocol.MethodResponseInterceptAfter, big); !ok || string(raw) != string(interceptPassThrough) {
+		t.Fatalf("oversized = %s", raw)
+	}
+	if _, ok := handleCall(protocol.MethodManagementHandle, make([]byte, protocol.MaxRequestBytes+1)); ok {
+		t.Fatal("oversized management call accepted")
+	}
+}
+
 func TestABIErrorsAndPanicsDoNotEchoPayload(t *testing.T) {
 	for _, panicInstead := range []bool{false, true} {
-		globalMu.Lock()
-		globalPlugin = stubNativePlugin{handle: func(string, []byte) (any, error) {
+		install(t, stubNativePlugin{handle: func(string, []byte) (any, error) {
 			if panicInstead {
 				panic("secret-payload")
 			}
 			return nil, errors.New("secret-payload")
-		}}
-		globalMu.Unlock()
-		globalMu.RLock()
-		raw, ok := dispatch(protocol.MethodManagementHandle, nil)
-		globalMu.RUnlock()
+		}})
+		raw, ok := handleCall(protocol.MethodManagementHandle, nil)
 		if ok || strings.Contains(string(raw), "secret-payload") {
 			t.Fatalf("unsafe result %s", raw)
 		}
-		cliproxyPluginShutdown()
+		shutdownNative()
 	}
 }
 
 func TestShutdownDrainsAdmittedNativeCall(t *testing.T) {
 	entered, release, stopped := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	globalMu.Lock()
-	globalPlugin = stubNativePlugin{
+	install(t, stubNativePlugin{
 		handle:   func(string, []byte) (any, error) { close(entered); <-release; return struct{}{}, nil },
 		shutdown: func() { close(stopped) },
-	}
-	globalMu.Unlock()
+	})
 	callDone := make(chan struct{})
 	go func() {
-		globalMu.RLock()
-		dispatch(protocol.MethodManagementHandle, nil)
-		globalMu.RUnlock()
+		handleCall(protocol.MethodManagementHandle, nil)
 		close(callDone)
 	}()
 	<-entered
 	shutdownDone := make(chan struct{})
-	go func() { cliproxyPluginShutdown(); close(shutdownDone) }()
+	go func() { shutdownNative(); close(shutdownDone) }()
 	select {
 	case <-stopped:
 		t.Fatal("shutdown ran while an admitted native call was in flight")
@@ -136,11 +190,53 @@ func TestShutdownDrainsAdmittedNativeCall(t *testing.T) {
 		t.Fatal("shutdown did not drain")
 	}
 	<-callDone
-	globalMu.RLock()
-	_, ok := dispatch(protocol.MethodManagementHandle, nil)
-	globalMu.RUnlock()
-	if ok {
+	if _, ok := handleCall(protocol.MethodManagementHandle, nil); ok {
 		t.Fatal("dispatch accepted after shutdown")
 	}
-	cliproxyPluginShutdown() // idempotent
+	shutdownNative() // idempotent
+}
+
+// A plugin route that fetches from CPA makes CPA call this library's response
+// interceptor while the route is still in flight. With Shutdown waiting, that
+// nested call must not block: it passes the response through at once, the
+// route finishes, and Shutdown completes, with no timeout involved.
+func TestNestedInterceptDuringShutdownDoesNotDeadlock(t *testing.T) {
+	entered, stopped := make(chan struct{}), make(chan struct{})
+	var nested []byte
+	var nestedOK bool
+	install(t, stubNativePlugin{
+		handle: func(method string, _ []byte) (any, error) {
+			if method == protocol.MethodResponseInterceptAfter {
+				t.Error("nested interceptor reached the plugin during shutdown")
+				return struct{}{}, nil
+			}
+			close(entered)
+			// Wait until Shutdown has started refusing new calls.
+			for {
+				gateMu.Lock()
+				s := stopping
+				gateMu.Unlock()
+				if s {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			nested, nestedOK = handleCall(protocol.MethodResponseInterceptAfter, []byte(`{"SourceFormat":"gemini"}`))
+			return struct{}{}, nil
+		},
+		shutdown: func() { close(stopped) },
+	})
+	outer := make(chan struct{})
+	go func() { handleCall(protocol.MethodManagementHandle, nil); close(outer) }()
+	<-entered
+	go shutdownNative()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown deadlocked behind a nested interceptor call")
+	}
+	<-outer
+	if !nestedOK || string(nested) != string(interceptPassThrough) {
+		t.Fatalf("nested call = %s", nested)
+	}
 }

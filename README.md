@@ -7,7 +7,7 @@ Native plugins for CLIProxyAPI (CPA), developed together and installed separatel
 | [Account Health Pushover](plugins/account-health-pushover/README.md) | Notifications when credentials need attention; optional weekly quota alerts |
 | [Auto Baseline](plugins/auto-baseline/README.md) | Automatically updated Claude Code and Codex CLI fingerprint baselines |
 | [Chat Archive](plugins/chat-archive/README.md) | Every chat exchange CPA serves, masked and uploaded to your private chat archive server, with a health page in the sidebar (needs CPA v8.0.60 or newer) |
-| [Codex Catalog Filter](plugins/codex-catalog-filter/README.md) | A Codex Models page to switch each model on or off for Codex, served to Codex at its own catalog URL |
+| [Model Picker](plugins/codex-catalog-filter/README.md) (ID `codex-catalog-filter`) | One page to switch each model on or off per client: Codex and Antigravity get their own catalog URLs, and Claude Code's model list is filtered in place |
 | [Reset Priority](plugins/reset-priority/README.md) | Account priority ordered by the next weekly quota reset |
 | [Quota Cache](plugins/quota-cache/README.md) | One scheduled quota poller with cached observations for other plugins (opt-in preview) |
 | [Quota Glance](plugins/quota-glance/README.md) | One page showing remaining capacity across every credential and window, which credential is taking the requests, banked Codex and Claude resets you can spend from the sidebar, a browser or the menu bar, and optionally your OpenRouter balance and Claude and OpenAI API credit spend |
@@ -50,7 +50,7 @@ See each plugin's reference documentation for its exact build and verification c
 
 ## Compatibility
 
-Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Codex Catalog Filter declares ABI 1 / RPC schema 6 and is verified in CPA v8.0.4. Chat Archive declares ABI 1 / RPC schema 7, needs CPA v8.0.60 or newer, and is verified in CPA v8.0.73 built from source and in the official v8.0.60 image beside every published plugin. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
+Account Health and Auto Baseline currently declare ABI 1 / RPC schema 4. Reset Priority 0.2.0 declares ABI 1 / RPC schema 6. Quota Cache 0.2.0 declares ABI 1, needs RPC schema 4 or newer, and registers the schema CPA offers, up to 6; so does Quota Glance from 0.8.1. Token Usage declares ABI 1 / RPC schema 6 and documents Linux amd64 runtime validation. Model Picker (`codex-catalog-filter`) declares ABI 1 / RPC schema 6; 0.2.0 is verified at runtime in CPA v8.0.73, and its release smoke runs in the pinned v8.0.4 image. Chat Archive declares ABI 1 / RPC schema 7, needs CPA v8.0.60 or newer, and is verified in CPA v8.0.73 built from source and in the official v8.0.60 image beside every published plugin. See each plugin's reference for exact CPA versions, platform requirements, evidence, and limitations. Consult each plugin’s verification record for tested behavior.
 
 ## Shared quota polling
 

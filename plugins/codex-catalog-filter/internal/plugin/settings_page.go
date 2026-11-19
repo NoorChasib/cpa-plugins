@@ -11,8 +11,8 @@ import (
 
 // These embedded assets contain no runtime data, credentials, configuration or
 // query values. The public page must never become an operational snapshot:
-// the model list is read from the private state route with the console's
-// management key.
+// each client's model list is read from the private state route with the
+// console's management key.
 //
 //go:embed pageassets/index.html
 var settingsHTML string
@@ -29,7 +29,9 @@ func assetHash(value string) string {
 }
 
 // Build the immutable document and asset hashes once, not on each public GET.
-var settingsDocument = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Codex Models</title><style>" + settingsStyle + "</style></head><body>" + settingsHTML + "<script>" + settingsScript + "</script></body></html>"
+// The CSP pins the exact script and style bytes embedded above, so editing an
+// asset changes its hash here with no separate step.
+var settingsDocument = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" + Name + "</title><style>" + settingsStyle + "</style></head><body>" + settingsHTML + "<script>" + settingsScript + "</script></body></html>"
 var settingsCSP = "default-src 'none'; script-src " + assetHash(settingsScript) + "; style-src " + assetHash(settingsStyle) + "; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
 
 // settingsPageResponse is deliberately independent of Plugin and the request.

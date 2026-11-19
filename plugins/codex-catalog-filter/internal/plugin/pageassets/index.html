@@ -1,42 +1,135 @@
 <main class="page">
   <header class="header">
-    <div>
-      <h1>Codex Models</h1>
-      <p class="subtitle">Choose which of CPA's models appear in Codex. Codex picks up saved changes the next time it refreshes its model list, within five minutes.</p>
-      <div class="pills"><span id="list-state" class="pill">Checking session</span><span id="new-models" class="pill" hidden></span><span id="action" class="pill" hidden></span></div>
-    </div>
-    <div class="actions"><button type="button" id="refresh" class="secondary">Refresh</button></div>
+    <h1>Model Picker</h1>
+    <p class="subtitle">Choose which of CPA's models each client shows. Each section saves only its own client's settings, and each client picks them up the next time it fetches its model list.</p>
+    <!-- Refresh stays on the left: the console's own toolbar floats over the top right of this frame. -->
+    <div class="status"><div class="pills"><span id="list-state" class="pill">Checking session</span><span id="version" class="pill" hidden></span></div><button type="button" id="refresh" class="secondary">Refresh</button></div>
   </header>
   <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   <div id="notice" class="alert info" role="status">Checking your existing console session…</div>
   <noscript><p class="alert">Enable JavaScript to load this page using your existing console session.</p></noscript>
-  <section id="workspace" aria-label="Codex models" aria-busy="false" hidden>
-    <div class="card setting">
-      <h2>Codex setting</h2>
-      <p class="hint">Add this line to the CPA provider in Codex's <code>config.toml</code>, and remove any <code>model_catalog_json</code> line:</p>
-      <pre id="codex-setting"></pre>
-    </div>
-    <div class="card toolbar" role="group" aria-label="Model list controls">
-      <div class="field"><label for="search">Filter</label><input id="search" type="search" maxlength="256" placeholder="Model or name" autocomplete="off" spellcheck="false"></div>
-      <div class="bulk"><button type="button" id="enable-shown" class="secondary">Enable shown</button><button type="button" id="disable-shown" class="secondary">Disable shown</button></div>
-      <span id="counts" class="result"></span>
-      <div class="save"><button type="button" id="discard" class="secondary" disabled>Discard</button><button type="button" id="save" disabled>Save</button></div>
-    </div>
-    <p id="warning" class="alert warn" hidden></p>
-    <div class="card">
-      <div class="table-wrap" role="region" aria-label="Models, horizontally scrollable" tabindex="0">
-        <table>
-          <thead><tr><th scope="col">In Codex</th><th scope="col">Model</th><th scope="col">Name</th><th scope="col">Notes</th></tr></thead>
-          <tbody id="rows"></tbody>
-        </table>
+  <div id="workspace" aria-busy="false" hidden>
+
+    <details id="codex-section" class="client" open>
+      <summary><h2>Codex</h2><span id="codex-summary" class="result"></span><span id="codex-dirty" class="pill warn" hidden>Unsaved changes</span></summary>
+      <div class="client-body">
+        <p id="codex-unusable" class="alert error" hidden></p>
+        <div id="codex-content">
+          <div class="setup">
+            <h3>Setup</h3>
+            <p class="hint">Add this line to the CPA provider in Codex's <code>config.toml</code>, and remove any <code>model_catalog_json</code> line. Codex picks up saved changes the next time it refreshes its model list, within five minutes.</p>
+            <pre id="codex-setup"></pre>
+          </div>
+          <div class="toolbar" role="group" aria-label="Codex model controls">
+            <div class="field"><label for="codex-search">Filter</label><input id="codex-search" type="search" maxlength="256" placeholder="Model or name" autocomplete="off" spellcheck="false"></div>
+            <div class="bulk"><button type="button" id="codex-enable-shown" class="secondary">Enable shown</button><button type="button" id="codex-disable-shown" class="secondary">Disable shown</button></div>
+            <div class="field"><label for="codex-new-models">Models without a switch</label><select id="codex-new-models"><option value="enabled">On</option><option value="disabled">Off</option></select></div>
+            <div class="field"><label for="codex-action">Switched-off models</label><select id="codex-action"><option value="remove">Removed</option><option value="hide">Hidden, usable by name</option></select></div>
+            <span id="codex-counts" class="result"></span>
+            <div class="save"><button type="button" id="codex-discard" class="secondary" disabled>Discard</button><button type="button" id="codex-save" disabled>Save Codex</button></div>
+          </div>
+          <p id="codex-warning" class="alert warn" hidden></p>
+          <div class="table-wrap" role="region" aria-label="Codex models, horizontally scrollable" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">In Codex</th><th scope="col">Model</th><th scope="col">Name</th><th scope="col">Notes</th></tr></thead>
+              <tbody id="codex-rows"></tbody>
+            </table>
+          </div>
+          <p id="codex-empty" class="empty" hidden></p>
+          <div id="codex-stale" class="stale" hidden>
+            <h3>Switches for models Codex was not offered</h3>
+            <p class="hint">These switches are saved but match nothing in the latest list. They take effect again if CPA offers the model later.</p>
+            <ul id="codex-stale-list" class="stale-list"></ul>
+          </div>
+          <p id="codex-seen" class="interval"></p>
+        </div>
       </div>
-      <p id="empty" class="empty" hidden></p>
-    </div>
-    <section id="stale" class="card" aria-labelledby="stale-heading" hidden>
-      <h2 id="stale-heading">Switches for models Codex was not offered</h2>
-      <p class="hint">These switches are saved but match nothing in the latest list. They take effect again if CPA offers the model later.</p>
-      <ul id="stale-list" class="stale-list"></ul>
-    </section>
-    <p id="seen" class="interval"></p>
-  </section>
+    </details>
+
+    <details id="agy-section" class="client" open>
+      <summary><h2>Antigravity</h2><span id="agy-summary" class="result"></span><span id="agy-dirty" class="pill warn" hidden>Unsaved changes</span></summary>
+      <div class="client-body">
+        <p id="agy-unusable" class="alert error" hidden></p>
+        <div id="agy-content">
+          <p id="agy-error" class="alert error" hidden></p>
+          <div class="setup">
+            <h3>Setup</h3>
+            <p class="hint">Put this in <code>/etc/antigravity/admin_settings.json</code> (root-owned; it applies to every agy profile on the machine). Its scheme, host and port must match agy's gateway URL exactly, or agy sends no key and CPA refuses the list. Remove any <code>models.defaultModelId</code> and <code>models.tiers</code> from agy's own <code>config.json</code>: they override the default and title model chosen here.</p>
+            <pre id="agy-setup"></pre>
+          </div>
+          <div class="toolbar" role="group" aria-label="Antigravity model controls">
+            <div class="field"><label for="agy-search">Filter</label><input id="agy-search" type="search" maxlength="256" placeholder="Model or name" autocomplete="off" spellcheck="false"></div>
+            <div class="bulk"><button type="button" id="agy-enable-shown" class="secondary">Enable shown</button><button type="button" id="agy-disable-shown" class="secondary">Disable shown</button></div>
+            <div class="field"><label for="agy-new-models">Models without a switch</label><select id="agy-new-models"><option value="enabled">On (text models)</option><option value="disabled">Off</option></select></div>
+            <div class="field"><label for="agy-default">Default model</label><select id="agy-default"></select></div>
+            <div class="field"><label for="agy-title">Title model</label><select id="agy-title"></select></div>
+            <span id="agy-counts" class="result"></span>
+            <div class="save"><button type="button" id="agy-discard" class="secondary" disabled>Discard</button><button type="button" id="agy-save" disabled>Save Antigravity</button></div>
+          </div>
+          <div class="preview" aria-label="List agy receives">
+            <span id="agy-slots" class="pill"></span><span id="agy-roles" class="result"></span>
+          </div>
+          <p id="agy-source" class="alert info" hidden></p>
+          <ul id="agy-warnings" class="alert warn warnings" hidden></ul>
+          <div class="table-wrap" role="region" aria-label="Antigravity models, horizontally scrollable" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">In agy</th><th scope="col">#</th><th scope="col">Model</th><th scope="col">Name agy shows</th><th scope="col">Notes</th></tr></thead>
+              <tbody id="agy-rows"></tbody>
+            </table>
+          </div>
+          <p id="agy-empty" class="empty" hidden></p>
+          <p class="hint legend"># is the model's place in the list agy receives: the default model first, then by id, because CPA's own order changes every time it reloads. agy keeps at most 32 models it has no built-in entry for, in list order; built-in models need no slot and use agy's own token limits. It titles threads with the first model whose id contains <code>flash-lite</code>. Models that do not answer in text stay off until switched on.</p>
+          <details id="agy-order" class="order">
+            <summary id="agy-order-summary">Order agy receives</summary>
+            <ol id="agy-order-list" class="order-list"></ol>
+          </details>
+          <div id="agy-stale" class="stale" hidden>
+            <h3>Switches for models agy was not offered</h3>
+            <p class="hint">These switches are saved but match nothing in the latest list. They take effect again if CPA offers the model later.</p>
+            <ul id="agy-stale-list" class="stale-list"></ul>
+          </div>
+          <p id="agy-seen" class="interval"></p>
+        </div>
+      </div>
+    </details>
+
+    <details id="claude-section" class="client" open>
+      <summary><h2>Claude Code</h2><span id="claude-summary" class="result"></span><span id="claude-dirty" class="pill warn" hidden>Unsaved changes</span></summary>
+      <div class="client-body">
+        <p id="claude-unusable" class="alert error" hidden></p>
+        <div id="claude-content">
+          <p id="claude-error" class="alert error" hidden></p>
+          <div class="setup">
+            <h3>Setup</h3>
+            <p class="hint">Claude Code must already reach CPA through <code>ANTHROPIC_BASE_URL</code>. Add this to its environment, for example under <code>env</code> in <code>~/.claude/settings.json</code>. Nothing else is needed: Claude Code fetches its model list each time it starts.</p>
+            <pre id="claude-setup"></pre>
+          </div>
+          <div class="toolbar" role="group" aria-label="Claude Code model controls">
+            <div class="field"><label for="claude-search">Filter</label><input id="claude-search" type="search" maxlength="256" placeholder="Model or name" autocomplete="off" spellcheck="false"></div>
+            <div class="bulk"><button type="button" id="claude-enable-shown" class="secondary">Enable shown</button><button type="button" id="claude-disable-shown" class="secondary">Disable shown</button></div>
+            <div class="field"><label for="claude-new-models">Models without a switch</label><select id="claude-new-models"><option value="enabled">On</option><option value="disabled">Off</option></select></div>
+            <div class="field"><span id="claude-filter-label" class="label">Filter Claude Code's list</span><label class="switch"><input id="claude-filter" type="checkbox" role="switch" aria-labelledby="claude-filter-label"><span></span></label></div>
+            <span id="claude-counts" class="result"></span>
+            <div class="save"><button type="button" id="claude-discard" class="secondary" disabled>Discard</button><button type="button" id="claude-save" disabled>Save Claude Code</button></div>
+          </div>
+          <p id="claude-source" class="alert info" hidden></p>
+          <p id="claude-warning" class="alert warn" hidden></p>
+          <div class="table-wrap" role="region" aria-label="Claude Code models, horizontally scrollable" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">In Claude Code</th><th scope="col">Model</th><th scope="col">Name</th><th scope="col">Notes</th></tr></thead>
+              <tbody id="claude-rows"></tbody>
+            </table>
+          </div>
+          <p id="claude-empty" class="empty" hidden></p>
+          <p class="hint legend">Switches use each model's real id. CPA lists models that are not Claude models to Claude Code under a <code>claude-fable-5-dd-</code> id, shown in the notes. While the filter is on, every non-streaming CPA response passes through the plugin, and only Claude Code's model list is changed.</p>
+          <div id="claude-stale" class="stale" hidden>
+            <h3>Switches for models Claude Code was not offered</h3>
+            <p class="hint">These switches are saved but match nothing in the latest list. They take effect again if CPA offers the model later.</p>
+            <ul id="claude-stale-list" class="stale-list"></ul>
+          </div>
+          <p id="claude-seen" class="interval"></p>
+        </div>
+      </div>
+    </details>
+  </div>
 </main>

@@ -114,10 +114,16 @@ func writeSeen(dir string, seen *seenCatalog) error {
 	if err != nil {
 		return err
 	}
+	return writeFileAtomic(dir, seenFile, raw)
+}
+
+// writeFileAtomic writes raw and a newline to dir/name with mode 0600 through
+// a synced temporary file and a rename.
+func writeFileAtomic(dir, name string, raw []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(dir, seenFile+".*.tmp")
+	temp, err := os.CreateTemp(dir, name+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -133,5 +139,5 @@ func writeSeen(dir string, seen *seenCatalog) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temp.Name(), filepath.Join(dir, seenFile))
+	return os.Rename(temp.Name(), filepath.Join(dir, name))
 }
