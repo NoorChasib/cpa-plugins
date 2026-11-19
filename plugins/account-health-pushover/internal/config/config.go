@@ -155,7 +155,7 @@ type CredentialStatus struct {
 func Default() Config {
 	return Config{
 		Enabled:                    true,
-		Providers:                  []string{"claude", "codex", "xai"},
+		Providers:                  []string{"antigravity", "claude", "codex", "xai"},
 		ScanInterval:               time.Minute,
 		StartupGrace:               30 * time.Second,
 		TransientConfirmAfter:      10 * time.Minute,
@@ -418,8 +418,9 @@ func (c Config) FormatDisplayTime(value time.Time, fallback string) string {
 }
 
 // SupportedProviders lists the CPA OAuth provider IDs this plugin can monitor.
-// "xai" is CPA's provider ID for Grok Build OAuth accounts.
-var SupportedProviders = []string{"claude", "codex", "xai"}
+// "xai" is CPA's provider ID for Grok Build OAuth accounts, and "antigravity"
+// is its provider ID (with no alias) for Google Antigravity OAuth accounts.
+var SupportedProviders = []string{"antigravity", "claude", "codex", "xai"}
 
 // SupportedProvider reports whether a normalized provider ID is monitorable.
 func SupportedProvider(provider string) bool {

@@ -90,7 +90,8 @@ type pageAccount struct {
 }
 
 // pageQuota is the per-account weekly usage cell. Set is false until the
-// first successful poll; Class colors the usage pill by threshold.
+// first successful poll; Class colors the usage pill by threshold. Families
+// is set instead for an account alerted per quota family (Antigravity).
 type pageQuota struct {
 	Set        bool
 	Percent    string
@@ -100,6 +101,18 @@ type pageQuota struct {
 	LastError  string
 	Warned     bool
 	Exhausted  bool
+	Families   []pageQuotaFamily
+}
+
+// pageQuotaFamily is one quota family's weekly usage inside a pageQuota cell.
+type pageQuotaFamily struct {
+	Name      string
+	Set       bool
+	Percent   string
+	Class     string
+	ResetAt   pageTime
+	Warned    bool
+	Exhausted bool
 }
 
 // pageTime carries one instant in the forms the template needs. A zero value
@@ -200,6 +213,7 @@ time .d,time .t{white-space:nowrap}
 .usage .bar.warn span{background:var(--warn-fg)}
 .usage .bar.err span{background:var(--err-fg)}
 .usage .pct{font-weight:550;font-variant-numeric:tabular-nums}
+.families{display:flex;flex-direction:column;gap:10px}
 .error-text{color:var(--err-fg)}
 .empty{padding:18px 14px;color:var(--muted);font-style:italic}
 .footnote{margin-top:28px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.55}
@@ -211,7 +225,7 @@ time .d,time .t{white-space:nowrap}
 <div class="header">
   <div>
     <h1>Account Health Pushover</h1>
-    <p class="subtitle">{{if .Authenticated}}Claude, Codex, and Grok OAuth credential health with Pushover delivery state.{{else}}Redacted read-only view. Quota-limited accounts are credential-healthy and never trigger failure alerts.{{end}}</p>
+    <p class="subtitle">{{if .Authenticated}}Claude, Codex, Grok, and Antigravity OAuth credential health with Pushover delivery state.{{else}}Redacted read-only view. Quota-limited accounts are credential-healthy and never trigger failure alerts.{{end}}</p>
     <div class="pills">
       {{if .PluginEnabled}}<span class="pill ok">monitoring enabled</span>{{else}}<span class="pill warn">monitoring disabled</span>{{end}}
       {{if .MonitoringStale}}<span class="pill warn">snapshot stale</span>{{else}}<span class="pill ok">snapshot current</span>{{end}}
@@ -317,7 +331,7 @@ time .d,time .t{white-space:nowrap}
   </div>
 </div>
 {{else}}
-<div class="section"><div class="card"><p class="empty">No monitored Claude, Codex, or Grok OAuth accounts have been observed yet.</p></div></div>
+<div class="section"><div class="card"><p class="empty">No monitored Claude, Codex, Grok, or Antigravity OAuth accounts have been observed yet.</p></div></div>
 {{end}}
 
 <p class="footnote">{{if .Authenticated}}Check now runs an immediate reconciliation and Test notification sends a safe Pushover test. Both post to same-origin management routes with the plugin action header; CPA must receive the management authentication header through the browser session or reverse proxy.{{else}}Account labels, auth indexes, reason codes, and error details are redacted on this unauthenticated page. When opened from the same origin as a signed-in management console, the full authenticated view loads in place.{{end}} Hover any timestamp for the exact UTC instant.</p>
@@ -325,7 +339,7 @@ time .d,time .t{white-space:nowrap}
 <script>` + browserAuthScript + `{{if .Authenticated}}` + managementActionsScript + `{{else}}` + resourceBootstrapScript + `{{end}}</script>
 </body>
 </html>
-{{define "usage"}}{{if .Set}}<div class="usage"><span class="pct">{{.Percent}} used</span><div class="bar {{.Class}}"><span style="width:{{.Percent}}"></span></div>{{if .ResetAt.Set}}<span class="sub">resets {{.ResetAt.Relative}}</span>{{end}}{{if or .Warned .Exhausted}}<span class="sub flags">{{if .Exhausted}}<span class="pill err">exhausted alert sent</span>{{else}}<span class="pill warn">warning sent</span>{{end}}</span>{{end}}{{if .LastError}}<span class="sub error-text">{{.LastError}}</span>{{end}}</div>{{else if .LastError}}<span class="dash">—</span><span class="sub error-text">{{.LastError}}</span>{{else}}<span class="dash">—</span>{{end}}{{end}}
+{{define "usage"}}{{if .Families}}<div class="families">{{range .Families}}<div class="usage">{{if .Set}}<span class="pct">{{.Name}}: {{.Percent}} used</span><div class="bar {{.Class}}"><span style="width:{{.Percent}}"></span></div>{{if .ResetAt.Set}}<span class="sub">resets {{.ResetAt.Relative}}</span>{{end}}{{if or .Warned .Exhausted}}<span class="sub flags">{{if .Exhausted}}<span class="pill err">exhausted alert sent</span>{{else}}<span class="pill warn">warning sent</span>{{end}}</span>{{end}}{{else}}<span class="pct">{{.Name}}</span><span class="dash">—</span>{{end}}</div>{{end}}{{if .LastError}}<span class="sub error-text">{{.LastError}}</span>{{end}}</div>{{else if .Set}}<div class="usage"><span class="pct">{{.Percent}} used</span><div class="bar {{.Class}}"><span style="width:{{.Percent}}"></span></div>{{if .ResetAt.Set}}<span class="sub">resets {{.ResetAt.Relative}}</span>{{end}}{{if or .Warned .Exhausted}}<span class="sub flags">{{if .Exhausted}}<span class="pill err">exhausted alert sent</span>{{else}}<span class="pill warn">warning sent</span>{{end}}</span>{{end}}{{if .LastError}}<span class="sub error-text">{{.LastError}}</span>{{end}}</div>{{else if .LastError}}<span class="dash">—</span><span class="sub error-text">{{.LastError}}</span>{{else}}<span class="dash">—</span>{{end}}{{end}}
 {{define "when"}}{{if .Set}}<time datetime="{{.Exact}}" title="{{.Exact}}"><span class="d">{{.Date}}</span> - <span class="t">{{.Clock}}</span></time>{{if .Relative}}<span class="rel">{{.Relative}}</span>{{end}}{{else}}<span class="dash">—</span>{{end}}{{end}}
 `))
 
@@ -407,11 +421,11 @@ func buildStatusPageData(status monitor.Status, authenticated bool, now time.Tim
 			RemovedAt:      when(account.RemovedAt),
 			Quota:          buildPageQuota(account.Quota, status.QuotaWarningPercent, when),
 		})
-		if account.Quota != nil && account.Quota.Percent != nil {
+		if used, ok := mostUsedQuota(account.Quota); ok {
 			switch {
-			case *account.Quota.Percent >= 100:
+			case used >= 100:
 				data.QuotaExhaustedCount++
-			case status.QuotaWarningPercent > 0 && *account.Quota.Percent >= status.QuotaWarningPercent:
+			case status.QuotaWarningPercent > 0 && used >= status.QuotaWarningPercent:
 				data.QuotaNearLimitCount++
 			}
 		}
@@ -428,6 +442,25 @@ func buildStatusPageData(status monitor.Status, authenticated bool, now time.Tim
 	return data
 }
 
+// mostUsedQuota returns the account's single weekly usage, or for an account
+// alerted per quota family the most-used family's, so the summary tile counts
+// each account once.
+func mostUsedQuota(q *monitor.QuotaStatus) (float64, bool) {
+	if q == nil {
+		return 0, false
+	}
+	used, ok := 0.0, false
+	if q.Percent != nil {
+		used, ok = *q.Percent, true
+	}
+	for _, family := range q.Families {
+		if family.Percent != nil && (!ok || *family.Percent > used) {
+			used, ok = *family.Percent, true
+		}
+	}
+	return used, ok
+}
+
 func buildPageQuota(q *monitor.QuotaStatus, warnAt float64, when func(time.Time) pageTime) pageQuota {
 	if q == nil {
 		return pageQuota{}
@@ -439,18 +472,37 @@ func buildPageQuota(q *monitor.QuotaStatus, warnAt float64, when func(time.Time)
 		Warned:     !q.WarningSentAt.IsZero(),
 		Exhausted:  !q.ExhaustedSentAt.IsZero(),
 	}
+	for _, family := range q.Families {
+		row := pageQuotaFamily{
+			Name:      family.Name,
+			ResetAt:   when(family.ResetAt),
+			Warned:    !family.WarningSentAt.IsZero(),
+			Exhausted: !family.ExhaustedSentAt.IsZero(),
+		}
+		if family.Percent != nil {
+			row.Set = true
+			row.Percent = formatPagePercent(*family.Percent)
+			row.Class = usageClass(*family.Percent, warnAt)
+		}
+		out.Families = append(out.Families, row)
+	}
 	if q.Percent == nil {
 		return out
 	}
 	out.Set = true
 	out.Percent = formatPagePercent(*q.Percent)
-	switch {
-	case *q.Percent >= 100:
-		out.Class = "err"
-	case warnAt > 0 && *q.Percent >= warnAt:
-		out.Class = "warn"
-	}
+	out.Class = usageClass(*q.Percent, warnAt)
 	return out
+}
+
+func usageClass(percent, warnAt float64) string {
+	switch {
+	case percent >= 100:
+		return "err"
+	case warnAt > 0 && percent >= warnAt:
+		return "warn"
+	}
+	return ""
 }
 
 func formatPagePercent(value float64) string {
@@ -591,6 +643,8 @@ func providerName(value string) string {
 		return "Codex"
 	case "xai", "grok":
 		return "Grok"
+	case "antigravity":
+		return "Antigravity"
 	default:
 		return "OAuth"
 	}

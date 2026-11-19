@@ -258,6 +258,16 @@ func TestQuotaPollCoversAllProvidersAndIsolatesFailures(t *testing.T) {
 	if !strings.Contains(mock.all(), "Codex weekly limit almost used") {
 		t.Fatalf("messages=%q", mock.all())
 	}
+	// The mock records the message before the delivery callback latches it;
+	// wait for the latch rather than racing it.
+	waitFor(t, 5*time.Second, func() bool {
+		for _, row := range monitor.Snapshot().Accounts {
+			if row.AuthIndex == "o1" && row.Quota != nil && !row.Quota.WarningSentAt.IsZero() {
+				return true
+			}
+		}
+		return false
+	})
 	status := monitor.Snapshot()
 	if !status.QuotaAlerts || status.LastQuotaPoll.IsZero() || !strings.Contains(status.LastQuotaPollError, "1 of 3") {
 		t.Fatalf("status=%+v", status)

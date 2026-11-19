@@ -25,3 +25,15 @@ test('the fixture carries the board\'s Rules table', () => {
   assert.equal(shared['codex/model_weekly:sage'], 'Wsa');
   assert.equal(shared['codex/model_session:spark'], 'Ss');
 });
+
+test('every Antigravity quota family reads apart within the provider', () => {
+  const families = letters('antigravity families');
+  assert.deepEqual(families, {
+    'antigravity/session': 'S', 'antigravity/weekly': 'W',
+    'antigravity/model_session:argon': 'Sa', 'antigravity/model_session:carbon': 'Sc',
+    'antigravity/model_session:hydrogen': 'Sh', 'antigravity/model_session:shared': 'Ss',
+    'antigravity/model_weekly:argon': 'Wa', 'antigravity/model_weekly:carbon': 'Wc',
+    'antigravity/model_weekly:hydrogen': 'Wh', 'antigravity/model_weekly:shared': 'Ws',
+  });
+  assert.equal(new Set(Object.values(families)).size, Object.keys(families).length);
+});

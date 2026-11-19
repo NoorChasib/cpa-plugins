@@ -162,6 +162,7 @@ public enum QuotaTitles {
         case "claude": return "Claude"
         case "codex": return "Codex"
         case "xai": return "xAI"
+        case "antigravity": return "Antigravity"
         default: return id
         }
     }

@@ -91,6 +91,10 @@ type Observation struct {
 
 // Supported reports whether the provider has a usage endpoint this package
 // can read.
+//
+// Antigravity is deliberately absent: this plugin never calls Google. Its
+// weekly windows are read only from quota-cache (monitor.readQuotaFamilies),
+// so standalone mode leaves Antigravity accounts out of quota polling.
 func Supported(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude", "codex", "xai":

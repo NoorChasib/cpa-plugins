@@ -18,8 +18,9 @@ import (
 // A window with no canonical meaning is emitted under a raw: prefix rather than
 // dropped, so an unrecognized upstream window is visible before it is mapped.
 
-// sessionWindowSeconds is Claude's and Codex's five-hour window. The weekly
-// duration is weeklyWindowSeconds, already defined for the primary parser.
+// sessionWindowSeconds is Claude's, Codex's and Antigravity's five-hour window.
+// The weekly duration is weeklyWindowSeconds, already defined for the primary
+// parser.
 const sessionWindowSeconds = 18000
 
 type canonical struct{ key, model, title string }
@@ -156,12 +157,20 @@ func mapWindow(provider, id string, w client.Window) canonical {
 		return mapCodex(id, duration, w.DurationSeconds != nil)
 	case "xai":
 		return mapXAI(id)
+	case client.ProviderAntigravity:
+		duration := int64(0)
+		if w.DurationSeconds != nil {
+			duration = *w.DurationSeconds
+		}
+		return mapAntigravity(id, duration, w.DurationSeconds != nil)
 	}
 	return raw(provider, id)
 }
 
 // primaryKeyOf reports which canonical window a provider's TOP-LEVEL
-// observation corresponds to. Claude and Codex report a weekly allowance there;
+// observation corresponds to. Claude, Codex and Antigravity report a weekly
+// allowance there (Antigravity's is the default Gemini family's weekly, read
+// from the window that already maps to weekly, so it is never synthesized);
 // Grok's headline figure is its shared credit pool, which is a consumable
 // balance rather than a rate window. Synthesis is keyed off this so a provider
 // never gains a window it does not actually have.
@@ -212,7 +221,7 @@ func canonicalWindows(provider string, q *client.Quota, primary Observation) []c
 	for id := range q.Windows {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	sortWindowIDs(provider, ids)
 
 	items := make([]derived, 0, len(ids))
 	seen := make(map[string]bool, len(ids))

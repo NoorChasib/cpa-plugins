@@ -42,11 +42,11 @@ The status error is intentionally sanitized. Use Pushover's dashboard and CPA ne
 
 Invoke **Check now** through CPA's authenticated Management API, then verify:
 
-- provider is `claude`, `codex`, or `xai` (Grok);
+- provider is `claude`, `codex`, `xai` (Grok), or `antigravity`;
 - the credential is OAuth, not an API key;
 - CPA exposes a non-empty `auth_index`;
 - CPA has finished loading the auth file;
-- `providers` includes the provider.
+- `providers` includes the provider. An explicit list replaces the default, so an older configuration that lists `claude`, `codex`, and `xai` must add `antigravity`.
 
 The plugin does not call `host.auth.get`, does not scrape raw files, and does not read unrelated providers.
 
@@ -74,6 +74,7 @@ Check, in order:
   - `usage endpoint rate limited the poll (HTTP 429)`: raise `quota-poll-interval`.
   - `usage endpoint did not report a weekly window`: the provider changed its response shape. Open an issue with the field names (never values) from a manual call.
   - `usage request timed out`: raise `quota-http-timeout` or check egress from the CPA container.
+- For an Antigravity account, `use-quota-cache: true` is set and Quota Cache is installed and polling it. Standalone mode never reads Antigravity usage, so the row stays empty without an error. With Quota Cache, `usage request failed` means it has no fresh window for the account yet, and `usage endpoint did not report a weekly window` means its last answer held only five-hour windows. Each model family alerts on its own; see [Antigravity quota families](../REFERENCE.md#antigravity-quota-families).
 - The threshold was actually crossed since the current window began: latches clear only when the provider reports a new reset instant. `warning_sent_at` / `exhausted_sent_at` in the JSON status show what was already sent for this window.
 
 A warning can lag by up to `quota-poll-interval`; **Check now** queues an immediate poll.
@@ -139,6 +140,16 @@ The mutating routes require browser requests to be same-origin (`Sec-Fetch-Site:
 
 At the audited CPA revision, an xAI `bad-credentials` rejection is cooled down as `payment_required` rather than triggering an immediate refresh (upstream issue #4046). The plugin treats `payment_required` as `suspect` and confirms it over `transient-confirm-after` before alerting as `credential_down`. You are still notified; the reason code is less specific until CPA changes that behavior.
 
+## Antigravity account shows `credential_down` with `tos_suspended`
+
+Google suspended the account for a terms-of-service violation (a 403 `PERMISSION_DENIED` with reason `TOS_VIOLATION`), and CPA disabled the credential. This alerts even with `notify-disabled: false`, because it is not an operator action. Signing in again does not lift it. Appeal the suspension with Google; CPA's Management API shows the appeal link on the credential (`tos_appeal_url`) when Google supplied one. Once Google reinstates the account, re-enable the credential in CPA; the plugin reports the recovery once CPA reports the credential active and available again.
+
+After a CPA restart the credential stays disabled but CPA no longer reports why, so the row then reads as an operator-disabled account and reminders stop. Check the credential in CPA before deleting or re-enabling it.
+
+## Antigravity account shows `suspect`, then `credential_down`, instead of `reauth_required`
+
+A revoked Google refresh token is not terminal in CPA's background refresh at v8.0.77: CPA keeps retrying and writes a status message the plugin does not classify, so the account becomes `suspect` and is confirmed as `credential_down` after `transient-confirm-after`. You are still notified. When a request reaches the account first, CPA reports `invalid_grant` and the plugin alerts `reauth_required` at once. Either way, sign in again through CPA's Antigravity flow.
+
 ## Timestamps show the wrong zone
 
 Set `display-timezone` to an IANA zone such as `America/Los_Angeles`, or `local` for the host process zone, then reload/restart CPA. An unknown zone name falls back to UTC and adds a warning to the status page and JSON `warnings` field. Zone data is embedded in the plugin, so minimal containers without `/usr/share/zoneinfo` still resolve IANA names.
@@ -146,7 +157,7 @@ Set `display-timezone` to an IANA zone such as `America/Los_Angeles`, or `local`
 ## Incident response checklist
 
 1. Confirm whether the row is `quota_limited` or a real failure.
-2. For `reauth_required`, complete provider sign-in through CPA.
+2. For `reauth_required`, complete provider sign-in through CPA. For `credential_down` with `tos_suspended`, appeal the Antigravity suspension with Google instead.
 3. For `credential_down`, inspect CPA auth status/provider availability; do not rotate credentials solely because one transient provider request failed.
 4. Invoke **Check now** through CPA's authenticated Management API after corrective action.
 5. Confirm exactly one recovery arrives.

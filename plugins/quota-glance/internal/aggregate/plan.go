@@ -66,9 +66,10 @@ var claudePlanLabels = map[string]string{
 	"free":       "Free",
 }
 
-// planTables holds every provider's token table, by provider id. Grok is
-// absent deliberately: quota-cache reports the subscription's own display name
-// ("SuperGrok Heavy"), which needs no table.
+// planTables holds every provider's token table, by provider id. Grok and
+// Antigravity are absent deliberately: quota-cache reports Grok's subscription
+// display name ("SuperGrok Heavy") and Antigravity's tier name as
+// loadCodeAssist gives it, neither of which needs a table.
 var planTables = map[string]map[string]string{
 	"codex":  codexPlanLabels,
 	"claude": claudePlanLabels,
@@ -86,10 +87,10 @@ func planLabelsFor(provider string) map[string]string { return planTables[provid
 // each, so a bare key for it is taken to mean Codex's, which is all it could
 // have meant when it was written, and it does not reach the other table's
 // provider: today that is Claude. Renaming Claude's needs the prefix:
-// "claude:pro". A provider with no table of its own, Grok among them, is
-// reached by every bare key exactly as before, shared tokens included. Without
-// the exception, an operator who kept "pro: Pro 20x" for Codex would find every
-// Claude Pro account renamed after an upgrade.
+// "claude:pro". A provider with no table of its own, Grok and Antigravity
+// among them, is reached by every bare key exactly as before, shared tokens
+// included. Without the exception, an operator who kept "pro: Pro 20x" for
+// Codex would find every Claude Pro account renamed after an upgrade.
 func bareKeyReaches(provider, key string) bool {
 	if _, own := planTables[provider][key]; !own {
 		return true

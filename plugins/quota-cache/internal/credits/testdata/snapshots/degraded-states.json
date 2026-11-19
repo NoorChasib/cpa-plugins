@@ -354,6 +354,142 @@
         }
       }
     },
+    "antigravity:antigravity-families@example.com.json": {
+      "provider": "antigravity",
+      "auth_index": "antigravity-families@example.com.json",
+      "used_percent": 35,
+      "reset_at": "2026-09-14T08:00:00Z",
+      "observed_at": "2026-09-10T03:55:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "plan": "Google AI Pro",
+      "windows": [
+        {
+          "key": "session",
+          "title": "Session (Gemini)",
+          "used_percent": 40,
+          "reset_at": "2026-09-10T06:30:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "weekly",
+          "title": "Weekly (Gemini)",
+          "used_percent": 35,
+          "reset_at": "2026-09-14T08:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_session",
+          "title": "Session (Claude & GPT)",
+          "model": "shared",
+          "used_percent": 100,
+          "reset_at": "2026-09-10T04:45:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_weekly",
+          "title": "Weekly (Gemini Argon)",
+          "model": "argon",
+          "used_percent": 0,
+          "reset_at": "0001-01-01T00:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_weekly",
+          "title": "Weekly (Claude & GPT)",
+          "model": "shared",
+          "used_percent": 72,
+          "reset_at": "2026-09-13T12:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "windows": {
+          "3p-5h": {
+            "used_percent": 100,
+            "duration_seconds": 18000,
+            "resets_at": "2026-09-10T04:45:00Z",
+            "period": "5h"
+          },
+          "3p-weekly": {
+            "used_percent": 72,
+            "duration_seconds": 604800,
+            "resets_at": "2026-09-13T12:00:00Z",
+            "period": "weekly"
+          },
+          "gemini-5h": {
+            "used_percent": 40,
+            "duration_seconds": 18000,
+            "resets_at": "2026-09-10T06:30:00Z",
+            "period": "5h"
+          },
+          "gemini-argon-weekly": {
+            "used_percent": 0,
+            "duration_seconds": 604800,
+            "period": "weekly"
+          },
+          "gemini-weekly": {
+            "used_percent": 35,
+            "duration_seconds": 604800,
+            "resets_at": "2026-09-14T08:00:00Z",
+            "period": "weekly"
+          }
+        }
+      },
+      "account_details": {
+        "checked_at": "2026-09-10T02:00:00Z",
+        "plan": "Google AI Pro"
+      }
+    },
+    "antigravity:antigravity-shared-only@example.com.json": {
+      "provider": "antigravity",
+      "auth_index": "antigravity-shared-only@example.com.json",
+      "used_percent": 0,
+      "reset_at": "0001-01-01T00:00:00Z",
+      "observed_at": "0001-01-01T00:00:00Z",
+      "last_attempt": "2026-09-10T03:55:00Z",
+      "next_attempt": "2026-09-10T04:10:00Z",
+      "failures": 0,
+      "windows": [
+        {
+          "key": "model_session",
+          "title": "Session (Claude & GPT)",
+          "model": "shared",
+          "used_percent": 10,
+          "reset_at": "2026-09-10T07:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        },
+        {
+          "key": "model_weekly",
+          "title": "Weekly (Claude & GPT)",
+          "model": "shared",
+          "used_percent": 50,
+          "reset_at": "2026-09-13T18:00:00Z",
+          "observed_at": "2026-09-10T03:55:00Z"
+        }
+      ],
+      "quota": {
+        "schema": 1,
+        "observed_at": "2026-09-10T03:55:00Z",
+        "windows": {
+          "3p-5h": {
+            "used_percent": 10,
+            "duration_seconds": 18000,
+            "resets_at": "2026-09-10T07:00:00Z",
+            "period": "5h"
+          },
+          "3p-weekly": {
+            "used_percent": 50,
+            "duration_seconds": 604800,
+            "resets_at": "2026-09-13T18:00:00Z",
+            "period": "weekly"
+          }
+        }
+      }
+    },
     "openrouter:key-8d41e07a2b9c": {
       "provider": "openrouter",
       "auth_index": "key-8d41e07a2b9c",

@@ -19,10 +19,10 @@ func TestParseDefaults(t *testing.T) {
 	if !cfg.NotifyRecovery || cfg.NotifyDisabled || cfg.NotifyRemoved {
 		t.Fatalf("unexpected notification defaults: %+v", cfg)
 	}
-	if strings.Join(cfg.Providers, ",") != "claude,codex,xai" {
+	if strings.Join(cfg.Providers, ",") != "antigravity,claude,codex,xai" {
 		t.Fatalf("providers = %v", cfg.Providers)
 	}
-	if !cfg.ProviderEnabled("xai") || cfg.ProviderEnabled("gemini") {
+	if !cfg.ProviderEnabled("xai") || !cfg.ProviderEnabled("antigravity") || cfg.ProviderEnabled("gemini") {
 		t.Fatalf("provider enablement wrong: %v", cfg.Providers)
 	}
 	if cfg.DisplayTimezone != "UTC" || cfg.DisplayTimezoneWarning != "" {
@@ -30,6 +30,30 @@ func TestParseDefaults(t *testing.T) {
 	}
 	if cfg.QuotaAlerts || cfg.QuotaPollInterval != 15*time.Minute || cfg.QuotaWarningPercent != 95 || cfg.QuotaExhaustedPercent != 100 || cfg.QuotaNotificationPriority != 0 || cfg.QuotaHTTPTimeout != 15*time.Second {
 		t.Fatalf("unexpected quota defaults: %+v", cfg)
+	}
+}
+
+func TestAntigravityIsASupportedProvider(t *testing.T) {
+	cfg, err := Parse([]byte("providers: [ANTIGRAVITY, claude, antigravity]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.Providers, ",") != "antigravity,claude" || !cfg.ProviderEnabled("antigravity") || cfg.ProviderEnabled("codex") {
+		t.Fatalf("providers = %v", cfg.Providers)
+	}
+	// A config that omits providers monitors the same set in the same order as
+	// one that lists every supported provider.
+	listed, err := Parse([]byte("providers: [xai, codex, claude, antigravity]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(listed.Providers, ",") != strings.Join(Default().Providers, ",") {
+		t.Fatalf("listed=%v default=%v", listed.Providers, Default().Providers)
+	}
+	// The API-key Gemini provider is still not an OAuth provider this plugin
+	// monitors.
+	if _, err := Parse([]byte("providers: [gemini]\n")); err == nil || !strings.Contains(err.Error(), `unsupported provider "gemini"`) {
+		t.Fatalf("gemini accepted: %v", err)
 	}
 }
 

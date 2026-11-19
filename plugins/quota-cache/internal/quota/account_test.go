@@ -262,6 +262,7 @@ func TestAccountDetailsAreReadAtMostOncePerInterval(t *testing.T) {
 		{"claude", claudeAuth, claudeProfileURL, `{"organization":{"organization_type":"claude_pro"}}`},
 		{"codex", codexAuth, codexSubscriptionURL, `{"active_until":1792838400}`},
 		{"xai", xaiAuth, xaiSettingsURL, `{"subscription_tier_display":"SuperGrok"}`},
+		{"antigravity", antigravityAuth, antigravityLoadURL, `{"paidTier":{"name":"Google AI Pro"}}`},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			doer := &routingDoer{bodies: map[string]string{tc.url: tc.body}}
@@ -311,6 +312,7 @@ func TestAccountDetailFailuresKeepTheLastGoodValue(t *testing.T) {
 			{"claude", claudeAuth, claudeProfileURL},
 			{"codex", codexAuth, codexSubscriptionURL},
 			{"xai", xaiAuth, xaiSettingsURL},
+			{"antigravity", antigravityAuth, antigravityLoadURL},
 		} {
 			t.Run(name+"/"+tc.provider, func(t *testing.T) {
 				doer := failure(tc.url)
@@ -358,6 +360,7 @@ func TestAnAnswerWithoutTheValueClearsIt(t *testing.T) {
 			{"claude", claudeAuth, claudeProfileURL},
 			{"codex", codexAuth, codexSubscriptionURL},
 			{"xai", xaiAuth, xaiSettingsURL},
+			{"antigravity", antigravityAuth, antigravityLoadURL},
 		} {
 			t.Run(name+"/"+tc.provider, func(t *testing.T) {
 				// Both Grok endpoints answer the same way.

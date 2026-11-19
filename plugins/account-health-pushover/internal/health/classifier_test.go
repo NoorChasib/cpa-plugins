@@ -194,3 +194,90 @@ func TestNormalizeReasonCodeRejectsLegacyRawText(t *testing.T) {
 		t.Fatalf("known reason normalized to %q", got)
 	}
 }
+
+func antigravitySnapshot(now time.Time, status, message string, disabled, unavailable bool, retry time.Time, httpStatus int) RuntimeSnapshot {
+	entry := protocol.HostAuthFileEntry{
+		AuthIndex:      "ag",
+		Provider:       "antigravity",
+		Type:           "antigravity",
+		AccountType:    "oauth",
+		Email:          "ag@example.com",
+		Status:         status,
+		StatusMessage:  message,
+		Disabled:       disabled,
+		Unavailable:    unavailable,
+		NextRetryAfter: retry,
+	}
+	return FromHostEntry(entry, FailureEvidence{HTTPStatus: httpStatus, ObservedAt: now}, now)
+}
+
+func TestAntigravityClassifier(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	classifier, ok := Classifiers()["antigravity"]
+	if !ok {
+		t.Fatal("no antigravity classifier registered")
+	}
+	tests := []struct {
+		name     string
+		snapshot RuntimeSnapshot
+		want     State
+		reason   ReasonCode
+	}{
+		// CPA sets disabled, status "disabled" and status_message
+		// "tos_violation" together when Google suspends the account.
+		{"tos suspension", antigravitySnapshot(now, "disabled", "tos_violation", true, true, time.Time{}, 0), CredentialDown, ReasonTOSSuspended},
+		{"tos suspension status only", antigravitySnapshot(now, "disabled", " TOS_VIOLATION ", false, true, time.Time{}, 0), CredentialDown, ReasonTOSSuspended},
+		{"operator disabled", antigravitySnapshot(now, "disabled", "disabled via management API", true, false, time.Time{}, 0), Disabled, ReasonOperatorDisabled},
+		{"disabled after restart without message", antigravitySnapshot(now, "disabled", "", true, false, time.Time{}, 0), Disabled, ReasonOperatorDisabled},
+		// A re-enabled credential has its message cleared by CPA; a stale one
+		// on an active credential must not alert.
+		{"active with stale tos message", antigravitySnapshot(now, "active", "tos_violation", false, false, time.Time{}, 0), Healthy, ReasonNone},
+		{"request invalid_grant", antigravitySnapshot(now, "error", "invalid_grant", false, true, now.Add(30*time.Minute), 0), ReauthRequired, ReasonInvalidGrant},
+		{"refresh unauthorized", antigravitySnapshot(now, "error", "unauthorized", false, true, time.Time{}, 0), ReauthRequired, ReasonUnauthorizedRefreshFailed},
+		{"structured 429", antigravitySnapshot(now, "error", "", false, true, now.Add(time.Hour), 429), QuotaLimited, ReasonHTTP429Quota},
+		{"healthy", antigravitySnapshot(now, "active", "", false, false, time.Time{}, 0), Healthy, ReasonNone},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifier.Classify(test.snapshot)
+			if got.State != test.want || got.ReasonCode != test.reason {
+				t.Fatalf("observation=%+v, want state=%q reason=%q", got, test.want, test.reason)
+			}
+			if test.reason == ReasonTOSSuspended && !strings.Contains(got.Detail, "appeal") {
+				t.Fatalf("suspension detail=%q", got.Detail)
+			}
+		})
+	}
+}
+
+// The ToS rule is Antigravity's alone: every other provider keeps the generic
+// classification, which reads a disabled credential as an operator action.
+func TestTOSViolationLeavesOtherProvidersUnchanged(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	for _, provider := range []string{"claude", "codex", "xai"} {
+		snapshot := antigravitySnapshot(now, "disabled", "tos_violation", true, true, time.Time{}, 0)
+		snapshot.Provider = provider
+		got := Classifiers()[provider].Classify(snapshot)
+		if got.State != Disabled || got.ReasonCode != ReasonOperatorDisabled {
+			t.Fatalf("%s: observation=%+v", provider, got)
+		}
+		// An error-state credential carrying the message classifies exactly as
+		// one with an unrecognized message.
+		withTOS := antigravitySnapshot(now, "error", "tos_violation", false, true, time.Time{}, 0)
+		withTOS.Provider = provider
+		withUnknown := antigravitySnapshot(now, "error", "some other message", false, true, time.Time{}, 0)
+		withUnknown.Provider = provider
+		if a, b := Classifiers()[provider].Classify(withTOS), Classifiers()[provider].Classify(withUnknown); a != b {
+			t.Fatalf("%s: tos=%+v unknown=%+v", provider, a, b)
+		}
+	}
+	if got := CanonicalRuntimeMessage("tos_violation"); got != RuntimeMessageTOSViolation {
+		t.Fatalf("CanonicalRuntimeMessage(tos_violation)=%q", got)
+	}
+	if got := CanonicalRuntimeMessage("tos violation suspended"); got != RuntimeMessageUnknown {
+		t.Fatalf("free-form TOS text mapped to %q", got)
+	}
+	if got := NormalizeReasonCode(string(ReasonTOSSuspended)); got != ReasonTOSSuspended {
+		t.Fatalf("persisted tos_suspended normalized to %q", got)
+	}
+}

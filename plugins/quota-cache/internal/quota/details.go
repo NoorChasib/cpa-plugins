@@ -316,6 +316,10 @@ func parseDetails(provider string, root map[string]any, now time.Time) *client.Q
 				}
 			}
 		}
+	case client.ProviderAntigravity:
+		// Windows only: the summary carries no plan, limit or balance. The
+		// plan comes from loadCodeAssist on the account-details schedule.
+		antigravitySummary(q, root, now)
 	}
 	return q
 }
