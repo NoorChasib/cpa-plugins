@@ -18,16 +18,16 @@
         "grok",
         "antigravity"
       ],
-      "version": "0.4.4",
+      "version": "0.5.0",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/account-health-pushover/v0.4.4/account-health-pushover_0.4.4_linux_amd64.zip",
-            "sha256": "14f6dc30e0a027f7b10e9c3f60f38c0c2a825c65b7167bcb732db8b312bc0012",
-            "size": 7494324
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/account-health-pushover/v0.5.0/account-health-pushover_0.5.0_linux_amd64.zip",
+            "sha256": "4e4effbaa4dfd1ea60ea40f5d8a123651f1e421d6845429fb632cb21fc7a9ee7",
+            "size": 7511840
           }
         ]
       }
