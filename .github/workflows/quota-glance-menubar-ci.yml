@@ -27,8 +27,10 @@ concurrency:
 
 jobs:
   macos:
-    # arm64 (M1) runner: the app and its Sparkle updater probe are Apple silicon only.
-    runs-on: macos-14
+    # arm64 runner: the app and its Sparkle updater probe are Apple silicon only.
+    # Pinned to macos-15, not macos-latest: GitHub retired macos-14 on 2026-11-02,
+    # and macos-latest moves to each new macOS.
+    runs-on: macos-15
     timeout-minutes: 90
     defaults:
       run:
