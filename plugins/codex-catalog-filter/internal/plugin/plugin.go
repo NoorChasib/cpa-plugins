@@ -1,4 +1,6 @@
-// Package plugin answers CPA's native calls for Codex Catalog Filter.
+// Package plugin answers CPA's native calls for Model Picker (plugin ID
+// codex-catalog-filter): per-client model lists for Codex, Antigravity, and
+// Claude Code.
 package plugin
 
 import (
@@ -14,28 +16,37 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/agy"
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/catalog"
+	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/claudelist"
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/config"
 	"github.com/NoorChasib/cpa-plugins/plugins/codex-catalog-filter/internal/protocol"
 )
 
+// ID stays codex-catalog-filter: CPA namespaces routes, configuration, and the
+// data directory by it, and Codex installs already point at its URL.
 const ID = "codex-catalog-filter"
 
-var Version = "0.1.1"
+// Name is the human-facing plugin name and sidebar label.
+const Name = "Model Picker"
+
+var Version = "0.2.0"
 
 const (
-	// CatalogPath is where CPA serves the filtered catalog. Point Codex's
+	// CatalogPath is where CPA serves the filtered Codex catalog. Point Codex's
 	// model_catalog_url at it; Codex appends ?client_version=<version>.
 	CatalogPath = "/v0/resource/plugins/" + ID + "/models"
-	// SettingsPath is the Codex Models sidebar page.
+	// AgyPath is the Antigravity catalog, for agy's models.listSource.
+	AgyPath = "/v0/resource/plugins/" + ID + "/agy/models"
+	// SettingsPath is the Model Picker sidebar page.
 	SettingsPath = "/v0/resource/plugins/" + ID + "/settings"
 	// StatePath is the page's private data. CPA requires the management key.
 	StatePath = "/v0/management/plugins/" + ID + "/state"
 )
 
 const (
-	// Codex abandons a catalog request after 5 seconds. Answering first lets
-	// it keep its cached catalog instead of recording a timeout.
+	// Codex abandons a catalog request after 5 seconds and agy after 15.
+	// Answering first lets Codex keep its cached catalog and agy its list.
 	fetchTimeout = 4 * time.Second
 	// CPA's full catalog is several hundred KiB; this only bounds a runaway.
 	maxCatalogBytes = 32 << 20
@@ -51,6 +62,15 @@ type Plugin struct {
 	// directory CPA had when it loaded the library.
 	defaultDataDir string
 	seen           seenState
+	clients        clientStore
+	// The last valid client subtrees this process applied, guarded by
+	// lifecycle. An invalid subtree falls back to them.
+	lastAntigravity *config.Antigravity
+	lastClaudeCode  *config.ClaudeCode
+	// effectiveAntigravity outlives Shutdown, so a request racing it still
+	// gets the user's list rather than a 503.
+	effectiveAntigravity atomic.Pointer[config.Antigravity]
+	interceptErrors      atomic.Uint64
 }
 
 func New() *Plugin {
@@ -69,6 +89,8 @@ func New() *Plugin {
 
 func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	switch method {
+	case protocol.MethodResponseInterceptAfter:
+		return p.intercept(raw), nil
 	case protocol.MethodPluginRegister, protocol.MethodPluginReconfigure:
 		return p.configure(raw)
 	case protocol.MethodPluginQuiesce:
@@ -80,12 +102,13 @@ func (p *Plugin) Handle(method string, raw []byte) (any, error) {
 	case protocol.MethodManagementRegister:
 		return protocol.ManagementRegistration{
 			Routes: []protocol.ManagementRoute{
-				{Method: http.MethodGet, Path: "/plugins/" + ID + "/state", Description: "Private model list and switches for the Codex Models page."},
+				{Method: http.MethodGet, Path: "/plugins/" + ID + "/state", Description: "Private model lists and switches for the Model Picker page."},
 			},
 			Resources: []protocol.ResourceRoute{
-				// No Menu: this one is an endpoint for Codex, not a sidebar page.
+				// No Menu: these are endpoints for clients, not sidebar pages.
 				{Path: "/models", Description: "Filtered Codex model catalog for Codex's model_catalog_url."},
-				{Path: "/settings", Menu: "Codex Models", Description: "Choose which models Codex shows."},
+				{Path: "/agy/models", Description: "Antigravity model catalog for agy's models.listSource."},
+				{Path: "/settings", Menu: Name, Description: "Choose which models each client shows."},
 			},
 		}, nil
 	case protocol.MethodManagementHandle:
@@ -113,10 +136,29 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	if settings.DataDir == "" {
 		settings.DataDir = p.defaultDataDir
 	}
+	// A bad client subtree disables only that client's new settings: it keeps
+	// the last valid ones, or its defaults, and /state reports the error.
+	if a := settings.Antigravity; a.Err == "" {
+		p.lastAntigravity = &a
+	} else if p.lastAntigravity != nil {
+		kept := *p.lastAntigravity
+		kept.Configured, kept.Err, kept.Source = a.Configured, a.Err, config.FromLastGood
+		settings.Antigravity = kept
+	}
+	if c := settings.ClaudeCode; c.Err == "" {
+		p.lastClaudeCode = &c
+	} else if p.lastClaudeCode != nil {
+		kept := *p.lastClaudeCode
+		kept.Configured, kept.Err, kept.Source = c.Configured, c.Err, config.FromLastGood
+		settings.ClaudeCode = kept
+	}
 	// A rejected reconfiguration returns above and keeps the previous settings.
 	p.settings.Store(settings)
+	effective := settings.Antigravity
+	p.effectiveAntigravity.Store(&effective)
 	p.seen.load(settings.DataDir)
-	return registration(), nil
+	p.clients.load(settings.DataDir)
+	return registration(settings), nil
 }
 
 func (p *Plugin) Shutdown() {
@@ -140,6 +182,8 @@ func (p *Plugin) route(raw []byte) protocol.ManagementResponse {
 	switch req.Path {
 	case CatalogPath:
 		return p.serveCatalog(req)
+	case AgyPath:
+		return p.serveAgy(req)
 	case SettingsPath:
 		// Fixed bytes, answered before any configuration or state is read.
 		return settingsPageResponse()
@@ -163,7 +207,9 @@ func (p *Plugin) serveCatalog(req protocol.ManagementRequest) protocol.Managemen
 	if settings == nil {
 		return failure(http.StatusServiceUnavailable, "not_configured")
 	}
-	status, body := p.fetch(settings.CPAURL, req.Query.Get("client_version"), req.Headers.Get("Authorization"))
+	// client_version must be present for CPA to answer in Codex's format.
+	target := settings.CPAURL + "/v1/models?" + url.Values{"client_version": {req.Query.Get("client_version")}}.Encode()
+	status, body := p.fetch(target, req.Headers.Get("Authorization"))
 	switch {
 	case status == http.StatusOK:
 		// The settings page lists what Codex was last offered, before switches.
@@ -183,66 +229,131 @@ func (p *Plugin) serveCatalog(req protocol.ManagementRequest) protocol.Managemen
 	}
 }
 
-type stateModel struct {
-	catalog.Entry
-	// Enabled is whether the model stays in Codex's catalog as CPA lists it.
-	Enabled bool `json:"enabled"`
-	// Switched is whether Enabled comes from an explicit switch.
-	Switched bool `json:"switched"`
-}
-
-type stateResponse struct {
-	CatalogPath string          `json:"catalog_path"`
-	SeenAt      *time.Time      `json:"seen_at"`
-	Saved       bool            `json:"saved"`
-	NewModels   string          `json:"new_models"`
-	Action      string          `json:"action"`
-	Models      []stateModel    `json:"models"`
-	Switches    map[string]bool `json:"switches"`
-}
-
-// serveState reports the last catalog Codex was offered and how the current
-// switches apply to it. The page saves switches through CPA's own
-// PATCH /v0/management/plugins/codex-catalog-filter/config.
-func (p *Plugin) serveState() protocol.ManagementResponse {
+// serveAgy answers GET AgyPath, agy's models.listSource, with CPA's
+// /v1beta/models built into agy's catalog format (package agy).
+//
+// Only the caller's Authorization is forwarded, as for Codex, and CPA's 401
+// or 403 is passed through. agy keeps no last good list of its own: when this
+// route fails it shows a random part of CPA's whole list. So when CPA cannot
+// answer (unreachable, 5xx, timeout, a body that is not a model list, or a
+// list with nothing agy can be given), the list is rebuilt from the last one
+// CPA returned that could be built, but only for a request whose
+// Authorization CPA accepted with a 200 within the last 24 hours. A request
+// without Authorization, or with any other key, never receives it: CPA does
+// not authenticate this route.
+func (p *Plugin) serveAgy(req protocol.ManagementRequest) protocol.ManagementResponse {
+	authorization := req.Headers.Get("Authorization")
 	settings := p.settings.Load()
 	if settings == nil {
+		// Shutting down: answer from memory rather than make agy fall back.
+		if client := p.effectiveAntigravity.Load(); client != nil {
+			if out, ok := p.agyLastGood(*client, authorization); ok {
+				return out
+			}
+		}
 		return failure(http.StatusServiceUnavailable, "not_configured")
 	}
-	rules := settings.Rules
-	state := stateResponse{
-		CatalogPath: CatalogPath,
-		Saved:       true,
-		NewModels:   "enabled",
-		Action:      string(rules.Action()),
-		Models:      []stateModel{},
-		Switches:    rules.Switches(),
-	}
-	if !rules.EnableNew() {
-		state.NewModels = "disabled"
-	}
-	if seen, saved := p.seen.current(); seen != nil {
-		at := seen.SeenAt.UTC()
-		state.SeenAt, state.Saved = &at, saved
-		for _, entry := range seen.Models {
-			_, switched := rules.Switched(entry.Slug)
-			state.Models = append(state.Models, stateModel{Entry: entry, Enabled: rules.Allows(entry.Slug), Switched: switched})
+	now := p.now()
+	status, body := p.fetch(settings.CPAURL+"/v1beta/models", authorization)
+	switch {
+	case status == http.StatusOK:
+		models, ok := agy.ParseGeminiList(body)
+		if !ok {
+			// Not proof that CPA accepted the key: only a model list is.
+			p.clients.agyFailed("cpa_invalid_list", now)
+			return p.agyFallback(settings, authorization)
 		}
+		result := agy.Build(models, agySelection(settings.Antigravity))
+		if result.Body == nil {
+			// CPA accepted the key, but its list has nothing agy can be given,
+			// as can happen while CPA is still registering models. The last
+			// good list is kept and served instead of this one.
+			p.clients.acceptKey(settings.DataDir, authorization, now)
+			p.clients.agyFailed("no_text_models", now)
+			return p.agyFallback(settings, authorization)
+		}
+		p.clients.rememberGemini(settings.DataDir, models, authorization, now)
+		p.clients.agyServed("cpa", now)
+		return jsonResponse(http.StatusOK, result.Body)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		p.clients.forgetKey(settings.DataDir, authorization, now)
+		return jsonResponse(status, body)
+	case status >= 400 && status < 500:
+		return jsonResponse(status, body)
+	default:
+		p.clients.agyFailed("cpa_unavailable", now)
+		return p.agyFallback(settings, authorization)
 	}
-	body, err := json.Marshal(state)
-	if err != nil {
-		return failure(http.StatusInternalServerError, "encoding_failed")
-	}
-	return jsonResponse(http.StatusOK, body)
 }
 
-// fetch returns CPA's Codex catalog response, or status 0 when CPA could not
-// be reached or answered with more than maxCatalogBytes.
-func (p *Plugin) fetch(origin, clientVersion, authorization string) (int, []byte) {
+func (p *Plugin) agyFallback(settings *config.Settings, authorization string) protocol.ManagementResponse {
+	if out, ok := p.agyLastGood(settings.Antigravity, authorization); ok {
+		return out
+	}
+	return failure(http.StatusBadGateway, "cpa_unavailable")
+}
+
+func (p *Plugin) agyLastGood(client config.Antigravity, authorization string) (protocol.ManagementResponse, bool) {
+	models := p.clients.lastGoodGemini(authorization, p.now())
+	if models == nil {
+		return protocol.ManagementResponse{}, false
+	}
+	result := agy.Build(models, agySelection(client))
+	if result.Body == nil {
+		return protocol.ManagementResponse{}, false
+	}
+	p.clients.agyServed("last-good", p.now())
+	return jsonResponse(http.StatusOK, result.Body), true
+}
+
+func agySelection(client config.Antigravity) agy.Selection {
+	rules := client.Rules
+	return agy.Selection{
+		Switched:     rules.Switched,
+		EnableNew:    rules.EnableNew(),
+		DefaultModel: client.DefaultModel,
+		TitleModel:   client.TitleModel,
+	}
+}
+
+// intercept answers response.intercept_after. It rewrites only CPA's
+// Claude-format model list for Claude Code (protocol.ScanClaudeListIntercept)
+// and returns an empty result, which keeps CPA's response, for everything
+// else, including any failure here.
+func (p *Plugin) intercept(raw []byte) (result any) {
+	defer func() {
+		if recover() != nil {
+			p.interceptErrors.Add(1)
+			result = struct{}{}
+		}
+	}()
+	settings := p.settings.Load()
+	if settings == nil || !settings.ClaudeCode.Filter {
+		return struct{}{}
+	}
+	// The plugin's own loopback fetches carry its User-Agent and pass through
+	// the interceptors too; they are never rewritten.
+	list, ok := protocol.ScanClaudeListIntercept(raw, ID+"/")
+	if !ok {
+		return struct{}{}
+	}
+	summary, body, ok := claudelist.Rewrite(list.Body, settings.ClaudeCode.Rules.Allows)
+	if !ok {
+		return struct{}{}
+	}
+	p.clients.rememberClaude(settings.DataDir, summary, body != nil, p.now())
+	if body == nil {
+		return struct{}{}
+	}
+	return protocol.ResponseInterceptResponse{Body: body}
+}
+
+// fetch returns CPA's response to a GET of target with only the caller's
+// Authorization forwarded, or status 0 when CPA could not be reached or
+// answered with more than maxCatalogBytes.
+func (p *Plugin) fetch(target, authorization string) (int, []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
-	// client_version must be present for CPA to answer in Codex's format.
-	target := origin + "/v1/models?" + url.Values{"client_version": {clientVersion}}.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return 0, nil
@@ -278,12 +389,14 @@ func jsonResponse(status int, body []byte) protocol.ManagementResponse {
 	}}
 }
 
-func registration() protocol.Registration {
-	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: "Codex Catalog Filter", Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: []protocol.ConfigField{
-		{Name: "models", Type: "object", Description: "Per-model switches written by the Codex Models page: model slug to true (in Codex) or false (not in Codex)."},
-		{Name: "new-models", Type: "enum", EnumValues: []string{"enabled", "disabled"}, Description: "Models without a switch: enabled (default) appear in Codex until switched off; disabled stay out until switched on."},
-		{Name: "action", Type: "enum", EnumValues: []string{string(catalog.Remove), string(catalog.Hide)}, Description: "remove (default) deletes switched-off models from the catalog; hide keeps them with visibility hide so they stay selectable by name."},
-		{Name: "cpa-url", Type: "string", Description: "Origin the plugin fetches CPA's own catalog from. Defaults to http://127.0.0.1:8317, CPA's listener inside the standard image."},
-		{Name: "data-dir", Type: "string", Description: "Optional absolute directory for the last model list Codex was offered. Defaults to plugins/data/codex-catalog-filter beneath CPA's working directory."},
-	}}, Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true}}
+func registration(settings *config.Settings) protocol.Registration {
+	return protocol.Registration{SchemaVersion: protocol.SchemaVersion, Metadata: protocol.Metadata{Name: Name, Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: []protocol.ConfigField{
+		{Name: "models", Type: "object", Description: "Codex: per-model switches written by the Model Picker page, model slug to true (in Codex) or false (not in Codex)."},
+		{Name: "new-models", Type: "enum", EnumValues: []string{"enabled", "disabled"}, Description: "Codex: models without a switch. enabled (default) appear until switched off; disabled stay out until switched on."},
+		{Name: "action", Type: "enum", EnumValues: []string{string(catalog.Remove), string(catalog.Hide)}, Description: "Codex: remove (default) deletes switched-off models from the catalog; hide keeps them with visibility hide so they stay selectable by name."},
+		{Name: "cpa-url", Type: "string", Description: "Origin the plugin fetches CPA's own model lists from. Defaults to http://127.0.0.1:8317, CPA's listener inside the standard image."},
+		{Name: "data-dir", Type: "string", Description: "Optional absolute directory for the last model lists clients were offered. Defaults to plugins/data/codex-catalog-filter beneath CPA's working directory."},
+		{Name: config.AntigravityKey, Type: "object", Description: "Antigravity (agy): models (id to true or false), new-models (default disabled), default-model, and title-model for the list at /agy/models."},
+		{Name: config.ClaudeCodeKey, Type: "object", Description: "Claude Code: filter (default true) rewrites CPA's model list for Claude Code; models (real id to true or false) and new-models (default enabled)."},
+	}}, Capabilities: protocol.RegistrationCapabilities{ManagementAPI: true, ResponseInterceptor: settings != nil && settings.ClaudeCode.Filter}}
 }

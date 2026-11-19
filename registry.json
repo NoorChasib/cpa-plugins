@@ -89,14 +89,15 @@
       }
     },
     {
-      "name": "Codex Catalog Filter",
-      "description": "Choose model by model what Codex shows: a Codex Models console page with a switch per model, and a filtered catalog URL for Codex's model_catalog_url. CPA's own model lists are unchanged. Linux amd64 only.",
+      "name": "Model Picker",
+      "description": "Choose, client by client, which of CPA's models Codex, Antigravity (agy) and Claude Code show, from one console page. Serves a filtered catalog URL for Codex's model_catalog_url and a model list URL for agy's models.listSource, and rewrites the model list CPA gives Claude Code. Linux amd64 only.",
       "author": "NoorChasib",
       "license": "MIT",
       "tags": [
-        "Codex",
         "Models",
-        "Catalog"
+        "Codex",
+        "Antigravity",
+        "Claude Code"
       ],
       "id": "codex-catalog-filter",
       "repository": "https://github.com/NoorChasib/cpa-plugins",

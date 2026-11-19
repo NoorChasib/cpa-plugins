@@ -1,10 +1,12 @@
-# Merge into the existing plugins mapping of CPA's config.yaml. The Codex Models
-# page in CPA's console writes the models map for you.
+# Merge into the existing plugins mapping of CPA's config.yaml. The Model Picker
+# page in CPA's console writes the switches for you, one client at a time.
 plugins:
   enabled: true
   configs:
     codex-catalog-filter:
       enabled: true
+
+      # --- Codex (model_catalog_url) ---
       # Per-model switches: true = in Codex, false = not.
       # models:
       #   claude-fable-5-1: false
@@ -13,10 +15,33 @@ plugins:
       # new-models: enabled
       # Switched-off models: remove (default) or hide, which keeps them selectable by name.
       # action: remove
-      # Where the plugin reads CPA's own catalog, from inside CPA's container.
+
+      # --- Antigravity (agy models.listSource) ---
+      # antigravity:
+      #   models:                      # true = offered to agy, false = not (only true/false, not yes/no)
+      #     gemini-4-argon-high: true
+      #     gemini-3.1-flash-lite: true
+      #     grok-4.7: true
+      #   new-models: disabled         # default: models without a switch stay out
+      #   default-model: gemini-4-argon-high    # optional; listed first and agy's default (else the first by id)
+      #   title-model: gemini-3.1-flash-lite    # optional; a flash-lite model, used for thread titles
+
+      # --- Claude Code (rewrites CPA's model list for Claude Code) ---
+      # claude-code:
+      #   filter: true                 # default; false stops rewriting and removes the interceptor
+      #   models:                      # real model ids, not the claude-fable-5-dd-... form
+      #     gpt-6-sol: false
+      #   new-models: enabled          # default: models without a switch are shown
+
+      # --- Shared ---
+      # Where the plugin reads CPA's own model lists, from inside CPA's container.
       # cpa-url: "http://127.0.0.1:8317"
-      # Where the last model list is kept (absolute path).
+      # Where the last model lists are kept (absolute path).
       # data-dir: "/CLIProxyAPI/plugins/data/codex-catalog-filter"
 
-# Then, in Codex's config.toml, on the provider that already uses CPA:
-#   model_catalog_url = "http://your-cpa-host:8317/v0/resource/plugins/codex-catalog-filter/models"
+# Then point each client at CPA once:
+#   Codex, in config.toml on the provider that already uses CPA:
+#     model_catalog_url = "http://your-cpa-host:8317/v0/resource/plugins/codex-catalog-filter/models"
+#   Antigravity, in /etc/antigravity/admin_settings.json (same scheme, host, and port as agy's gateway URL):
+#     {"models":{"listSource":"http://127.0.0.1:8317/v0/resource/plugins/codex-catalog-filter/agy/models"}}
+#   Claude Code: set CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1; nothing else.

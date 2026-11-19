@@ -175,36 +175,55 @@ func slugs(t *testing.T, body []byte) []string {
 	return out
 }
 
-func TestRegistrationAdvertisesOnlyTheManagementAPI(t *testing.T) {
-	p := New()
-	result, err := p.Handle(protocol.MethodPluginRegister, lifecycle(t, "enabled: true\n", protocol.SchemaVersion))
+type registrationView struct {
+	SchemaVersion uint32          `json:"schema_version"`
+	Capabilities  map[string]bool `json:"capabilities"`
+	Metadata      struct {
+		Name, Version, Author, GitHubRepository string
+		ConfigFields                            []struct{ Name, Type string }
+	} `json:"metadata"`
+}
+
+func register(t *testing.T, p *Plugin, method, yaml string) registrationView {
+	t.Helper()
+	result, err := p.Handle(method, lifecycle(t, yaml, protocol.SchemaVersion))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var reg struct {
-		SchemaVersion uint32          `json:"schema_version"`
-		Capabilities  map[string]bool `json:"capabilities"`
-		Metadata      struct {
-			Name, Version, Author, GitHubRepository string
-			ConfigFields                            []struct{ Name, Type string }
-		} `json:"metadata"`
-	}
+	var reg registrationView
 	if err := json.Unmarshal(encode(t, result), &reg); err != nil {
 		t.Fatal(err)
 	}
-	if reg.SchemaVersion != 6 || len(reg.Capabilities) != 1 || !reg.Capabilities["management_api"] {
+	return reg
+}
+
+// The response interceptor is declared only while claude-code.filter is on
+// (the default); with it off, registration is exactly 0.1.1's single
+// management_api capability. CPA rebuilds capabilities on every reconfigure.
+func TestRegistrationAdvertisesTheInterceptorOnlyWhileClaudeCodeFilters(t *testing.T) {
+	p := New()
+	reg := register(t, p, protocol.MethodPluginRegister, "enabled: true\ndata-dir: "+t.TempDir()+"\n")
+	if reg.SchemaVersion != 6 || len(reg.Capabilities) != 2 || !reg.Capabilities["management_api"] || !reg.Capabilities["response_interceptor"] {
 		t.Fatalf("registration = %+v", reg)
 	}
 	m := reg.Metadata
-	if m.Name != "Codex Catalog Filter" || m.Version != Version || m.Author != "NoorChasib" || m.GitHubRepository != "https://github.com/NoorChasib/cpa-plugins" {
+	if m.Name != "Model Picker" || m.Version != Version || Version != "0.2.0" || m.Author != "NoorChasib" || m.GitHubRepository != "https://github.com/NoorChasib/cpa-plugins" {
 		t.Fatalf("metadata = %+v", m)
 	}
 	var fields []string
 	for _, f := range m.ConfigFields {
 		fields = append(fields, f.Name+":"+f.Type)
 	}
-	if !slices.Equal(fields, []string{"models:object", "new-models:enum", "action:enum", "cpa-url:string", "data-dir:string"}) {
+	if !slices.Equal(fields, []string{"models:object", "new-models:enum", "action:enum", "cpa-url:string", "data-dir:string", "antigravity:object", "claude-code:object"}) {
 		t.Fatalf("config fields = %v", fields)
+	}
+	off := register(t, p, protocol.MethodPluginReconfigure, "data-dir: "+t.TempDir()+"\nclaude-code: {filter: false}\n")
+	if len(off.Capabilities) != 1 || !off.Capabilities["management_api"] {
+		t.Fatalf("filter off = %+v", off.Capabilities)
+	}
+	on := register(t, p, protocol.MethodPluginReconfigure, "data-dir: "+t.TempDir()+"\nclaude-code: {filter: true}\n")
+	if !on.Capabilities["response_interceptor"] {
+		t.Fatalf("filter on = %+v", on.Capabilities)
 	}
 }
 
@@ -221,8 +240,9 @@ func TestManagementRegisterDeclaresRoutesAndResources(t *testing.T) {
 	if len(reg.Routes) != 1 || reg.Routes[0].Method != http.MethodGet || reg.Routes[0].Path != "/plugins/"+ID+"/state" || reg.Routes[0].Menu != "" {
 		t.Fatalf("routes = %+v", reg.Routes)
 	}
-	if len(reg.Resources) != 2 || reg.Resources[0].Path != "/models" || reg.Resources[0].Menu != "" ||
-		reg.Resources[1].Path != "/settings" || reg.Resources[1].Menu != "Codex Models" {
+	if len(reg.Resources) != 3 || reg.Resources[0].Path != "/models" || reg.Resources[0].Menu != "" ||
+		reg.Resources[1].Path != "/agy/models" || reg.Resources[1].Menu != "" ||
+		reg.Resources[2].Path != "/settings" || reg.Resources[2].Menu != "Model Picker" {
 		t.Fatalf("resources = %+v", reg.Resources)
 	}
 }
@@ -238,7 +258,7 @@ func TestLifecycleRejectsOldSchemaAndBadConfig(t *testing.T) {
 	if _, err := p.Handle(protocol.MethodPluginRegister, lifecycle(t, "models: {a: maybe}\n", protocol.SchemaVersion)); err == nil {
 		t.Fatal("non-boolean switch accepted")
 	}
-	if _, err := p.Handle("response.intercept_after", nil); err == nil {
+	if _, err := p.Handle("request.intercept_before", nil); err == nil {
 		t.Fatal("unknown method accepted")
 	}
 	for _, method := range []string{protocol.MethodPluginQuiesce, protocol.MethodPluginShutdown} {
@@ -535,11 +555,16 @@ func TestSettingsPageIsFixedAndLockedDown(t *testing.T) {
 		}
 	}
 	// Fixed bytes: nothing from the request or the plugin's state is reflected.
-	if string(out.Body) != settingsDocument || !strings.Contains(settingsDocument, "<title>Codex Models</title>") {
+	if string(out.Body) != settingsDocument {
 		t.Fatalf("page body is not the fixed document")
 	}
-	// The script calls exactly the plugin's own state and config routes.
-	for _, path := range []string{StatePath, CatalogPath, SettingsPath, "/v0/management/plugins/" + ID + "/config"} {
+	// The page is titled like its sidebar entry, and its heading says so too.
+	if !strings.Contains(settingsDocument, "<title>"+Name+"</title>") || !strings.Contains(settingsHTML, "<h1>"+Name+"</h1>") || strings.Contains(settingsDocument, "Codex Models") {
+		t.Fatalf("page is not titled %q", Name)
+	}
+	// The script calls exactly the plugin's own state and config routes, and
+	// shows the Codex and agy setup URLs.
+	for _, path := range []string{StatePath, CatalogPath, AgyPath, SettingsPath, "/v0/management/plugins/" + ID + "/config"} {
 		if !strings.Contains(settingsScript, "'"+path+"'") {
 			t.Errorf("script lacks %s", path)
 		}

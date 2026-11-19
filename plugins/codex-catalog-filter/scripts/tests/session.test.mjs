@@ -1,17 +1,21 @@
-// The Codex Models page's console session reader, run as shipped: app.js is
+// The Model Picker page's console session reader, run as shipped: app.js is
 // loaded unchanged into a stub page at CPA's resource route, with local
 // storage holding what the official Management Center stores, and the test
 // watches whether the page's first request carries the remembered key or the
 // page asks to sign in instead. fetch only records its arguments, so no
 // request leaves.
 //
-// The go test in internal/plugin runs this file when node is on PATH.
-// Run directly: node --test plugins/codex-catalog-filter/scripts/tests/
+// The go test in internal/plugin runs this file when node is on PATH, and
+// this file brings in the page's other tests (clients.mjs) so that go test
+// runs them too. Run directly:
+//   node --test plugins/codex-catalog-filter/scripts/tests/session.test.mjs
 
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {test} from 'node:test'
 import vm from 'node:vm'
+// The per-client logic and save flow; see the comment above.
+import './clients.mjs'
 
 const script = readFileSync(new URL('../../internal/plugin/pageassets/app.js', import.meta.url), 'utf8')
 
