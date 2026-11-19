@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,107 @@ func TestTheRenewalEstimateInputsAreAdditive(t *testing.T) {
 	bare, _ := json.Marshal(Entry{Provider: "claude", AuthIndex: "one", Quota: &Quota{Schema: 1}, AccountDetails: &AccountDetails{}})
 	if strings.Contains(string(bare), "subscription_started_at") || strings.Contains(string(bare), "billing_period") {
 		t.Fatalf("empty estimate inputs serialized: %s", bare)
+	}
+}
+
+// The Antigravity names consumers build on are fixed: the provider string CPA
+// lists and the model tokens of the non-default quota families.
+func TestAntigravityNamesAreFixed(t *testing.T) {
+	for got, want := range map[string]string{
+		ProviderAntigravity:      "antigravity",
+		AntigravityModelShared:   "shared",
+		AntigravityModelArgon:    "argon",
+		AntigravityModelCarbon:   "carbon",
+		AntigravityModelHydrogen: "hydrogen",
+	} {
+		if got != want {
+			t.Fatalf("%q != %q", got, want)
+		}
+	}
+}
+
+// ReadFreshWindows judges each window by its own observation and reset, so an
+// entry with no compatibility observation (Entry.ObservedAt zero) still
+// yields the windows a successful poll published, and a stale, future,
+// expired or invalid one is left out.
+func TestReadFreshWindowsJudgesEachWindowOnItsOwn(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	observed := now.Add(-5 * time.Minute)
+	window := func(key, model string, change func(*EntryWindow)) EntryWindow {
+		w := EntryWindow{Key: key, Model: model, Title: key, UsedPercent: 40, ResetAt: now.Add(time.Hour), ObservedAt: observed}
+		if change != nil {
+			change(&w)
+		}
+		return w
+	}
+	entry := Entry{Provider: ProviderAntigravity, AuthIndex: "ag", Windows: []EntryWindow{
+		window(WindowSession, "", func(w *EntryWindow) { w.ResetAt = time.Time{} }), // unknown reset is fine
+		window(WindowModelSession, AntigravityModelShared, nil),
+		window(WindowModelWeekly, AntigravityModelShared, func(w *EntryWindow) { w.ResetAt = now }),                             // reset already reached
+		window(WindowModelWeekly, AntigravityModelArgon, func(w *EntryWindow) { w.ObservedAt = time.Time{} }),                   // never observed
+		window(WindowModelWeekly, AntigravityModelCarbon, func(w *EntryWindow) { w.ObservedAt = now.Add(time.Minute) }),         // from the future
+		window(WindowModelWeekly, AntigravityModelHydrogen, func(w *EntryWindow) { w.ObservedAt = now.Add(-31 * time.Minute) }), // stale
+		window("raw:antigravity:x", "", func(w *EntryWindow) { w.UsedPercent = 101 }),
+		window("raw:antigravity:y", "", func(w *EntryWindow) { w.LastError = "window failed" }),
+		window(WindowModelWeekly, AntigravityModelShared, func(w *EntryWindow) { w.ObservedAt = now.Add(-30 * time.Minute) }), // exactly maxAge
+	}}
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	write := func(e Entry) {
+		t.Helper()
+		raw, _ := json.Marshal(Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]Entry{Key(e.Provider, e.AuthIndex): e}})
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(entry)
+	got, err := ReadFreshWindows(path, ProviderAntigravity, "ag", now, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, w := range got {
+		keys = append(keys, w.Key+"/"+w.Model)
+	}
+	want := []string{"session/", "model_session/shared", "model_weekly/shared"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("windows = %v; want %v", keys, want)
+	}
+	// The compatibility reader still waits for the regular weekly.
+	if _, err := ReadFresh(path, ProviderAntigravity, "ag", now, 30*time.Minute); err == nil {
+		t.Fatal("ReadFresh accepted an entry with no weekly observation")
+	}
+
+	for _, tc := range []struct {
+		name            string
+		change          func(*Entry)
+		provider, index string
+		maxAge          time.Duration
+	}{
+		{"failed poll", func(e *Entry) { e.LastError = "quota fetch failed" }, ProviderAntigravity, "ag", 30 * time.Minute},
+		{"pending poll", func(e *Entry) { e.LastError = "refresh pending" }, ProviderAntigravity, "ag", 30 * time.Minute},
+		{"no windows", func(e *Entry) { e.Windows = nil }, ProviderAntigravity, "ag", 30 * time.Minute},
+		{"none fresh", func(e *Entry) { e.Windows = e.Windows[3:6] }, ProviderAntigravity, "ag", 30 * time.Minute},
+		{"another provider", nil, "claude", "ag", 30 * time.Minute},
+		{"another account", nil, ProviderAntigravity, "other", 30 * time.Minute},
+		{"entry keyed under the wrong account", func(e *Entry) { e.AuthIndex = "other" }, ProviderAntigravity, "ag", 30 * time.Minute},
+		{"no max age", nil, ProviderAntigravity, "ag", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := entry
+			e.Windows = append([]EntryWindow(nil), entry.Windows...)
+			if tc.change != nil {
+				tc.change(&e)
+			}
+			raw, _ := json.Marshal(Snapshot{Schema: 1, ProviderCooldown: map[string]time.Time{}, Entries: map[string]Entry{Key(ProviderAntigravity, "ag"): e}})
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if windows, err := ReadFreshWindows(path, tc.provider, tc.index, now, tc.maxAge); !errors.Is(err, ErrUnavailable) || windows != nil {
+				t.Fatalf("windows=%v err=%v; want ErrUnavailable", windows, err)
+			}
+		})
+	}
+	if _, err := ReadFreshWindows(filepath.Join(t.TempDir(), "missing.json"), ProviderAntigravity, "ag", now, time.Hour); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a missing snapshot: %v", err)
 	}
 }

@@ -25,6 +25,16 @@
 //	           reset_at (unix seconds) or reset_after_seconds
 //	Grok:   GET https://cli-chat-proxy.grok.com/v1/billing?format=credits
 //	        -> config.creditUsagePercent (0..100), config.currentPeriod.end
+//
+// And, from CPA v8.0.77's Antigravity executor and an open-source reader
+// (see antigravity.go):
+//
+//	Antigravity: POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+//	        {"project":"<project_id>"} or {}
+//	        -> groups[].buckets[] (else buckets[]): bucketId, window ("5h" /
+//	           "weekly"), remainingFraction (0..1), resetTime (RFC3339);
+//	           POST /v1internal:fetchAvailableModels only when that names no
+//	           usable bucket -> models{<id>:{quotaInfo, weeklyQuotaInfo}}
 package quota
 
 import (
@@ -98,6 +108,11 @@ var (
 	ErrNoAccountID         = errors.New("codex account id could not be resolved")
 	ErrInvalidResponse     = errors.New("usage endpoint returned an unreadable response")
 	ErrNoWeeklyWindow      = errors.New("usage endpoint did not report a weekly window")
+	// ErrTokenExpired is an Antigravity credential whose stored access token
+	// has already expired. CPA refreshes it well before expiry, so one still
+	// on disk past it means CPA's refresh is failing; a request would only
+	// earn a 401, so none is sent.
+	ErrTokenExpired = errors.New("stored access token has expired")
 )
 
 // HTTPStatusError reports a non-2xx usage endpoint status. The body is never
@@ -141,15 +156,29 @@ type Observation struct {
 // can read.
 func Supported(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude", "codex", "xai":
+	case "claude", "codex", "xai", client.ProviderAntigravity:
 		return true
 	}
 	return false
 }
 
+// Listing is what host.auth.list said about the credential, for the fields
+// the physical auth JSON may not carry yet. Only Antigravity uses it: CPA adds
+// project_id to the file after the account's first proxied request, but lists
+// the project it resolved before then.
+type Listing struct {
+	ProjectID string
+}
+
 // Fetch reads quota fields for one credential. rawAuth is the physical
 // auth JSON from host.auth.get; only the token fields are extracted.
 func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now time.Time) (Observation, error) {
+	return FetchListed(ctx, doer, provider, rawAuth, Listing{}, now)
+}
+
+// FetchListed is Fetch with what the host's roster said about the credential.
+// A value the auth JSON carries itself always outranks the listing's.
+func FetchListed(ctx context.Context, doer Doer, provider string, rawAuth []byte, listing Listing, now time.Time) (Observation, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if !Supported(provider) {
 		return Observation{}, ErrUnsupportedProvider
@@ -195,6 +224,18 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 			headers["x-userid"] = []string{creds.userID}
 		}
 		request = protocol.HostHTTPRequest{Method: "GET", URL: xaiBillingURL, Headers: headers}
+	case client.ProviderAntigravity:
+		if creds.projectID == "" {
+			creds.projectID = projectID(listing.ProjectID)
+		}
+		// CPA refreshes the token half an hour before it expires and writes
+		// the new one back, so a stored token already past its expiry is a
+		// refresh that is failing. Asking Google with it would only collect a
+		// 401; the poll fails before sending and backs off as any other does.
+		if !creds.expired.IsZero() && !creds.expired.After(now) {
+			return Observation{}, ErrTokenExpired
+		}
+		request = antigravityRequest(creds, antigravitySummaryPath, antigravityProjectBody(creds.projectID))
 	}
 	response, err := doer.HTTPDo(ctx, request)
 	if err != nil {
@@ -210,8 +251,18 @@ func Fetch(ctx context.Context, doer Doer, provider string, rawAuth []byte, now 
 	if err != nil {
 		return Observation{}, err
 	}
-	observation, primaryErr := parsePrimary(provider, root, now)
 	details := parseDetails(provider, root, now)
+	// Antigravity's summary can answer without a bucket this code can use: an
+	// older account, or a tier the summary does not cover. Its model list is
+	// then the only other place the same quotas appear. It is asked only after
+	// the summary answered 2xx, through the same doer, so the poll is still
+	// judged by the summary request alone: the caller counts only the first
+	// request made through doer, and a 429 here costs this fallback, never the
+	// poll or the provider.
+	if provider == client.ProviderAntigravity && len(details.Windows) == 0 {
+		antigravityModelsFallback(ctx, doer, creds, details)
+	}
+	observation, primaryErr := parsePrimary(provider, root, details, now)
 	if primaryErr != nil && !errors.Is(primaryErr, ErrNoWeeklyWindow) {
 		return Observation{}, primaryErr
 	}
@@ -269,6 +320,16 @@ type credentials struct {
 	// claim, unchecked against the clock. Free for the same reason as plan, and
 	// as old as the token, which is why the subscription endpoint outranks it.
 	subscriptionEnd time.Time
+
+	// Antigravity only. projectID is the Cloud Code project the quota is
+	// metered against, empty when neither the file nor the listing names one.
+	// baseURL and userAgent are always set: an operator's base_url or
+	// user_agent when it passes validation, else CPA's own defaults. expired
+	// is the stored token's expiry, zero when the file does not say.
+	projectID string
+	baseURL   string
+	userAgent string
+	expired   time.Time
 }
 
 // extractCredentials decodes the minimum fields for one usage request.
@@ -325,6 +386,13 @@ func extractCredentials(provider string, rawAuth []byte) (credentials, error) {
 		creds.subscriptionEnd = subscriptionEndFromClaims(claims)
 	case "xai":
 		creds.userID = stringField(root, "sub")
+	case client.ProviderAntigravity:
+		// Field names only: the refresh token and every other secret in the
+		// file are never read.
+		creds.projectID = projectID(stringField(root, "project_id"))
+		creds.baseURL = antigravityBaseURL(stringField(root, "base_url"))
+		creds.userAgent = antigravityUserAgentOf(stringField(root, "user_agent"))
+		creds.expired, _ = rfc3339Field(root, "expired")
 	}
 	return creds, nil
 }
@@ -423,7 +491,11 @@ func codexResetCreditExpiry(ctx context.Context, doer Doer, creds credentials, n
 	return soonest, !soonest.IsZero()
 }
 
-func parsePrimary(provider string, root map[string]any, now time.Time) (Observation, error) {
+// parsePrimary reads the regular weekly/pool compatibility observation. Most
+// providers name it in the response itself; Antigravity's is whichever of the
+// already-collected windows maps to the default Gemini family's weekly, so it
+// is read from details, which also covers the model-list fallback.
+func parsePrimary(provider string, root map[string]any, details *client.Quota, now time.Time) (Observation, error) {
 	switch provider {
 	case "claude":
 		return parseClaude(root)
@@ -431,6 +503,8 @@ func parsePrimary(provider string, root map[string]any, now time.Time) (Observat
 		return parseCodex(root, now)
 	case "xai":
 		return parseXAI(root)
+	case client.ProviderAntigravity:
+		return parseAntigravity(details)
 	}
 	return Observation{}, ErrUnsupportedProvider
 }

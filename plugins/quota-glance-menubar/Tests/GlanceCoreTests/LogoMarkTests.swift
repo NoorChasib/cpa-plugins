@@ -6,8 +6,8 @@ final class LogoMarkTests: XCTestCase {
     private let logos = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().appendingPathComponent("Resources/Logos")
 
-    func testTheThreeBundledLogosParse() throws {
-        for provider in ["claude", "codex", "xai"] {
+    func testTheBundledLogosParse() throws {
+        for provider in ["claude", "codex", "xai", "antigravity"] {
             let mark = try LogoMark(contentsOf: logos.appendingPathComponent("\(provider).svg"))
             let box = mark.viewBox
             XCTAssertEqual(box.width, box.height, accuracy: box.width * 0.01, "\(provider): the viewBox must be square")
@@ -25,6 +25,12 @@ final class LogoMarkTests: XCTestCase {
         XCTAssertEqual(codex.shapes.first?.paint, .fill(evenOdd: true), "The blossom's knot is cut out by the even-odd rule")
         let xai = try LogoMark(contentsOf: logos.appendingPathComponent("xai.svg"))
         XCTAssertEqual(xai.shapes.count, 2, "The Grok mark is two strokes drawn as fills")
+        let antigravity = try LogoMark(contentsOf: logos.appendingPathComponent("antigravity.svg"))
+        XCTAssertEqual(antigravity.shapes.count, 1, "The Antigravity arch is its colour mask's one outline")
+        XCTAssertEqual(antigravity.shapes.first?.paint, .fill(evenOdd: false))
+        // Wider than it is tall: centred in the square, its feet and crown clear the edges alike.
+        let ink = try XCTUnwrap(antigravity.inkBounds)
+        XCTAssertEqual(ink.minY - antigravity.viewBox.minY, antigravity.viewBox.maxY - ink.maxY, accuracy: 0.01)
     }
 
     func testPathDataCoversEveryCommand() throws {

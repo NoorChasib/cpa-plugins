@@ -1,6 +1,6 @@
 # Account Health Pushover
 
-Get a Pushover message when a Claude, Codex, or Grok credential needs reauthentication or stays unhealthy. Ordinary usage limits do not trigger credential-health alerts.
+Get a Pushover message when a Claude, Codex, Grok, or Antigravity credential needs reauthentication or stays unhealthy. Ordinary usage limits do not trigger credential-health alerts.
 
 ## Install
 
@@ -29,7 +29,7 @@ Before starting CPA, provide `CPA_PUSHOVER_APP_TOKEN` and `CPA_PUSHOVER_USER_KEY
 
 Open **Account Health** in the CPA sidebar to inspect discovered accounts. Use the authenticated status page's **Test notification** action to verify delivery. Allow the initial health scan to complete.
 
-Weekly quota notifications are optional. Enable `quota-alerts` for notifications; choose standalone provider polling or opt into Quota Cache below. Credential-health monitoring continues when quota alerts are off.
+Weekly quota notifications are optional. Enable `quota-alerts` for notifications; choose standalone provider polling or opt into Quota Cache below. Credential-health monitoring continues when quota alerts are off. Antigravity weekly notifications need Quota Cache: standalone polling never calls Google, so it monitors only the health of Antigravity accounts.
 
 Preserve any existing `state-file` override. By default, incident and notification state lives under the detected auth directory at `.plugin-state/account-health-pushover/state.ahp`, so persist and back up the auth volume too.
 

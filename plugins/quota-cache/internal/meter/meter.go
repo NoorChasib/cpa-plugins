@@ -189,6 +189,9 @@ type Meter struct {
 	done     chan struct{}
 	exited   chan struct{}
 	stopOnce sync.Once
+	// stopAt is the instant Stop was given. It is written before done is
+	// closed and read by the worker only after, so the close orders it.
+	stopAt time.Time
 
 	// mu guards data and what is derived from it. No I/O happens under it.
 	mu      sync.Mutex
@@ -401,7 +404,9 @@ func (m *Meter) work() {
 			m.flushIfDue(now.UTC())
 		case <-m.done:
 			m.drain()
-			m.save(time.Now().UTC())
+			// The last save is dated at the stop it records, as every other
+			// time in the meter is the caller's, not the wall clock's.
+			m.save(m.stopAt)
 			return
 		}
 	}
@@ -456,6 +461,7 @@ func (m *Meter) Stop(reason string, now time.Time) {
 		}
 		m.dirty = true
 		m.mu.Unlock()
+		m.stopAt = now
 		close(m.done)
 	})
 	<-m.exited

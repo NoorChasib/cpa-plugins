@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -732,4 +733,167 @@ func TestMigrateLegacyRejectsCorruptLegacyFileWithoutTouchingIt(t *testing.T) {
 	if _, statErr := os.Stat(store.Path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("state file was created from corrupt input: %v", statErr)
 	}
+}
+
+// legacyQuotaState is QuotaState exactly as 0.4.4 declared it.
+type legacyQuotaState struct {
+	Percent            float64   `json:"percent,omitempty"`
+	ResetAt            time.Time `json:"reset_at,omitempty"`
+	ObservedAt         time.Time `json:"observed_at,omitempty"`
+	LastPollAt         time.Time `json:"last_poll_at,omitempty"`
+	LastError          string    `json:"last_error,omitempty"`
+	WindowKey          string    `json:"window_key,omitempty"`
+	WarningSentAt      time.Time `json:"warning_sent_at,omitempty"`
+	ExhaustedSentAt    time.Time `json:"exhausted_sent_at,omitempty"`
+	WarningAttemptAt   time.Time `json:"warning_attempt_at,omitempty"`
+	ExhaustedAttemptAt time.Time `json:"exhausted_attempt_at,omitempty"`
+}
+
+// The single-window quota state of Claude, Codex and Grok must encode
+// byte-for-byte as 0.4.4 encoded it, and a 0.4.4 state file must load and save
+// back unchanged, with no "families" key appearing.
+func TestSingleWindowQuotaStateIsByteCompatible(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for _, legacy := range []legacyQuotaState{
+		{},
+		{LastPollAt: now, LastError: "usage request failed"},
+		{Percent: 96.5, ResetAt: now.Add(time.Hour), ObservedAt: now, LastPollAt: now, WindowKey: "2026-09-01T13:00:00Z", WarningSentAt: now, WarningAttemptAt: now},
+		{Percent: 100, ResetAt: now, ObservedAt: now, LastPollAt: now, LastError: "x", WindowKey: "k", WarningSentAt: now, ExhaustedSentAt: now, WarningAttemptAt: now, ExhaustedAttemptAt: now},
+	} {
+		current := QuotaState{
+			Percent: legacy.Percent, ResetAt: legacy.ResetAt, ObservedAt: legacy.ObservedAt, LastPollAt: legacy.LastPollAt,
+			LastError: legacy.LastError, WindowKey: legacy.WindowKey, WarningSentAt: legacy.WarningSentAt,
+			ExhaustedSentAt: legacy.ExhaustedSentAt, WarningAttemptAt: legacy.WarningAttemptAt, ExhaustedAttemptAt: legacy.ExhaustedAttemptAt,
+		}
+		want, _ := json.MarshalIndent(legacy, "", "  ")
+		got, _ := json.MarshalIndent(current, "", "  ")
+		if string(got) != string(want) {
+			t.Fatalf("quota encoded as\n%s\nwant\n%s", got, want)
+		}
+		var decoded QuotaState
+		if err := json.Unmarshal(want, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Families != nil {
+			t.Fatalf("legacy quota decoded with families: %+v", decoded)
+		}
+		window, ok := decoded.Window("")
+		if !ok || window.Percent != legacy.Percent || window.WindowKey != legacy.WindowKey || !window.WarningSentAt.Equal(legacy.WarningSentAt) || !window.ExhaustedAttemptAt.Equal(legacy.ExhaustedAttemptAt) {
+			t.Fatalf("single window view=%+v ok=%v", window, ok)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "state.ahp")
+	data := NewData()
+	data.Accounts["claude:one"] = &Account{AccountKey: "claude:one", Provider: "claude", AuthIndex: "one", Health: health.Healthy,
+		Quota: QuotaState{Percent: 96.5, ResetAt: now.Add(time.Hour), ObservedAt: now, LastPollAt: now, WindowKey: "2026-09-01T13:00:00Z", WarningSentAt: now}}
+	store := Store{Path: path}
+	if err := store.Save(data); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(loaded); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Load normalizes unrelated suspect fields, so compare the quota document.
+	var a, b struct {
+		Accounts map[string]struct {
+			Quota json.RawMessage `json:"quota"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(first, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second, &b); err != nil {
+		t.Fatal(err)
+	}
+	if compactJSON(t, a.Accounts["claude:one"].Quota) != compactJSON(t, b.Accounts["claude:one"].Quota) || strings.Contains(string(second), "families") {
+		t.Fatalf("round trip changed the quota state:\n%s\n%s", first, second)
+	}
+}
+
+func compactJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var out bytes.Buffer
+	if err := json.Compact(&out, raw); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestQuotaFamiliesSchemaAndCloneIsolation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.ahp")
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	data := NewData()
+	account := &Account{AccountKey: "antigravity:ag", Provider: "antigravity", AuthIndex: "ag", Health: health.Healthy}
+	account.Quota.LastPollAt = now
+	account.Quota.SetWindow("shared", QuotaWindow{
+		Percent: 96, ResetAt: now.Add(time.Hour), ObservedAt: now, WindowKey: "shared@2026-11-19T13:00:00Z",
+		WarningSentAt: now, ExhaustedSentAt: now, WarningAttemptAt: now, ExhaustedAttemptAt: now,
+	})
+	if _, ok := account.Quota.Window("argon"); ok {
+		t.Fatal("absent family reported present")
+	}
+	if account.Quota.WindowKey != "" || account.Quota.Percent != 0 {
+		t.Fatalf("family write leaked into the single window: %+v", account.Quota)
+	}
+	data.Accounts[account.AccountKey] = account
+
+	clone := Clone(data)
+	window := clone.Accounts["antigravity:ag"].Quota.Families["shared"]
+	window.Percent = 1
+	clone.Accounts["antigravity:ag"].Quota.Families["shared"] = window
+	clone.Accounts["antigravity:ag"].Quota.Families["argon"] = QuotaWindow{}
+	if got := data.Accounts["antigravity:ag"].Quota.Families; got["shared"].Percent != 96 || len(got) != 1 {
+		t.Fatalf("clone shares the families map: %+v", got)
+	}
+
+	if err := (Store{Path: path}).Save(data); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := (Store{Path: path}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Accounts["antigravity:ag"].Quota.Families["shared"]; got.WindowKey != "shared@2026-11-19T13:00:00Z" || got.Percent != 96 || !got.WarningSentAt.Equal(now) {
+		t.Fatalf("family round trip=%+v", got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Accounts map[string]struct {
+			Quota map[string]json.RawMessage `json:"quota"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	quotaDoc := document.Accounts["antigravity:ag"].Quota
+	// The single-window fields stay at their zero values for a per-family
+	// account; time.Time ignores omitempty, exactly as it always has.
+	assertExactJSONKeys(t, quotaDoc, []string{
+		"reset_at", "observed_at", "last_poll_at", "warning_sent_at", "exhausted_sent_at",
+		"warning_attempt_at", "exhausted_attempt_at", "families",
+	})
+	var families map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(quotaDoc["families"], &families); err != nil {
+		t.Fatal(err)
+	}
+	assertExactJSONKeys(t, families["shared"], []string{
+		"percent", "reset_at", "observed_at", "window_key",
+		"warning_sent_at", "exhausted_sent_at", "warning_attempt_at", "exhausted_attempt_at",
+	})
 }

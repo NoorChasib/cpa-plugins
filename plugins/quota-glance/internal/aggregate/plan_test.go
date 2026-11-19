@@ -172,7 +172,7 @@ func TestOverrideMapIsBounded(t *testing.T) {
 // The Codex table belongs to Codex. Claude sells its own "Pro" tier, and
 // applying OpenAI's table to it would rename that credential "Pro 200".
 func TestTheCodexEnumTableIsNotAppliedToOtherProviders(t *testing.T) {
-	for _, provider := range []string{"claude", "xai", "gemini", ""} {
+	for _, provider := range []string{"claude", "xai", "antigravity", "gemini", ""} {
 		for _, raw := range []string{"Pro", "Team", "Max", "Plus"} {
 			if got := planLabelOf(provider, raw, nil); got != raw {
 				t.Errorf("planLabelOf(%q, %q) = %q; another provider's tier must not be renamed", provider, raw, got)
@@ -218,6 +218,29 @@ func TestGrokDisplayNamesPassThrough(t *testing.T) {
 	for _, raw := range []string{"SuperGrok", "SuperGrok Heavy", "SuperGrok Lite (2026)"} {
 		if got := planLabelOf("xai", raw, nil); got != raw {
 			t.Errorf("planLabelOf(xai, %q) = %q", raw, got)
+		}
+	}
+}
+
+// Antigravity's plan is the tier name quota-cache reads from loadCodeAssist,
+// already written for a person, so it needs no table and is never rewritten.
+// Like Grok, it has no table of its own, so a bare override reaches it, shared
+// tokens included, and its own prefix is its provider id.
+func TestAntigravityTierNamesPassThrough(t *testing.T) {
+	for _, raw := range []string{"Google AI Pro", "Google AI Ultra", "Gemini Code Assist"} {
+		if got := planLabelOf("antigravity", raw, nil); got != raw {
+			t.Errorf("planLabelOf(antigravity, %q) = %q", raw, got)
+		}
+	}
+	overrides := NormalizePlanLabels(map[string]string{"free": "Codex Free", "antigravity:Google AI Pro": "AI Pro"})
+	for _, one := range []struct{ provider, raw, want string }{
+		{"antigravity", "Google AI Pro", "AI Pro"},
+		{"antigravity", "Free", "Codex Free"},
+		{"xai", "Google AI Pro", "Google AI Pro"},
+		{"claude", "free", "Free"},
+	} {
+		if got := planLabelOf(one.provider, one.raw, overrides); got != one.want {
+			t.Errorf("planLabelOf(%q, %q) = %q; want %q", one.provider, one.raw, got, one.want)
 		}
 	}
 }

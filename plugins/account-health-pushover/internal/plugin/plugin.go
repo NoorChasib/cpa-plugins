@@ -29,7 +29,7 @@ const (
 	actionRequestHeaderValue = "1"
 )
 
-var Version = "0.4.4"
+var Version = "0.5.0"
 
 type Host = monitor.Host
 
@@ -413,7 +413,7 @@ func managementRegistration() protocol.ManagementRegistration {
 			{Method: http.MethodPost, Path: base + "/test", Description: "Sends a safe Pushover test notification."},
 		},
 		Resources: []protocol.ResourceRoute{
-			{Path: "/status", Menu: "Account Health Pushover", Description: "Shows Claude, Codex, and Grok OAuth health and Pushover delivery state."},
+			{Path: "/status", Menu: "Account Health Pushover", Description: "Shows Claude, Codex, Grok, and Antigravity OAuth health and Pushover delivery state."},
 		},
 	}
 }
@@ -423,14 +423,14 @@ func configFields() []protocol.ConfigField {
 		return protocol.ConfigField{Name: name, Type: typ, Description: description}
 	}
 	return []protocol.ConfigField{
-		field("providers", "array", "OAuth providers to monitor. Supported values: claude, codex, xai (Grok)."),
+		field("providers", "array", "OAuth providers to monitor. Supported values: claude, codex, xai (Grok), antigravity (Google Antigravity)."),
 		field("scan-interval", "string", "Full health reconciliation interval (default 1m)."),
 		field("startup-grace", "string", "Delay before the first baseline scan; usage events retain status evidence but cannot bypass it (default 30s)."),
 		field("transient-confirm-after", "string", "How long transient and ambiguous failures remain suspect before credential_down (default 10m)."),
 		field("unauthorized-confirm-after", "string", "How long continuing recent request-level 401 evidence must remain unresolved before reauthentication is required; evidence expires after 2m unless repeated 401s refresh it (default 1m)."),
 		field("usage-recheck-delay", "string", "Delay that allows CPA OAuth refresh to finish before usage-triggered reconciliation; must not exceed scan-interval (default 10s)."),
 		field("notify-recovery", "boolean", "Send one recovery notification after an alerted incident (default true)."),
-		field("notify-disabled", "boolean", "Send informational disabled notifications (default false)."),
+		field("notify-disabled", "boolean", "Send informational disabled notifications (default false). An Antigravity terms-of-service suspension alerts regardless."),
 		field("notify-removed", "boolean", "Send informational removed notifications (default false)."),
 		field("reminder-interval", "string", "Minimum interval for unresolved-incident reminders; 0 disables (default 12h)."),
 		field("notification-coalesce-window", "string", "Short window for batching simultaneous transitions (default 5s)."),
@@ -447,7 +447,7 @@ func configFields() []protocol.ConfigField {
 		field("pushover-http-timeout", "string", "Timeout for each Pushover HTTP request (default 10s)."),
 		field("max-concurrent-checks", "integer", "Maximum concurrent host runtime reads (default 4)."),
 		field("display-timezone", "string", "IANA time zone for timestamps on the status page and in Pushover messages, e.g. America/Los_Angeles, or \"local\" for the host zone (default UTC). Presentation only."),
-		field("quota-alerts", "boolean", "Poll each account's provider usage endpoint for the regular weekly window and send one warning near the limit plus one message when it is exhausted (default false). Requires host.auth.get and host.http.do."),
+		field("quota-alerts", "boolean", "Poll each account's provider usage endpoint for the regular weekly window and send one warning near the limit plus one message when it is exhausted (default false). Requires host.auth.get and host.http.do. Antigravity is alerted per model family and only with use-quota-cache."),
 		field("quota-poll-interval", "string", "How often weekly usage is read per account while quota-alerts is enabled; minimum 1m (default 15m)."),
 		field("quota-warning-percent", "number", "Used-percentage that triggers the single per-window warning; 95 means 5% remaining (default 95)."),
 		field("quota-exhausted-percent", "number", "Used-percentage that counts as the weekly limit being reached (default 100)."),

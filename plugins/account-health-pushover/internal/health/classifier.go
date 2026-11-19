@@ -16,12 +16,47 @@ func CodexClassifier() ProviderClassifier  { return classifier{} }
 // conservative classification applies.
 func XAIClassifier() ProviderClassifier { return classifier{} }
 
+// AntigravityClassifier covers CPA's "antigravity" provider (Google
+// Antigravity OAuth). At CPA v8.0.77 Antigravity shares the generic refresh
+// manager, status fields, and next_retry_after cooldown paths, so every state
+// is classified exactly as for the other providers, with one addition.
+//
+// When Google answers 403 PERMISSION_DENIED with ErrorInfo reason
+// TOS_VIOLATION, CPA deactivates the credential itself: it sets disabled,
+// status "disabled", and status_message "tos_violation"
+// (sdk/cliproxy/auth/conductor_cooldown.go). The generic classifier would read
+// that as an operator action and stay silent unless notify-disabled is on. A
+// suspension is not an operator action and signing in again does not lift it,
+// so it is classified credential_down with ReasonTOSSuspended, which alerts
+// whatever notify-disabled says.
+func AntigravityClassifier() ProviderClassifier { return antigravityClassifier{} }
+
 func Classifiers() map[string]ProviderClassifier {
 	return map[string]ProviderClassifier{
-		"claude": ClaudeClassifier(),
-		"codex":  CodexClassifier(),
-		"xai":    XAIClassifier(),
+		"antigravity": AntigravityClassifier(),
+		"claude":      ClaudeClassifier(),
+		"codex":       CodexClassifier(),
+		"xai":         XAIClassifier(),
 	}
+}
+
+type antigravityClassifier struct{}
+
+func (antigravityClassifier) Classify(snapshot RuntimeSnapshot) Observation {
+	status := strings.ToLower(strings.TrimSpace(snapshot.Status))
+	if snapshot.MessageCode == RuntimeMessageTOSViolation && (snapshot.Disabled || status == "disabled") {
+		now := snapshot.ObservedAt
+		if now.IsZero() {
+			now = time.Now()
+		}
+		return Observation{
+			State:      CredentialDown,
+			ReasonCode: ReasonTOSSuspended,
+			Detail:     "Google suspended the account for a terms-of-service violation; an appeal is required",
+			ObservedAt: now,
+		}
+	}
+	return classifier{}.Classify(snapshot)
 }
 
 func (classifier) Classify(snapshot RuntimeSnapshot) Observation {

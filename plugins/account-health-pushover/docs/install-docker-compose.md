@@ -84,6 +84,7 @@ plugins:
         - claude
         - codex
         - xai # Grok Build OAuth accounts
+        - antigravity # Google Antigravity OAuth accounts
       scan-interval: 1m
       startup-grace: 30s
       transient-confirm-after: 10m
@@ -121,7 +122,7 @@ plugins:
     reset-priority:
       enabled: true
       priority: 10
-      providers: [claude, codex, xai]
+      providers: [claude, codex]
       priority-floor: 100
       priority-step: 100
       refresh-interval: 1h
@@ -130,7 +131,7 @@ plugins:
     account-health-pushover:
       enabled: true
       priority: 20
-      providers: [claude, codex, xai]
+      providers: [antigravity, claude, codex, xai]
       scan-interval: 1m
       pushover-app-token-env: CPA_PUSHOVER_APP_TOKEN
       pushover-user-key-env: CPA_PUSHOVER_USER_KEY
@@ -160,7 +161,7 @@ No code-level imports or runtime dependency connect the projects.
    From a console served on the CPA origin with the management key remembered, the page upgrades itself to the authenticated view.
 
 7. Click **Test notification** on the authenticated view (or invoke the authenticated Management API) and confirm Pushover receives the safe test message.
-8. Click **Check now** (or invoke the authenticated Management API) and confirm Claude, Codex, and Grok accounts appear.
+8. Click **Check now** (or invoke the authenticated Management API) and confirm Claude, Codex, Grok, and Antigravity accounts appear.
 9. Recreate/redeploy the container and verify the plugin remains installed.
 
 ## Manual pre-release install

@@ -33,6 +33,27 @@ const (
 	WindowRawPrefix    = "raw:"
 )
 
+// ProviderAntigravity is the CPA provider string of a Google Antigravity OAuth
+// credential, exactly as host.auth.list reports it. It has no alias.
+const ProviderAntigravity = "antigravity"
+
+// Antigravity meters its models in separate quota families, each with its own
+// five-hour and weekly window. The default Gemini family maps to
+// WindowSession and WindowWeekly, and so to Entry.Percent; every other family
+// maps to WindowModelSession and WindowModelWeekly with one of these tokens as
+// EntryWindow.Model. The tokens are fixed machine names for a consumer to
+// label: the window's Title already carries a display name ("Weekly (Claude &
+// GPT)", "Session (Gemini Argon)").
+const (
+	// AntigravityModelShared is the one pool Claude and GPT models share.
+	AntigravityModelShared = "shared"
+	// AntigravityModelArgon, AntigravityModelCarbon and AntigravityModelHydrogen
+	// are the Gemini families Google meters apart from the default one.
+	AntigravityModelArgon    = "argon"
+	AntigravityModelCarbon   = "carbon"
+	AntigravityModelHydrogen = "hydrogen"
+)
+
 // EntryWindow is one canonical quota window. It is a separate type from Window,
 // which remains the verbatim per-provider projection under Entry.Quota.
 //
@@ -74,7 +95,10 @@ type Entry struct {
 	// Additive schema-1 fields. Readers built before these existed ignore them;
 	// snapshots written before they existed decode them as zero values.
 	// Percent and ResetAt keep their exact prior meaning: the regular weekly
-	// window. They are never repurposed.
+	// window. They are never repurposed. For Antigravity that is the default
+	// Gemini family's weekly bucket only; an account that reports none, such
+	// as one whose summary carries only the Claude & GPT pool, has a zero
+	// ObservedAt and its windows are read with ReadFreshWindows.
 	Windows  []EntryWindow `json:"windows,omitempty"`
 	Plan     string        `json:"plan,omitempty"`
 	TierName string        `json:"tier_name,omitempty"`
@@ -103,10 +127,10 @@ type Entry struct {
 
 // AccountDetails are the facts about an account that rarely change and cost a
 // request of their own to learn: Claude's plan and when its subscription
-// began, Codex's subscription renewal, Grok's plan name. The usage response
-// either lacks them or carries a weaker spelling, and asking on every poll
-// would multiply the requests made against each credential for an answer that
-// changes once a month at most.
+// began, Codex's subscription renewal, Grok's and Antigravity's plan names.
+// The usage response either lacks them or carries a weaker spelling, and
+// asking on every poll would multiply the requests made against each
+// credential for an answer that changes once a month at most.
 //
 // They are read at most once per credential every six hours. A read that fails
 // leaves the last good value in place, so a value here may be older than
@@ -116,9 +140,10 @@ type AccountDetails struct {
 	// they answered. It is what spaces the reads.
 	CheckedAt time.Time `json:"checked_at"`
 	// Plan is the plan as the account endpoint names it: a Claude token
-	// ("team", "enterprise", "max_20x", "max_5x", "max", "pro", "free") or
-	// Grok's display name ("SuperGrok Heavy"). Empty until a read supplies one,
-	// and empty again once a read answers without one.
+	// ("team", "enterprise", "max_20x", "max_5x", "max", "pro", "free"), Grok's
+	// display name ("SuperGrok Heavy"), or Antigravity's tier name from
+	// loadCodeAssist (the paid tier's, else the current tier's). Empty until
+	// a read supplies one, and empty again once a read answers without one.
 	Plan string `json:"plan,omitempty"`
 	// RenewalAt is when a Codex subscription is paid up to, as its
 	// subscription endpoint reports. Nil until a read supplies one still ahead,
@@ -210,4 +235,45 @@ func ReadFresh(path, provider, authIndex string, now time.Time, maxAge time.Dura
 		return Entry{}, ErrUnavailable
 	}
 	return entry, nil
+}
+
+// ReadFreshWindows returns the credential's canonical windows that are each
+// fresh on their own terms, in snapshot order.
+//
+// Unlike ReadFresh it does not need the entry's compatibility observation:
+// Entry.ObservedAt may be zero, as it is for an account whose provider
+// reported windows but no regular weekly one (a Codex short-window-only
+// account, or an Antigravity account whose summary carries only the Claude &
+// GPT pool). Each window is judged by its own ObservedAt instead, which must be
+// set, not after now, and no older than maxAge, and by its own ResetAt, which
+// must be zero (unknown) or still ahead. A window with its own LastError, or a
+// UsedPercent outside 0-100, is left out.
+//
+// The entry itself must exist under provider and authIndex and carry no
+// LastError: a failed or pending poll makes every window unavailable, exactly
+// as it does for ReadFresh. ErrUnavailable is returned when no window
+// qualifies. Reading never makes a window fresh; consumers must not fall back
+// to provider HTTP.
+func ReadFreshWindows(path, provider, authIndex string, now time.Time, maxAge time.Duration) ([]EntryWindow, error) {
+	snapshot, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := snapshot.Entries[Key(provider, authIndex)]
+	if !ok || entry.Provider != provider || entry.AuthIndex != authIndex || maxAge <= 0 || entry.LastError != "" {
+		return nil, ErrUnavailable
+	}
+	var fresh []EntryWindow
+	for _, w := range entry.Windows {
+		if w.ObservedAt.IsZero() || w.ObservedAt.After(now) || now.Sub(w.ObservedAt) > maxAge || w.LastError != "" ||
+			math.IsNaN(w.UsedPercent) || math.IsInf(w.UsedPercent, 0) || w.UsedPercent < 0 || w.UsedPercent > 100 ||
+			(!w.ResetAt.IsZero() && !w.ResetAt.After(now)) {
+			continue
+		}
+		fresh = append(fresh, w)
+	}
+	if len(fresh) == 0 {
+		return nil, ErrUnavailable
+	}
+	return fresh, nil
 }

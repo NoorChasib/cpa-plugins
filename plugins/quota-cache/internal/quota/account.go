@@ -16,9 +16,9 @@ import (
 // Account details are the facts about a credential that change rarely and that
 // the usage response does not carry, or carries only in a weaker spelling:
 // Claude's plan and when its subscription began, Codex's subscription renewal,
-// Grok's plan name. Each costs a request of its own, so they keep a slow
-// schedule of their own — at most one read per credential every
-// DetailsInterval — and the last good answer is carried between reads and
+// Grok's and Antigravity's plan names. Each costs a request of its own, so
+// they keep a slow schedule of their own — at most one read per credential
+// every DetailsInterval — and the last good answer is carried between reads and
 // across failed requests. Nothing here can fail a poll, back it off, or pause
 // its provider: every request that goes wrong leaves the previous value
 // standing and the observation as it was. An endpoint that answers but no
@@ -39,6 +39,12 @@ import (
 //	        -> subscription_tier_display ("SuperGrok Heavy"), else
 //	        GET https://cli-chat-proxy.grok.com/v1/user?include=subscription
 //	        -> subscriptionTier
+//
+// And the one CPA's Antigravity executor reads for its credit hint:
+//
+//	Antigravity: POST https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+//	        {"metadata":{"ideType":"ANTIGRAVITY"}}
+//	        -> paidTier.name, else currentTier.name
 const (
 	// DetailsInterval spaces the account-detail reads for one credential. A
 	// plan or a renewal date changes about once a month; four reads a day
@@ -75,7 +81,7 @@ const (
 // package reads. OpenRouter has none: its one request is its whole observation.
 func hasAccountDetails(provider string) bool {
 	switch provider {
-	case "claude", "codex", "xai":
+	case "claude", "codex", "xai", client.ProviderAntigravity:
 		return true
 	}
 	return false
@@ -134,6 +140,10 @@ func RefreshDetails(ctx context.Context, doer Doer, provider string, rawAuth []b
 		if plan, answered := xaiPlanName(ctx, doer, creds); answered {
 			next.Plan = plan
 		}
+	case client.ProviderAntigravity:
+		if plan, answered := antigravityPlanName(ctx, doer, creds); answered {
+			next.Plan = plan
+		}
 	}
 	return next
 }
@@ -162,8 +172,9 @@ func (o *Observation) ApplyDetails(details *client.AccountDetails, now time.Time
 	}
 }
 
-// readAccount performs one account-endpoint GET and returns its JSON object.
-// Every failure is just false: the caller keeps what it had.
+// readAccount performs one account-endpoint request (a GET, or Antigravity's
+// POST with its JSON body) and returns its JSON object. Every failure is just
+// false: the caller keeps what it had.
 func readAccount(ctx context.Context, doer Doer, request protocol.HostHTTPRequest) (map[string]any, bool) {
 	response, err := doer.HTTPDo(ctx, request)
 	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 || len(response.Body) > maxResponseBytes {
