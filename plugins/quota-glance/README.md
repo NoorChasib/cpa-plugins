@@ -84,7 +84,7 @@ for a loaded native library. After an update, reload any open dashboard tab and
 use **Reload Page** in the menu bar app: a page already open keeps running the
 version it loaded.
 
-Then set its options. On CPA's Plugins page, open quota-glance's
+Then set its options. On CPA's Plugins page, open Quota Glance's
 **Edit config**. The form saves them to CPA's configuration for you. It shows
 `allow-redeem` off until you save it once, though it defaults to on. As
 written in the configuration file, keeping your existing options
@@ -357,7 +357,7 @@ its first poll. Without a key there is no card and the page is unchanged.
 The card shows the dollar amount left: what you have bought, minus what you
 have spent. It turns **amber below `openrouter-warn-below`** (default `$5`) and
 **red once nothing is left**, whatever the threshold. To change the threshold,
-on CPA's Plugins page, open quota-glance's **Edit config** and set
+on CPA's Plugins page, open Quota Glance's **Edit config** and set
 `openrouter-warn-below`; it applies without a restart. Set it to `0` to keep
 the card green until the balance runs out. A value that is not a dollar amount
 of 0 or more is refused, and the CPA log says
