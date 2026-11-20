@@ -803,8 +803,8 @@ func TestRegistrationUsesCurrentABIContract(t *testing.T) {
 		fieldNames[field.Name] = true
 	}
 	for _, field := range registration.Metadata.ConfigFields {
-		if field.Name == "providers" && (!strings.Contains(field.Description, "xai") || !strings.Contains(field.Description, "antigravity")) {
-			t.Fatalf("providers field does not document xai and antigravity: %q", field.Description)
+		if field.Name == "providers" && !strings.Contains(field.Description, "xai") {
+			t.Fatalf("providers field does not document xai: %q", field.Description)
 		}
 	}
 	for _, required := range []string{"providers", "scan-interval", "startup-grace", "transient-confirm-after", "unauthorized-confirm-after", "usage-recheck-delay", "notify-recovery", "reminder-interval", "pushover-app-token-env", "pushover-user-key-env", "management-url", "quota-alerts", "quota-poll-interval", "quota-warning-percent", "quota-exhausted-percent", "quota-notification-priority", "quota-http-timeout"} {
@@ -1021,59 +1021,6 @@ func TestResourceStatusRedactsAllDiagnosticsAndUsesClosedProviderNames(t *testin
 }
 
 func floatPtr(value float64) *float64 { return &value }
-
-func TestStatusPageShowsAntigravityFamilies(t *testing.T) {
-	now := time.Date(2026, time.November, 19, 12, 0, 0, 0, time.UTC)
-	for provider, want := range map[string]string{"antigravity": "Antigravity", "ANTIGRAVITY": "Antigravity", "claude": "Claude", "codex": "Codex", "xai": "Grok", "gemini": "OAuth"} {
-		if got := providerName(provider); got != want {
-			t.Fatalf("providerName(%q)=%q want %q", provider, got, want)
-		}
-	}
-	status := monitor.Status{
-		QuotaAlerts:         true,
-		QuotaWarningPercent: 95,
-		Accounts: []monitor.AccountStatus{
-			{Provider: "antigravity", Label: "ag@example.com", AuthIndex: "ag-index", Health: health.CredentialDown, ReasonCode: string(health.ReasonTOSSuspended), Quota: &monitor.QuotaStatus{
-				LastPollAt: now,
-				Families: []monitor.QuotaFamilyStatus{
-					{Family: "gemini", Name: "Gemini", Percent: floatPtr(40), ResetAt: now.Add(72 * time.Hour), ObservedAt: now},
-					{Family: "shared", Name: "Claude & GPT", Percent: floatPtr(96), ResetAt: now.Add(72 * time.Hour), ObservedAt: now, WarningSentAt: now},
-				},
-			}},
-			{Provider: "antigravity", Label: "second@example.com", AuthIndex: "ag-two", Health: health.Healthy, Quota: &monitor.QuotaStatus{
-				LastPollAt: now,
-				Families:   []monitor.QuotaFamilyStatus{{Family: "argon", Name: "Gemini Argon", Percent: floatPtr(100), ObservedAt: now, ExhaustedSentAt: now}},
-			}},
-		},
-	}
-	page := string(renderStatusPage(status, true, now))
-	for _, want := range []string{
-		"<h2>Antigravity</h2>",
-		"Gemini: 40% used",
-		"Claude &amp; GPT: 96% used",
-		"Gemini Argon: 100% used",
-		"warning sent",
-		"exhausted alert sent",
-		"tos_suspended",
-		"1 exhausted · 1 near limit",
-		"Claude, Codex, Grok, and Antigravity OAuth credential health",
-	} {
-		if !strings.Contains(page, want) {
-			t.Fatalf("status page missing %q: %s", want, page)
-		}
-	}
-	redacted := string(renderStatusPage(redactResourceStatus(status), false, now))
-	if !strings.Contains(redacted, "Antigravity OAuth account 1") || !strings.Contains(redacted, "Antigravity OAuth account 2") || !strings.Contains(redacted, "Claude &amp; GPT: 96% used") {
-		t.Fatalf("redacted page: %s", redacted)
-	}
-	if strings.Contains(redacted, "ag@example.com") || strings.Contains(redacted, "ag-index") || strings.Contains(redacted, "tos_suspended") {
-		t.Fatalf("redacted page leaked identity or reason: %s", redacted)
-	}
-	empty := string(renderStatusPage(monitor.Status{}, true, now))
-	if !strings.Contains(empty, "No monitored Claude, Codex, Grok, or Antigravity OAuth accounts") {
-		t.Fatalf("empty state: %s", empty)
-	}
-}
 
 func TestResourcePageCarriesSameOriginUpgradeScript(t *testing.T) {
 	host := &pluginFakeHost{}

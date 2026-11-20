@@ -1,14 +1,12 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', antigravity: 'Antigravity', openrouter: 'OpenRouter', 'anthropic-api': 'Claude API credits'};
-  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', antigravity: 'daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary', openrouter: 'openrouter.ai/api/v1/credits', 'anthropic-api': 'CPA usage meter (no requests)'};
-  // The poll's request method, where it is not GET.
-  const methods = {antigravity: 'POST'};
+  const providers = {claude: 'Claude', codex: 'Codex', xai: 'Grok', openrouter: 'OpenRouter', 'anthropic-api': 'Claude API credits'};
+  const endpoints = {claude: 'api.anthropic.com/api/oauth/usage', codex: 'chatgpt.com/backend-api/wham/usage', xai: 'cli-chat-proxy.grok.com/v1/billing?format=credits', openrouter: 'openrouter.ai/api/v1/credits', 'anthropic-api': 'CPA usage meter (no requests)'};
   // Providers with no weekly window: their observation is dated by the nested
   // quota.observed_at, and the weekly observed_at stays empty.
   const noWeekly = ['openrouter', 'anthropic-api'];
-  const EMPTY = 'No supported accounts found. Enable a Claude, Codex, Grok, or Antigravity OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add a Claude Console organization under Organizations above; the next scheduled scan will discover it.';
+  const EMPTY = 'No supported accounts found. Enable a Claude, Codex, or Grok OAuth account in CPA, or set an OpenRouter management key in this plugin’s configuration, or add a Claude Console organization under Organizations above; the next scheduled scan will discover it.';
 
   // Status is read with the management key the CPA console remembers, and CPA
   // locks an address out of its management API for 30 minutes after five failed
@@ -533,7 +531,7 @@
     for (const p of history) {
       const row = node('tr');
       addCell(row, time(p.started_at,now)); row.append(account(p));
-      addCell(row, p.request_sent ? (methods[p.provider] || 'GET') + ' ' + (endpoints[p.provider] || 'Provider quota endpoint') : 'No provider request sent', 'endpoint');
+      addCell(row, p.request_sent ? 'GET ' + (endpoints[p.provider] || 'Provider quota endpoint') : 'No provider request sent', 'endpoint');
       const label = p.outcome === 'success' ? 'Success' : p.outcome === 'rate_limited' ? 'Rate limited' : 'Failed';
       const cell = addCell(row,node('span',label,'pill ' + (p.outcome === 'success' ? 'ok' : 'warn')));
       cell.append(node('span', p.http_status ? 'HTTP ' + p.http_status : p.request_sent ? 'No HTTP response' : 'Stopped before HTTP', 'secondary'));

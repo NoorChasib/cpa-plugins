@@ -23,10 +23,6 @@ type Account struct {
 	// is copied onto the entry at every scan, and an account with one is never
 	// fetched.
 	Credit *client.APICredit
-	// ProjectID is the project host.auth.list reports for an Antigravity
-	// credential, empty for every other provider. The fetcher uses it only
-	// when the credential's own file names none. It is never persisted.
-	ProjectID string
 }
 type Observation struct {
 	Quota               *client.Quota
@@ -293,7 +289,7 @@ func (c *Cache) Step(ctx context.Context, now time.Time) (result error) {
 	}
 	active := map[string]Account{}
 	for _, a := range accounts {
-		if a.AuthIndex != "" && (a.Provider == "claude" || a.Provider == "codex" || a.Provider == "xai" || a.Provider == client.ProviderAntigravity || a.Provider == "openrouter" || a.Provider == client.ProviderAnthropicAPI) {
+		if a.AuthIndex != "" && (a.Provider == "claude" || a.Provider == "codex" || a.Provider == "xai" || a.Provider == "openrouter" || a.Provider == client.ProviderAnthropicAPI) {
 			active[client.Key(a.Provider, a.AuthIndex)] = a
 		}
 	}

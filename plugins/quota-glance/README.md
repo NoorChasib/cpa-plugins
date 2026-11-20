@@ -39,9 +39,6 @@ Spending the API credit that refills soonest first is Reset Priority's
 - Quota Cache **0.6.0 or newer**, with an OpenAI API organization added on
   its page, for the [Monthly OpenAI API Credit](#openai-api-credits). Without
   one there is no OpenAI API section and nothing else changes.
-- A Quota Cache **newer than 0.6.0** for Antigravity accounts. Against an
-  older one each Antigravity account is listed as one Quota Cache does not
-  poll, with no windows, and fills in on its own once Quota Cache is updated.
 - Quota Cache **0.2.0 or newer**, running, for the poll a spent
   [banked reset](#banked-resets) asks for, organizations or not. Against an
   older or stopped Quota Cache the card updates at its next scheduled poll,
@@ -209,15 +206,14 @@ slices are for a client that draws the pool account by account — see
 
 Plan names arrive display-ready: Claude shows Team, Enterprise, Max 20x, Max 5x,
 Pro or Free; Codex's plan enum is resolved to the tier name (`pro` is Pro 200,
-`prolite` is Pro 100); Grok shows its subscription's own name, such as
-SuperGrok Heavy; and Antigravity shows the tier name Google reports for the
-account. Set `plan-labels` only if a provider renames a tier; prefix a key
-with the provider id (`codex:pro`, `claude:pro`, `xai:` for Grok and
-`antigravity:`) to rename one provider's tier. An unprefixed key applies on
-every provider, Grok and Antigravity included, as it always has — except to
-Claude's `pro`, `team`, `free` and `enterprise`. Codex sends those same tokens
-for different tiers, so an unprefixed key for one of them is taken as written
-for Codex, and leaves Claude's alone; rename Claude's with `claude:`.
+`prolite` is Pro 100); and Grok shows its subscription's own name, such as
+SuperGrok Heavy. Set `plan-labels` only if a provider renames a tier; prefix a
+key with the provider id (`codex:pro`, `claude:pro`, and `xai:` for Grok) to
+rename one provider's tier. An unprefixed key applies on every provider, Grok
+included, as it always has — except to Claude's `pro`, `team`, `free` and
+`enterprise`. Codex sends those same tokens for different tiers, so an
+unprefixed key for one of them is taken as written for Codex, and leaves
+Claude's alone; rename Claude's with `claude:`.
 
 Where the provider reports them, a credential also carries its **credit
 balance** — Codex credits, or Grok's prepaid dollars — and its **renewal date**,

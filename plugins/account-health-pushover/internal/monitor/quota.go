@@ -33,62 +33,7 @@ const (
 	quotaWarningKind   = "quota_warning"
 	quotaExhaustedKind = "quota_exhausted"
 	quotaHostWarning   = "quota-alerts is enabled but the host does not expose host.auth.get/host.http.do; weekly quota polling is disabled"
-
-	// quotaCacheMaxAge is the oldest quota-cache observation an alert may use.
-	quotaCacheMaxAge = 30 * time.Minute
-	// familyRetention bounds how long a family that a later read no longer
-	// reports keeps its latches when its reset instant is unknown. A family
-	// with a known reset keeps them until that reset passes.
-	familyRetention = 7 * 24 * time.Hour
 )
-
-// quotaFamily is one Antigravity quota family that has its own weekly window.
-// quota-cache publishes the default Gemini family's weekly window as
-// WindowWeekly and every other family's as WindowModelWeekly with the token in
-// EntryWindow.Model. Token is also the key in state.QuotaState.Families.
-type quotaFamily struct {
-	Token string
-	Name  string
-}
-
-// familyGemini is the default Gemini family. quota-cache gives it no Model
-// token because it is the account's regular weekly window.
-const familyGemini = "gemini"
-
-// antigravityFamilies is the closed set of families alerted on, in display
-// order. A model_weekly window with any other Model token is ignored.
-var antigravityFamilies = []quotaFamily{
-	{Token: familyGemini, Name: "Gemini"},
-	{Token: quotaclient.AntigravityModelShared, Name: "Claude & GPT"},
-	{Token: quotaclient.AntigravityModelArgon, Name: "Gemini Argon"},
-	{Token: quotaclient.AntigravityModelCarbon, Name: "Gemini Carbon"},
-	{Token: quotaclient.AntigravityModelHydrogen, Name: "Gemini Hydrogen"},
-}
-
-// familyName returns the display name of a family token, and its position in
-// display order.
-func familyName(token string) (string, int, bool) {
-	for rank, family := range antigravityFamilies {
-		if family.Token == token {
-			return family.Name, rank, true
-		}
-	}
-	return "", len(antigravityFamilies), false
-}
-
-// perFamilyQuota reports whether provider's weekly usage is alerted per quota
-// family rather than as one account-wide window.
-func perFamilyQuota(provider string) bool {
-	return provider == quotaclient.ProviderAntigravity
-}
-
-// familyObservation is one family's weekly window as quota-cache observed it.
-type familyObservation struct {
-	Family     string
-	Percent    float64
-	ResetAt    time.Time
-	ObservedAt time.Time
-}
 
 // QuotaStatus is the account-level quota view in status JSON.
 type QuotaStatus struct {
@@ -99,26 +44,11 @@ type QuotaStatus struct {
 	LastError       string    `json:"last_error,omitempty"`
 	WarningSentAt   time.Time `json:"warning_sent_at,omitempty"`
 	ExhaustedSentAt time.Time `json:"exhausted_sent_at,omitempty"`
-	// Families lists the per-family weekly windows of an Antigravity account,
-	// in display order. The fields above stay empty for such an account
-	// except LastPollAt and LastError, which cover the whole read.
-	Families []QuotaFamilyStatus `json:"families,omitempty"`
-}
-
-// QuotaFamilyStatus is one quota family's weekly window in status JSON.
-type QuotaFamilyStatus struct {
-	Family          string    `json:"family"`
-	Name            string    `json:"name"`
-	Percent         *float64  `json:"percent,omitempty"`
-	ResetAt         time.Time `json:"reset_at,omitempty"`
-	ObservedAt      time.Time `json:"observed_at,omitempty"`
-	WarningSentAt   time.Time `json:"warning_sent_at,omitempty"`
-	ExhaustedSentAt time.Time `json:"exhausted_sent_at,omitempty"`
 }
 
 func quotaStatusOf(account *state.Account) *QuotaStatus {
 	q := account.Quota
-	if q.ObservedAt.IsZero() && q.LastPollAt.IsZero() && len(q.Families) == 0 {
+	if q.ObservedAt.IsZero() && q.LastPollAt.IsZero() {
 		return nil
 	}
 	status := &QuotaStatus{
@@ -133,30 +63,6 @@ func quotaStatusOf(account *state.Account) *QuotaStatus {
 		percent := q.Percent
 		status.Percent = &percent
 	}
-	for token, window := range q.Families {
-		name, _, ok := familyName(token)
-		if !ok {
-			continue
-		}
-		family := QuotaFamilyStatus{
-			Family:          token,
-			Name:            name,
-			ResetAt:         window.ResetAt,
-			ObservedAt:      window.ObservedAt,
-			WarningSentAt:   window.WarningSentAt,
-			ExhaustedSentAt: window.ExhaustedSentAt,
-		}
-		if !window.ObservedAt.IsZero() {
-			percent := window.Percent
-			family.Percent = &percent
-		}
-		status.Families = append(status.Families, family)
-	}
-	sort.Slice(status.Families, func(i, j int) bool {
-		_, left, _ := familyName(status.Families[i].Family)
-		_, right, _ := familyName(status.Families[j].Family)
-		return left < right
-	})
 	return status
 }
 
@@ -238,7 +144,7 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 	loaded := m.stateLoaded
 	targets := make([]protocol.HostAuthFileEntry, 0, len(candidates))
 	for _, candidate := range candidates {
-		if !m.quotaTracked(candidate.Provider) {
+		if !quota.Supported(candidate.Provider) {
 			continue
 		}
 		if _, ok := m.data.Accounts[health.AccountKey(candidate.Provider, candidate.AuthIndex)]; ok {
@@ -253,7 +159,6 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 	type result struct {
 		entry       protocol.HostAuthFileEntry
 		observation quota.Observation
-		families    []familyObservation
 		err         error
 	}
 	results := make(chan result, len(targets))
@@ -271,11 +176,6 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 				return
 			}
 			defer func() { <-semaphore }()
-			if perFamilyQuota(target.Provider) {
-				families, readErr := m.readQuotaFamilies(target, now)
-				results <- result{entry: target, families: families, err: readErr}
-				return
-			}
 			observation, fetchErr := m.fetchQuota(ctx, target, now)
 			results <- result{entry: target, observation: observation, err: fetchErr}
 		}()
@@ -311,10 +211,6 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 			continue
 		}
 		account.Quota.LastError = ""
-		if perFamilyQuota(item.entry.Provider) {
-			m.applyQuotaFamiliesLocked(account, item.families, now)
-			continue
-		}
 		m.applyQuotaLocked(account, item.observation, now)
 	}
 	persistErr := m.persistLocked()
@@ -335,64 +231,12 @@ func (m *Monitor) PollQuota(ctx context.Context, trigger string) error {
 	return persistErr
 }
 
-// quotaTracked reports whether provider's weekly usage is read in the
-// configured mode. Antigravity is read only from quota-cache: standalone mode
-// never calls Google, so there its accounts keep credential-health monitoring
-// but are left out of quota polling without an error.
-func (m *Monitor) quotaTracked(provider string) bool {
-	if perFamilyQuota(provider) {
-		return m.cfg.QuotaCachePath != ""
-	}
-	return quota.Supported(provider)
-}
-
-// readQuotaFamilies reads an Antigravity account's per-family weekly windows
-// from quota-cache. Each window is judged fresh on its own terms by
-// ReadFreshWindows, so an account whose summary reports no default Gemini
-// weekly window, which ReadFresh refuses, still has its other families read.
-// Session windows, raw windows and unknown families are ignored; a family
-// reported twice keeps its first reading, as quota-cache does.
-func (m *Monitor) readQuotaFamilies(entry protocol.HostAuthFileEntry, now time.Time) ([]familyObservation, error) {
-	windows, err := quotaclient.ReadFreshWindows(m.cfg.QuotaCachePath, entry.Provider, entry.AuthIndex, now, quotaCacheMaxAge)
-	if err != nil {
-		return nil, err
-	}
-	families := make([]familyObservation, 0, len(antigravityFamilies))
-	seen := make(map[string]struct{}, len(antigravityFamilies))
-	for _, window := range windows {
-		var token string
-		switch window.Key {
-		case quotaclient.WindowWeekly:
-			token = familyGemini
-		case quotaclient.WindowModelWeekly:
-			token = window.Model
-			if token == familyGemini {
-				continue
-			}
-		default:
-			continue
-		}
-		if _, _, ok := familyName(token); !ok {
-			continue
-		}
-		if _, dup := seen[token]; dup {
-			continue
-		}
-		seen[token] = struct{}{}
-		families = append(families, familyObservation{Family: token, Percent: window.UsedPercent, ResetAt: window.ResetAt, ObservedAt: window.ObservedAt})
-	}
-	if len(families) == 0 {
-		return nil, quota.ErrNoWeeklyWindow
-	}
-	return families, nil
-}
-
 // fetchQuota reads one account's usage window, bounding the wait on the
 // synchronous host callbacks with the configured timeout. A callback that
 // outlives the timeout keeps its native admission and drains at shutdown.
 func (m *Monitor) fetchQuota(ctx context.Context, entry protocol.HostAuthFileEntry, now time.Time) (quota.Observation, error) {
 	if m.cfg.QuotaCachePath != "" {
-		cached, err := quotaclient.ReadFresh(m.cfg.QuotaCachePath, entry.Provider, entry.AuthIndex, now, quotaCacheMaxAge)
+		cached, err := quotaclient.ReadFresh(m.cfg.QuotaCachePath, entry.Provider, entry.AuthIndex, now, 30*time.Minute)
 		if err != nil {
 			return quota.Observation{}, err
 		}
@@ -423,123 +267,77 @@ func (m *Monitor) fetchQuota(ctx context.Context, entry protocol.HostAuthFileEnt
 	}
 }
 
-// applyQuotaLocked records a single-window observation and enqueues
-// threshold notifications. Caller holds stateMu.
+// applyQuotaLocked records an observation and enqueues threshold
+// notifications. Caller holds stateMu.
 func (m *Monitor) applyQuotaLocked(account *state.Account, observation quota.Observation, now time.Time) {
-	observedAt := now
+	q := &account.Quota
+	windowKey := quotaWindowKey(observation)
+	previousPercent := q.Percent
+	hadObservation := !q.ObservedAt.IsZero()
+	q.Percent = observation.Percent
+	q.ResetAt = observation.ResetAt
+	q.ObservedAt = now
 	if m.cfg.QuotaCachePath != "" {
-		observedAt = observation.ObservedAt
+		q.ObservedAt = observation.ObservedAt
 	}
-	m.applyQuotaWindowLocked(account, "", observation.Percent, observation.ResetAt, observedAt, now)
-}
-
-// applyQuotaFamiliesLocked records each family's weekly window under its own
-// latches. A family the read did not report keeps its latches until its
-// window is over, so a family that drops out of one read and returns with the
-// same reset is not alerted twice. Caller holds stateMu.
-func (m *Monitor) applyQuotaFamiliesLocked(account *state.Account, families []familyObservation, now time.Time) {
-	reported := make(map[string]struct{}, len(families))
-	for _, family := range families {
-		reported[family.Family] = struct{}{}
-		m.applyQuotaWindowLocked(account, family.Family, family.Percent, family.ResetAt, family.ObservedAt, now)
-	}
-	for token, window := range account.Quota.Families {
-		if _, ok := reported[token]; ok {
-			continue
-		}
-		_, _, known := familyName(token)
-		over := (!window.ResetAt.IsZero() && !window.ResetAt.After(now)) ||
-			(window.ResetAt.IsZero() && (window.ObservedAt.IsZero() || now.Sub(window.ObservedAt) > familyRetention))
-		if !known || over {
-			delete(account.Quota.Families, token)
-		}
-	}
-	if len(account.Quota.Families) == 0 {
-		account.Quota.Families = nil
-	}
-}
-
-// applyQuotaWindowLocked records one window's observation and enqueues its
-// threshold notifications. family "" is the account's single window; any other
-// value is a quota family with latches of its own. Caller holds stateMu.
-func (m *Monitor) applyQuotaWindowLocked(account *state.Account, family string, percent float64, resetAt, observedAt, now time.Time) {
-	window, _ := account.Quota.Window(family)
-	windowKey := quotaWindowKey(family, resetAt)
-	previousPercent := window.Percent
-	hadObservation := !window.ObservedAt.IsZero()
-	window.Percent = percent
-	window.ResetAt = resetAt
-	window.ObservedAt = observedAt
 
 	// A new window (different reset instant, or a large drop in usage when the
 	// provider reports no reset instant) clears the latches so the next window
 	// alerts again.
-	newWindow := window.WindowKey != windowKey
-	if !newWindow && hadObservation && percent < m.cfg.QuotaWarningPercent && previousPercent >= m.cfg.QuotaWarningPercent {
+	newWindow := q.WindowKey != windowKey
+	if !newWindow && hadObservation && observation.Percent < m.cfg.QuotaWarningPercent && previousPercent >= m.cfg.QuotaWarningPercent {
 		newWindow = true
 	}
 	if newWindow {
-		window.WindowKey = windowKey
-		window.WarningSentAt = time.Time{}
-		window.ExhaustedSentAt = time.Time{}
-		window.WarningAttemptAt = time.Time{}
-		window.ExhaustedAttemptAt = time.Time{}
+		q.WindowKey = windowKey
+		q.WarningSentAt = time.Time{}
+		q.ExhaustedSentAt = time.Time{}
+		q.WarningAttemptAt = time.Time{}
+		q.ExhaustedAttemptAt = time.Time{}
 	}
-	// The message is built from the stored window, so store it first.
-	account.Quota.SetWindow(family, window)
 
 	switch {
-	case percent >= m.cfg.QuotaExhaustedPercent:
-		if window.ExhaustedSentAt.IsZero() && due(window.ExhaustedAttemptAt, notificationRetryAfter, now) {
-			if m.enqueueQuotaLocked(account, family, quotaExhaustedKind, windowKey, now) {
-				window.ExhaustedAttemptAt = now
+	case observation.Percent >= m.cfg.QuotaExhaustedPercent:
+		if q.ExhaustedSentAt.IsZero() && due(q.ExhaustedAttemptAt, notificationRetryAfter, now) {
+			if m.enqueueQuotaLocked(account, quotaExhaustedKind, windowKey, now) {
+				q.ExhaustedAttemptAt = now
 			}
 		}
-	case percent >= m.cfg.QuotaWarningPercent:
-		if window.WarningSentAt.IsZero() && window.ExhaustedSentAt.IsZero() && due(window.WarningAttemptAt, notificationRetryAfter, now) {
-			if m.enqueueQuotaLocked(account, family, quotaWarningKind, windowKey, now) {
-				window.WarningAttemptAt = now
+	case observation.Percent >= m.cfg.QuotaWarningPercent:
+		if q.WarningSentAt.IsZero() && q.ExhaustedSentAt.IsZero() && due(q.WarningAttemptAt, notificationRetryAfter, now) {
+			if m.enqueueQuotaLocked(account, quotaWarningKind, windowKey, now) {
+				q.WarningAttemptAt = now
 			}
 		}
 	}
-	account.Quota.SetWindow(family, window)
 }
 
-// quotaWindowKey identifies the window that latches belong to: the reset
-// instant, and for a quota family the family token in front of it. The
-// single-window key is unchanged from earlier versions, so persisted latches
-// keep matching.
-func quotaWindowKey(family string, resetAt time.Time) string {
-	key := ""
-	if !resetAt.IsZero() {
-		key = resetAt.UTC().Format(time.RFC3339)
+func quotaWindowKey(observation quota.Observation) string {
+	if observation.ResetAt.IsZero() {
+		return ""
 	}
-	if family == "" {
-		return key
-	}
-	return family + "@" + key
+	return observation.ResetAt.UTC().Format(time.RFC3339)
 }
 
-func (m *Monitor) enqueueQuotaLocked(account *state.Account, family, kind, windowKey string, now time.Time) bool {
+func (m *Monitor) enqueueQuotaLocked(account *state.Account, kind, windowKey string, now time.Time) bool {
 	if m.retiring.Load() || m.retired {
 		return false
 	}
-	message := m.quotaMessage(account, family, kind)
+	message := m.quotaMessage(account, kind)
 	job := notifier.Job{
 		Message: message,
 		Valid: func() bool {
 			m.stateMu.RLock()
 			defer m.stateMu.RUnlock()
-			window, ok := account.Quota.Window(family)
-			if !m.accountCurrentLocked(account) || !ok || window.WindowKey != windowKey {
+			if !m.accountCurrentLocked(account) || account.Quota.WindowKey != windowKey {
 				return false
 			}
 			if kind == quotaExhaustedKind {
-				return window.ExhaustedSentAt.IsZero()
+				return account.Quota.ExhaustedSentAt.IsZero()
 			}
-			return window.WarningSentAt.IsZero() && window.ExhaustedSentAt.IsZero()
+			return account.Quota.WarningSentAt.IsZero() && account.Quota.ExhaustedSentAt.IsZero()
 		},
-		Callback: m.quotaDeliveryCallback(account, family, kind, windowKey, now),
+		Callback: m.quotaDeliveryCallback(account, kind, windowKey, now),
 	}
 	if !m.dispatcher.Enqueue(job) {
 		m.data.LastNotificationErr = "notification queue is unavailable"
@@ -548,24 +346,23 @@ func (m *Monitor) enqueueQuotaLocked(account *state.Account, family, kind, windo
 	return true
 }
 
-func (m *Monitor) quotaDeliveryCallback(account *state.Account, family, kind, windowKey string, attemptAt time.Time) func(notifier.DeliveryResult) {
+func (m *Monitor) quotaDeliveryCallback(account *state.Account, kind, windowKey string, attemptAt time.Time) func(notifier.DeliveryResult) {
 	return func(result notifier.DeliveryResult) {
 		m.stateMu.Lock()
 		defer m.stateMu.Unlock()
 		if m.retiring.Load() || m.retired {
 			return
 		}
-		window, ok := account.Quota.Window(family)
-		current := m.accountCurrentLocked(account) && ok && window.WindowKey == windowKey
+		current := m.accountCurrentLocked(account) && account.Quota.WindowKey == windowKey
+		q := &account.Quota
 		switch {
 		case result.Unattempted:
 			if current {
-				if kind == quotaExhaustedKind && window.ExhaustedAttemptAt.Equal(attemptAt) {
-					window.ExhaustedAttemptAt = time.Time{}
-				} else if kind == quotaWarningKind && window.WarningAttemptAt.Equal(attemptAt) {
-					window.WarningAttemptAt = time.Time{}
+				if kind == quotaExhaustedKind && q.ExhaustedAttemptAt.Equal(attemptAt) {
+					q.ExhaustedAttemptAt = time.Time{}
+				} else if kind == quotaWarningKind && q.WarningAttemptAt.Equal(attemptAt) {
+					q.WarningAttemptAt = time.Time{}
 				}
-				account.Quota.SetWindow(family, window)
 			}
 			return
 		case result.Accepted:
@@ -573,11 +370,10 @@ func (m *Monitor) quotaDeliveryCallback(account *state.Account, family, kind, wi
 			m.data.LastNotificationErr = ""
 			if current {
 				if kind == quotaExhaustedKind {
-					window.ExhaustedSentAt = result.At
+					q.ExhaustedSentAt = result.At
 				} else {
-					window.WarningSentAt = result.At
+					q.WarningSentAt = result.At
 				}
-				account.Quota.SetWindow(family, window)
 			}
 		default:
 			m.data.LastNotificationErr = result.Error
@@ -587,35 +383,24 @@ func (m *Monitor) quotaDeliveryCallback(account *state.Account, family, kind, wi
 	}
 }
 
-// quotaMessage builds a threshold message. For a quota family the provider
-// label and the limit both name the family, because the account's other
-// families keep their own limits.
-func (m *Monitor) quotaMessage(account *state.Account, family, kind string) notifier.Message {
+func (m *Monitor) quotaMessage(account *state.Account, kind string) notifier.Message {
 	provider := titleProvider(account.Provider)
-	window, _ := account.Quota.Window(family)
-	percent := window.Percent
+	percent := account.Quota.Percent
 	remaining := 100 - percent
 	if remaining < 0 {
 		remaining = 0
 	}
 	reset := "unknown"
-	if !window.ResetAt.IsZero() {
-		reset = m.formatTime(window.ResetAt)
-	}
-	limit := "its weekly limit"
-	routing := "Other healthy accounts will continue routing if available."
-	if name, _, ok := familyName(family); ok && family != "" {
-		provider = fmt.Sprintf("%s (%s)", provider, name)
-		limit = fmt.Sprintf("its %s weekly limit", name)
-		routing = "Its other model families have separate limits, and other healthy accounts will continue routing if available."
+	if !account.Quota.ResetAt.IsZero() {
+		reset = m.formatTime(account.Quota.ResetAt)
 	}
 	var title, body string
 	if kind == quotaExhaustedKind {
 		title = fmt.Sprintf("CLIProxyAPI: %s weekly limit reached", provider)
-		body = fmt.Sprintf("%s has used %s of %s.\nResets: %s\n%s", account.Label, formatPercent(percent), limit, reset, routing)
+		body = fmt.Sprintf("%s has used %s of its weekly limit.\nResets: %s\nOther healthy accounts will continue routing if available.", account.Label, formatPercent(percent), reset)
 	} else {
 		title = fmt.Sprintf("CLIProxyAPI: %s weekly limit almost used", provider)
-		body = fmt.Sprintf("%s has used %s of %s (%s remaining).\nResets: %s", account.Label, formatPercent(percent), limit, formatPercent(remaining), reset)
+		body = fmt.Sprintf("%s has used %s of its weekly limit (%s remaining).\nResets: %s", account.Label, formatPercent(percent), formatPercent(remaining), reset)
 	}
 	if m.cfg.ManagementURL != "" {
 		body += "\nManagement: " + m.cfg.ManagementURL

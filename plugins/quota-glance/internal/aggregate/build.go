@@ -189,16 +189,10 @@ func providerOrderOf(provider string) int {
 		return 20
 	case "xai":
 		return 30
-	case qc.ProviderAntigravity:
-		return 40
 	}
 	return 100
 }
 
-// providerTitleOf is a provider's section heading, and the provider half of
-// the menu bar's "Provider · Row" titles. Antigravity's rows arrive titled by
-// quota family from quota-cache ("Weekly (Gemini)", "Session (Claude & GPT)"),
-// so its heading names the product and never a model.
 func providerTitleOf(provider string) string {
 	switch provider {
 	case "claude":
@@ -207,8 +201,6 @@ func providerTitleOf(provider string) string {
 		return "Codex"
 	case "xai":
 		return "xAI"
-	case qc.ProviderAntigravity:
-		return "Antigravity"
 	}
 	return provider
 }

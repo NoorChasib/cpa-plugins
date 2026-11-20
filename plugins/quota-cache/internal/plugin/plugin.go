@@ -28,7 +28,7 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.7.0"
+var Version = "0.8.0"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -764,13 +764,7 @@ func (f hostFetcher) List(ctx context.Context) ([]cache.Account, error) {
 			unindexed = true
 			continue
 		}
-		account := cache.Account{Provider: provider, AuthIndex: entry.AuthIndex}
-		// CPA resolves an Antigravity account's project before it writes it
-		// into the credential file, and lists it meanwhile.
-		if provider == client.ProviderAntigravity {
-			account.ProjectID = strings.TrimSpace(entry.ProjectID)
-		}
-		accounts = append(accounts, account)
+		accounts = append(accounts, cache.Account{Provider: provider, AuthIndex: entry.AuthIndex})
 	}
 	// CPA sends plugin.register before its core auth manager exists, and until
 	// the manager is attached host.auth.list falls back to reading the auth
@@ -822,7 +816,7 @@ func (f hostFetcher) Fetch(ctx context.Context, account cache.Account, known *cl
 	}
 	doer := &captureDoer{host: f.host}
 	now := time.Now().UTC()
-	observation, err := quota.FetchListed(ctx, doer, account.Provider, raw, quota.Listing{ProjectID: account.ProjectID}, now)
+	observation, err := quota.Fetch(ctx, doer, account.Provider, raw, now)
 	// Account details only after a poll that will be recorded as a success: a
 	// refused or rate-limited usage request says the credential or the
 	// provider is in no state to answer more. They go to the host directly,
@@ -894,8 +888,7 @@ func observed(doer *captureDoer, observation quota.Observation, err error) (cach
 
 // captureDoer records the poll's own request, the usage or credits read, which
 // is always the first a fetch makes. A later request through it, Codex's reset
-// inventory or Antigravity's model-list fallback (asked only after the summary
-// answered 2xx), is an optional read on top of a reading already in hand, so its
+// inventory, is an optional read on top of a reading already in hand, so its
 // status is never the poll's: like a profile 429, an inventory 429 must not
 // discard a good usage reading, count as a rate limit, or pause the provider.
 type captureDoer struct {

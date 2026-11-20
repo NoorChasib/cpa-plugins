@@ -878,17 +878,6 @@ func (m *Monitor) applyObservation(snapshot health.RuntimeSnapshot, observation 
 		account.ClearSuspect()
 	}
 
-	// A ToS suspension always gets its own alert, with the appeal guidance,
-	// even when it lands inside an incident that has already alerted (an
-	// Antigravity account that was credential_down or reauth_required before
-	// Google suspended it). Clearing AlertSent once, on entry, reuses the
-	// ordinary delivery and retry path; LastReasonCode is persisted, so the
-	// message is not repeated on later scans or after a restart.
-	enteredTOS := observation.ReasonCode == health.ReasonTOSSuspended && account.LastReasonCode != health.ReasonTOSSuspended
-	if enteredTOS {
-		account.AlertSent = false
-	}
-
 	previous := account.Health
 	if previous != newState {
 		account.PreviousHealth = previous
@@ -929,7 +918,7 @@ func (m *Monitor) applyObservation(snapshot health.RuntimeSnapshot, observation 
 	} else {
 		account.LastReasonCode = observation.ReasonCode
 		if health.IsFailure(newState) {
-			if !account.AlertSent && (enteredTOS || due(account.LastAlertAttemptAt, notificationRetryAfter, now)) {
+			if !account.AlertSent && due(account.LastAlertAttemptAt, notificationRetryAfter, now) {
 				m.enqueueFailureLocked(account, false, now)
 			} else if account.AlertSent && m.cfg.ReminderInterval > 0 && due(account.LastAlertAt, m.cfg.ReminderInterval, now) && due(account.LastAlertAttemptAt, notificationRetryAfter, now) {
 				m.enqueueFailureLocked(account, true, now)
@@ -1308,11 +1297,6 @@ func (m *Monitor) failureMessage(account *state.Account, notificationKind string
 	if notificationKind == "reminder" {
 		title = fmt.Sprintf("CLIProxyAPI: %s incident still unresolved", provider)
 		body = fmt.Sprintf("%s is still unavailable.\nIncident: %s\nReason: %s\nFirst detected: %s", account.Label, incidentKind, account.LastReasonCode, m.formatTime(account.FirstDetectedAt))
-	} else if account.Health == health.CredentialDown && account.LastReasonCode == health.ReasonTOSSuspended {
-		// Only the Antigravity classifier reports this reason. Signing in again
-		// does not lift a suspension, so the message points at the appeal.
-		title = fmt.Sprintf("CLIProxyAPI: %s account suspended", provider)
-		body = fmt.Sprintf("%s was suspended by Google for a terms-of-service violation, and CPA has disabled it.\nSigning in again will not fix this. Appeal the suspension with Google, then re-enable the credential in CPA once it is reinstated.\nIncident: %s\nReason: %s\nDetected: %s\nOther healthy accounts will continue routing if available.", account.Label, incidentKind, account.LastReasonCode, m.formatTime(account.FirstDetectedAt))
 	} else if account.Health == health.ReauthRequired {
 		title = fmt.Sprintf("CLIProxyAPI: %s reauth required", provider)
 		body = fmt.Sprintf("%s is unavailable because its OAuth credentials were rejected.\nManual sign-in is required.\nIncident: %s\nReason: %s\nDetected: %s\nOther healthy accounts will continue routing if available.", account.Label, incidentKind, account.LastReasonCode, m.formatTime(account.FirstDetectedAt))
@@ -1466,9 +1450,6 @@ func titleProvider(provider string) string {
 	}
 	if strings.EqualFold(provider, "xai") {
 		return "Grok"
-	}
-	if strings.EqualFold(provider, "antigravity") {
-		return "Antigravity"
 	}
 	runes := []rune(strings.ToLower(provider))
 	runes[0] = unicode.ToUpper(runes[0])

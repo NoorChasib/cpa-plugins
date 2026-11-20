@@ -1,18 +1,17 @@
 # CLIProxyAPI Account Health → Pushover
 
-`account-health-pushover` is a native CLIProxyAPI (CPA) Go plugin that monitors Claude, Codex, Grok (xAI), and Google Antigravity OAuth credentials and sends transition-based Pushover notifications when an account requires reauthentication or remains credential-unhealthy.
+`account-health-pushover` is a native CLIProxyAPI (CPA) Go plugin that monitors Claude, Codex, and Grok (xAI) OAuth credentials and sends transition-based Pushover notifications when an account requires reauthentication or remains credential-unhealthy.
 
 Health alerts deliberately do **not** fire for ordinary quota consumption. Five-hour limits, weekly limits, Claude model/Fable limits, HTTP 429 responses, and known quota cooldowns are credential-healthy operational states.
 
-Optionally (`quota-alerts: true`), the plugin also polls each account's regular **weekly** usage window straight from the provider and sends one warning when 5% remains and one message when the window is exhausted. Antigravity accounts are alerted per model family, from Quota Cache only. See [Weekly quota alerts](#weekly-quota-alerts) and [Antigravity](#antigravity).
+Optionally (`quota-alerts: true`), the plugin also polls each account's regular **weekly** usage window straight from the provider and sends one warning when 5% remains and one message when the window is exhausted. See [Weekly quota alerts](#weekly-quota-alerts).
 
 ## What it does
 
-- Dynamically discovers Claude, Codex, Grok (CPA provider `xai`), and Antigravity (CPA provider `antigravity`) OAuth credentials through `host.auth.list`.
+- Dynamically discovers Claude, Codex, and Grok (CPA provider `xai`) OAuth credentials through `host.auth.list`.
 - Reads current runtime health through `host.auth.get_runtime`.
 - Classifies accounts as `healthy`, `quota_limited`, `suspect`, `credential_down`, `reauth_required`, `disabled`, or `removed`.
 - Immediately alerts on exact definitive refresh-path `unauthorized`/`invalid_grant` runtime states.
-- Alerts when Google suspends an Antigravity account for a terms-of-service violation, as `credential_down` with reason `tos_suspended`, even with `notify-disabled: false`. See [Antigravity](#antigravity).
 - Confirms request-level 401 evidence for 1 minute by default, giving CPA time to refresh successfully before declaring `reauth_required`.
 - Confirms transient network/5xx errors for 10 minutes by default before declaring `credential_down`.
 - Persists incident/delivery state to prevent restart spam.
@@ -22,7 +21,7 @@ Optionally (`quota-alerts: true`), the plugin also polls each account's regular 
 - Decodes only `AuthIndex`, `Failed`, and `Failure.StatusCode` from failed usage records, retains that structured status evidence briefly, and schedules a delayed runtime recheck; it never materializes the failure body or sends from the request callback.
 - Provides authenticated JSON status, an authenticated browser status page with **Check now** and **Test notification** buttons, and a redacted read-only browser resource that appears in the Management Center sidebar.
 - Renders timestamps in a configurable `display-timezone` as `Tue Sep 1 2026 - 6:25:36 PM PDT` on the status page and in Pushover messages.
-- Optionally polls Claude, Codex, and Grok weekly usage every 15 minutes and sends one "almost used" warning plus one "limit reached" message per weekly window, latched across restarts. With Quota Cache it does the same for each Antigravity model family, with separate latches per family.
+- Optionally polls Claude, Codex, and Grok weekly usage every 15 minutes and sends one "almost used" warning plus one "limit reached" message per weekly window, latched across restarts.
 - Never changes credential priority, routing policy, quota state, OAuth tokens, or auth files.
 
 This repository has no code-level dependency on the separate reset-priority plugin.
@@ -83,7 +82,7 @@ plugins:
     account-health-pushover:
       enabled: true
       priority: 20 # Plugin load/order priority only; unrelated to OAuth credential priority.
-      providers: [antigravity, claude, codex, xai]
+      providers: [claude, codex, xai]
       scan-interval: 1m
       startup-grace: 30s
       transient-confirm-after: 10m
@@ -208,14 +207,14 @@ Do not paste the management key into shell history on shared systems; use an env
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `providers` | `[antigravity, claude, codex, xai]` | OAuth providers monitored dynamically. `xai` is CPA's provider ID for Grok Build OAuth accounts; they display as **Grok**. `antigravity` is CPA's provider ID for Google Antigravity OAuth accounts; they display as **Antigravity**. An explicit list replaces the default, so add `antigravity` to an existing list to monitor it. |
+| `providers` | `[claude, codex, xai]` | OAuth providers monitored dynamically. `xai` is CPA's provider ID for Grok Build OAuth accounts; they display as **Grok**. |
 | `scan-interval` | `1m` | Full roster/runtime reconciliation interval. |
 | `startup-grace` | `30s` | Initial grace before baseline classification; usage evidence is retained but cannot bypass this delay. |
 | `transient-confirm-after` | `10m` | Confirmation time before a typed transient `suspect` becomes `credential_down`. |
 | `unauthorized-confirm-after` | `1m` | Confirmation time before continuing recent request-level 401 evidence becomes `reauth_required`; exact refresh-path rejection remains immediate. Request evidence expires after 2 minutes, so longer windows confirm only while repeated 401s refresh that evidence. |
 | `usage-recheck-delay` | `10s` | Delay before a usage-triggered reconciliation so CPA's synchronous OAuth refresh can finish; must not exceed `scan-interval`. |
 | `notify-recovery` | `true` | Send one recovery after an alerted incident. |
-| `notify-disabled` | `false` | Optional informational disabled notice. An Antigravity terms-of-service suspension is not an operator action and alerts regardless. |
+| `notify-disabled` | `false` | Optional informational disabled notice. |
 | `notify-removed` | `false` | Optional informational removed notice. |
 | `reminder-interval` | `12h` | Unresolved reminder interval; `0` disables. |
 | `notification-coalesce-window` | `5s` | Batch simultaneous same-kind transitions. |
@@ -251,9 +250,7 @@ With `quota-alerts: true` the plugin reads the regular weekly window for every m
 
 Five-hour windows, Claude model-scoped weekly windows, Codex additional/code-review limits, and credits are ignored.
 
-Antigravity has no direct endpoint here: its weekly windows come only from Quota Cache, one per model family, as described under [Antigravity quota families](#antigravity-quota-families). In standalone mode Antigravity accounts are left out of quota polling.
-
-Per account and per weekly window (keyed by the provider's reset instant; for an Antigravity family, by the family and its reset instant) the plugin sends at most:
+Per account and per weekly window (keyed by the provider's reset instant) the plugin sends at most:
 
 - one **"weekly limit almost used"** message when usage first reaches `quota-warning-percent`;
 - one **"weekly limit reached"** message when usage first reaches `quota-exhausted-percent`.
@@ -262,51 +259,9 @@ Both latches persist in the state file, so restarts and repeated polls never rep
 
 Detection is polling-based: an account that crosses a threshold is reported at the next poll, so a warning can lag by up to `quota-poll-interval`. **Check now** also queues an immediate quota poll.
 
-Reading usage requires the account's own OAuth access token, so while quota alerts are enabled the plugin calls `host.auth.get` and `host.http.do`. It decodes only `access_token`, `account_id`/`chatgpt_account_id` (Codex), the `id_token` account claim (Codex fallback), and `sub` (Grok) from the credential JSON, and never reads an Antigravity credential; the document is never logged, persisted, or rendered, and provider response bodies are discarded after parsing. Every quota error shown in status is a closed, static string. The endpoints are undocumented and the providers change limits without notice; a change breaks the alert, never the health monitor.
+Reading usage requires the account's own OAuth access token, so while quota alerts are enabled the plugin calls `host.auth.get` and `host.http.do`. It decodes only `access_token`, `account_id`/`chatgpt_account_id` (Codex), the `id_token` account claim (Codex fallback), and `sub` (Grok) from the credential JSON; the document is never logged, persisted, or rendered, and provider response bodies are discarded after parsing. Every quota error shown in status is a closed, static string. The endpoints are undocumented and the providers change limits without notice; a change breaks the alert, never the health monitor.
 
 Environment values take precedence over secret files. Direct Pushover values are intentionally not supported as plugin config fields.
-
-## Antigravity
-
-CPA reports Google Antigravity OAuth credentials as provider `antigravity` (no alias), with the account email as identity. They are discovered, classified and alerted like the other providers and display as **Antigravity** in notifications, on the status page, and in its redacted labels ("Antigravity OAuth account 1"). `antigravity` is in the default `providers` list; a configuration with an explicit list must add it.
-
-### Health classification
-
-At CPA v8.0.77 Antigravity uses the generic refresh manager, status fields, and `next_retry_after` cooldown paths, so every state classifies exactly as it does for Claude, Codex, and Grok, with one addition.
-
-When Google answers a request with 403 `PERMISSION_DENIED` and ErrorInfo reason `TOS_VIOLATION`, CPA deactivates the credential itself: it sets `disabled`, status `disabled`, and status message `tos_violation`. The plugin reports that as `credential_down` with reason `tos_suspended` rather than as an operator's `disabled`, so it alerts even with `notify-disabled: false`:
-
-```text
-CLIProxyAPI: Antigravity account suspended
-<account> was suspended by Google for a terms-of-service violation, and CPA has disabled it.
-Signing in again will not fix this. Appeal the suspension with Google, then re-enable the credential in CPA once it is reinstated.
-```
-
-The usual reminder interval applies while the suspension lasts. Re-enabling the credential in CPA clears the status message; the recovery is reported, as for any incident, once CPA reports the credential active and available again. Disabling it yourself instead replaces the message with CPA's own, which the plugin reads as an operator action and stops reminding. The rule applies only to provider `antigravity`; the same message on any other provider classifies as before.
-
-CPA does not persist the status message. After a CPA restart a suspended credential is still disabled but carries no reason, so it reads as an operator-disabled account and the plugin stops reminding.
-
-### Antigravity quota families
-
-Antigravity meters separate weekly pools per model family. With `quota-alerts: true` and `use-quota-cache: true`, the plugin reads each Antigravity account's canonical windows from Quota Cache with `ReadFreshWindows`, which judges each window by its own observation time (at most 30 minutes old) and reset. Every family is alerted on its own:
-
-| Quota Cache window | Family | Alert names it as |
-|---|---|---|
-| `weekly` | default Gemini | Antigravity (Gemini) |
-| `model_weekly`, model `shared` | the pool Claude and GPT models share | Antigravity (Claude & GPT) |
-| `model_weekly`, model `argon` | Gemini Argon | Antigravity (Gemini Argon) |
-| `model_weekly`, model `carbon` | Gemini Carbon | Antigravity (Gemini Carbon) |
-| `model_weekly`, model `hydrogen` | Gemini Hydrogen | Antigravity (Gemini Hydrogen) |
-
-Five-hour windows, raw windows, and any other model token are ignored. Thresholds, poll interval, and priority are the shared `quota-*` settings. A message names the family, for example `CLIProxyAPI: Antigravity (Claude & GPT) weekly limit almost used` with `<account> has used 96% of its Claude & GPT weekly limit (4% remaining).` An exhausted message adds that the account's other model families have separate limits.
-
-Each family has its own warning and exhausted latches, persisted in the state file under the account's `quota.families.<family>` and keyed by the family and its reset instant (`shared@2026-11-22T12:00:00Z`). Families therefore alert, re-arm after a drop below `quota-warning-percent`, and start new windows independently. A family missing from one read keeps its latches until its reset passes (or, with no known reset, for seven days), so a family that drops out of one Quota Cache answer and returns in the same window is not alerted twice. Claude, Codex, and Grok accounts keep their single window and the state file layout of earlier versions.
-
-The JSON status lists the families under the account's `quota.families`, and the status page shows one usage bar per family. The summary tile counts an Antigravity account once, by its most-used family.
-
-When Quota Cache has no fresh family window for an account, the row shows `usage request failed`; when it has only five-hour windows, it shows `usage endpoint did not report a weekly window`. Neither is retried against Google.
-
-In standalone mode (`use-quota-cache` off) the plugin never calls Google and never reads an Antigravity credential. Antigravity accounts are still monitored for credential health but are left out of quota polling without an error, and their row shows no weekly usage.
 
 ## Persistence
 
@@ -392,8 +347,6 @@ Release procedure: [docs/release.md](docs/release.md).
 [ ] Claude accounts discovered dynamically
 [ ] Codex accounts discovered dynamically
 [ ] Grok (xai) accounts discovered dynamically
-[ ] Antigravity accounts discovered dynamically when providers includes antigravity
-[ ] with use-quota-cache on, each Antigravity row shows one weekly usage bar per model family
 [ ] quota-limited accounts do not send health alerts
 [ ] with quota-alerts enabled, each account row shows weekly usage and a reset time
 [ ] an account at or above quota-warning-percent sends exactly one warning per week
@@ -409,7 +362,7 @@ Release procedure: [docs/release.md](docs/release.md).
 
 ## Security notes
 
-- `host.auth.get` returns full raw auth JSON, so it is called only while `quota-alerts` is enabled, only for OAuth accounts of supported providers, and the document is decoded for the token fields of one usage request and then dropped. It is never called for an Antigravity account, whose usage comes only from Quota Cache.
+- `host.auth.get` returns full raw auth JSON, so it is called only while `quota-alerts` is enabled, only for OAuth accounts of supported providers, and the document is decoded for the token fields of one usage request and then dropped.
 - Provider usage responses are parsed for the weekly percentage and reset instant only; bodies and provider error text never reach logs, state, status, or notifications.
 - The potentially secret `HostAuthFileEntry.Account` field is deliberately ignored.
 - Usage failure bodies are never persisted, logged, rendered, or copied into notifications.

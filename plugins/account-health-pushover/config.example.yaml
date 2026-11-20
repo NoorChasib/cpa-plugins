@@ -12,7 +12,6 @@ plugins:
         - claude
         - codex
         - xai # Grok Build OAuth accounts
-        - antigravity # Google Antigravity OAuth accounts
 
       scan-interval: 1m
       startup-grace: 30s
@@ -21,7 +20,7 @@ plugins:
       usage-recheck-delay: 10s
 
       notify-recovery: true
-      notify-disabled: false # An Antigravity terms-of-service suspension alerts regardless.
+      notify-disabled: false
       notify-removed: false
       reminder-interval: 12h
       notification-coalesce-window: 5s
@@ -48,8 +47,6 @@ plugins:
       # (Claude oauth/usage, Codex wham/usage, Grok billing credits) and sends one
       # warning per window when usage crosses quota-warning-percent, plus one
       # message when the window is exhausted. Health alerts are unaffected.
-      # Antigravity is read only from Quota Cache (use-quota-cache below), one
-      # weekly window per model family, each alerted on its own.
       quota-alerts: false
       quota-poll-interval: 15m
       quota-warning-percent: 95 # 5% remaining

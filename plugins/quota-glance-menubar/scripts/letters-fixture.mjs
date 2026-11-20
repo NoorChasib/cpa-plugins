@@ -56,13 +56,6 @@ export const SCENARIOS = [
   {name: 'skipped l and monthly', windows: [
     ...rows('claude', 'monthly', 'model_weekly:llama', 'model_session:Opus-4'),
   ]},
-  // Antigravity's quota families, in the summary's order: the default Gemini
-  // family as session/weekly, then one model token per other family.
-  {name: 'antigravity families', windows: [
-    ...rows('antigravity', 'session', 'weekly',
-      'model_session:argon', 'model_session:carbon', 'model_session:hydrogen', 'model_session:shared',
-      'model_weekly:argon', 'model_weekly:carbon', 'model_weekly:hydrogen', 'model_weekly:shared'),
-  ]},
   {name: 'raw rows', windows: [
     ...rows('xai', 'credits', 'raw:xai:sandbox', 'raw:xai:Omega', 'raw:xai:quota-2', 'raw:xai:image-gen', 'raw:xai:Images', 'raw:xai:BUILD', 'raw:xai:bulk', 'raw:noprovider'),
   ]},

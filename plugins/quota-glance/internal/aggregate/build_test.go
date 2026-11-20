@@ -1030,13 +1030,6 @@ func degradedRoster() []Identity {
 		{AuthIndex: "codex-model@example.com.json", Provider: "codex",
 			Recent: ringOf(12, 5*time.Minute, map[int]int64{10: 1, 11: 2}, nil)},
 		{AuthIndex: "xai-raw@example.com.json", Provider: "xai"},
-		// Antigravity's quota families: the default Gemini one as session and
-		// weekly, the Claude & GPT pool and Gemini Argon as per-model rows,
-		// Argon's weekly untouched and so with no reset. The second account
-		// reports the Claude & GPT pool alone, so quota-cache gave it no
-		// entry-level observation, only its windows'.
-		{AuthIndex: "antigravity-families@example.com.json", Provider: "antigravity"},
-		{AuthIndex: "antigravity-shared-only@example.com.json", Provider: "antigravity"},
 	}
 }
 
