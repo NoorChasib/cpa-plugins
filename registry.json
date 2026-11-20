@@ -17,16 +17,16 @@
         "codex",
         "grok"
       ],
-      "version": "0.5.0",
+      "version": "0.6.0",
       "install": {
         "type": "direct",
         "artifacts": [
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/account-health-pushover/v0.5.0/account-health-pushover_0.5.0_linux_amd64.zip",
-            "sha256": "4e4effbaa4dfd1ea60ea40f5d8a123651f1e421d6845429fb632cb21fc7a9ee7",
-            "size": 7511840
+            "url": "https://github.com/NoorChasib/cpa-plugins/releases/download/account-health-pushover/v0.6.0/account-health-pushover_0.6.0_linux_amd64.zip",
+            "sha256": "6a7e0c6bfa0b2f0b22a9532e17243ba0c15914ee148704d1f0689bf01345bbfc",
+            "size": 7495530
           }
         ]
       }
