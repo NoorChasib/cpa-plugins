@@ -58,7 +58,12 @@ import (
 
 const ID = "quota-glance"
 
-var Version = "0.13.0"
+// PluginName is the label CPA shows for the plugin on its Plugins page and in
+// its logs, the same as the catalog's name. ID stays the configuration key,
+// route and data-directory name.
+const PluginName = "Quota Glance"
+
+var Version = "0.13.1"
 
 // rawManagementSchema is the first RPC schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -449,7 +454,7 @@ func registration(schema uint32) protocol.Registration {
 	return protocol.Registration{
 		SchemaVersion: schema,
 		Metadata: protocol.Metadata{
-			Name: ID, Version: Version, Author: "NoorChasib",
+			Name: PluginName, Version: Version, Author: "NoorChasib",
 			GitHubRepository: "https://github.com/NoorChasib/cpa-plugins",
 			// Every key an operator sets, so CPA's Plugins page can edit
 			// them all; configFieldExclusions in the tests names the rest.

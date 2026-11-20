@@ -28,7 +28,12 @@ import (
 
 const ID = "quota-cache"
 
-var Version = "0.8.0"
+// PluginName is the label CPA shows for the plugin on its Plugins page and in
+// its logs, the same as the catalog's name. ID stays the configuration key,
+// route and data-directory name.
+const PluginName = "Quota Cache"
+
+var Version = "0.8.1"
 
 // rawManagementSchema is the first schema at which CPA hands this plugin's
 // management JSON to the browser as it is. Below it, CPA HTML-escapes every
@@ -419,7 +424,7 @@ func (p *Plugin) configure(raw []byte) (protocol.Registration, error) {
 	// What CPA holds the plugin to from this answer on, so the status says
 	// whether CPA escapes its strings.
 	p.schema.Store(min(req.SchemaVersion, rawManagementSchema))
-	return protocol.Registration{SchemaVersion: p.schema.Load(), Metadata: protocol.Metadata{Name: ID, Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: configFields},
+	return protocol.Registration{SchemaVersion: p.schema.Load(), Metadata: protocol.Metadata{Name: PluginName, Version: Version, Author: "NoorChasib", GitHubRepository: "https://github.com/NoorChasib/cpa-plugins", ConfigFields: configFields},
 		Capabilities: protocol.RegistrationCapabilities{UsagePlugin: p.cache != nil, ManagementAPI: true}}, nil
 }
 

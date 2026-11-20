@@ -1,5 +1,5 @@
-# On CPA's Plugins page, open quota-glance's Edit config: the form saves its
-# options to CPA's configuration for you, and quota-cache's are on its own
+# On CPA's Plugins page, open Quota Glance's Edit config: the form saves its
+# options to CPA's configuration for you, and Quota Cache's are on its own
 # entry there. If you edit config.yaml instead, merge these fields into your
 # existing plugin configuration and keep all other options.
 plugins:

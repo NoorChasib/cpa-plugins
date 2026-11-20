@@ -1,5 +1,5 @@
 # Set these on CPA's Plugins page: open Quota Cache's Edit config, which
-# shows them under Config fields in the Configure quota-cache dialog. If you
+# shows them under Config fields in the Configure Quota Cache dialog. If you
 # edit config.yaml instead, merge these fields into the existing plugin
 # configuration; preserve all other options.
 plugins:

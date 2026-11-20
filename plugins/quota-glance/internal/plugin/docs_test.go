@@ -61,7 +61,7 @@ func prose(name, text string) string {
 // writes it, so "edit config.yaml" is not a mention.
 func TestDocsNameThePluginsFormAsTheConsoleDoes(t *testing.T) {
 	for name, text := range operatorDocs(t) {
-		open := "on CPA's Plugins page, open quota-glance's **Edit config**"
+		open := "on CPA's Plugins page, open Quota Glance's **Edit config**"
 		if strings.HasSuffix(name, ".yaml") {
 			open = strings.ReplaceAll(open, "**", "")
 		}

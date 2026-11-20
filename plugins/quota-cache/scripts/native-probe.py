@@ -112,7 +112,7 @@ def start(path, extra=None):
     import os
     cfg = {'cache-path': os.path.relpath(path), 'poll-interval': '15m', 'request-spacing': '1s', **(extra or {})}
     registered = call(api, 'plugin.register', {'schema_version': 6, 'config_yaml': base64.b64encode(json.dumps(cfg).encode()).decode()})
-    assert registered['metadata']['Name'] == 'quota-cache'
+    assert registered['metadata']['Name'] == 'Quota Cache'
     assert registered['capabilities']['management_api'] is True
     routes = call(api, 'management.register')
     assert routes['resources'][0]['Menu'] == 'Quota Cache'
