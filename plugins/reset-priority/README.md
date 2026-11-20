@@ -1,6 +1,6 @@
 # Reset Priority
 
-Give higher priority to healthy Claude and Codex accounts whose regular weekly quota resets sooner. Provider groups are ranked independently. Antigravity and Grok (xAI) accounts are left alone; [REFERENCE.md](REFERENCE.md#providers-it-leaves-alone) explains why.
+Give higher priority to healthy Claude and Codex accounts whose regular weekly quota resets sooner. Provider groups are ranked independently.
 
 ## Install
 

@@ -160,7 +160,7 @@ func TestStatusPageShowsClaudeAPICredits(t *testing.T) {
 			t.Fatalf("the credit reading or the meter panel does arithmetic (%q); totals are Quota Glance's", arithmetic)
 		}
 	}
-	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, `<option value="antigravity">Antigravity</option>`, `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
+	for _, rule := range []string{`<option value="anthropic-api">Claude API credits</option>`, `<section id="meter-section"`, `<dl id="meter"`, `<ul id="meter-gaps"`, `<ul id="meter-unlinked"`} {
 		if !strings.Contains(sidebarHTML, rule) {
 			t.Fatalf("the page lost %q", rule)
 		}

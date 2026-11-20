@@ -15,10 +15,6 @@ The plugin does not rank OAuth accounts from utilization, percentage used or rem
 
 Claude and Codex are ranked independently.
 
-### Providers it leaves alone
-
-Antigravity and Grok (xAI) credentials are deliberately not managed: the plugin never ranks, quarantines or writes a priority to them, and the `providers` alias accepts only `claude` and `codex`. Antigravity also serves Claude models such as `claude-sonnet-4-6`, and for a model that several providers serve, CPA picks from the highest available priority across all of them. Ranking Antigravity accounts would therefore steer Claude traffic between Antigravity and Claude accounts. Once this plugin writes Claude priorities, which never go below `priority-floor` (`100` by default), an Antigravity credential with no priority of its own, which CPA reads as `0`, serves those shared models only while no healthy ranked Claude account is available for them. A priority you set on an Antigravity credential yourself is compared with the ones this plugin writes.
-
 ## Priority model
 
 For `N` healthy accounts in one provider group:

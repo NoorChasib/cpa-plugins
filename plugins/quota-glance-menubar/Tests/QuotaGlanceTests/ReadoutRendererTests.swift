@@ -10,7 +10,7 @@ final class ReadoutRendererTests: XCTestCase {
 
     private func marks() throws -> [String: LogoMark] {
         var marks: [String: LogoMark] = [:]
-        for provider in ["claude", "codex", "xai", "antigravity"] {
+        for provider in ["claude", "codex", "xai"] {
             marks[provider] = try LogoMark(contentsOf: logos.appendingPathComponent("\(provider).svg"))
         }
         return marks

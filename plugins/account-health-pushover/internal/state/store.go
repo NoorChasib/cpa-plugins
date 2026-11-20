@@ -220,67 +220,6 @@ type QuotaState struct {
 	// delivery is in flight or shortly after a failed one.
 	WarningAttemptAt   time.Time `json:"warning_attempt_at,omitempty"`
 	ExhaustedAttemptAt time.Time `json:"exhausted_attempt_at,omitempty"`
-	// Families holds one weekly window per quota family for a provider that
-	// meters several weekly pools on one account (Antigravity: Gemini, the
-	// Claude & GPT pool, and the separately metered Gemini families). Each
-	// family has its own latches, so families alert and re-arm independently.
-	// The fields above stay the single-window state of every other provider;
-	// for those accounts Families is nil and is not written, so their state is
-	// byte-identical to earlier versions.
-	Families map[string]QuotaWindow `json:"families,omitempty"`
-}
-
-// QuotaWindow is the observation and threshold latches of one alertable
-// weekly window. Its fields mean exactly what the same-named QuotaState fields
-// mean.
-type QuotaWindow struct {
-	Percent            float64   `json:"percent,omitempty"`
-	ResetAt            time.Time `json:"reset_at,omitempty"`
-	ObservedAt         time.Time `json:"observed_at,omitempty"`
-	WindowKey          string    `json:"window_key,omitempty"`
-	WarningSentAt      time.Time `json:"warning_sent_at,omitempty"`
-	ExhaustedSentAt    time.Time `json:"exhausted_sent_at,omitempty"`
-	WarningAttemptAt   time.Time `json:"warning_attempt_at,omitempty"`
-	ExhaustedAttemptAt time.Time `json:"exhausted_attempt_at,omitempty"`
-}
-
-// Window returns the window for family, where "" is the account's single
-// window held in the QuotaState fields themselves. ok is false only for a
-// family that has no entry yet.
-func (q *QuotaState) Window(family string) (QuotaWindow, bool) {
-	if family == "" {
-		return QuotaWindow{
-			Percent:            q.Percent,
-			ResetAt:            q.ResetAt,
-			ObservedAt:         q.ObservedAt,
-			WindowKey:          q.WindowKey,
-			WarningSentAt:      q.WarningSentAt,
-			ExhaustedSentAt:    q.ExhaustedSentAt,
-			WarningAttemptAt:   q.WarningAttemptAt,
-			ExhaustedAttemptAt: q.ExhaustedAttemptAt,
-		}, true
-	}
-	window, ok := q.Families[family]
-	return window, ok
-}
-
-// SetWindow stores the window for family; "" writes the QuotaState fields.
-func (q *QuotaState) SetWindow(family string, window QuotaWindow) {
-	if family == "" {
-		q.Percent = window.Percent
-		q.ResetAt = window.ResetAt
-		q.ObservedAt = window.ObservedAt
-		q.WindowKey = window.WindowKey
-		q.WarningSentAt = window.WarningSentAt
-		q.ExhaustedSentAt = window.ExhaustedSentAt
-		q.WarningAttemptAt = window.WarningAttemptAt
-		q.ExhaustedAttemptAt = window.ExhaustedAttemptAt
-		return
-	}
-	if q.Families == nil {
-		q.Families = make(map[string]QuotaWindow)
-	}
-	q.Families[family] = window
 }
 
 // ClearSuspect resets confirmation metadata when an account is not carrying a
@@ -374,12 +313,6 @@ func Clone(data Data) Data {
 			continue
 		}
 		accountClone := *account
-		if account.Quota.Families != nil {
-			accountClone.Quota.Families = make(map[string]QuotaWindow, len(account.Quota.Families))
-			for family, window := range account.Quota.Families {
-				accountClone.Quota.Families[family] = window
-			}
-		}
 		clone.Accounts[key] = &accountClone
 	}
 	return clone

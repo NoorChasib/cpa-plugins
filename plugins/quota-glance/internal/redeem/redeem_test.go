@@ -106,7 +106,7 @@ func TestRedeemMapsProviderCodes(t *testing.T) {
 // Only Codex and Claude bank resets. A credential on any other provider must
 // not produce a request at all, whatever the caller claims about it.
 func TestRedeemRefusesEveryOtherProvider(t *testing.T) {
-	for _, provider := range []string{"xai", "antigravity", "gemini", "openrouter", ""} {
+	for _, provider := range []string{"xai", "gemini", "openrouter", ""} {
 		host := hostWith(map[string]string{codexCreditsURL: oneAvailable, codexConsumeURL: `{"code":"reset"}`})
 		if _, err := New(host).Redeem(context.Background(), provider, "some-credential", kindFor(provider)); !errors.Is(err, ErrUnsupportedProvider) {
 			t.Fatalf("provider %q: err = %v, want ErrUnsupportedProvider", provider, err)

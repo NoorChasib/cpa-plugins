@@ -50,8 +50,6 @@ func TestListWaitsForTheRosterCPAHasNotLoadedYet(t *testing.T) {
 	for name, roster := range map[string][]protocol.HostAuthFileEntry{
 		"claude": {diskEntry("claude-one.json", "claude")},
 		"codex":  {diskEntry("codex-two.json", "codex")},
-		// Antigravity is polled too, so an index-less one is CPA still starting.
-		"antigravity": {diskEntry("antigravity-synthetic.json", "antigravity")},
 		// The type alone names the provider, normalized as for any entry.
 		"type only": {{Name: "codex-three.json", Type: " Codex ", Source: "file", Path: "/root/.cli-proxy-api/codex-three.json"}},
 		"beside unsupported and disabled": {
@@ -78,8 +76,6 @@ func TestListKeepsRostersThatAreAlreadyAuthoritative(t *testing.T) {
 	disabled := diskEntry("claude-off.json", "claude")
 	disabled.Disabled = true
 	runtimeOnly := protocol.HostAuthFileEntry{Name: "codex-runtime", Provider: "codex", RuntimeOnly: true}
-	antigravity := diskEntry("antigravity-synthetic.json", "antigravity")
-	antigravity.AuthIndex, antigravity.Source, antigravity.ProjectID = "ag", "memory", "listed-project"
 	key := "sk-or-v1-secret"
 	openRouter := cache.Account{Provider: quota.OpenRouterProvider, AuthIndex: openRouterAccount(key)}
 	for _, tc := range []struct {
@@ -93,7 +89,6 @@ func TestListKeepsRostersThatAreAlreadyAuthoritative(t *testing.T) {
 		{"disabled only", []protocol.HostAuthFileEntry{disabled}, "", []cache.Account{}},
 		{"runtime only", []protocol.HostAuthFileEntry{runtimeOnly}, "", []cache.Account{}},
 		{"mixed", []protocol.HostAuthFileEntry{indexed, diskEntry("codex-two.json", "codex")}, "", []cache.Account{{Provider: "claude", AuthIndex: "one"}}},
-		{"antigravity with its listed project", []protocol.HostAuthFileEntry{antigravity, diskEntry("gemini.json", "gemini")}, "", []cache.Account{{Provider: "antigravity", AuthIndex: "ag", ProjectID: "listed-project"}}},
 		{"openrouter only", nil, key, []cache.Account{openRouter}},
 		{"openrouter beside unsupported", []protocol.HostAuthFileEntry{diskEntry("gemini.json", "gemini")}, key, []cache.Account{openRouter}},
 		{"openrouter beside indexed", []protocol.HostAuthFileEntry{indexed}, key, []cache.Account{{Provider: "claude", AuthIndex: "one"}, openRouter}},

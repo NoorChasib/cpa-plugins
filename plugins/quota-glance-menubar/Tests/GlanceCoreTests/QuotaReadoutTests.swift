@@ -131,7 +131,6 @@ final class QuotaReadoutTests: XCTestCase {
         XCTAssertEqual(QuotaTitles.row("raw:xai:product/BUILD"), "product/BUILD")
         XCTAssertEqual(QuotaTitles.row("something_new"), "something_new")
         XCTAssertEqual(QuotaTitles.provider("xai"), "xAI")
-        XCTAssertEqual(QuotaTitles.provider("antigravity"), "Antigravity")
         XCTAssertEqual(QuotaTitles.provider("openrouter"), "openrouter")
         // After a summary, a gone window of a listed provider takes that provider's title.
         var state = QuotaReadoutState()

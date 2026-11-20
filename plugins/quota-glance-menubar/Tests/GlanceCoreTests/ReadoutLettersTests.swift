@@ -36,25 +36,6 @@ final class ReadoutLettersTests: XCTestCase {
         XCTAssertEqual(ReadoutLetters.forms(rowID: "model_weekly:llama").short, "Wa")
     }
 
-    /// Antigravity's families share one badge, so only their letters tell them
-    /// apart: the default Gemini family is session/weekly, every other family a
-    /// model token (quota-cache's AntigravityModel* constants).
-    func testAntigravityFamiliesGetDistinctLetters() {
-        let rows = ["session", "weekly"].map { sel("antigravity", $0) }
-            + ["model_session", "model_weekly"].flatMap { kind in
-                ["shared", "argon", "carbon", "hydrogen"].map { sel("antigravity", "\(kind):\($0)") }
-            }
-        let letters = rows.map { ReadoutLetters.letter(for: $0, among: rows) }
-        XCTAssertEqual(letters, ["S", "W", "Ss", "Sa", "Sc", "Sh", "Ws", "Wa", "Wc", "Wh"])
-        XCTAssertEqual(Set(letters).count, rows.count)
-        XCTAssertNil(ReadoutLetters.clash(rows, letters: letters, badgeVisible: true))
-        XCTAssertNil(ReadoutLetters.clash(rows, letters: letters, badgeVisible: false))
-        // Beside Claude's, Antigravity's Gemini session is told apart by its badge alone.
-        let both = [sel("claude", "session"), sel("antigravity", "session")]
-        XCTAssertNil(ReadoutLetters.clash(both, letters: ["S", "S"], badgeVisible: true))
-        XCTAssertEqual(ReadoutLetters.clash(both, letters: ["S", "S"], badgeVisible: false)?.sameProvider, false)
-    }
-
     func testShapesTheBoardCannotDrawStillGetALetter() {
         XCTAssertEqual(ReadoutLetters.forms(rowID: "daily").short, "D")
         XCTAssertEqual(ReadoutLetters.forms(rowID: "raw:xai:2026").short, "?")

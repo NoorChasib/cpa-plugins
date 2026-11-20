@@ -46,15 +46,14 @@ plugins:
       # Optional. Plan names are already display-ready: each provider's plan
       # token is mapped to the name the tier is sold under — Codex "pro" ->
       # "Pro 200", "prolite" -> "Pro 100"; Claude "max_20x" -> "Max 20x",
-      # "team" -> "Team" — and Grok's own display name and Antigravity's
-      # tier name pass through. Override only if a provider renames a tier
-      # before this plugin catches up. Prefix a key with the provider id to
-      # rename one provider's value ("codex:pro", "claude:pro"; Grok's id is
-      # xai, as in "xai:supergrok"; Antigravity's is antigravity). A key
-      # without a prefix applies on every provider, Grok and Antigravity
-      # included, except to Claude's pro, team, free and enterprise: Codex
-      # sends those same tokens for different tiers, so an unprefixed key for
-      # one of them is taken as written for Codex, and renaming Claude's needs
+      # "team" -> "Team" — and Grok's own display name passes through.
+      # Override only if a provider renames a tier before this plugin catches
+      # up. Prefix a key with the provider id to rename one provider's value
+      # ("codex:pro", "claude:pro"; Grok's id is xai, as in "xai:supergrok").
+      # A key without a prefix applies on every provider, Grok included,
+      # except to Claude's pro, team, free and enterprise: Codex sends those
+      # same tokens for different tiers, so an unprefixed key for one of them
+      # is taken as written for Codex, and renaming Claude's needs
       # "claude:pro".
       # plan-labels:
       #   "codex:pro": "Pro 200"

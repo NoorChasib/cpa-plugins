@@ -10,14 +10,11 @@ SVG files bundled with the app:
 | `claude` | `Resources/Logos/claude.svg` |
 | `codex` | `Resources/Logos/codex.svg` |
 | `xai` | `Resources/Logos/xai.svg` |
-| `antigravity` | `Resources/Logos/antigravity.svg` |
 
-The files are the Claude spark, the OpenAI blossom (for Codex), the Grok
-mark (for xAI) and the Antigravity arch, with their fills set to
-`currentColor` and the OpenAI and Antigravity `viewBox`es cropped to a square
-around their ink, so all four fill the badge alike. The Antigravity file is
-the outline its multi-coloured brand mark is masked by, drawn in one colour.
-A provider without a readable file gets no badge; the number keeps its
+The files are the Claude spark, the OpenAI blossom (for Codex) and the Grok
+mark (for xAI), with their fills set to `currentColor` and the OpenAI
+`viewBox` cropped to a square around its ink, so all three fill the badge
+alike. A provider without a readable file gets no badge; the number keeps its
 letter, and it is spaced and checked for look-alike letters as if badges
 were off.
 
@@ -28,7 +25,7 @@ were off.
    whole `viewBox` is fitted into the badge, so empty space inside it shrinks
    the logo. The small "glyph" or "symbol" version of a brand mark works best
    at 9pt.
-2. Run the checks, which parse the four bundled files:
+2. Run the checks, which parse the three bundled files:
 
    ```sh
    cd plugins/quota-glance-menubar
@@ -37,7 +34,7 @@ were off.
 
 3. Build (`make install` or `make dmg`). `scripts/build-app.sh` copies every
    `Resources/Logos/*.svg` into `Contents/Resources/Logos/`, and
-   `scripts/verify-bundle.sh` fails if any of the four is missing.
+   `scripts/verify-bundle.sh` fails if any of the three is missing.
 
 No code changes are needed. To add a badge for another provider, add
 `Resources/Logos/<providerID>.svg` using the summary's provider ID; IDs may
@@ -84,6 +81,6 @@ logos in each row's pop-up menu.
 
 ## Brand marks
 
-Anthropic, OpenAI, xAI and Google each publish rules for using their
-marks. The bundled files are the owner's choice of marks, used only to name
-the provider beside its own reading.
+Anthropic, OpenAI and xAI each publish rules for using their marks. The
+bundled files are the owner's choice of marks, used only to name the
+provider beside its own reading.

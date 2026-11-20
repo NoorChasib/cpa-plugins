@@ -259,12 +259,10 @@ func TestAppendRefreshRequestReplacesAnUnreadableFile(t *testing.T) {
 func TestAppendRefreshRequestRefusesAnInvalidRequest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.refresh.json")
 	for name, request := range map[string]RefreshRequest{
-		"provider": {Provider: "xai", AuthIndex: refreshAuthA, Reason: RefreshReasonReset},
-		// Antigravity has no banked resets to spend, so it is never refreshed.
-		"antigravity": {Provider: ProviderAntigravity, AuthIndex: refreshAuthA, Reason: RefreshReasonReset},
-		"auth index":  {Provider: "codex", AuthIndex: "claude-one.json", Reason: RefreshReasonReset},
-		"reason":      {Provider: "codex", AuthIndex: refreshAuthA, Reason: "manual"},
-		"id":          {ID: "ABCDEF0123456789", Provider: "codex", AuthIndex: refreshAuthA, Reason: RefreshReasonReset},
+		"provider":   {Provider: "xai", AuthIndex: refreshAuthA, Reason: RefreshReasonReset},
+		"auth index": {Provider: "codex", AuthIndex: "claude-one.json", Reason: RefreshReasonReset},
+		"reason":     {Provider: "codex", AuthIndex: refreshAuthA, Reason: "manual"},
+		"id":         {ID: "ABCDEF0123456789", Provider: "codex", AuthIndex: refreshAuthA, Reason: RefreshReasonReset},
 	} {
 		if err := AppendRefreshRequest(path, request, refreshNow); !errors.Is(err, ErrRefreshRequestInvalid) {
 			t.Errorf("%s: %v", name, err)
@@ -346,7 +344,6 @@ func TestLoadRefreshRequests(t *testing.T) {
 		valid("0123456789ABCDEF", "2026-10-12T09:00:00Z"),
 		valid("0123456789abcde", "2026-10-12T09:00:00Z"),
 		`{"id":"` + refreshID16(4) + `","provider":"xai","auth_index":"` + refreshAuthB + `","reason":"reset","at":"2026-10-12T09:00:00Z"}`,
-		`{"id":"` + refreshID16(12) + `","provider":"antigravity","auth_index":"` + refreshAuthB + `","reason":"reset","at":"2026-10-12T09:00:00Z"}`,
 		`{"id":"` + refreshID16(5) + `","provider":"Codex","auth_index":"` + refreshAuthB + `","reason":"reset","at":"2026-10-12T09:00:00Z"}`,
 		`{"id":"` + refreshID16(6) + `","provider":"codex","auth_index":"claude-one.json","reason":"reset","at":"2026-10-12T09:00:00Z"}`,
 		`{"id":"` + refreshID16(7) + `","provider":"codex","auth_index":"` + refreshAuthB + `","reason":"manual","at":"2026-10-12T09:00:00Z"}`,

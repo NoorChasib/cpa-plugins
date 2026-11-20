@@ -118,8 +118,7 @@ over the letter). **Always** is the default; **When
 providers differ** draws badges only when the chosen windows span more than
 one provider; **Off** draws letters only. A provider without a bundled logo
 draws no badge and is spaced as if badges were off (Lettered pair slots 7pt
-apart, not 6pt). Logos are bundled SVG files (Claude, OpenAI for Codex, Grok
-for xAI, and Antigravity's arch); replacing them is described in
+apart, not 6pt). Logos are bundled SVG files (Claude, OpenAI for Codex, Grok for xAI); replacing them is described in
 [docs/logos.md](docs/logos.md).
 
 ### Drawing
@@ -355,7 +354,7 @@ make appcast        # after signing: generate, sign, and test the update feed
 make ci             # scripts, tests, arm64 build, verification, ZIP + DMG
 ```
 
-`VERSION` defaults to `0.7.0` and must be three numeric components. The app is
+`VERSION` defaults to `0.6.0` and must be three numeric components. The app is
 Apple silicon only: there is no Intel or universal build. Every goal except
 `test` and `check-scripts` stops with an error if `ARCHS` names anything other
 than `arm64`, whether it is set on the command line or in the environment;
@@ -366,7 +365,7 @@ before installing its replacement.
 Builds compile one arm64 executable in the `.build/arm64` SwiftPM scratch
 directory. An AppKit script renders the app icon, and `iconutil` creates its
 ICNS. The provider logos in `Resources/Logos/` are copied into
-`Contents/Resources/Logos/`, and `verify-bundle.sh` checks all four. SwiftPM verifies the checksum of the pinned Sparkle 2.10.0 binary
+`Contents/Resources/Logos/`, and `verify-bundle.sh` checks all three. SwiftPM verifies the checksum of the pinned Sparkle 2.10.0 binary
 package. Sparkle ships only a universal framework, so the build copies it with
 `ditto --arch arm64`, which removes the Intel slice from every binary inside
 (the framework, Autoupdate, Updater.app, and both XPC services) and keeps its
@@ -446,8 +445,8 @@ Complete the one-time [Apple signing setup](docs/apple-signing.md), push the
 committed app and its root workflow to `main`, then push an app-specific tag:
 
 ```sh
-git tag quota-glance-menubar/v0.7.0 <verified-commit-on-main>
-git push origin quota-glance-menubar/v0.7.0
+git tag quota-glance-menubar/v0.6.0 <verified-commit-on-main>
+git push origin quota-glance-menubar/v0.6.0
 ```
 
 The tag must be `quota-glance-menubar/vMAJOR.MINOR.PATCH`. Its version is passed
@@ -478,12 +477,12 @@ with either signing mode and remains a user preference.
 
 ## Verification
 
-The suite contains 115 Swift tests and 37 JavaScript tests. GlanceCore (82
+The suite contains 114 Swift tests and 36 JavaScript tests. GlanceCore (81
 tests, which also run on Linux) covers the readout preference and its
 migration, letters against the board-generated fixture and the look-alike
 warning, cells before and after the first summary, fallback titles,
 accessibility and tooltip text, the pill and slot arithmetic, the SVG logo
-reader against the four bundled files, which status item writes each change
+reader against the three bundled files, which status item writes each change
 needs (none for an unchanged readout), the retry schedule (including when it
 stops reloading a page that never reads), the status item press that closed the
 popover, and dashboard URL validation, including refused Management API

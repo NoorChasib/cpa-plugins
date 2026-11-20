@@ -19,13 +19,12 @@ func TestDiscoverDynamicOAuthAccounts(t *testing.T) {
 		{AuthIndex: "claude-key", Provider: "claude", AccountType: "api_key", Account: "must-not-leak"},
 		{AuthIndex: "", Provider: "codex", AccountType: "oauth", Email: "missing-index@example.com"},
 		{AuthIndex: "claude-1", Provider: "claude", AccountType: "oauth", Email: "duplicate@example.com"},
-		{AuthIndex: "antigravity-1", Provider: "antigravity", AccountType: "oauth", Email: "ag@example.com"},
 	}
 	got := Discover(roster, cfg)
-	if len(got) != 4 {
-		t.Fatalf("discovered %d accounts, want 4: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("discovered %d accounts, want 3: %+v", len(got), got)
 	}
-	if got[0].AuthIndex != "antigravity-1" || got[1].AuthIndex != "claude-1" || got[2].AuthIndex != "codex-1" || got[3].AuthIndex != "xai-1" {
+	if got[0].AuthIndex != "claude-1" || got[1].AuthIndex != "codex-1" || got[2].AuthIndex != "xai-1" {
 		t.Fatalf("unexpected accounts: %+v", got)
 	}
 }

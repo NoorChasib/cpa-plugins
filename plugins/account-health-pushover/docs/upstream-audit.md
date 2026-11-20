@@ -156,8 +156,6 @@ Quota alerts do not use CPA's quota observation: at the audited commit `host.aut
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` with `Chatgpt-Account-Id` and a CLI-shaped `User-Agent` | window with `limit_window_seconds == 604800`: `used_percent`, `reset_at` (unix seconds) or `reset_after_seconds` |
 | Grok | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` with `X-XAI-Token-Auth: xai-grok-cli` and optional `x-userid` | `config.creditUsagePercent` (0–100), `config.currentPeriod.end` (RFC3339); `config.isUnifiedBillingUser` was `true` on the verified account, so this is the shared weekly pool |
 
-Antigravity has no row here: this plugin never calls Google. Its weekly windows are read only from Quota Cache's snapshot (`client.ReadFreshWindows`), so standalone mode leaves Antigravity accounts out of quota polling and never reads their credential.
-
 The Grok request shape mirrors `crates/codegen/xai-grok-shell/src/extensions/billing.rs` in `xai-org/grok-build` (commit `72a6125`); the endpoint accepted a bearer-only request in verification, so the extra headers are sent for parity, not necessity. The Codex `x-userid` equivalent is the ChatGPT account ID that CPA persists as `account_id`; CPA persists the xAI OpenID subject as `sub`. All three endpoints are undocumented.
 
 `HostAuthFileEntry.Account` can contain a raw API key for API-key credentials. The plugin ignores this field and filters to OAuth credentials.
@@ -193,12 +191,7 @@ Management authentication at the audited commit is header-only (`Authorization: 
 
 xAI (Grok Build) OAuth accounts are exposed by CPA as provider `xai` with `auth_kind: oauth` and the account email in metadata (`internal/auth/xai/token.go`), and share the generic refresh manager, status fields, and `next_retry_after` cooldown paths with Claude and Codex, so the same classifier applies. Note upstream issue #4046: an xAI `bad-credentials` rejection is currently cooled down as `payment_required` instead of refreshing, so a dead Grok credential surfaces as `suspect` then `credential_down` rather than immediate `reauth_required`.
 
-Google Antigravity OAuth accounts were audited against CPA v8.0.77 on 2026-11-19. CPA reports them as provider `antigravity` (no alias) with account type `oauth` and the account email (`sdk/auth/antigravity.go`, `sdk/cliproxy/auth/types.go` `AccountInfo`), in credential files named `antigravity-<email>.json`. They share the generic refresh manager, status fields, and `next_retry_after` cooldown paths, so the generic classifier applies, with two Antigravity-only behaviours:
-
-- A 403 `PERMISSION_DENIED` with ErrorInfo reason `TOS_VIOLATION` is marked by the Antigravity executor only (`internal/runtime/executor/antigravity_executor_credits.go`). The conductor then sets `Disabled=true`, `Status=disabled`, `Unavailable=true`, and `StatusMessage="tos_violation"` and clears `NextRetryAfter` (`sdk/cliproxy/auth/conductor_cooldown.go`, `isTOSViolationResultError`). The plugin's Antigravity classifier reads that combination as `credential_down` with reason `tos_suspended`; the generic rule would read it as an operator's `disabled`. Re-enabling through the Management API resets the message (`applyAuthDisabledState`), and the file store keeps only `disabled`, so the message does not survive a CPA restart.
-- Google's `invalid_grant` is terminal at refresh only for Codex in the conductor's refresh failure handling. A revoked Antigravity refresh token therefore keeps retrying with an unmapped status message, which the plugin confirms as `credential_down` over `transient-confirm-after`. A request-path `invalid_grant` still becomes `reauth_required` at once. This generic mapping is unchanged.
-
-No direct Claude/Codex/Grok/Antigravity provider probe is implemented. Provider probes were optional in the specification and would require reading raw credential JSON or introducing token-bearing provider requests. Current CPA already owns OAuth refresh and exposes definitive unauthorized state. Avoiding direct probes preserves the supported host boundary and secret-minimization requirements.
+No direct Claude/Codex/Grok provider probe is implemented. Provider probes were optional in the specification and would require reading raw credential JSON or introducing token-bearing provider requests. Current CPA already owns OAuth refresh and exposes definitive unauthorized state. Avoiding direct probes preserves the supported host boundary and secret-minimization requirements.
 
 ## Plugin Store audit
 

@@ -39,11 +39,6 @@ const (
 	RuntimeMessageRequestFailed       RuntimeMessageCode = "request_failed"
 	RuntimeMessageRefreshRevoked      RuntimeMessageCode = "refresh_token_revoked"
 	RuntimeMessageRefreshRejected     RuntimeMessageCode = "refresh_token_rejected"
-	// RuntimeMessageTOSViolation is CPA's status_message for a credential it
-	// deactivated after the provider answered 403 PERMISSION_DENIED with
-	// ErrorInfo reason TOS_VIOLATION. Only CPA's Antigravity executor raises it,
-	// and only the Antigravity classifier acts on it.
-	RuntimeMessageTOSViolation RuntimeMessageCode = "tos_violation"
 )
 
 type ReasonCode string
@@ -89,11 +84,6 @@ const (
 	ReasonPersistentPaymentRequired   ReasonCode = "persistent_payment_required"
 	ReasonPersistentNotFound          ReasonCode = "persistent_not_found"
 	ReasonPersistentUnclassified      ReasonCode = "persistent_unclassified_credential_error"
-	// ReasonTOSSuspended marks an Antigravity account that Google suspended for
-	// a terms-of-service violation. CPA disables such a credential itself; the
-	// plugin reports it as credential_down so it alerts even with
-	// notify-disabled off.
-	ReasonTOSSuspended ReasonCode = "tos_suspended"
 )
 
 type ConfirmationClass string
@@ -188,8 +178,6 @@ func CanonicalRuntimeMessage(value string) RuntimeMessageCode {
 		return RuntimeMessageRefreshRevoked
 	case "refresh token rejected", "refresh_token_rejected":
 		return RuntimeMessageRefreshRejected
-	case "tos_violation":
-		return RuntimeMessageTOSViolation
 	default:
 		return RuntimeMessageUnknown
 	}
@@ -210,7 +198,7 @@ func NormalizeReasonCode(value string) ReasonCode {
 		ReasonPersistentHTTP500, ReasonPersistentHTTP502, ReasonPersistentHTTP503,
 		ReasonPersistentHTTP504, ReasonPersistentTransient, ReasonPersistentCloudflare,
 		ReasonPersistentRequestFailed, ReasonPersistentPaymentRequired,
-		ReasonPersistentNotFound, ReasonPersistentUnclassified, ReasonTOSSuspended,
+		ReasonPersistentNotFound, ReasonPersistentUnclassified,
 	} {
 		if candidate == known {
 			return candidate
