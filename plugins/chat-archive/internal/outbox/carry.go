@@ -118,7 +118,14 @@ func (o *Outbox) SaveCarry(ctx context.Context, reqs []OpenRequest, nums []Numbe
 		}
 	}
 	if len(keep) > MaxNumbering {
-		sort.Slice(keep, func(i, j int) bool { return keep[i].ClosedAt == 0 || keep[i].ClosedAt > keep[j].ClosedAt })
+		// Open entries (ClosedAt 0) first, then closed ones newest first, so the cut drops the oldest closed.
+		sort.Slice(keep, func(i, j int) bool {
+			a, b := keep[i].ClosedAt, keep[j].ClosedAt
+			if (a == 0) != (b == 0) {
+				return a == 0
+			}
+			return a > b
+		})
 		keep = keep[:MaxNumbering]
 	}
 	return o.saveOpen(ctx, reqs, func(ctx context.Context, tx *sql.Tx, now int64) error {

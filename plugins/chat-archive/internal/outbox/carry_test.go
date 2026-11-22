@@ -3,7 +3,9 @@ package outbox
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -147,4 +149,64 @@ func TestCompletionNumberingSaveTake(t *testing.T) {
 		t.Fatalf("stale take = %v, %v", old, err)
 	}
 	o.Close()
+}
+
+// TestSaveCarryTruncationKeepsOpenAndNewestClosed: past MaxNumbering, SaveCarry keeps every open
+// entry (ClosedAt 0) and then the most recently closed ones, so the cut falls on the oldest closed.
+func TestSaveCarryTruncationKeepsOpenAndNewestClosed(t *testing.T) {
+	ctx := context.Background()
+	c := &clock{t: time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)}
+	o, err := Open(Options{Dir: filepath.Join(t.TempDir(), "data"), CapBytes: 1 << 40, Retention: 168 * time.Hour, Now: c.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	// Every other entry is open (30,720 of 61,440, under MaxNumbering), with closed times descending: a
+	// comparator that is not a strict weak ordering drops some open entries on this layout.
+	const total, every = 2*MaxNumbering - 4096, 2
+	nums := make([]Numbering, 0, total)
+	open := map[string]bool{}
+	var closedAt []int64
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("req-%05d", i)
+		if i%every == 0 {
+			nums = append(nums, Numbering{RequestID: id})
+			open[id] = true
+			continue
+		}
+		at := int64(total - i)
+		nums = append(nums, Numbering{RequestID: id, ClosedAt: at})
+		closedAt = append(closedAt, at)
+	}
+	sort.Slice(closedAt, func(i, j int) bool { return closedAt[i] > closedAt[j] })
+	keepClosed := MaxNumbering - len(open)
+	cutoff := closedAt[keepClosed-1] // the oldest closed time that must survive
+	if _, err := o.SaveCarry(ctx, nil, nums); err != nil {
+		t.Fatal(err)
+	}
+	got, err := o.TakeNumbering(ctx, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != MaxNumbering {
+		t.Fatalf("kept %d rows, want %d", len(got), MaxNumbering)
+	}
+	openKept, closedKept, tooOld := 0, 0, 0
+	for _, g := range got {
+		if g.ClosedAt == 0 {
+			if !open[g.RequestID] {
+				t.Fatalf("unexpected open row %q", g.RequestID)
+			}
+			openKept++
+			continue
+		}
+		if g.ClosedAt < cutoff {
+			tooOld++
+		}
+		closedKept++
+	}
+	if openKept != len(open) || closedKept != keepClosed || tooOld != 0 {
+		t.Fatalf("kept %d open (want %d) and %d closed (want %d), %d of them older than the cutoff %d",
+			openKept, len(open), closedKept, keepClosed, tooOld, cutoff)
+	}
 }
