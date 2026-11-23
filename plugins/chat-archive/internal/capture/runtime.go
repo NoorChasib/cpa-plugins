@@ -419,10 +419,13 @@ const (
 	groupLinger    = 25 * time.Millisecond
 )
 
-// Writer retries: one outbox write attempt is bounded by WriteTimeout; a failed group waits
-// RetryBackoffMin before its next attempt, doubling up to RetryBackoffMax.
+// Writer retries: a group's first outbox write attempt is bounded by WriteTimeout, and each attempt
+// after a timeout gets twice the last one's time, up to WriteTimeoutMax, so a disk that is slow but
+// working always completes a write. A failed group waits RetryBackoffMin before its next attempt,
+// doubling up to RetryBackoffMax.
 var (
 	WriteTimeout    = 10 * time.Second
+	WriteTimeoutMax = time.Minute
 	RetryBackoffMin = 25 * time.Millisecond
 	RetryBackoffMax = time.Second
 )
@@ -541,7 +544,7 @@ func (rt *Runtime) flush(group []writeReq) {
 		envs[i] = r.env
 	}
 	var res outbox.WriteResult
-	backoff, failures := RetryBackoffMin, 0
+	backoff, failures, attempt := RetryBackoffMin, 0, WriteTimeout
 	for {
 		ps := ob.Pressure()
 		rt.setPressure(ps)
@@ -549,7 +552,7 @@ func (rt *Runtime) flush(group []writeReq) {
 			drop("disk_hard")
 			return
 		}
-		budget := WriteTimeout
+		budget := attempt
 		if by := rt.stopBy.Load(); by != 0 {
 			// A stop's deadline bounds the final flush too.
 			if budget = min(budget, time.Until(time.Unix(0, by))); budget <= 0 {
@@ -559,6 +562,7 @@ func (rt *Runtime) flush(group []writeReq) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		r, err := write(ctx, envs)
+		timedOut := ctx.Err() != nil
 		cancel()
 		if err == nil {
 			res = r
@@ -583,6 +587,9 @@ func (rt *Runtime) flush(group []writeReq) {
 				drop("disk_hard")
 				return
 			}
+		}
+		if timedOut {
+			attempt = min(2*attempt, max(WriteTimeoutMax, WriteTimeout))
 		}
 		rt.pause(backoff)
 		backoff = min(2*backoff, RetryBackoffMax)
