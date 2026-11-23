@@ -89,6 +89,8 @@ Model-directory GETs (`/v1/models`, `/v1/models/{id}`, `/v1beta/models` and CPA'
 
 Hooks do no I/O, compression or masking. Bodies are decoded straight from CPA's call buffer, reserve four times their size from a 256 MiB content pool before decoding, and go to the capture workers through bounded queues. When a budget or queue is full the plugin keeps the metadata and counts the reason under `dropped`: `body_budget`, `handoff_full`, `control_full`, `usage_queue`, `stream_overflow`, `mask_timeout`, `oversize`, `oversize_rpc`, `parse_error`, `disk_guard`, `outbox_cap`, `disk_hard`, `encode_error`, `stopped`, `media_fetch`, and `duplicate_key` for an envelope the outbox skipped because its key was already queued. Per-call caps: body-carrying hooks `max-rpc-mib`; stream chunks 16 MiB; after-auth, completion and management 1 MiB; usage 4 MiB.
 
+The outbox writer writes up to 50 envelopes in one transaction. A write that fails or times out (10 s per attempt) keeps its group and tries it again after a backoff that doubles from 25 ms to 1 s, for as long as it takes, so envelopes stay in order. While the writer waits, the capture queues and the content pool fill, and new exchanges keep their metadata without bodies (`body_budget`, `handoff_full`). A whole begin, attempt, completion or usage record is lost only when those queues are full too (`control_full`, `usage_queue`, `stream_overflow`). The writer itself drops a group, as `disk_hard`, only at pressure level 3 or on an error that no retry can fix (the outbox is closed, an envelope does not encode, or SQLite refuses its content). It drops a group as `stopped` when a stop's deadline cuts its retries.
+
 ## Management routes
 
 | Route | Auth | Use |
@@ -99,7 +101,7 @@ Hooks do no I/O, compression or masking. Bodies are decoded straight from CPA's 
 
 ## Faults
 
-`write_unavailable` (outbox writes failing; captures dropped as `disk_hard` until a probe succeeds), `auth_failed` (the archive answered 401/403; uploads, heartbeats and media fetches pause for 15 minutes, never retried in a loop), `replay_gap` (the archive restored behind the local retention window), `server_too_old`, `masker_rebuild`, plus a fault per goroutine that panicked and was restarted (the panic's type is recorded, never its value).
+`write_unavailable` (outbox writes failing: raised at once, or after three consecutive SQLite busy or locked attempts, and cleared by the next write that succeeds; the failing group is kept and retried, see [Hot path and limits](#hot-path-and-limits)), `auth_failed` (the archive answered 401/403; uploads, heartbeats and media fetches pause for 15 minutes, never retried in a loop), `replay_gap` (the archive restored behind the local retention window), `server_too_old`, `masker_rebuild`, plus a fault per goroutine that panicked and was restarted (the panic's type is recorded, never its value).
 
 ## Heartbeats
 
