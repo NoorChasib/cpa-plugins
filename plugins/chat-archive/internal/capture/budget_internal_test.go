@@ -40,20 +40,42 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 		t.Fatalf("pool after the worker handed the begin over = %d, want %d (held until written)", got, need)
 	}
 	r := <-rt.writes
-	var probe time.Time
-	rt.flush([]writeReq{r}, &probe)
+	rt.flush([]writeReq{r})
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after the writer committed = %d", got)
 	}
 	if items, _ := ob.Pending(context.Background(), time.Now(), 10, 1<<30); len(items) != 1 {
 		t.Fatalf("pending = %d", len(items))
 	}
-	// A request the writer drops (write_unavailable inside the probe interval) is released too.
+	// While write_unavailable is raised the writer still tries every group (0.1.4 dropped it untried
+	// until a probe succeeded): the write is stored, the fault clears and the budget is released.
 	e.Stats.SetFault("write_unavailable", true)
-	probe = time.Now()
 	e.Pool.TryReserve(100)
-	rt.flush([]writeReq{{env: r.env, release: func() { e.Pool.Release(100) }}}, &probe)
+	env := r.env
+	env.Key = "ex/budget-2/begin/0"
+	rt.flush([]writeReq{{env: env, release: func() { e.Pool.Release(100) }}})
+	if got := e.Pool.Used(); got != 0 {
+		t.Fatalf("pool after a group written under write_unavailable = %d", got)
+	}
+	if items, _ := ob.Pending(context.Background(), time.Now(), 10, 1<<30); len(items) != 2 {
+		t.Fatalf("pending = %d, want 2 (the group was tried and stored)", len(items))
+	}
+	if e.Stats.HasFault("write_unavailable") || e.Stats.DroppedTotal() != 0 {
+		t.Fatalf("fault %v, dropped %v after a successful write", e.Stats.Faults(), e.Stats.Dropped())
+	}
+	// A group the writer drops (pressure level 3, where nothing is written) is released too.
+	rt.obWrite = func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error) {
+		t.Fatal("written at pressure level 3")
+		return outbox.WriteResult{}, nil
+	}
+	rt.opts.Outbox = hardPressure(t)
+	e.Pool.TryReserve(100)
+	env.Key = "ex/budget-3/begin/0"
+	rt.flush([]writeReq{{env: env, release: func() { e.Pool.Release(100) }}})
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after a dropped group = %d", got)
+	}
+	if n := e.Stats.Dropped()["disk_hard"]; n != 1 {
+		t.Fatalf("dropped.disk_hard = %d, want 1", n)
 	}
 }
