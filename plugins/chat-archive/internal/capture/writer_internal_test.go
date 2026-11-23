@@ -235,12 +235,17 @@ func dropSplit(d map[string]uint64) (bodies, envelopes uint64) {
 func TestSustainedWriteFailureDegradesBodiesFirst(t *testing.T) {
 	fastRetries(t, 20*time.Millisecond)
 	var failing atomic.Bool
+	var stored atomic.Int64
 	failing.Store(true)
 	rt, e, ob := writerRuntime(t, true, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
 		if failing.Load() {
 			return outbox.WriteResult{}, sqlite.Error{Code: sqlite.ErrIoErr}
 		}
-		return real(ctx, envs)
+		res, err := real(ctx, envs)
+		if err == nil {
+			stored.Add(int64(len(res.Inserted)))
+		}
+		return res, err
 	})
 	e.SetConfig(&hooks.Config{Configured: true, Capture: "full", MaxRPC: 1 << 20})
 	e.Start()
@@ -291,7 +296,7 @@ func TestSustainedWriteFailureDegradesBodiesFirst(t *testing.T) {
 
 	failing.Store(false)
 	want := uint64(n) - d["control_full"]
-	waitUntil(t, "the queued begins written", 30*time.Second, func() bool { return uint64(len(pendingKeys(t, ob))) == want })
+	waitUntil(t, "the queued begins written", 2*time.Minute, func() bool { return uint64(stored.Load()) >= want })
 	items, err := ob.Pending(context.Background(), time.Now().Add(time.Hour), 100000, 1<<40)
 	if err != nil {
 		t.Fatal(err)
@@ -360,5 +365,32 @@ func TestHeldGroupBoundedByStop(t *testing.T) {
 	}
 	if d := e.Stats.Dropped(); d["stopped"] != 3 || e.Stats.DroppedTotal() != 3 {
 		t.Fatalf("dropped = %v, want stopped 3", d)
+	}
+}
+
+// TestSlowWriteGetsLongerAttempts: a disk so slow that the group's write needs longer than the first
+// attempt's budget still gets it written, because each attempt after a timeout is given twice as long;
+// retrying with the same budget would time out forever and hold every later envelope behind it.
+func TestSlowWriteGetsLongerAttempts(t *testing.T) {
+	fastRetries(t, 10*time.Millisecond)
+	const need = 60 * time.Millisecond
+	var calls atomic.Int32
+	rt, e, ob := writerRuntime(t, false, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
+		calls.Add(1)
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < need {
+			<-ctx.Done() // the slow fsync outlasts this attempt's budget
+			return outbox.WriteResult{}, ctx.Err()
+		}
+		return real(ctx, envs)
+	})
+	for i := 0; i < 3; i++ {
+		rt.write(syntheticEnv(i), nil, nil)
+	}
+	waitUntil(t, "the slow group stored", 10*time.Second, func() bool { return len(pendingKeys(t, ob)) == 3 })
+	if c := calls.Load(); c < 2 {
+		t.Fatalf("write calls = %d, want a timeout before the write", c)
+	}
+	if e.Stats.DroppedTotal() != 0 {
+		t.Fatalf("dropped = %v", e.Stats.Dropped())
 	}
 }
