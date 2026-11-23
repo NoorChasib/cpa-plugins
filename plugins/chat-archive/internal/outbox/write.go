@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,7 +61,7 @@ func (o *Outbox) buildEnvelope(e NewEnvelope, seq, epoch uint64, outboxID string
 func (o *Outbox) insertEnvelope(ctx context.Context, tx *sql.Tx, e NewEnvelope, seq uint64, meta Meta) (bool, error) {
 	body, err := o.buildEnvelope(e, seq, meta.EpochSeen, meta.OutboxID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: %w", errEncode, err)
 	}
 	stored, _ := o.compress(body)
 	r, err := tx.ExecContext(ctx, `INSERT INTO envelopes(seq,kind,key,created_at,state,attempts,next_attempt_at,body,body_len,bytes_total)
@@ -717,17 +718,4 @@ func (o *Outbox) Rekey(ctx context.Context, seq uint64) (bool, uint32, error) {
 		return false, 0, nil
 	}
 	return true, c.LifecycleInputSeq, nil
-}
-
-// ProbeWrite checks that a write transaction commits, without changing any data.
-func (o *Outbox) ProbeWrite(ctx context.Context) error {
-	tx, err := o.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value WHERE key='next_seq'"); err != nil {
-		return err
-	}
-	return tx.Commit()
 }

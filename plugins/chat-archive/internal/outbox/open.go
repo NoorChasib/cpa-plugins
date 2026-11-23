@@ -30,6 +30,8 @@ import (
 var (
 	ErrUnavailable = errors.New("outbox unavailable")
 	ErrClosed      = errors.New("outbox closed")
+	// errEncode marks an envelope that does not encode: no retry of the same envelope can store it.
+	errEncode = errors.New("outbox: envelope does not encode")
 )
 
 // Envelope states.
@@ -554,6 +556,26 @@ func (o *Outbox) TotalBytes() int64 {
 func Retryable(err error) bool {
 	var e sqlite.Error
 	return errors.As(err, &e) && (e.Code == sqlite.ErrBusy || e.Code == sqlite.ErrLocked)
+}
+
+// Permanent reports a Write error that no retry of the same envelopes can fix: the outbox is
+// closed, an envelope does not encode, or SQLite refused the content itself (a constraint, a type
+// mismatch, a value too big or out of range). Every other error, a timeout, SQLITE_BUSY or
+// SQLITE_LOCKED, an I/O error, a full disk or a file-system error writing a blob, can pass once
+// the disk recovers, so the capture writer keeps the group and retries it.
+func Permanent(err error) bool {
+	if errors.Is(err, ErrClosed) || errors.Is(err, errEncode) {
+		return true
+	}
+	var e sqlite.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code {
+	case sqlite.ErrConstraint, sqlite.ErrMismatch, sqlite.ErrTooBig, sqlite.ErrRange:
+		return true
+	}
+	return false
 }
 
 // CloseTimeout bounds Close's clean mark and WAL checkpoint.
