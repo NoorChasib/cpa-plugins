@@ -49,6 +49,14 @@ func hardPressure(t *testing.T) *outbox.Outbox { return openOutbox(t, -2<<30) }
 // stream goroutine) whose outbox writes go through write, which gets the real write to call.
 func writerRuntime(t *testing.T, pipeline bool, write func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error)) (*Runtime, *hooks.Engine, *outbox.Outbox) {
 	t.Helper()
+	return pressureRuntime(t, pipeline, write, nil)
+}
+
+// pressureRuntime is writerRuntime whose writer reads its pressure from pressure (nil: the outbox's), which gets the
+// real reading to return.
+func pressureRuntime(t *testing.T, pipeline bool, write func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error),
+	pressure func(real func() outbox.PressureState) outbox.PressureState) (*Runtime, *hooks.Engine, *outbox.Outbox) {
+	t.Helper()
 	e := hooks.NewEngine()
 	ob := openOutbox(t, 1<<40)
 	m, _ := mask.New(mask.Config{})
@@ -56,6 +64,9 @@ func writerRuntime(t *testing.T, pipeline bool, write func(ctx context.Context, 
 		writes: make(chan writeReq, 1024)}
 	rt.obWrite = func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
 		return write(ctx, envs, ob.Write)
+	}
+	if pressure != nil {
+		rt.obPressure = func() outbox.PressureState { return pressure(ob.Pressure) }
 	}
 	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
 	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
@@ -392,5 +403,102 @@ func TestSlowWriteGetsLongerAttempts(t *testing.T) {
 	}
 	if e.Stats.DroppedTotal() != 0 {
 		t.Fatalf("dropped = %v", e.Stats.Dropped())
+	}
+}
+
+// TestHardPressureHoldsGroup: free space that falls below the level-3 threshold between two attempts of a failing
+// write holds the group without writing, instead of dropping it as disk_hard; the envelopes queued behind it wait
+// too, and once the pressure clears every one is written, in order. Before, the writer dropped the held group and
+// every later one untried while level 3 lasted, even with room left in the queues.
+func TestHardPressureHoldsGroup(t *testing.T) {
+	fastRetries(t, WriteTimeout)
+	var hard atomic.Bool
+	var calls, callsWhileHard atomic.Int32
+	rt, e, ob := pressureRuntime(t, false, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
+		if hard.Load() {
+			callsWhileHard.Add(1)
+		}
+		if calls.Add(1) == 1 {
+			hard.Store(true) // the disk fills while the first write fails
+			return outbox.WriteResult{}, sqlite.Error{Code: sqlite.ErrIoErr}
+		}
+		return real(ctx, envs)
+	}, func(real func() outbox.PressureState) outbox.PressureState {
+		if hard.Load() {
+			return outbox.PressureState{Level: outbox.PressureHard}
+		}
+		return real()
+	})
+	const n = 10
+	for i := 0; i < 3; i++ {
+		rt.write(syntheticEnv(i), nil, nil)
+	}
+	waitUntil(t, "level 3 seen", 10*time.Second, func() bool { return rt.Pressure() == outbox.PressureHard })
+	for i := 3; i < n; i++ {
+		rt.write(syntheticEnv(i), nil, nil) // queued behind the held group
+	}
+	time.Sleep(150 * time.Millisecond) // many backoffs (1 to 10 ms) at level 3
+	if d := e.Stats.Dropped(); e.Stats.DroppedTotal() != 0 {
+		t.Fatalf("dropped = %v at level 3, want the group held", d)
+	}
+	if c := callsWhileHard.Load(); c != 0 {
+		t.Fatalf("%d outbox writes at level 3, want none", c)
+	}
+	hard.Store(false)
+	waitUntil(t, "every envelope stored", 10*time.Second, func() bool { return len(pendingKeys(t, ob)) == n })
+	for i, k := range pendingKeys(t, ob) {
+		if want := syntheticEnv(i).Key; k != want {
+			t.Fatalf("envelope %d stored as %q, want %q: order not kept", i, k, want)
+		}
+	}
+	if e.Stats.DroppedTotal() != 0 {
+		t.Fatalf("dropped = %v", e.Stats.Dropped())
+	}
+}
+
+// TestStopDeadlineCutsHeldGroup: a stop's deadline ends a group's wait whatever it is doing when the stop comes: an
+// outbox write attempt already running with a longer budget (it honors its context), or a backoff between two
+// failing attempts. StopBy returns by its deadline and the group is counted dropped.stopped. Before, the running
+// attempt kept its own budget (up to WriteTimeoutMax) and a backoff begun during the stop ran to its end, so StopBy
+// waited for them past the plugin's stop budget.
+func TestStopDeadlineCutsHeldGroup(t *testing.T) {
+	cases := map[string]struct {
+		attempt, backoff time.Duration
+		write            func(ctx context.Context) error
+	}{
+		"in_flight_attempt": {5 * time.Second, time.Millisecond, func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }},
+		"backoff":           {time.Second, 5 * time.Second, func(context.Context) error { return sqlite.Error{Code: sqlite.ErrIoErr} }},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			wt, lo, hi := WriteTimeout, RetryBackoffMin, RetryBackoffMax
+			WriteTimeout, RetryBackoffMin, RetryBackoffMax = c.attempt, c.backoff, c.backoff
+			t.Cleanup(func() { WriteTimeout, RetryBackoffMin, RetryBackoffMax = wt, lo, hi })
+			entered := make(chan struct{}, 1)
+			rt, e, _ := writerRuntime(t, false, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				return outbox.WriteResult{}, c.write(ctx)
+			})
+			for i := 0; i < 3; i++ {
+				rt.write(syntheticEnv(i), nil, nil)
+			}
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the writer never attempted the write")
+			}
+			time.Sleep(20 * time.Millisecond) // inside the attempt, or inside the backoff after it
+			start := time.Now()
+			rt.StopBy(start.Add(300 * time.Millisecond))
+			if d := time.Since(start); d > time.Second {
+				t.Fatalf("StopBy took %v past a 300ms deadline", d)
+			}
+			if d := e.Stats.Dropped(); d["stopped"] != 3 || e.Stats.DroppedTotal() != 3 {
+				t.Fatalf("dropped = %v, want stopped 3", d)
+			}
+		})
 	}
 }
