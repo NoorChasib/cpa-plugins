@@ -485,13 +485,18 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 		return OK
 	}
 	defer e.leave()
+	// The record reserves its bytes from the usage budget whole; when it does not fit it sheds its failure body, then
+	// its response headers, and a record that does not fit even bare is dropped whole. Each step counts usage_queue once.
 	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + 512
-	if e.usageBytes.Add(size) > UsageQueueBytes {
-		e.usageBytes.Add(-size)
-		rec.FailureBody = ""
-		size = headerBytes(rec.ResponseHeaders) + 512
-		e.usageBytes.Add(size)
+	if !e.reserveUsage(size) {
 		e.Stats.Drop("usage_queue")
+		rec.FailureBody = ""
+		if size = headerBytes(rec.ResponseHeaders) + 512; !e.reserveUsage(size) {
+			rec.ResponseHeaders = nil
+			if size = 512; !e.reserveUsage(size) {
+				return OK
+			}
+		}
 	}
 	select {
 	case e.Usage <- UsageItem{Rec: rec, Bytes: size, ObservedAt: start}:
@@ -500,6 +505,19 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 		e.Stats.Drop("usage_queue")
 	}
 	return OK
+}
+
+// reserveUsage adds n to the usage queue's bytes when the total stays within UsageQueueBytes, and reports whether it did.
+func (e *Engine) reserveUsage(n int64) bool {
+	for {
+		cur := e.usageBytes.Load()
+		if cur+n > UsageQueueBytes {
+			return false
+		}
+		if e.usageBytes.CompareAndSwap(cur, cur+n) {
+			return true
+		}
+	}
 }
 
 func headerBytes(h map[string][]string) int64 {

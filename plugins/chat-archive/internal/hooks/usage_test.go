@@ -121,3 +121,68 @@ func TestUsageSourceRules(t *testing.T) {
 		t.Fatal("AuthID path reached the record")
 	}
 }
+
+// TestUsageQueueBudgetHeldWriter: with the writer held (nothing takes the usage queue), the 32 MiB usage budget holds for
+// every record, the metadata-only fallback included. A record whose failure body does not fit keeps its response headers
+// when they fit, sheds them when they do not, and is dropped whole (usage_queue) when even the bare record does not
+// fit; every queued item's Bytes covers what it holds, and the queued items' Bytes add up to the reservation. Before,
+// the fallback added the headers and 512 bytes without a limit check, so header-heavy records pushed the queue past
+// the budget.
+func TestUsageQueueBudgetHeldWriter(t *testing.T) {
+	e := running(t, "full")
+	hdr := func(n int) map[string][]string { return map[string][]string{"X-Synthetic": {strings.Repeat("h", n)}} }
+	call := func(body string, h map[string][]string) {
+		fields := map[string]any{"RequestID": "u-held", "Provider": "claude", "Model": "model-x", "Failure": map[string]any{"Body": body}}
+		if h != nil {
+			fields["ResponseHeaders"] = h
+		}
+		raw, _ := json.Marshal(fields)
+		e.UsageHook(raw)
+		if b := e.usageBytes.Load(); b > UsageQueueBytes {
+			t.Fatalf("usage queue reservation %d past the %d budget", b, UsageQueueBytes)
+		}
+	}
+	// Header-heavy records with failure bodies: the first fill the budget, the rest fall back.
+	for i := 0; i < 40; i++ {
+		call(strings.Repeat("b", 1<<20), hdr(1<<20))
+	}
+	// Bodyless records: headers that do not fit are shed, the bare record is kept while it fits.
+	for i := 0; i < 20; i++ {
+		call("", hdr(1<<20))
+	}
+	// Leave less than a bare record's room, then send bodyless, headerless records: dropped whole.
+	if rem := UsageQueueBytes - e.usageBytes.Load(); rem > 612 {
+		call(strings.Repeat("f", int(rem-612)), nil)
+	}
+	if rem := UsageQueueBytes - e.usageBytes.Load(); rem >= 512 {
+		t.Fatalf("%d bytes left, want less than a bare record", rem)
+	}
+	before := e.Stats.Dropped()["usage_queue"]
+	call("", nil)
+	call("", hdr(64))
+	if d := e.Stats.Dropped()["usage_queue"] - before; d != 2 {
+		t.Fatalf("usage_queue +%d for two records that cannot fit, want +2", d)
+	}
+	var sum int64
+	var withHeaders, bare int
+	for len(e.Usage) > 0 {
+		u := <-e.Usage
+		need := int64(len(u.Rec.FailureBody)) + headerBytes(u.Rec.ResponseHeaders) + 512
+		if u.Bytes < need {
+			t.Fatalf("queued item counts %d bytes, holds %d", u.Bytes, need)
+		}
+		if u.Rec.ResponseHeaders != nil && u.Rec.FailureBody == "" {
+			withHeaders++
+		}
+		if u.Rec.ResponseHeaders == nil && u.Rec.FailureBody == "" {
+			bare++
+		}
+		sum += u.Bytes
+	}
+	if sum != e.usageBytes.Load() {
+		t.Fatalf("queued items count %d bytes, reservation %d", sum, e.usageBytes.Load())
+	}
+	if withHeaders == 0 || bare == 0 {
+		t.Fatalf("records kept without their body: %d with headers, %d with headers shed; want both", withHeaders, bare)
+	}
+}
