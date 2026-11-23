@@ -63,7 +63,7 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 	if e.Stats.HasFault("write_unavailable") || e.Stats.DroppedTotal() != 0 {
 		t.Fatalf("fault %v, dropped %v after a successful write", e.Stats.Faults(), e.Stats.Dropped())
 	}
-	// A group the writer drops (pressure level 3, where nothing is written) is released too.
+	// A group held at pressure level 3 (nothing is written there) until a stop's deadline drops it is released too.
 	rt.obWrite = func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error) {
 		t.Fatal("written at pressure level 3")
 		return outbox.WriteResult{}, nil
@@ -71,11 +71,16 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 	rt.opts.Outbox = hardPressure(t)
 	e.Pool.TryReserve(100)
 	env.Key = "ex/budget-3/begin/0"
+	start := time.Now()
+	rt.stopBy.Store(start.Add(100 * time.Millisecond).UnixNano())
 	rt.flush([]writeReq{{env: env, release: func() { e.Pool.Release(100) }}})
+	if d := time.Since(start); d < 100*time.Millisecond {
+		t.Fatalf("group dropped after %v at level 3, want it held until the stop's deadline", d)
+	}
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after a dropped group = %d", got)
 	}
-	if n := e.Stats.Dropped()["disk_hard"]; n != 1 {
-		t.Fatalf("dropped.disk_hard = %d, want 1", n)
+	if d := e.Stats.Dropped(); d["stopped"] != 1 || d["disk_hard"] != 0 {
+		t.Fatalf("dropped = %v, want stopped 1", d)
 	}
 }

@@ -64,9 +64,15 @@ type Runtime struct {
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
 	stopBy        atomic.Int64 // StopBy's deadline (unix ns), 0 while running
+	// cut is canceled at StopBy's deadline: it ends the writer's running outbox write attempt and its backoff wait.
+	cutOnce sync.Once
+	cut     context.Context
+	cutStop context.CancelFunc
 
 	// obWrite is the outbox write the writer calls (Outbox.Write when nil; tests inject failures).
 	obWrite func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
+	// obPressure is the pressure the writer reads before each attempt (Outbox.Pressure when nil; tests inject levels).
+	obPressure func() outbox.PressureState
 	// holdUntil ends the retries of failing writes once a stop without a deadline has lasted
 	// DrainTimeout. The writer goroutine alone reads and sets it.
 	holdUntil time.Time
@@ -124,14 +130,21 @@ func (rt *Runtime) Prefix() *PrefixMap { return rt.prefix }
 // Stop is StopBy with no deadline but DrainTimeout.
 func (rt *Runtime) Stop() { rt.StopBy(time.Time{}) }
 
+// stopCut is the context StopBy's deadline cancels.
+func (rt *Runtime) stopCut() context.Context {
+	rt.cutOnce.Do(func() { rt.cut, rt.cutStop = context.WithCancel(context.Background()) })
+	return rt.cut
+}
+
 // StopBy drains what admission let in, within DrainTimeout and before deadline (when not zero).
 // The engine's admission must already be stopping, so the queues only shrink. First the stream
 // goroutine processes the queued stream and control items and writes each stream still open as a
 // partial response (finishStreams), while the workers keep running; then the workers process the
 // queued bodies and usage items; then the writer flushes what it holds, its outbox writes also
-// bounded by deadline. Past the drain bound, unfinished bodies and whatever is still queued are
-// counted stopped and released, never written; an exchange's completion that waited for a drained
-// body is still handed to the writer until deadline (or DrainTimeout), else counted stopped.
+// bounded by deadline, which cancels a write attempt still running then and ends a wait between
+// attempts. Past the drain bound, unfinished bodies and whatever is still queued are counted
+// stopped and released, never written; an exchange's completion that waited for a drained body is
+// still handed to the writer until deadline (or DrainTimeout), else counted stopped.
 func (rt *Runtime) StopBy(deadline time.Time) {
 	bound := DrainTimeout
 	finalBy := time.Now().Add(DrainTimeout)
@@ -139,6 +152,9 @@ func (rt *Runtime) StopBy(deadline time.Time) {
 		finalBy = deadline
 		bound = min(bound, max(time.Until(deadline), 0))
 		rt.stopBy.Store(deadline.UnixNano())
+		rt.stopCut() // sets cutStop
+		t := time.AfterFunc(max(time.Until(deadline), 0), rt.cutStop)
+		defer t.Stop()
 	}
 	expire := time.AfterFunc(bound, rt.drainStop)
 	defer expire.Stop()
@@ -492,7 +508,7 @@ func (rt *Runtime) writer(ctx context.Context) {
 func (rt *Runtime) writerStopping() bool { return rt.writerCtx != nil && rt.writerCtx.Err() != nil }
 
 // pause waits d between two attempts of a failing write; a stop that begins meanwhile ends the
-// wait at once.
+// wait at once, and a stop's deadline ends it whenever it comes.
 func (rt *Runtime) pause(d time.Duration) {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -503,7 +519,26 @@ func (rt *Runtime) pause(d time.Duration) {
 	select {
 	case <-t.C:
 	case <-stop:
+	case <-rt.stopCut().Done():
 	}
+}
+
+// holdEnd is the counter under which a stop ends the hold of a group not written yet: stopped once its deadline
+// passed; for a stop without one, disk_hard once the group has been held DrainTimeout into the stop; "" while the
+// group is still held.
+func (rt *Runtime) holdEnd() string {
+	if by := rt.stopBy.Load(); by != 0 && !time.Now().Before(time.Unix(0, by)) {
+		return "stopped"
+	}
+	if rt.writerStopping() {
+		if rt.holdUntil.IsZero() {
+			rt.holdUntil = time.Now().Add(DrainTimeout)
+		}
+		if !time.Now().Before(rt.holdUntil) {
+			return "disk_hard"
+		}
+	}
+	return ""
 }
 
 // flush writes one group in one outbox transaction. A write that fails or times out keeps the group
@@ -512,10 +547,12 @@ func (rt *Runtime) pause(d time.Duration) {
 // holds a group, the workers and the stream goroutine wait on the bounded write queue, the hooks'
 // queues and the content pool fill, and the hooks keep each new exchange's metadata without its body
 // (body_budget, handoff_full). A whole envelope is lost only when those queues are full too
-// (control_full, usage_queue, stream_overflow). The writer still drops a group, counted under
-// dropped, at pressure level 3 (disk_hard: nothing is written there), on an error no retry can fix
-// (outbox.Permanent; disk_hard), and at a stop: past its deadline (stopped) or, for a stop without
-// one, once its failing writes have been retried for DrainTimeout (disk_hard).
+// (control_full, usage_queue, stream_overflow). At pressure level 3 nothing is written: the writer
+// holds its group the same way, without attempting the write, and resumes it when the pressure
+// falls. The writer still drops a group, counted under dropped, on an error no retry can fix
+// (outbox.Permanent; disk_hard), and at a stop: past its deadline (stopped), which also cancels an
+// attempt still running, or, for a stop without one, once it has held the group DrainTimeout into
+// the stop (disk_hard).
 func (rt *Runtime) flush(group []writeReq) {
 	// Every path out of flush, a recovered panic included, returns the group's budgets: by then
 	// the envelopes are written or dropped.
@@ -545,12 +582,22 @@ func (rt *Runtime) flush(group []writeReq) {
 	}
 	var res outbox.WriteResult
 	backoff, failures, attempt := RetryBackoffMin, 0, WriteTimeout
+	pressure := rt.obPressure
+	if pressure == nil {
+		pressure = ob.Pressure
+	}
 	for {
-		ps := ob.Pressure()
+		ps := pressure()
 		rt.setPressure(ps)
 		if ps.Level >= outbox.PressureHard {
-			drop("disk_hard")
-			return
+			// Nothing is written at level 3: hold the group, as for a failing write, until the pressure falls.
+			if why := rt.holdEnd(); why != "" {
+				drop(why)
+				return
+			}
+			rt.pause(backoff)
+			backoff = min(2*backoff, RetryBackoffMax)
+			continue
 		}
 		budget := attempt
 		if by := rt.stopBy.Load(); by != 0 {
@@ -560,7 +607,7 @@ func (rt *Runtime) flush(group []writeReq) {
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		ctx, cancel := context.WithTimeout(rt.stopCut(), budget)
 		r, err := write(ctx, envs)
 		timedOut := ctx.Err() != nil
 		cancel()
@@ -579,14 +626,9 @@ func (rt *Runtime) flush(group []writeReq) {
 			drop("disk_hard")
 			return
 		}
-		if rt.writerStopping() {
-			if rt.holdUntil.IsZero() {
-				rt.holdUntil = time.Now().Add(DrainTimeout)
-			}
-			if !time.Now().Before(rt.holdUntil) {
-				drop("disk_hard")
-				return
-			}
+		if why := rt.holdEnd(); why != "" {
+			drop(why)
+			return
 		}
 		if timedOut {
 			attempt = min(2*attempt, max(WriteTimeoutMax, WriteTimeout))
