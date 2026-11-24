@@ -559,9 +559,13 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	retryBy := time.Now().Add(WriteRetryWindow)
 	cut := rt.stopCutCtx()
 	backoff := WriteRetryBackoff
+	// gaveUp is when 0.1.4's loop (three attempts, retrying only busy or locked) would have dropped
+	// the group. The probe interval after a failed group runs from there, so a later group is
+	// probed and written whenever 0.1.4 would have tried it, although it waited behind the retry.
+	var gaveUp time.Time
 	var res outbox.WriteResult
 	var err error
-	for {
+	for attempt := 0; ; attempt++ {
 		budget := min(WriteAttemptTimeout, max(time.Until(retryBy), time.Millisecond))
 		if by := rt.stopBy.Load(); by != 0 {
 			// A stop's deadline bounds the final flush too.
@@ -574,6 +578,9 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		res, err = write(ctx, envs)
 		timedOut := err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
+		if err != nil && gaveUp.IsZero() && (attempt >= 2 || !outbox.Retryable(err)) {
+			gaveUp = time.Now()
+		}
 		if err == nil || cut.Err() != nil || !(timedOut || outbox.TransientWrite(err)) {
 			break
 		}
@@ -599,6 +606,9 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		}
 		rt.stats().SetFault("write_unavailable", true)
 		*lastProbe = time.Now()
+		if !gaveUp.IsZero() {
+			*lastProbe = gaveUp
+		}
 		drop("disk_hard")
 		return
 	}

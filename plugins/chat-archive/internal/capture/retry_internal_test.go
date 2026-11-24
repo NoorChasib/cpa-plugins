@@ -224,3 +224,49 @@ func TestStopDuringWriteRetryReturnsByDeadline(t *testing.T) {
 		})
 	}
 }
+
+// TestRetryExhaustionKeepsBaselineProbeCooldown: the probe interval after a group that kept failing
+// runs from where 0.1.4's write would have given up (its first timed-out attempt), not from the end of
+// the retry window. A later group that arrives once 0.1.4's interval has passed is probed and stored,
+// although it waited behind the failing group's retry.
+func TestRetryExhaustionKeepsBaselineProbeCooldown(t *testing.T) {
+	setRetry(t, time.Second, 2*time.Second, 10*time.Millisecond)
+	pi := ProbeInterval
+	ProbeInterval = 400 * time.Millisecond
+	t.Cleanup(func() { ProbeInterval = pi })
+	rt, e, ob := stoppingRuntime(t, true)
+	bad := wire.ExchangeAttemptKey("cool-a", 1)
+	rt.outboxWrite = func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
+		for _, en := range envs {
+			if en.Key == bad {
+				return blockWrite(ctx, envs) // a disk that cannot take this group
+			}
+		}
+		return ob.Write(ctx, envs)
+	}
+	got := make(chan [2]any, 2)
+	commit := func(key string) func(bool) { return func(ok bool) { got <- [2]any{key, ok} } }
+	start := time.Now()
+	rt.writes <- writeReq{env: retryEnv(t, "cool-a"), commit: commit("a")}
+	// 0.1.4 gives up on a at about 1 s and probes again from 1.4 s: b arrives at 1.7 s, while a's
+	// retry runs until about 2 s.
+	time.Sleep(time.Until(start.Add(1700 * time.Millisecond)))
+	rt.writes <- writeReq{env: retryEnv(t, "cool-b"), commit: commit("b")}
+	want := map[string]bool{"a": false, "b": true}
+	for range 2 {
+		select {
+		case c := <-got:
+			if k := c[0].(string); c[1].(bool) != want[k] {
+				t.Fatalf("group %s committed %v, want %v (dropped %v)", k, c[1], want[k], nonZeroDrops(e))
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the writer did not finish both groups")
+		}
+	}
+	if d := nonZeroDrops(e); !reflect.DeepEqual(d, map[string]uint64{"disk_hard": 1}) {
+		t.Fatalf("dropped = %v, want disk_hard 1 (the failing group only)", d)
+	}
+	if e.Stats.HasFault("write_unavailable") {
+		t.Fatal("write_unavailable still raised after the probe and write succeeded")
+	}
+}
