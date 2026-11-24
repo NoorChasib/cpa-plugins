@@ -60,6 +60,9 @@ type Runtime struct {
 	writerWG  sync.WaitGroup
 	writerCtx context.Context
 	writerEnd context.CancelFunc
+	// writerDone is closed once the writer goroutine returned (WriterDone).
+	doneOnce   sync.Once
+	writerDone chan struct{}
 
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
@@ -131,6 +134,22 @@ func (rt *Runtime) Prefix() *PrefixMap { return rt.prefix }
 // Stop is StopBy with no deadline but DrainTimeout.
 func (rt *Runtime) Stop() { rt.StopBy(time.Time{}) }
 
+// StopWriterGrace is how long past its deadline StopBy waits for the writer to return from an attempt the deadline
+// canceled, before it leaves the writer the outbox and returns.
+var StopWriterGrace = 50 * time.Millisecond
+
+// WriterDone is closed once the writer goroutine has returned, after which it no longer uses the outbox.
+func (rt *Runtime) WriterDone() <-chan struct{} {
+	rt.doneOnce.Do(func() {
+		rt.writerDone = make(chan struct{})
+		go func() {
+			rt.writerWG.Wait()
+			close(rt.writerDone)
+		}()
+	})
+	return rt.writerDone
+}
+
 // stopCut is the context StopBy's deadline cancels.
 func (rt *Runtime) stopCut() context.Context {
 	rt.cutOnce.Do(func() { rt.cut, rt.cutStop = context.WithCancel(context.Background()) })
@@ -146,7 +165,16 @@ func (rt *Runtime) stopCut() context.Context {
 // attempts. Past the drain bound, unfinished bodies and whatever is still queued are counted
 // stopped and released, never written; an exchange's completion that waited for a drained body is
 // still handed to the writer until deadline (or DrainTimeout), else counted stopped.
-func (rt *Runtime) StopBy(deadline time.Time) {
+//
+// The deadline's cancel reaches the backoff wait and the outbox's SQLite statements (the driver
+// interrupts them, and the transaction is rolled back), not a blob file's write and fsync, the
+// blob directory's fsync, or SQLite's own fsync at commit: on a stalled disk those return only
+// when the disk does (review 2 of the round-4 fixes). So with a deadline StopBy waits for the
+// writer only until deadline plus StopWriterGrace and then returns false, leaving the writer, which
+// still owns the outbox, to finish in the background: the caller must not close the outbox until
+// WriterDone. It returns true when the writer has returned. Without a deadline it waits for the
+// writer, as long as that takes.
+func (rt *Runtime) StopBy(deadline time.Time) bool {
 	bound := DrainTimeout
 	finalBy := time.Now().Add(DrainTimeout)
 	if !deadline.IsZero() {
@@ -166,7 +194,18 @@ func (rt *Runtime) StopBy(deadline time.Time) {
 	rt.drainStop()
 	rt.drainChannels(finalBy)
 	rt.writerEnd()
-	rt.writerWG.Wait()
+	if deadline.IsZero() {
+		<-rt.WriterDone()
+		return true
+	}
+	t := time.NewTimer(max(time.Until(deadline), 0) + StopWriterGrace)
+	defer t.Stop()
+	select {
+	case <-rt.WriterDone():
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // drainChannels counts every queued item stopped and releases its reservation. When a drained
