@@ -337,10 +337,18 @@ var StopCloseMargin = 500 * time.Millisecond
 // closeOutbox closes the runtime's outbox at a stop (a variable so tests can slow it down).
 var closeOutbox = (*outbox.Outbox).CloseContext
 
-// closeAfterWriter closes ob once the capture writer returned (done), for a stop whose deadline passed while the writer
-// was still inside an outbox write; the close is bounded by outbox.CloseTimeout.
-func closeAfterWriter(ob *outbox.Outbox, done <-chan struct{}) {
+// outboxWrite, when set, gives the capture writer's outbox write for ob (tests stall it); nil means Outbox.Write.
+var outboxWrite func(ob *outbox.Outbox) func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
+
+// closeAfterWriter finishes a stop whose deadline passed while the capture writer was still inside an outbox write:
+// once the writer returned (done), and so counted what it held or still had queued as dropped, it saves this boot's
+// dropped counters (saveDrops, bounded by FinalSaveTimeout), so the next boot on this outbox reports them, and then
+// closes ob, bounded by outbox.CloseTimeout.
+func closeAfterWriter(ob *outbox.Outbox, done <-chan struct{}, saveDrops func(context.Context) error) {
 	<-done
+	sctx, scancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
+	_ = saveDrops(sctx)
+	scancel()
 	ctx, cancel := context.WithTimeout(context.Background(), outbox.CloseTimeout)
 	defer cancel()
 	_ = closeOutbox(ob, ctx)
@@ -450,10 +458,14 @@ func (p *Plugin) startWith(cfg config.Config, secrets config.Secrets, ob *outbox
 		Heartbeat: func(state string) wire.Heartbeat { return p.heartbeat(rs, state) },
 		Boot:      outbox.BootCounters{BootID: p.bootID, StartedAt: p.startedAt, Component: "cpa-plugin", Version: Version},
 	})
-	rs.capture = capture.Start(capture.Options{
+	copts := capture.Options{
 		Engine: e, Outbox: ob, Workers: cfg.Workers, HMACKeyID: cfg.HMACKeyID, HMACKey: secrets.HMACKey, Masker: rs.masker,
 		Limits: rs.up.Limits, Media: rs.up.Media(), Labels: rs.labels, Notify: rs.up.Notify, Prefix: rs.prefix,
-	})
+	}
+	if outboxWrite != nil {
+		copts.Write = outboxWrite(ob)
+	}
+	rs.capture = capture.Start(copts)
 	e.SetConfig(&hooks.Config{Configured: true, Capture: cfg.Capture, MaxRPC: cfg.MaxRPCMiB << 20, HMACKeyID: cfg.HMACKeyID,
 		HMACKey: secrets.HMACKey, Labels: rs.labels})
 	if a, ok := pushalert.New(secrets.PushoverApp, secrets.PushoverUser, cfg.AlertBacklogHours); ok {
@@ -512,8 +524,8 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 // numbering, which the next instance on this outbox adopts so that the rest of each exchange gets
 // new keys. Then the status snapshot is refreshed, by the deadline, and the outbox is closed, by
 // StopCloseMargin after it, so the whole stop returns by then. When the capture writer is still
-// inside an outbox write the deadline cannot cut (capture.Runtime.StopBy), the outbox is closed in
-// the background once the writer returned instead. Shutdown does not drain: CPA has already detached the
+// inside an outbox write the deadline cannot cut (capture.Runtime.StopBy), the dropped counters are
+// saved again and the outbox closed in the background once the writer returned instead. Shutdown does not drain: CPA has already detached the
 // plugin, so no further hook arrives and no exchange continues.
 func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
@@ -551,9 +563,11 @@ func (p *Plugin) stopRuntime(drain bool) {
 		ccancel()
 	} else {
 		// The writer is still inside an outbox write the stop's deadline cannot cut (an fsync on a stalled disk), so it
-		// still owns the outbox: close it once the writer returned. Until then a new start finds the outbox locked and
+		// still owns the outbox, and the group it holds and whatever is still queued for it are counted dropped only
+		// when it returns, after the SaveDrops above: once it returned, save the counters again and then close the
+		// outbox, so the next boot reports this boot's final drops. Until then a new start finds the outbox locked and
 		// retries its open in the background.
-		go closeAfterWriter(rs.ob, rs.capture.WriterDone())
+		go closeAfterWriter(rs.ob, rs.capture.WriterDone(), rs.up.SaveDrops)
 	}
 	p.engine.Stopped()
 	p.mu.Lock()
