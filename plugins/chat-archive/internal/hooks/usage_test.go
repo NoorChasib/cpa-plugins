@@ -2,11 +2,13 @@ package hooks
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/fingerprint"
@@ -199,7 +201,7 @@ func TestUsageQueueBudgetHeldWriter(t *testing.T) {
 // retainedUsage is what a queued usage record holds, counted independently of usageMetaBytes: every string field
 // (reflection, so a field added later counts too), the response headers and the fixed size.
 func retainedUsage(u protocol.Usage) int64 {
-	n := int64(usageRecordBytes) + headerBytes(u.ResponseHeaders)
+	n := int64(usageRecordBytes) + retainedHeaders(u.ResponseHeaders)
 	v := reflect.ValueOf(u)
 	for i := 0; i < v.NumField(); i++ {
 		if f := v.Field(i); f.Kind() == reflect.String {
@@ -262,5 +264,67 @@ func TestUsageQueueBudgetLargeMetadata(t *testing.T) {
 	}
 	if n == 0 || n == 40 || e.Stats.Dropped()["usage_queue"] == 0 {
 		t.Fatalf("%d of 40 records queued, usage_queue %d: want some kept and the rest dropped", n, e.Stats.Dropped()["usage_queue"])
+	}
+}
+
+// retainedHeaders is a lower bound on what decoded headers hold, counted independently of headerBytes: one group of map
+// slots, per key its contents and slot (a string key and a []string value), and per value array its backing array's
+// string headers (by capacity) and the values' contents.
+func retainedHeaders(h map[string][]string) int64 {
+	if h == nil {
+		return 0
+	}
+	slot := int64(unsafe.Sizeof("") + unsafe.Sizeof([]string(nil)))
+	n := 8 * slot
+	for k, vs := range h {
+		n += int64(len(k)) + slot + int64(cap(vs))*int64(unsafe.Sizeof(""))
+		for _, v := range vs {
+			n += int64(len(v))
+		}
+	}
+	return n
+}
+
+// TestUsageQueueBudgetHeaderContainers (review 3 of the round-4 fixes): decoded response headers hold string headers
+// and slots for every value, however short. With the writer held, records with 70,000 empty header values each (one
+// RPC well under MaxUsage) are charged for that storage, so the queue never holds more than its 32 MiB budget: each
+// queued record's charge covers what it holds, and records whose headers no longer fit shed them. Before, empty values
+// were charged nothing: 32 queued records held more than 32 MiB in string headers alone.
+func TestUsageQueueBudgetHeaderContainers(t *testing.T) {
+	e := running(t, "full")
+	vals := make([]string, 70000)
+	for n := 0; n < 2; n++ {
+		h := map[string][]string{"X-Synthetic": vals}
+		for i := 0; i < 20; i++ {
+			h[fmt.Sprintf("X-Short-%02d", i)] = []string{"", ""}
+		}
+		raw := rpc(map[string]any{"RequestID": "u-hdr", "Provider": "claude", "Model": "model-x", "ResponseHeaders": h})
+		if len(raw) > protocol.MaxUsage {
+			t.Fatalf("RPC of %d bytes past MaxUsage", len(raw))
+		}
+		for i := 0; i < 32; i++ {
+			e.UsageHook(raw)
+			if b := e.usageBytes.Load(); b > UsageQueueBytes {
+				t.Fatalf("usage queue reservation %d past the %d budget", b, UsageQueueBytes)
+			}
+		}
+	}
+	var held, withHeaders int64
+	for len(e.Usage) > 0 {
+		u := <-e.Usage
+		need := retainedUsage(u.Rec)
+		if u.Bytes < need {
+			t.Fatalf("queued record charged %d bytes, holds at least %d", u.Bytes, need)
+		}
+		held += need
+		if u.Rec.ResponseHeaders != nil {
+			withHeaders++
+		}
+	}
+	if held > UsageQueueBytes {
+		t.Fatalf("queued records hold at least %d bytes, past the %d budget", held, UsageQueueBytes)
+	}
+	if withHeaders == 0 || e.Stats.Dropped()["usage_queue"] == 0 {
+		t.Fatalf("%d records kept their headers, usage_queue %d: want some kept and some shed", withHeaders, e.Stats.Dropped()["usage_queue"])
 	}
 }
