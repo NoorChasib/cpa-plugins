@@ -342,7 +342,7 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 			e.evidence(en, &it)
 			en.ChunksQueued++
 			en.Stream = true
-			en.Truncated = false
+			en.Truncated, en.StreamShed = false, false
 		})
 		select {
 		case e.Stream <- it:
@@ -357,11 +357,19 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		return OK
 	}
 	n := int64(req.BodyLen)
-	ok := false
+	ok, shed := false, e.ShedStreamChunks()
+	reason := "stream_overflow"
 	e.With(req.RequestID, true, func(en *Entry) {
 		noteHook(en, start.UnixNano())
 		e.evidence(en, &it)
 		en.Stream = true
+		if shed {
+			// Metadata first: the chunk is shed and the stream truncated, and the sequencer still writes its response.
+			en.Truncated, en.StreamShed = true, true
+		}
+		if en.StreamShed {
+			reason = wire.DroppedBodyBudget
+		}
 		if en.Truncated || en.StreamBytes+n > StreamPerStream {
 			en.Truncated = true
 			return
@@ -375,8 +383,8 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		ok = true
 	})
 	if !ok {
-		e.Stats.Drop("stream_overflow")
-		e.record(hook, req.ChunkIndex, req.BodyLen, "stream_overflow")
+		e.Stats.Drop(reason)
+		e.record(hook, req.ChunkIndex, req.BodyLen, reason)
 		return OK
 	}
 	body, err := protocol.DecodeBase64(sp.Body)
@@ -485,6 +493,12 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 		return OK
 	}
 	defer e.leave()
+	// Metadata first: while the write queue is full or Usage is down to its metadata reserve, the failure body is shed
+	// (body_budget) before the record is queued, so bodies degrade before whole records are lost.
+	if rec.FailureBody != "" && e.ShedUsageBodies() {
+		rec.FailureBody = ""
+		e.Stats.Drop(wire.DroppedBodyBudget)
+	}
 	// The record reserves its bytes from the usage budget whole; when it does not fit it sheds its failure body, then
 	// its response headers, and a record that does not fit even bare is dropped whole. Each step counts usage_queue once.
 	// Every step charges the metadata the record keeps (usageMetaBytes), whose fields have no cap of their own.
