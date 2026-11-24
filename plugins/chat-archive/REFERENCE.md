@@ -99,7 +99,7 @@ Hooks do no I/O, compression or masking. Bodies are decoded straight from CPA's 
 
 ## Faults
 
-`write_unavailable` (outbox writes failing; captures dropped as `disk_hard` until a probe succeeds), `auth_failed` (the archive answered 401/403; uploads, heartbeats and media fetches pause for 15 minutes, never retried in a loop), `replay_gap` (the archive restored behind the local retention window), `server_too_old`, `masker_rebuild`, plus a fault per goroutine that panicked and was restarted (the panic's type is recorded, never its value).
+`write_unavailable` (outbox writes failing; captures dropped as `disk_hard` until a probe succeeds; a group whose write fails busy, locked or with an I/O error, or times out after 10 s, is first retried in order with a backoff doubling from 25 ms, for up to 20 s and never past a stop's deadline), `auth_failed` (the archive answered 401/403; uploads, heartbeats and media fetches pause for 15 minutes, never retried in a loop), `replay_gap` (the archive restored behind the local retention window), `server_too_old`, `masker_rebuild`, plus a fault per goroutine that panicked and was restarted (the panic's type is recorded, never its value).
 
 ## Heartbeats
 
