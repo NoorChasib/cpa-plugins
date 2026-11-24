@@ -270,3 +270,140 @@ func TestRetryExhaustionKeepsBaselineProbeCooldown(t *testing.T) {
 		t.Fatal("write_unavailable still raised after the probe and write succeeded")
 	}
 }
+
+// ignoringWrite is an outbox write whose first call fails with EIO and whose second call blocks in
+// I/O that ignores its context (a blob fsync on a stalled disk) until release is closed.
+type ignoringWrite struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newIgnoringWrite(t *testing.T) *ignoringWrite {
+	w := &ignoringWrite{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(w.free)
+	return w
+}
+
+func (w *ignoringWrite) free() { w.once.Do(func() { close(w.release) }) }
+
+func (w *ignoringWrite) write(next func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error) {
+	return func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
+		switch w.calls.Add(1) {
+		case 1:
+			return outbox.WriteResult{}, &fs.PathError{Op: "write", Path: "blob", Err: syscall.EIO}
+		case 2:
+			close(w.entered)
+			<-w.release
+			return outbox.WriteResult{}, &fs.PathError{Op: "sync", Path: "blob", Err: syscall.EIO}
+		}
+		return next(ctx, envs)
+	}
+}
+
+// TestStopDuringRetryIgnoringCancelReturnsByDeadline: a stop whose deadline passes while a retry
+// attempt is inside I/O that ignores the cancel returns by the deadline: the group is counted stopped,
+// its budget stays held until the attempt returns, and OutboxIdle stays open until then.
+func TestStopDuringRetryIgnoringCancelReturnsByDeadline(t *testing.T) {
+	setRetry(t, 5*time.Second, 20*time.Second, time.Millisecond)
+	rt, e, ob := stoppingRuntime(t, true)
+	w := newIgnoringWrite(t)
+	rt.outboxWrite = w.write(ob.Write)
+	var released atomic.Int32
+	rt.writes <- writeReq{env: retryEnv(t, "ignore-1"), release: func() { released.Add(1) }}
+	select {
+	case <-w.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer did not retry the group")
+	}
+	safety := time.AfterFunc(3*time.Second, w.free)
+	defer safety.Stop()
+	const grace = 300 * time.Millisecond
+	start := time.Now()
+	rt.StopBy(start.Add(grace))
+	if took := time.Since(start); took > grace+200*time.Millisecond {
+		t.Fatalf("StopBy took %v with a %v deadline", took, grace)
+	}
+	if d := nonZeroDrops(e); !reflect.DeepEqual(d, map[string]uint64{"stopped": 1}) {
+		t.Fatalf("dropped = %v, want stopped 1", d)
+	}
+	if e.Stats.HasFault("write_unavailable") {
+		t.Fatal("write_unavailable raised by a stop")
+	}
+	select {
+	case <-rt.OutboxIdle():
+		t.Fatal("OutboxIdle closed while the attempt is still inside the outbox")
+	default:
+	}
+	if released.Load() != 0 {
+		t.Fatal("the group's budget was released while its attempt still holds the envelopes")
+	}
+	w.free()
+	select {
+	case <-rt.OutboxIdle():
+	case <-time.After(2 * time.Second):
+		t.Fatal("OutboxIdle did not close after the attempt returned")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for released.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if released.Load() != 1 {
+		t.Fatalf("releases = %d after the attempt returned, want 1", released.Load())
+	}
+}
+
+// TestRetryIgnoringCancelEndsAtWindowAndHoldsNextWrite: a retry attempt inside I/O that ignores the
+// cancel does not hold the group past the retry window (it is dropped as before, write_unavailable
+// raised), and the writer's next outbox use waits until that attempt returned, so writes stay one at
+// a time.
+func TestRetryIgnoringCancelEndsAtWindowAndHoldsNextWrite(t *testing.T) {
+	setRetry(t, 100*time.Millisecond, 300*time.Millisecond, time.Millisecond)
+	pi := ProbeInterval
+	ProbeInterval = 0
+	t.Cleanup(func() { ProbeInterval = pi })
+	rt, e, ob := stoppingRuntime(t, false)
+	w := newIgnoringWrite(t)
+	var active atomic.Int32
+	rt.outboxWrite = w.write(func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		return ob.Write(ctx, envs)
+	})
+	safety := time.AfterFunc(3*time.Second, w.free)
+	defer safety.Stop()
+	var committed []bool
+	commit := func(ok bool) { committed = append(committed, ok) }
+	var probe time.Time
+	start := time.Now()
+	rt.flush([]writeReq{{env: retryEnv(t, "window-a"), commit: commit}}, &probe)
+	if took := time.Since(start); took > WriteRetryWindow+500*time.Millisecond {
+		t.Fatalf("flush took %v with a %v retry window", took, WriteRetryWindow)
+	}
+	if d := nonZeroDrops(e); !reflect.DeepEqual(d, map[string]uint64{"disk_hard": 1}) || !e.Stats.HasFault("write_unavailable") {
+		t.Fatalf("dropped = %v, fault %v; want disk_hard 1 and write_unavailable", d, e.Stats.HasFault("write_unavailable"))
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.flush([]writeReq{{env: retryEnv(t, "window-b"), commit: commit}}, &probe)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the next group was written or dropped while the earlier attempt was still inside the outbox")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if n := w.calls.Load(); n != 2 {
+		t.Fatalf("write calls = %d while the earlier attempt runs, want 2", n)
+	}
+	w.free()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the next group did not finish after the earlier attempt returned")
+	}
+	if !reflect.DeepEqual(committed, []bool{false, true}) {
+		t.Fatalf("commits %v, want [false true]", committed)
+	}
+}
