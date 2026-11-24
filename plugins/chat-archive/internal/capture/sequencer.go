@@ -217,7 +217,7 @@ func (rt *Runtime) writeOpen(rid string, a *acc, s *segment) {
 			s.cut = s.cut || r.TerminalStatus != stream.StatusCompleted
 			rt.handOff(rid, a, s, r)
 		}
-		rt.writeShed(rid, s)
+		rt.writeShed(rid, a, s)
 	}
 	rt.releaseSeg(rid, s)
 	a.remove(s)
@@ -519,7 +519,7 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 		for _, r := range open {
 			rt.handOff(rid, a, newest, r)
 		}
-		rt.writeShed(rid, newest)
+		rt.writeShed(rid, a, newest)
 		rt.releaseSeg(rid, newest)
 		a.remove(newest)
 		for _, s := range cl.cands[:n-1] {
@@ -527,7 +527,7 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 				for _, r := range rt.flushSeg(rid, a, s, status, d.ObservedAt) {
 					rt.handOff(rid, a, s, r)
 				}
-				rt.writeShed(rid, s)
+				rt.writeShed(rid, a, s)
 			}
 			rt.releaseSeg(rid, s)
 			a.remove(s)
@@ -612,9 +612,11 @@ func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 // writeShed writes a metadata-only, truncated response for header-init segment s when no response was written from it
 // and its stream lost its payload (the hooks shed its chunks under write pressure, hooks.ShedStreamChunks, or they did
 // not fit the stream budget): the reassembler saw no event, so it has nothing to flush, and without this the response
-// would leave no record (review 3 of the round-4 fixes). A segment whose stream was not truncated is left as before.
-func (rt *Runtime) writeShed(rid string, s *segment) {
-	if s.handed > 0 || s.headerInitAt.IsZero() {
+// would leave no record (review 3 of the round-4 fixes). Only the accumulator's current segment is written so: the
+// entry's Truncated describes the current stream, not a parked or kept one. A segment whose stream was not truncated
+// is left as before.
+func (rt *Runtime) writeShed(rid string, a *acc, s *segment) {
+	if s != a.cur || s.handed > 0 || s.headerInitAt.IsZero() {
 		return
 	}
 	e := rt.opts.Engine
