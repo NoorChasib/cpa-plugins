@@ -556,26 +556,6 @@ func Retryable(err error) bool {
 	return errors.As(err, &e) && (e.Code == sqlite.ErrBusy || e.Code == sqlite.ErrLocked)
 }
 
-// TransientWrite reports a Write error that the same write can pass once the disk catches up:
-// SQLITE_BUSY, SQLITE_LOCKED, an SQLite I/O error (SQLITE_IOERR and its extended codes), or a
-// transient error writing a blob file (EIO, EAGAIN, EINTR, EBUSY). A timeout is the caller's to
-// tell, from its own context.
-func TransientWrite(err error) bool {
-	if Retryable(err) {
-		return true
-	}
-	var e sqlite.Error
-	if errors.As(err, &e) && e.Code == sqlite.ErrIoErr {
-		return true
-	}
-	for _, n := range []syscall.Errno{syscall.EIO, syscall.EAGAIN, syscall.EINTR, syscall.EBUSY} {
-		if errors.Is(err, n) {
-			return true
-		}
-	}
-	return false
-}
-
 // CloseTimeout bounds Close's clean mark and WAL checkpoint.
 const CloseTimeout = 5 * time.Second
 
