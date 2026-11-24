@@ -37,6 +37,8 @@ type Options struct {
 	Labels    *labels.Cache
 	Notify    func() // wakes the uploader after a commit
 	Prefix    *PrefixMap
+	// Write is the outbox write the writer calls (Outbox.Write when nil; tests stall or fail it).
+	Write func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
 }
 
 // Runtime is one started capture pipeline.
@@ -106,7 +108,7 @@ func Start(opts Options) *Runtime {
 	if opts.Prefix == nil {
 		opts.Prefix = NewPrefixMap()
 	}
-	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, 1024)}
+	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, 1024), obWrite: opts.Write}
 	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
 	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
 	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
