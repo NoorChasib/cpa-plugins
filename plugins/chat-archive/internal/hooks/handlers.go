@@ -487,13 +487,15 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 	defer e.leave()
 	// The record reserves its bytes from the usage budget whole; when it does not fit it sheds its failure body, then
 	// its response headers, and a record that does not fit even bare is dropped whole. Each step counts usage_queue once.
-	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + 512
+	// Every step charges the metadata the record keeps (usageMetaBytes), whose fields have no cap of their own.
+	meta := usageMetaBytes(&rec)
+	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + meta
 	if !e.reserveUsage(size) {
 		e.Stats.Drop("usage_queue")
 		rec.FailureBody = ""
-		if size = headerBytes(rec.ResponseHeaders) + 512; !e.reserveUsage(size) {
+		if size = headerBytes(rec.ResponseHeaders) + meta; !e.reserveUsage(size) {
 			rec.ResponseHeaders = nil
-			if size = 512; !e.reserveUsage(size) {
+			if size = meta; !e.reserveUsage(size) {
 				return OK
 			}
 		}
@@ -518,6 +520,23 @@ func (e *Engine) reserveUsage(n int64) bool {
 			return true
 		}
 	}
+}
+
+// usageRecordBytes is a usage record's fixed size (its struct, times, counts and map header), charged with its strings.
+const usageRecordBytes = 512
+
+// usageMetaBytes is what a usage record keeps besides its failure body and response headers: its fixed size and every
+// string it decoded or derived. MaxUsage bounds the call, not one field, so a long model, base URL or session id is
+// charged as it is (review 2 of the round-4 fixes).
+func usageMetaBytes(u *protocol.Usage) int64 {
+	n := usageRecordBytes
+	for _, s := range [...]string{u.RequestID, u.TraceID, u.SelectionID, u.Provider, u.BaseURL, u.ExecutorType, u.Model, u.Alias,
+		u.AccessProvider, u.SessionID, u.ParentSessionID, u.AuthIndex, u.AuthType, u.ReasoningEffort, u.ServiceTier,
+		u.EffectiveServiceTier, u.ResponseServiceTier, u.ResponseModel, u.CallerFP, u.AuthFP, u.AccountFP, u.SourceClear,
+		u.SourceKind} {
+		n += len(s)
+	}
+	return int64(n)
 }
 
 func headerBytes(h map[string][]string) int64 {

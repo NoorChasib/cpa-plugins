@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -142,6 +143,14 @@ func TestUsageQueueBudgetHeldWriter(t *testing.T) {
 			t.Fatalf("usage queue reservation %d past the %d budget", b, UsageQueueBytes)
 		}
 	}
+	// A bare record's charge: its fixed size and its metadata strings (usageMetaBytes).
+	call("", nil)
+	first := <-e.Usage
+	e.UsageDequeued(first.Bytes)
+	bare := first.Bytes
+	if bare != usageMetaBytes(&first.Rec) || bare < usageRecordBytes {
+		t.Fatalf("bare record charged %d, metadata %d", bare, usageMetaBytes(&first.Rec))
+	}
 	// Header-heavy records with failure bodies: the first fill the budget, the rest fall back.
 	for i := 0; i < 40; i++ {
 		call(strings.Repeat("b", 1<<20), hdr(1<<20))
@@ -151,10 +160,10 @@ func TestUsageQueueBudgetHeldWriter(t *testing.T) {
 		call("", hdr(1<<20))
 	}
 	// Leave less than a bare record's room, then send bodyless, headerless records: dropped whole.
-	if rem := UsageQueueBytes - e.usageBytes.Load(); rem > 612 {
-		call(strings.Repeat("f", int(rem-612)), nil)
+	if rem := UsageQueueBytes - e.usageBytes.Load(); rem > bare+100 {
+		call(strings.Repeat("f", int(rem-bare-100)), nil)
 	}
-	if rem := UsageQueueBytes - e.usageBytes.Load(); rem >= 512 {
+	if rem := UsageQueueBytes - e.usageBytes.Load(); rem >= bare {
 		t.Fatalf("%d bytes left, want less than a bare record", rem)
 	}
 	before := e.Stats.Dropped()["usage_queue"]
@@ -164,10 +173,10 @@ func TestUsageQueueBudgetHeldWriter(t *testing.T) {
 		t.Fatalf("usage_queue +%d for two records that cannot fit, want +2", d)
 	}
 	var sum int64
-	var withHeaders, bare int
+	var withHeaders, bareKept int
 	for len(e.Usage) > 0 {
 		u := <-e.Usage
-		need := int64(len(u.Rec.FailureBody)) + headerBytes(u.Rec.ResponseHeaders) + 512
+		need := retainedUsage(u.Rec)
 		if u.Bytes < need {
 			t.Fatalf("queued item counts %d bytes, holds %d", u.Bytes, need)
 		}
@@ -175,14 +184,83 @@ func TestUsageQueueBudgetHeldWriter(t *testing.T) {
 			withHeaders++
 		}
 		if u.Rec.ResponseHeaders == nil && u.Rec.FailureBody == "" {
-			bare++
+			bareKept++
 		}
 		sum += u.Bytes
 	}
 	if sum != e.usageBytes.Load() {
 		t.Fatalf("queued items count %d bytes, reservation %d", sum, e.usageBytes.Load())
 	}
-	if withHeaders == 0 || bare == 0 {
-		t.Fatalf("records kept without their body: %d with headers, %d with headers shed; want both", withHeaders, bare)
+	if withHeaders == 0 || bareKept == 0 {
+		t.Fatalf("records kept without their body: %d with headers, %d with headers shed; want both", withHeaders, bareKept)
+	}
+}
+
+// retainedUsage is what a queued usage record holds, counted independently of usageMetaBytes: every string field
+// (reflection, so a field added later counts too), the response headers and the fixed size.
+func retainedUsage(u protocol.Usage) int64 {
+	n := int64(usageRecordBytes) + headerBytes(u.ResponseHeaders)
+	v := reflect.ValueOf(u)
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.String {
+			n += int64(f.Len())
+		}
+	}
+	return n
+}
+
+// TestUsageMetaBytesCountsEveryString: usageMetaBytes charges every string field of a usage record but the failure
+// body (charged on its own), so a field added to protocol.Usage cannot escape the usage budget.
+func TestUsageMetaBytesCountsEveryString(t *testing.T) {
+	base := usageMetaBytes(&protocol.Usage{})
+	typ := reflect.TypeOf(protocol.Usage{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.Type.Kind() != reflect.String || f.Name == "FailureBody" {
+			continue
+		}
+		var u protocol.Usage
+		reflect.ValueOf(&u).Elem().Field(i).SetString(strings.Repeat("m", 1000))
+		if got := usageMetaBytes(&u) - base; got != 1000 {
+			t.Errorf("a 1000-byte %s adds %d to the charge", f.Name, got)
+		}
+	}
+}
+
+// TestUsageQueueBudgetLargeMetadata (review 2 of the round-4 fixes): with the writer held, records whose metadata
+// fields are large (a base URL, response model and session id of 1 MiB each) stay inside the 32 MiB usage budget by
+// what they hold, not by a flat 512 bytes: after the failure body and headers are shed, each queued record's charge
+// covers its metadata, the queue holds at most the budget, and the records that do not fit are dropped whole
+// (usage_queue). Before, 40 such records queued about 120 MiB while charging under 64 KiB.
+func TestUsageQueueBudgetLargeMetadata(t *testing.T) {
+	e := running(t, "full")
+	big := strings.Repeat("m", 1<<20)
+	for i := 0; i < 40; i++ {
+		raw, _ := json.Marshal(map[string]any{"RequestID": "u-meta", "Provider": "claude", "Model": "model-x", "BaseURL": big,
+			"ResponseModel": big, "SessionID": big, "ResponseHeaders": map[string][]string{"X-Synthetic": {strings.Repeat("h", 4096)}},
+			"Failure": map[string]any{"Body": strings.Repeat("b", 64<<10)}})
+		e.UsageHook(raw)
+		if b := e.usageBytes.Load(); b > UsageQueueBytes {
+			t.Fatalf("usage queue reservation %d past the %d budget", b, UsageQueueBytes)
+		}
+	}
+	var held, charged int64
+	n := 0
+	for len(e.Usage) > 0 {
+		u := <-e.Usage
+		r := retainedUsage(u.Rec)
+		if len(u.Rec.SessionID) != 1<<20 {
+			t.Fatalf("queued record kept a %d-byte session id", len(u.Rec.SessionID))
+		}
+		if u.Bytes < r {
+			t.Fatalf("queued record charged %d bytes, holds %d", u.Bytes, r)
+		}
+		held, charged, n = held+r, charged+u.Bytes, n+1
+	}
+	if held > UsageQueueBytes || charged != e.usageBytes.Load() {
+		t.Fatalf("%d queued records hold %d bytes (budget %d), charged %d, reservation %d", n, held, UsageQueueBytes, charged, e.usageBytes.Load())
+	}
+	if n == 0 || n == 40 || e.Stats.Dropped()["usage_queue"] == 0 {
+		t.Fatalf("%d of 40 records queued, usage_queue %d: want some kept and the rest dropped", n, e.Stats.Dropped()["usage_queue"])
 	}
 }
