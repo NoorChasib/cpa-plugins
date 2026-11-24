@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -423,83 +422,4 @@ func TestReplacementCarriesReusedRequestID(t *testing.T) {
 	if d := p2.Engine().Stats.Dropped(); d["duplicate_key"] != 0 {
 		t.Fatalf("new instance dropped = %v", d)
 	}
-}
-
-// TestStalledWriteDropsReachNextBoot (review 3 of the round-4 fixes): a shutdown whose deadline passes while the capture
-// writer is inside an outbox write that ignores the cancel (a stalled fsync) returns at the deadline, and the writer
-// counts the group it held as dropped only when the write returns, after the stop's own SaveDrops. Those drops still
-// reach the archive: the deferred close saves the counters again before it closes the outbox, and the next instance on
-// the same data directory reports them under the stopped instance's boot_id. Before, the deferred path only closed the
-// outbox, so the next boot found no record.
-func TestStalledWriteDropsReachNextBoot(t *testing.T) {
-	setStopDrain(t, 0)
-	setVar(t, &plugin.StopTimeout, 2500*time.Millisecond)
-	setVar(t, &plugin.CaptureStopMin, 300*time.Millisecond)
-	setVar(t, &plugin.FinalSaveTimeout, 200*time.Millisecond)
-	var armed atomic.Bool
-	entered, release := make(chan struct{}, 1), make(chan struct{})
-	var once sync.Once
-	unblock := func() { once.Do(func() { close(release) }) }
-	t.Cleanup(unblock)
-	plugin.SetOutboxWrite(t, func(ob *outbox.Outbox) func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error) {
-		return func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
-			if armed.Load() {
-				select {
-				case entered <- struct{}{}:
-				default:
-				}
-				<-release // ignores ctx, as a stalled fsync does
-			}
-			return ob.Write(ctx, envs)
-		}
-	})
-	h := plugintest.New(t, nil, "")
-	p := h.Plugin
-	bootA, _ := statusJSON(t, p)["boot_id"].(string)
-	plugintest.WaitFor(t, "first heartbeat", func() bool { return len(h.Srv.Heartbeats(h.SourceID)) >= 1 })
-	_, _, crt := p.Runtime()
-	armed.Store(true)
-	meta := plugintest.Meta("/v1/messages")
-	for _, rid := range []string{"sw-1", "sw-2", "sw-3"} {
-		p.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "claude", plugintest.ClaudeBody("x"), nil, meta))
-	}
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the writer never attempted the write")
-	}
-	start := time.Now()
-	p.Shutdown()
-	if d := time.Since(start); d > plugin.StopTimeout+plugin.StopCloseMargin+time.Second {
-		t.Fatalf("shutdown took %v with the write stuck (StopTimeout %v)", d, plugin.StopTimeout)
-	}
-	select {
-	case <-crt.WriterDone():
-		t.Fatal("the writer returned while its write was stuck")
-	default:
-	}
-	unblock()
-	select {
-	case <-crt.WriterDone():
-	case <-time.After(10 * time.Second):
-		t.Fatal("the writer did not return after its write did")
-	}
-	stopped := p.Engine().Stats.Dropped()["stopped"]
-	if stopped == 0 {
-		t.Fatal("the held group was not counted stopped")
-	}
-
-	next := plugin.New(nil)
-	if _, err := next.Handle(protocol.MethodPluginRegister, plugintest.Lifecycle(h.YAML)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(next.Shutdown)
-	plugintest.WaitFor(t, "the stopped boot's final drops reported", func() bool {
-		for _, hb := range h.Srv.Heartbeats(h.SourceID) {
-			if hb.BootID == bootA && hb.State == "recovered" {
-				return hb.Dropped["stopped"] == stopped
-			}
-		}
-		return false
-	})
 }

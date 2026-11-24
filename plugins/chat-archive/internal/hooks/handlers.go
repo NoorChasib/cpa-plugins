@@ -109,7 +109,7 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 		return out
 	}
 	need := int64(req.BodyLen) * BodyReserveFactor
-	if e.ShedBodies() || !e.Pool.TryReserve(need) {
+	if !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.record(HookBeforeAuth, 0, req.BodyLen, "body_budget")
 		e.metaBegin(b, wire.DroppedBodyBudget)
@@ -250,7 +250,7 @@ func (e *Engine) Response(raw []byte) []byte {
 		return OK
 	}
 	need := int64(req.BodyLen) * BodyReserveFactor
-	if e.ShedBodies() || !e.Pool.TryReserve(need) {
+	if !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.metaResponse(r, wire.DroppedBodyBudget)
 		return OK
@@ -342,7 +342,7 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 			e.evidence(en, &it)
 			en.ChunksQueued++
 			en.Stream = true
-			en.Truncated, en.StreamShed = false, false
+			en.Truncated = false
 		})
 		select {
 		case e.Stream <- it:
@@ -357,19 +357,11 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		return OK
 	}
 	n := int64(req.BodyLen)
-	ok, shed := false, e.ShedStreamChunks()
-	reason := "stream_overflow"
+	ok := false
 	e.With(req.RequestID, true, func(en *Entry) {
 		noteHook(en, start.UnixNano())
 		e.evidence(en, &it)
 		en.Stream = true
-		if shed {
-			// Metadata first: the chunk is shed and the stream truncated, and the sequencer still writes its response.
-			en.Truncated, en.StreamShed = true, true
-		}
-		if en.StreamShed {
-			reason = wire.DroppedBodyBudget
-		}
 		if en.Truncated || en.StreamBytes+n > StreamPerStream {
 			en.Truncated = true
 			return
@@ -383,8 +375,8 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		ok = true
 	})
 	if !ok {
-		e.Stats.Drop(reason)
-		e.record(hook, req.ChunkIndex, req.BodyLen, reason)
+		e.Stats.Drop("stream_overflow")
+		e.record(hook, req.ChunkIndex, req.BodyLen, "stream_overflow")
 		return OK
 	}
 	body, err := protocol.DecodeBase64(sp.Body)
@@ -493,26 +485,13 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 		return OK
 	}
 	defer e.leave()
-	// Metadata first: while the write queue is full or Usage is down to its metadata reserve, the failure body is shed
-	// (body_budget) before the record is queued, so bodies degrade before whole records are lost.
-	if rec.FailureBody != "" && e.ShedUsageBodies() {
+	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + 512
+	if e.usageBytes.Add(size) > UsageQueueBytes {
+		e.usageBytes.Add(-size)
 		rec.FailureBody = ""
-		e.Stats.Drop(wire.DroppedBodyBudget)
-	}
-	// The record reserves its bytes from the usage budget whole; when it does not fit it sheds its failure body, then
-	// its response headers, and a record that does not fit even bare is dropped whole. Each step counts usage_queue once.
-	// Every step charges the metadata the record keeps (usageMetaBytes), whose fields have no cap of their own.
-	meta := usageMetaBytes(&rec)
-	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + meta
-	if !e.reserveUsage(size) {
+		size = headerBytes(rec.ResponseHeaders) + 512
+		e.usageBytes.Add(size)
 		e.Stats.Drop("usage_queue")
-		rec.FailureBody = ""
-		if size = headerBytes(rec.ResponseHeaders) + meta; !e.reserveUsage(size) {
-			rec.ResponseHeaders = nil
-			if size = meta; !e.reserveUsage(size) {
-				return OK
-			}
-		}
 	}
 	select {
 	case e.Usage <- UsageItem{Rec: rec, Bytes: size, ObservedAt: start}:
@@ -523,57 +502,12 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 	return OK
 }
 
-// reserveUsage adds n to the usage queue's bytes when the total stays within UsageQueueBytes, and reports whether it did.
-func (e *Engine) reserveUsage(n int64) bool {
-	for {
-		cur := e.usageBytes.Load()
-		if cur+n > UsageQueueBytes {
-			return false
-		}
-		if e.usageBytes.CompareAndSwap(cur, cur+n) {
-			return true
-		}
-	}
-}
-
-// usageRecordBytes is a usage record's fixed size (its struct, times, counts and map header), charged with its strings.
-const usageRecordBytes = 512
-
-// usageMetaBytes is what a usage record keeps besides its failure body and response headers: its fixed size and every
-// string it decoded or derived. MaxUsage bounds the call, not one field, so a long model, base URL or session id is
-// charged as it is (review 2 of the round-4 fixes).
-func usageMetaBytes(u *protocol.Usage) int64 {
-	n := usageRecordBytes
-	for _, s := range [...]string{u.RequestID, u.TraceID, u.SelectionID, u.Provider, u.BaseURL, u.ExecutorType, u.Model, u.Alias,
-		u.AccessProvider, u.SessionID, u.ParentSessionID, u.AuthIndex, u.AuthType, u.ReasoningEffort, u.ServiceTier,
-		u.EffectiveServiceTier, u.ResponseServiceTier, u.ResponseModel, u.CallerFP, u.AuthFP, u.AccountFP, u.SourceClear,
-		u.SourceKind} {
-		n += len(s)
-	}
-	return int64(n)
-}
-
-// Decoded header storage beyond the strings' contents (review 3 of the round-4 fixes), charged conservatively for amd64:
-// the map's first group (8 slots of a string key and a []string value, 40 bytes each, and control bytes); per key, its
-// slot again with the table's growth slack (a table is at least 7/16 full after it doubles, so a slot costs up to 94
-// bytes) and the decoder's smallest value array (4 string headers); per value, its string header (16 bytes) with
-// append's up to 2x capacity slack. So many short or empty values are charged for what they hold.
-const (
-	headerMapBytes   = 8*40 + 64
-	headerKeyBytes   = 128 + 4*16
-	headerValueBytes = 2 * 16
-)
-
-// headerBytes is what decoded response headers hold: the keys' and values' contents and their container storage.
 func headerBytes(h map[string][]string) int64 {
-	if h == nil {
-		return 0
-	}
-	n := int64(headerMapBytes)
+	var n int64
 	for k, vs := range h {
-		n += int64(len(k)) + headerKeyBytes
+		n += int64(len(k))
 		for _, v := range vs {
-			n += int64(len(v)) + headerValueBytes
+			n += int64(len(v))
 		}
 	}
 	return n
