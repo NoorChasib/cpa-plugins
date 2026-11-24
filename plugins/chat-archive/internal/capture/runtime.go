@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -64,6 +65,24 @@ type Runtime struct {
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
 	stopBy        atomic.Int64 // StopBy's deadline (unix ns), 0 while running
+
+	stopMu     sync.Mutex
+	stopCut    context.Context // ends when a stop's deadline passes (stopCutCtx)
+	stopCutEnd context.CancelFunc
+
+	// outboxWrite replaces Outbox.Write in tests (nil = the outbox's Write).
+	outboxWrite func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
+}
+
+// stopCutCtx returns the context a stop's deadline ends (StopBy with a deadline). The writer's
+// outbox write attempts and retry backoff derive from it, so neither runs past the deadline.
+func (rt *Runtime) stopCutCtx() context.Context {
+	rt.stopMu.Lock()
+	defer rt.stopMu.Unlock()
+	if rt.stopCut == nil {
+		rt.stopCut, rt.stopCutEnd = context.WithCancel(context.Background())
+	}
+	return rt.stopCut
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
@@ -133,6 +152,9 @@ func (rt *Runtime) StopBy(deadline time.Time) {
 		finalBy = deadline
 		bound = min(bound, max(time.Until(deadline), 0))
 		rt.stopBy.Store(deadline.UnixNano())
+		rt.stopCutCtx()
+		cut := time.AfterFunc(max(time.Until(deadline), 0), rt.stopCutEnd)
+		defer cut.Stop()
 	}
 	expire := time.AfterFunc(bound, rt.drainStop)
 	defer expire.Stop()
@@ -416,6 +438,18 @@ const (
 // ProbeInterval is the write-probe interval while write_unavailable is raised.
 var ProbeInterval = 5 * time.Second
 
+// Outbox write retry: each attempt is bounded by WriteAttemptTimeout; an attempt that fails with
+// a transient error or times out is retried after a backoff doubling from WriteRetryBackoff (at
+// most writeRetryBackoffMax) until WriteRetryWindow has passed since the group's first attempt.
+// Then the group is dropped as disk_hard and write_unavailable is raised.
+var (
+	WriteAttemptTimeout = 10 * time.Second
+	WriteRetryWindow    = 20 * time.Second
+	WriteRetryBackoff   = 25 * time.Millisecond
+)
+
+const writeRetryBackoffMax = 2 * time.Second
+
 func reqBytes(r writeReq) int64 {
 	n := int64(len(r.env.Body))
 	for _, p := range r.env.Pieces {
@@ -515,10 +549,20 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	for i, r := range group {
 		envs[i] = r.env
 	}
+	write := ob.Write
+	if rt.outboxWrite != nil {
+		write = rt.outboxWrite
+	}
+	// A write that fails with a transient error (busy, locked, I/O) or times out is retried, the
+	// same group in order, after a backoff doubling from WriteRetryBackoff, until WriteRetryWindow
+	// has passed since the first attempt. A stop's deadline cuts the attempt and the backoff.
+	retryBy := time.Now().Add(WriteRetryWindow)
+	cut := rt.stopCutCtx()
+	backoff := WriteRetryBackoff
 	var res outbox.WriteResult
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		budget := 10 * time.Second
+	for {
+		budget := min(WriteAttemptTimeout, max(time.Until(retryBy), time.Millisecond))
 		if by := rt.stopBy.Load(); by != 0 {
 			// A stop's deadline bounds the final flush too.
 			if budget = min(budget, time.Until(time.Unix(0, by))); budget <= 0 {
@@ -526,13 +570,27 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), budget)
-		res, err = ob.Write(ctx, envs)
+		ctx, cancel := context.WithTimeout(cut, budget)
+		res, err = write(ctx, envs)
+		timedOut := err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
 		cancel()
-		if err == nil || !outbox.Retryable(err) {
+		if err == nil || cut.Err() != nil || !(timedOut || outbox.TransientWrite(err)) {
 			break
 		}
-		time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
+		wait := min(backoff, time.Until(retryBy))
+		if wait <= 0 {
+			break
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-t.C:
+		case <-cut.Done():
+		}
+		t.Stop()
+		if cut.Err() != nil || !time.Now().Before(retryBy) {
+			break
+		}
+		backoff = min(backoff*2, writeRetryBackoffMax)
 	}
 	if err != nil {
 		if by := rt.stopBy.Load(); by != 0 && !time.Now().Before(time.Unix(0, by)) {
