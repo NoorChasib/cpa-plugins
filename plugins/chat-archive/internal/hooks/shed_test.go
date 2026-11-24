@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
@@ -89,5 +90,102 @@ func TestWriteStallShedsBodies(t *testing.T) {
 	call("stall-2")
 	if d := e.Stats.Dropped()["body_budget"]; d != 2 || len(e.Handoff) != 2 {
 		t.Fatalf("drained: body_budget %d, Handoff %d; want 2, 2", d, len(e.Handoff))
+	}
+}
+
+// TestUsageShedsBodiesBeforeQueueFull (review 3 of the round-4 fixes): with the writer held (nothing takes Usage), usage
+// failures with 1 KiB failure bodies fill the 16,384 usage slots while staying far below the 32 MiB byte budget.
+// Failure bodies degrade (body_budget) once Usage is down to its metadata reserve, before any whole record is lost
+// (usage_queue), and no record queued after that keeps its body. Before, every slot took a body and the next record
+// was dropped whole with no body shed.
+func TestUsageShedsBodiesBeforeQueueFull(t *testing.T) {
+	e := running(t, "full")
+	raw := rpc(map[string]any{"RequestID": "u-fill", "Provider": "claude", "Model": "model-x",
+		"Failure": map[string]any{"Body": strings.Repeat("f", 1<<10)}})
+	firstShed, firstLoss := -1, -1
+	for i := 0; firstLoss < 0 && i < UsageQueueEntries+10; i++ {
+		e.UsageHook(raw)
+		d := e.Stats.Dropped()
+		if firstShed < 0 && d["body_budget"] > 0 {
+			firstShed = i
+		}
+		if d["usage_queue"] > 0 {
+			firstLoss = i
+		}
+	}
+	if b := e.usageBytes.Load(); b > UsageQueueBytes-(1<<20) {
+		t.Fatalf("usage reservation %d: the test must stay below the byte budget", b)
+	}
+	if firstShed < 0 || firstLoss < 0 || firstShed >= firstLoss {
+		t.Fatalf("first failure body shed at record %d, first whole loss at %d (dropped %v): bodies must degrade first", firstShed, firstLoss, e.Stats.Dropped())
+	}
+	if firstShed != UsageQueueEntries-UsageReserve {
+		t.Fatalf("first shed at record %d, want %d (the metadata reserve)", firstShed, UsageQueueEntries-UsageReserve)
+	}
+	withBody := 0
+	for i := 0; len(e.Usage) > 0; i++ {
+		u := <-e.Usage
+		if u.Rec.FailureBody != "" {
+			withBody++
+		}
+		e.UsageDequeued(u.Bytes)
+	}
+	if withBody != UsageQueueEntries-UsageReserve {
+		t.Fatalf("%d queued records kept their failure body, want %d", withBody, UsageQueueEntries-UsageReserve)
+	}
+	// While the write queue is full, a failure body is shed with Usage empty.
+	e.SetWriteStall(true)
+	before := e.Stats.Dropped()["body_budget"]
+	e.UsageHook(raw)
+	if u := <-e.Usage; u.Rec.FailureBody != "" || e.Stats.Dropped()["body_budget"] != before+1 {
+		t.Fatalf("stalled: failure body kept %v, body_budget +%d", u.Rec.FailureBody != "", e.Stats.Dropped()["body_budget"]-before)
+	}
+}
+
+// TestStreamChunksShedBeforeHeaderInit (review 3 of the round-4 fixes): with the stream goroutine held (nothing takes
+// Stream), payload chunks stop being queued once Stream is down to the part kept for header-inits: they are shed
+// (body_budget) and their stream marked truncated, and a later stream's header-init is still queued. While the write
+// queue is full a payload chunk is shed with Stream empty. Before, payload chunks filled Stream and the next
+// header-init was lost (stream_overflow).
+func TestStreamChunksShedBeforeHeaderInit(t *testing.T) {
+	e := running(t, "full")
+	chunk := func(rid string, idx int) []byte {
+		m := map[string]any{"RequestID": rid, "SourceFormat": "openai-response", "Model": "model-x", "ChunkIndex": idx}
+		if idx < 0 {
+			m["ResponseHeaders"] = map[string][]string{"Content-Type": {"text/event-stream"}}
+		} else {
+			m["Body"] = []byte("data: {}\n\n")
+		}
+		return rpc(m)
+	}
+	for i := 0; i < StreamEntries; i++ {
+		e.StreamChunk(chunk("s-fill", i))
+	}
+	if n := len(e.Stream); n != StreamEntries-StreamReserve {
+		t.Fatalf("Stream holds %d payload chunks, want %d", n, StreamEntries-StreamReserve)
+	}
+	d := e.Stats.Dropped()
+	if d["body_budget"] != StreamReserve || d["stream_overflow"] != 0 {
+		t.Fatalf("dropped %v, want body_budget %d and no stream_overflow", d, StreamReserve)
+	}
+	truncated := false
+	e.With("s-fill", false, func(en *Entry) { truncated = en.Truncated && en.StreamShed })
+	if !truncated {
+		t.Fatal("the shed stream is not marked truncated")
+	}
+	e.StreamChunk(chunk("s-new", -1))
+	if n := len(e.Stream); n != StreamEntries-StreamReserve+1 || e.Stats.Dropped()["stream_overflow"] != 0 {
+		t.Fatalf("header-init not queued: Stream %d, dropped %v", n, e.Stats.Dropped())
+	}
+	for len(e.Stream) > 0 {
+		it := <-e.Stream
+		e.Pool.ReleaseStream(it.Reserved)
+	}
+	e.SetWriteStall(true)
+	e.StreamChunk(chunk("s-stall", -1))
+	before := e.Stats.Dropped()["body_budget"]
+	e.StreamChunk(chunk("s-stall", 0))
+	if n := len(e.Stream); n != 1 || e.Stats.Dropped()["body_budget"] != before+1 {
+		t.Fatalf("stalled: Stream %d (header-init only), body_budget +%d; want 1, +1", n, e.Stats.Dropped()["body_budget"]-before)
 	}
 }

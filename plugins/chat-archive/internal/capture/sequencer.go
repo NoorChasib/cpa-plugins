@@ -30,7 +30,8 @@ type segment struct {
 	bytes        int64
 	state        int64 // stream-pool bytes held for assembled state
 	resets       uint32
-	ended        bool // the last response handed off ended with a completed, done or incomplete event
+	ended        bool   // the last response handed off ended with a completed, done or incomplete event
+	handed       uint32 // responses written from this segment (writeShed)
 	// cut: the next response handed off lost part of its stream, so it is marked truncated. Set
 	// when this runtime picks a stream up after its first payload chunk (the start went to an
 	// earlier runtime or plugin instance), and when a stop writes a stream that is still open.
@@ -216,6 +217,7 @@ func (rt *Runtime) writeOpen(rid string, a *acc, s *segment) {
 			s.cut = s.cut || r.TerminalStatus != stream.StatusCompleted
 			rt.handOff(rid, a, s, r)
 		}
+		rt.writeShed(rid, s)
 	}
 	rt.releaseSeg(rid, s)
 	a.remove(s)
@@ -517,6 +519,7 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 		for _, r := range open {
 			rt.handOff(rid, a, newest, r)
 		}
+		rt.writeShed(rid, newest)
 		rt.releaseSeg(rid, newest)
 		a.remove(newest)
 		for _, s := range cl.cands[:n-1] {
@@ -524,6 +527,7 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 				for _, r := range rt.flushSeg(rid, a, s, status, d.ObservedAt) {
 					rt.handOff(rid, a, s, r)
 				}
+				rt.writeShed(rid, s)
 			}
 			rt.releaseSeg(rid, s)
 			a.remove(s)
@@ -562,6 +566,7 @@ func (rt *Runtime) flushSeg(rid string, a *acc, s *segment, status string, at ti
 func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 	e := rt.opts.Engine
 	rt.releaseSeg(rid, s)
+	s.handed++
 	switch sr.TerminalStatus {
 	case stream.StatusCompleted, stream.StatusDone, stream.StatusIncomplete:
 		s.ended = !sr.TerminalAt.IsZero() // zero when Flush closed it, not a terminal event
@@ -602,6 +607,34 @@ func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 		e.Stats.Drop("handoff_full")
 		rt.metaResponse(r, "body_budget")
 	}
+}
+
+// writeShed writes a metadata-only, truncated response for header-init segment s when no response was written from it
+// and its stream lost its payload (the hooks shed its chunks under write pressure, hooks.ShedStreamChunks, or they did
+// not fit the stream budget): the reassembler saw no event, so it has nothing to flush, and without this the response
+// would leave no record (review 3 of the round-4 fixes). A segment whose stream was not truncated is left as before.
+func (rt *Runtime) writeShed(rid string, s *segment) {
+	if s.handed > 0 || s.headerInitAt.IsZero() {
+		return
+	}
+	e := rt.opts.Engine
+	r := &hooks.Response{
+		RequestID: rid, SourceFormat: s.format, Model: s.model, StatusCode: 200, Stream: true, Headers: s.headers,
+		ObservedAt: e.Now(), Meta: s.meta, HeaderInitAt: s.headerInitAt, FirstChunkAt: s.firstChunkAt, Chunks: s.chunks,
+		StreamBytes: s.bytes, BootstrapResets: s.resets, Truncated: true,
+	}
+	truncated := false
+	e.With(rid, false, func(en *hooks.Entry) {
+		if truncated = en.Truncated; truncated {
+			r.Index = en.NextResponse
+			en.NextResponse++
+		}
+	})
+	if !truncated {
+		return
+	}
+	s.handed++
+	rt.metaResponse(r, "body_budget")
 }
 
 func (rt *Runtime) metaResponse(r *hooks.Response, reason string) {
