@@ -337,20 +337,6 @@ var StopCloseMargin = 500 * time.Millisecond
 // closeOutbox closes the runtime's outbox at a stop (a variable so tests can slow it down).
 var closeOutbox = (*outbox.Outbox).CloseContext
 
-// closeWhenIdle finishes a stop whose capture writer left an outbox write retry behind at the
-// deadline, inside I/O that ignores the cancel (a blob fsync on a stalled disk): once that write
-// returned (idle), it runs resave, bounded by FinalSaveTimeout, for what the stop could not save
-// while the write held the database, then closes the outbox, bounded by outbox.CloseTimeout.
-func closeWhenIdle(idle <-chan struct{}, resave, closeOb func(context.Context)) {
-	<-idle
-	sctx, cancel := context.WithTimeout(context.Background(), FinalSaveTimeout)
-	resave(sctx)
-	cancel()
-	cctx, ccancel := context.WithTimeout(context.Background(), outbox.CloseTimeout)
-	closeOb(cctx)
-	ccancel()
-}
-
 // CarryMaxAge is how old a saved set of open requests may be when the next instance opens the
 // outbox: CPA loads the new version right after the old one's quiesce returned, so an older set
 // belongs to requests that ended with an earlier CPA process.
@@ -516,11 +502,7 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 // heartbeat are reported by the next boot), and, with drain set, so are the open requests'
 // numbering, which the next instance on this outbox adopts so that the rest of each exchange gets
 // new keys. Then the status snapshot is refreshed, by the deadline, and the outbox is closed, by
-// StopCloseMargin after it, so the whole stop returns by then. When the capture writer left a
-// retry attempt inside the outbox at its deadline (capture.Runtime.OutboxIdle still open), the
-// outbox is closed in the background once that attempt returned, after saving again what failed
-// (closeWhenIdle); until then a new start finds the outbox locked and retries its open in the
-// background. Shutdown does not drain: CPA has already detached the
+// StopCloseMargin after it, so the whole stop returns by then. Shutdown does not drain: CPA has already detached the
 // plugin, so no further hook arrives and no exchange continues.
 func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
@@ -544,40 +526,17 @@ func (p *Plugin) stopRuntime(drain bool) {
 	p.engine.BeginStop()
 	rs.capture.StopBy(captureBy)
 	sctx, cancel := context.WithDeadline(context.Background(), minTime(time.Now().Add(FinalSaveTimeout), deadline))
-	dropsErr := rs.up.SaveDrops(sctx)
-	var carryErr error
-	var carry []outbox.OpenRequest
-	var nums []outbox.Numbering
+	_ = rs.up.SaveDrops(sctx)
 	if drain {
-		carry, nums = carriedToOutbox(p.engine.OpenRequests()), numberingToOutbox(p.engine.Numbering())
-		_, carryErr = rs.ob.SaveCarry(sctx, carry, nums)
+		_, _ = rs.ob.SaveCarry(sctx, carriedToOutbox(p.engine.OpenRequests()), numberingToOutbox(p.engine.Numbering()))
 	}
 	cancel()
 	sctx, cancel = context.WithDeadline(context.Background(), deadline)
 	p.refreshSnapshot(sctx, rs)
 	cancel()
-	idle := rs.capture.OutboxIdle()
-	select {
-	case <-idle:
-		cctx, ccancel := context.WithDeadline(context.Background(), deadline.Add(StopCloseMargin))
-		_ = closeOutbox(rs.ob, cctx)
-		ccancel()
-	default:
-		// The left-behind attempt may still hold the outbox's write lock and transaction: the saves
-		// above may have failed busy, and closing now would let a new instance open the outbox
-		// under it.
-		ob, up := rs.ob, rs.up
-		safego.Go(nil, "outbox_close", p.engine.Stats.Panic, func() {
-			closeWhenIdle(idle, func(ctx context.Context) {
-				if dropsErr != nil {
-					_ = up.SaveDrops(ctx)
-				}
-				if carryErr != nil {
-					_, _ = ob.SaveCarry(ctx, carry, nums)
-				}
-			}, func(ctx context.Context) { _ = closeOutbox(ob, ctx) })
-		})
-	}
+	cctx, ccancel := context.WithDeadline(context.Background(), deadline.Add(StopCloseMargin))
+	_ = closeOutbox(rs.ob, cctx)
+	ccancel()
 	p.engine.Stopped()
 	p.mu.Lock()
 	p.rt = nil

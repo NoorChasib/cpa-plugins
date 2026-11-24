@@ -2,7 +2,6 @@ package capture
 
 import (
 	"context"
-	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -65,117 +64,6 @@ type Runtime struct {
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
 	stopBy        atomic.Int64 // StopBy's deadline (unix ns), 0 while running
-
-	stopMu     sync.Mutex
-	stopCut    context.Context // ends when a stop's deadline passes (stopCutCtx)
-	stopCutEnd context.CancelFunc
-
-	// outboxWrite replaces Outbox.Write in tests (nil = the outbox's Write).
-	outboxWrite writeFunc
-
-	// stray is closed once a retry attempt the writer left behind at its deadline (inside I/O
-	// that ignores the cancel, such as a blob fsync on a stalled disk) has returned; nil while
-	// none is outstanding. Only the writer sets it.
-	strayMu sync.Mutex
-	stray   chan struct{}
-}
-
-type writeFunc func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
-
-var closedChan = func() chan struct{} { c := make(chan struct{}); close(c); return c }()
-
-// OutboxIdle returns a channel that is closed once no outbox write the writer left behind is
-// still running. After StopBy, the outbox may be closed once it is closed.
-func (rt *Runtime) OutboxIdle() <-chan struct{} {
-	rt.strayMu.Lock()
-	defer rt.strayMu.Unlock()
-	if rt.stray == nil {
-		return closedChan
-	}
-	return rt.stray
-}
-
-// awaitStray waits until a retry attempt left behind has returned, so the writer's outbox writes
-// stay one at a time, but not past a stop's deadline (cut): then it reports false.
-func (rt *Runtime) awaitStray(cut context.Context) bool {
-	rt.strayMu.Lock()
-	s := rt.stray
-	rt.strayMu.Unlock()
-	if s == nil {
-		return true
-	}
-	select {
-	case <-s:
-	case <-cut.Done():
-		select {
-		case <-s:
-		default:
-			return false
-		}
-	}
-	rt.strayMu.Lock()
-	if rt.stray == s {
-		rt.stray = nil
-	}
-	rt.strayMu.Unlock()
-	return true
-}
-
-// errWritePanic is a retry attempt's result when the write panicked (recovered and recorded).
-var errWritePanic = errors.New("outbox write panicked")
-
-// boundedWrite runs one retry attempt so that it ends by the retry window's end (by) or a stop's
-// deadline (cut), each plus WriteAbandonGrace, even inside I/O that ignores ctx. An attempt still
-// running then is left behind: it keeps the envelopes until it returns (left is closed then, and
-// OutboxIdle stays open until it is), and the writer's next outbox use waits for it.
-func (rt *Runtime) boundedWrite(ctx, cut context.Context, by time.Time, write writeFunc, envs []outbox.NewEnvelope) (res outbox.WriteResult, err error, left chan struct{}) {
-	type result struct {
-		res outbox.WriteResult
-		err error
-	}
-	ch := make(chan result, 1)
-	done := make(chan struct{})
-	safego.Go(nil, "outbox_write", rt.opts.Engine.Stats.Panic, func() {
-		defer close(done)
-		r := result{err: errWritePanic}
-		defer func() { ch <- r }()
-		r.res, r.err = write(ctx, envs)
-	})
-	hard := time.NewTimer(max(time.Until(by), 0) + WriteAbandonGrace)
-	defer hard.Stop()
-	select {
-	case r := <-ch:
-		return r.res, r.err, nil
-	case <-hard.C:
-	case <-cut.Done():
-		g := time.NewTimer(WriteAbandonGrace)
-		select {
-		case r := <-ch:
-			g.Stop()
-			return r.res, r.err, nil
-		case <-g.C:
-		}
-	}
-	select {
-	case r := <-ch:
-		return r.res, r.err, nil
-	default:
-	}
-	rt.strayMu.Lock()
-	rt.stray = done
-	rt.strayMu.Unlock()
-	return outbox.WriteResult{}, context.DeadlineExceeded, done
-}
-
-// stopCutCtx returns the context a stop's deadline ends (StopBy with a deadline). The writer's
-// outbox write attempts and retry backoff derive from it, so neither runs past the deadline.
-func (rt *Runtime) stopCutCtx() context.Context {
-	rt.stopMu.Lock()
-	defer rt.stopMu.Unlock()
-	if rt.stopCut == nil {
-		rt.stopCut, rt.stopCutEnd = context.WithCancel(context.Background())
-	}
-	return rt.stopCut
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
@@ -245,9 +133,6 @@ func (rt *Runtime) StopBy(deadline time.Time) {
 		finalBy = deadline
 		bound = min(bound, max(time.Until(deadline), 0))
 		rt.stopBy.Store(deadline.UnixNano())
-		rt.stopCutCtx()
-		cut := time.AfterFunc(max(time.Until(deadline), 0), rt.stopCutEnd)
-		defer cut.Stop()
 	}
 	expire := time.AfterFunc(bound, rt.drainStop)
 	defer expire.Stop()
@@ -531,21 +416,6 @@ const (
 // ProbeInterval is the write-probe interval while write_unavailable is raised.
 var ProbeInterval = 5 * time.Second
 
-// Outbox write retry: each attempt is bounded by WriteAttemptTimeout; an attempt that fails with
-// a transient error or times out is retried after a backoff doubling from WriteRetryBackoff (at
-// most writeRetryBackoffMax) until WriteRetryWindow has passed since the group's first attempt.
-// Then the group is dropped as disk_hard and write_unavailable is raised. A retry attempt (every
-// attempt after the first, which is 0.1.4's) still inside the outbox WriteAbandonGrace after the
-// window's end or a stop's deadline, in I/O that ignores the cancel, is left behind (boundedWrite).
-var (
-	WriteAttemptTimeout = 10 * time.Second
-	WriteRetryWindow    = 20 * time.Second
-	WriteRetryBackoff   = 25 * time.Millisecond
-	WriteAbandonGrace   = 50 * time.Millisecond
-)
-
-const writeRetryBackoffMax = 2 * time.Second
-
 func reqBytes(r writeReq) int64 {
 	n := int64(len(r.env.Body))
 	for _, p := range r.env.Pieces {
@@ -603,25 +473,13 @@ func (rt *Runtime) writer(ctx context.Context) {
 
 func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	// Every path out of flush, a recovered panic included, returns the group's budgets: by then
-	// the envelopes are written or dropped. A retry attempt left behind returns them itself.
-	releaseAll := func() {
+	// the envelopes are written or dropped.
+	defer func() {
 		for _, r := range group {
 			if r.release != nil {
 				r.release()
 			}
 		}
-	}
-	var left chan struct{}
-	defer func() {
-		if left == nil {
-			releaseAll()
-			return
-		}
-		l := left
-		safego.Go(nil, "outbox_write_release", rt.opts.Engine.Stats.Panic, func() {
-			<-l
-			releaseAll()
-		})
 	}()
 	ob := rt.opts.Outbox
 	ps := ob.Pressure()
@@ -638,16 +496,11 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		drop("disk_hard")
 		return
 	}
-	if rt.stats().HasFault("write_unavailable") && time.Since(*lastProbe) < ProbeInterval {
-		drop("disk_hard")
-		return
-	}
-	cut := rt.stopCutCtx()
-	if !rt.awaitStray(cut) {
-		drop("stopped") // a retry attempt left behind still holds the outbox at the stop's deadline
-		return
-	}
 	if rt.stats().HasFault("write_unavailable") {
+		if time.Since(*lastProbe) < ProbeInterval {
+			drop("disk_hard")
+			return
+		}
 		*lastProbe = time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err := ob.ProbeWrite(ctx)
@@ -662,23 +515,10 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 	for i, r := range group {
 		envs[i] = r.env
 	}
-	var write writeFunc = ob.Write
-	if rt.outboxWrite != nil {
-		write = rt.outboxWrite
-	}
-	// A write that fails with a transient error (busy, locked, I/O) or times out is retried, the
-	// same group in order, after a backoff doubling from WriteRetryBackoff, until WriteRetryWindow
-	// has passed since the first attempt. A stop's deadline cuts the attempt and the backoff.
-	retryBy := time.Now().Add(WriteRetryWindow)
-	backoff := WriteRetryBackoff
-	// gaveUp is when 0.1.4's loop (three attempts, retrying only busy or locked) would have dropped
-	// the group. The probe interval after a failed group runs from there, so a later group is
-	// probed and written whenever 0.1.4 would have tried it, although it waited behind the retry.
-	var gaveUp time.Time
 	var res outbox.WriteResult
 	var err error
-	for attempt := 0; ; attempt++ {
-		budget := min(WriteAttemptTimeout, max(time.Until(retryBy), time.Millisecond))
+	for attempt := 0; attempt < 3; attempt++ {
+		budget := 10 * time.Second
 		if by := rt.stopBy.Load(); by != 0 {
 			// A stop's deadline bounds the final flush too.
 			if budget = min(budget, time.Until(time.Unix(0, by))); budget <= 0 {
@@ -686,37 +526,13 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(cut, budget)
-		if attempt == 0 {
-			res, err = write(ctx, envs) // 0.1.4's attempt, unchanged
-		} else {
-			res, err, left = rt.boundedWrite(ctx, cut, retryBy, write, envs)
-		}
-		timedOut := err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		res, err = ob.Write(ctx, envs)
 		cancel()
-		if left != nil {
-			break // counted below as a timeout; the attempt keeps the envelopes until it returns
-		}
-		if err != nil && gaveUp.IsZero() && (attempt >= 2 || !outbox.Retryable(err)) {
-			gaveUp = time.Now()
-		}
-		if err == nil || cut.Err() != nil || !(timedOut || outbox.TransientWrite(err)) {
+		if err == nil || !outbox.Retryable(err) {
 			break
 		}
-		wait := min(backoff, time.Until(retryBy))
-		if wait <= 0 {
-			break
-		}
-		t := time.NewTimer(wait)
-		select {
-		case <-t.C:
-		case <-cut.Done():
-		}
-		t.Stop()
-		if cut.Err() != nil || !time.Now().Before(retryBy) {
-			break
-		}
-		backoff = min(backoff*2, writeRetryBackoffMax)
+		time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
 	}
 	if err != nil {
 		if by := rt.stopBy.Load(); by != 0 && !time.Now().Before(time.Unix(0, by)) {
@@ -725,9 +541,6 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 		}
 		rt.stats().SetFault("write_unavailable", true)
 		*lastProbe = time.Now()
-		if !gaveUp.IsZero() {
-			*lastProbe = gaveUp
-		}
 		drop("disk_hard")
 		return
 	}
