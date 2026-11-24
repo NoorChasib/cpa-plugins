@@ -533,3 +533,56 @@ func TestWriteQueueFullStallsBodies(t *testing.T) {
 	<-done
 	waitUntil(t, "the write stall cleared", 30*time.Second, func() bool { return !e.WriteStalled() && len(rt.writes) == 0 })
 }
+
+// TestStopDeadlineWriteIgnoresCancel (review 2 of the round-4 fixes): an outbox write that does not observe its
+// context (a blob or SQLite fsync on a stalled disk) cannot be cut by the stop's deadline. StopBy still returns by its
+// deadline plus StopWriterGrace, reporting that the writer still owns the outbox (false, WriterDone open); when the
+// write returns, the writer drops its group as stopped and exits, and WriterDone closes. Before, StopBy waited for the
+// writer unconditionally.
+func TestStopDeadlineWriteIgnoresCancel(t *testing.T) {
+	fastRetries(t, 5*time.Second)
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	rt, e, _ := writerRuntime(t, false, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release // ignores ctx, as a stalled fsync does
+		return real(ctx, envs)
+	})
+	for i := 0; i < 3; i++ {
+		rt.write(syntheticEnv(i), nil, nil)
+	}
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer never attempted the write")
+	}
+	safety := time.AfterFunc(3*time.Second, unblock) // lets a StopBy that waits for the writer return, to fail below
+	defer safety.Stop()
+	start := time.Now()
+	returned := rt.StopBy(start.Add(300 * time.Millisecond))
+	if d := time.Since(start); d > 300*time.Millisecond+StopWriterGrace+200*time.Millisecond {
+		t.Fatalf("StopBy took %v past a 300ms deadline with the write stuck", d)
+	}
+	if returned {
+		t.Fatal("StopBy reported the writer returned while its write was stuck")
+	}
+	select {
+	case <-rt.WriterDone():
+		t.Fatal("WriterDone closed while the writer was inside the write")
+	default:
+	}
+	unblock()
+	select {
+	case <-rt.WriterDone():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer did not return after its write did")
+	}
+	if d := e.Stats.Dropped(); d["stopped"] != 3 || e.Stats.DroppedTotal() != 3 {
+		t.Fatalf("dropped = %v, want stopped 3", d)
+	}
+}

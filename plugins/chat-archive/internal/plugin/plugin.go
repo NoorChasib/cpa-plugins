@@ -337,6 +337,15 @@ var StopCloseMargin = 500 * time.Millisecond
 // closeOutbox closes the runtime's outbox at a stop (a variable so tests can slow it down).
 var closeOutbox = (*outbox.Outbox).CloseContext
 
+// closeAfterWriter closes ob once the capture writer returned (done), for a stop whose deadline passed while the writer
+// was still inside an outbox write; the close is bounded by outbox.CloseTimeout.
+func closeAfterWriter(ob *outbox.Outbox, done <-chan struct{}) {
+	<-done
+	ctx, cancel := context.WithTimeout(context.Background(), outbox.CloseTimeout)
+	defer cancel()
+	_ = closeOutbox(ob, ctx)
+}
+
 // CarryMaxAge is how old a saved set of open requests may be when the next instance opens the
 // outbox: CPA loads the new version right after the old one's quiesce returned, so an older set
 // belongs to requests that ended with an earlier CPA process.
@@ -502,7 +511,9 @@ func (p *Plugin) applyExact(rs *runtimeState, set wire.ExactSet) {
 // heartbeat are reported by the next boot), and, with drain set, so are the open requests'
 // numbering, which the next instance on this outbox adopts so that the rest of each exchange gets
 // new keys. Then the status snapshot is refreshed, by the deadline, and the outbox is closed, by
-// StopCloseMargin after it, so the whole stop returns by then. Shutdown does not drain: CPA has already detached the
+// StopCloseMargin after it, so the whole stop returns by then. When the capture writer is still
+// inside an outbox write the deadline cannot cut (capture.Runtime.StopBy), the outbox is closed in
+// the background once the writer returned instead. Shutdown does not drain: CPA has already detached the
 // plugin, so no further hook arrives and no exchange continues.
 func (p *Plugin) stopRuntime(drain bool) {
 	p.mu.RLock()
@@ -524,7 +535,7 @@ func (p *Plugin) stopRuntime(drain bool) {
 	rs.cancel()
 	rs.wg.Wait()
 	p.engine.BeginStop()
-	rs.capture.StopBy(captureBy)
+	writerDone := rs.capture.StopBy(captureBy)
 	sctx, cancel := context.WithDeadline(context.Background(), minTime(time.Now().Add(FinalSaveTimeout), deadline))
 	_ = rs.up.SaveDrops(sctx)
 	if drain {
@@ -534,9 +545,16 @@ func (p *Plugin) stopRuntime(drain bool) {
 	sctx, cancel = context.WithDeadline(context.Background(), deadline)
 	p.refreshSnapshot(sctx, rs)
 	cancel()
-	cctx, ccancel := context.WithDeadline(context.Background(), deadline.Add(StopCloseMargin))
-	_ = closeOutbox(rs.ob, cctx)
-	ccancel()
+	if writerDone {
+		cctx, ccancel := context.WithDeadline(context.Background(), deadline.Add(StopCloseMargin))
+		_ = closeOutbox(rs.ob, cctx)
+		ccancel()
+	} else {
+		// The writer is still inside an outbox write the stop's deadline cannot cut (an fsync on a stalled disk), so it
+		// still owns the outbox: close it once the writer returned. Until then a new start finds the outbox locked and
+		// retries its open in the background.
+		go closeAfterWriter(rs.ob, rs.capture.WriterDone())
+	}
 	p.engine.Stopped()
 	p.mu.Lock()
 	p.rt = nil
