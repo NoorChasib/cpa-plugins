@@ -36,6 +36,10 @@ const (
 	UsageQueueEntries = 16384
 	UsageQueueBytes   = 32 << 20
 	ControlEntries    = 4096
+	// ControlReserve is the part of Control kept for metadata (review 2 of the round-4 fixes): once Control holds
+	// ControlEntries less it, the body hooks keep each new body's metadata without the body (ShedBodies), so bodies
+	// degrade while the begins, attempts and completions still fit.
+	ControlReserve    = ControlEntries / 4
 	HandoffEntries    = 256
 	StreamEntries     = 8192
 	IdleAfter         = 2 * time.Hour
@@ -312,6 +316,9 @@ type Engine struct {
 	Usage   chan UsageItem
 
 	usageBytes atomic.Int64
+	// writeStall is set while the capture runtime's write queue is full (the writer is held or behind): the body hooks
+	// shed bodies (ShedBodies) until the writer drained it.
+	writeStall atomic.Bool
 	state      atomic.Int32
 	inflight   atomic.Int64
 	cfg        atomic.Pointer[Config]
@@ -368,6 +375,19 @@ func storeMax(a *atomic.Int64, v int64) {
 			return
 		}
 	}
+}
+
+// SetWriteStall records whether the capture runtime's write queue is full (true) or drained again (false).
+func (e *Engine) SetWriteStall(v bool) { e.writeStall.Store(v) }
+
+// WriteStalled reports whether the capture runtime's write queue was last seen full.
+func (e *Engine) WriteStalled() bool { return e.writeStall.Load() }
+
+// ShedBodies reports whether a body hook keeps a new body's metadata only (dropped.body_budget): while the write queue
+// is full, or once Control is down to its metadata reserve (ControlReserve). Bodies then degrade before the queues that
+// hold whole envelopes are full, and while the writer is held no new body is decoded into the content pool.
+func (e *Engine) ShedBodies() bool {
+	return e.writeStall.Load() || len(e.Control) >= ControlEntries-ControlReserve
 }
 
 // Config returns the current hook configuration.

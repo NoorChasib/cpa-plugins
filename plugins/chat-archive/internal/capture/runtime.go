@@ -111,6 +111,7 @@ func Start(opts Options) *Runtime {
 	rec := opts.Engine.Stats.Panic
 	ps := opts.Outbox.Pressure()
 	rt.setPressure(ps)
+	opts.Engine.SetWriteStall(false) // a new write queue
 	for i := 0; i < max(opts.Workers, 1); i++ {
 		safego.Loop(rt.runCtx, &rt.wg, "worker", rec, rt.worker)
 	}
@@ -221,8 +222,16 @@ func (rt *Runtime) write(env outbox.NewEnvelope, commit func(bool), release func
 		}
 		return false
 	}
+	req := writeReq{env: env, commit: commit, release: release}
 	select {
-	case rt.writes <- writeReq{env: env, commit: commit, release: release}:
+	case rt.writes <- req:
+		return true
+	default:
+	}
+	// The write queue is full: the hooks shed new bodies until the writer drained it (hooks.Engine.ShedBodies).
+	rt.opts.Engine.SetWriteStall(true)
+	select {
+	case rt.writes <- req:
 		return true
 	case <-rt.drainCtx.Done():
 		rt.stats().Drop("stopped")
@@ -501,6 +510,15 @@ func (rt *Runtime) writer(ctx context.Context) {
 		}
 		timer.Stop()
 		rt.flush(group)
+		rt.unstall()
+	}
+}
+
+// unstall clears the hooks' write stall once the write queue is down to half (hysteresis: a queue that refills at
+// once does not flip the hooks between full bodies and metadata only on every group).
+func (rt *Runtime) unstall() {
+	if len(rt.writes) <= cap(rt.writes)/2 {
+		rt.opts.Engine.SetWriteStall(false)
 	}
 }
 
@@ -544,9 +562,11 @@ func (rt *Runtime) holdEnd() string {
 // flush writes one group in one outbox transaction. A write that fails or times out keeps the group
 // and tries it again after a backoff, as long as it takes: the group holds its place, so envelopes
 // stay in order, and nothing is skipped untried while write_unavailable is raised. While the writer
-// holds a group, the workers and the stream goroutine wait on the bounded write queue, the hooks'
-// queues and the content pool fill, and the hooks keep each new exchange's metadata without its body
-// (body_budget, handoff_full). A whole envelope is lost only when those queues are full too
+// holds a group, the bounded write queue fills; from then until the writer drained it to half (unstall),
+// and whenever Control is down to its metadata reserve, the hooks keep each new exchange's metadata
+// without its body (hooks.Engine.ShedBodies: body_budget). The workers and the stream goroutine wait on
+// the write queue, and the hooks' queues and the content pool fill (handoff_full). A whole envelope is
+// lost only when those queues are full too
 // (control_full, usage_queue, stream_overflow). At pressure level 3 nothing is written: the writer
 // holds its group the same way, without attempting the write, and resumes it when the pressure
 // falls. The writer still drops a group, counted under dropped, on an error no retry can fix
