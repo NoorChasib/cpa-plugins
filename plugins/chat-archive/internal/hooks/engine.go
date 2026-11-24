@@ -36,18 +36,8 @@ const (
 	UsageQueueEntries = 16384
 	UsageQueueBytes   = 32 << 20
 	ControlEntries    = 4096
-	// ControlReserve is the part of Control kept for metadata (review 2 of the round-4 fixes): once Control holds
-	// ControlEntries less it, the body hooks keep each new body's metadata without the body (ShedBodies), so bodies
-	// degrade while the begins, attempts and completions still fit.
-	ControlReserve = ControlEntries / 4
-	HandoffEntries = 256
-	StreamEntries  = 8192
-	// UsageReserve and StreamReserve are the parts of Usage and Stream kept for metadata (review 3 of the round-4
-	// fixes): while the write queue is full, or once Usage holds UsageQueueEntries less UsageReserve, a usage record
-	// keeps its metadata without its failure body (ShedUsageBodies); on the same conditions for Stream, payload chunks
-	// are shed so header-inits still fit (ShedStreamChunks).
-	UsageReserve      = UsageQueueEntries / 4
-	StreamReserve     = StreamEntries / 4
+	HandoffEntries    = 256
+	StreamEntries     = 8192
 	IdleAfter         = 2 * time.Hour
 	BodyReserveFactor = 4
 	// TombstoneTTL is how long the numbering of a closed RequestID is kept (its tombstone), so a
@@ -263,11 +253,8 @@ type Entry struct {
 	ChunksDone  uint64
 	StreamBytes int64 // queued plus assembled bytes of the current stream
 	Truncated   bool
-	// StreamShed: the current stream's payload chunks are being shed (ShedStreamChunks), so its later chunks count
-	// body_budget, not stream_overflow. A header-init clears it with Truncated.
-	StreamShed bool
-	HookMicros [numHooks]uint32
-	Stream     bool
+	HookMicros  [numHooks]uint32
+	Stream      bool
 
 	// Lifecycle evidence for a RequestID that CPA reuses (an in-place WebSocket failover since
 	// v8.0.76). Hook times are the synchronous CPA hooks' own start times (unix ns), set only in
@@ -325,9 +312,6 @@ type Engine struct {
 	Usage   chan UsageItem
 
 	usageBytes atomic.Int64
-	// writeStall is set while the capture runtime's write queue is full (the writer is held or behind): the body hooks
-	// shed bodies (ShedBodies) until the writer drained it.
-	writeStall atomic.Bool
 	state      atomic.Int32
 	inflight   atomic.Int64
 	cfg        atomic.Pointer[Config]
@@ -384,32 +368,6 @@ func storeMax(a *atomic.Int64, v int64) {
 			return
 		}
 	}
-}
-
-// SetWriteStall records whether the capture runtime's write queue is full (true) or drained again (false).
-func (e *Engine) SetWriteStall(v bool) { e.writeStall.Store(v) }
-
-// WriteStalled reports whether the capture runtime's write queue was last seen full.
-func (e *Engine) WriteStalled() bool { return e.writeStall.Load() }
-
-// ShedBodies reports whether a body hook keeps a new body's metadata only (dropped.body_budget): while the write queue
-// is full, or once Control is down to its metadata reserve (ControlReserve). Bodies then degrade before the queues that
-// hold whole envelopes are full, and while the writer is held no new body is decoded into the content pool.
-func (e *Engine) ShedBodies() bool {
-	return e.writeStall.Load() || len(e.Control) >= ControlEntries-ControlReserve
-}
-
-// ShedUsageBodies reports whether a usage record keeps its metadata without its failure body (dropped.body_budget):
-// while the write queue is full, or once Usage is down to its metadata reserve (UsageReserve).
-func (e *Engine) ShedUsageBodies() bool {
-	return e.writeStall.Load() || len(e.Usage) >= UsageQueueEntries-UsageReserve
-}
-
-// ShedStreamChunks reports whether a payload stream chunk is shed (dropped.body_budget, the stream marked truncated):
-// while the write queue is full, or once Stream is down to the part kept for header-inits (StreamReserve). The
-// sequencer still writes the response, as metadata only when no chunk of it was kept.
-func (e *Engine) ShedStreamChunks() bool {
-	return e.writeStall.Load() || len(e.Stream) >= StreamEntries-StreamReserve
 }
 
 // Config returns the current hook configuration.

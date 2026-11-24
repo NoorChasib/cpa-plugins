@@ -13,10 +13,3 @@ func SetCloseOutbox(t *testing.T, f func(*outbox.Outbox, context.Context) error)
 	closeOutbox = f
 	t.Cleanup(func() { closeOutbox = old })
 }
-
-// SetOutboxWrite makes the capture writer of every runtime started during the test call f's write for its outbox.
-func SetOutboxWrite(t *testing.T, f func(ob *outbox.Outbox) func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) {
-	old := outboxWrite
-	outboxWrite = f
-	t.Cleanup(func() { outboxWrite = old })
-}
