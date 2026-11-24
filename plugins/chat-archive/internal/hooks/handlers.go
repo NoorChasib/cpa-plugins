@@ -109,7 +109,7 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 		return out
 	}
 	need := int64(req.BodyLen) * BodyReserveFactor
-	if !e.Pool.TryReserve(need) {
+	if e.ShedBodies() || !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.record(HookBeforeAuth, 0, req.BodyLen, "body_budget")
 		e.metaBegin(b, wire.DroppedBodyBudget)
@@ -250,7 +250,7 @@ func (e *Engine) Response(raw []byte) []byte {
 		return OK
 	}
 	need := int64(req.BodyLen) * BodyReserveFactor
-	if !e.Pool.TryReserve(need) {
+	if e.ShedBodies() || !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.metaResponse(r, wire.DroppedBodyBudget)
 		return OK

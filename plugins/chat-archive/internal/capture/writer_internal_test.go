@@ -502,3 +502,34 @@ func TestStopDeadlineCutsHeldGroup(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteQueueFullStallsBodies (review 2 of the round-4 fixes): when the writer is held and the write queue fills,
+// the runtime tells the hooks to shed bodies (hooks.Engine.WriteStalled), before the workers and the stream goroutine
+// block and the hooks' queues fill; once the writer drained the queue to half, the stall clears.
+func TestWriteQueueFullStallsBodies(t *testing.T) {
+	fastRetries(t, WriteTimeout)
+	release := make(chan struct{})
+	rt, e, _ := writerRuntime(t, false, func(ctx context.Context, envs []outbox.NewEnvelope, real func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)) (outbox.WriteResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return outbox.WriteResult{}, ctx.Err()
+		}
+		return real(ctx, envs)
+	})
+	n := cap(rt.writes) + groupEnvelopes + 10
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < n; i++ {
+			rt.write(syntheticEnv(i), nil, nil)
+		}
+	}()
+	waitUntil(t, "the write stall raised", 10*time.Second, e.WriteStalled)
+	if len(rt.writes) != cap(rt.writes) {
+		t.Fatalf("stall raised with the write queue at %d of %d", len(rt.writes), cap(rt.writes))
+	}
+	close(release)
+	<-done
+	waitUntil(t, "the write stall cleared", 30*time.Second, func() bool { return !e.WriteStalled() && len(rt.writes) == 0 })
+}
