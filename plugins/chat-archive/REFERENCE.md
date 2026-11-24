@@ -89,7 +89,7 @@ Model-directory GETs (`/v1/models`, `/v1/models/{id}`, `/v1beta/models` and CPA'
 
 Hooks do no I/O, compression or masking. Bodies are decoded straight from CPA's call buffer, reserve four times their size from a 256 MiB content pool before decoding, and go to the capture workers through bounded queues. When a budget or queue is full the plugin keeps the metadata and counts the reason under `dropped`: `body_budget`, `handoff_full`, `control_full`, `usage_queue`, `stream_overflow`, `mask_timeout`, `oversize`, `oversize_rpc`, `parse_error`, `disk_guard`, `outbox_cap`, `disk_hard`, `encode_error`, `stopped`, `media_fetch`, and `duplicate_key` for an envelope the outbox skipped because its key was already queued. Per-call caps: body-carrying hooks `max-rpc-mib`; stream chunks 16 MiB; after-auth, completion and management 1 MiB; usage 4 MiB.
 
-A usage record that does not fit the 32 MiB usage queue sheds its failure body, then its response headers, and is dropped (`usage_queue`) only when it does not fit bare. Each step charges the record's metadata (its model, base URL, session id and the other fields it keeps) at their full size, so the queue holds at most 32 MiB whatever the fields carry.
+A usage record that does not fit the 32 MiB usage queue sheds its failure body, then its response headers, and is dropped (`usage_queue`) only when it does not fit bare. Each step charges the record's metadata (its model, base URL, session id and the other fields it keeps) at their full size, and its decoded response headers with their storage (a slot for every key and value, however short), so the queue holds at most 32 MiB whatever the fields carry.
 
 ## Management routes
 
