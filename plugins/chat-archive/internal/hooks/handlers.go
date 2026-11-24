@@ -553,12 +553,27 @@ func usageMetaBytes(u *protocol.Usage) int64 {
 	return int64(n)
 }
 
+// Decoded header storage beyond the strings' contents (review 3 of the round-4 fixes), charged conservatively for amd64:
+// the map's first group (8 slots of a string key and a []string value, 40 bytes each, and control bytes); per key, its
+// slot again with the table's growth slack (a table is at least 7/16 full after it doubles, so a slot costs up to 94
+// bytes) and the decoder's smallest value array (4 string headers); per value, its string header (16 bytes) with
+// append's up to 2x capacity slack. So many short or empty values are charged for what they hold.
+const (
+	headerMapBytes   = 8*40 + 64
+	headerKeyBytes   = 128 + 4*16
+	headerValueBytes = 2 * 16
+)
+
+// headerBytes is what decoded response headers hold: the keys' and values' contents and their container storage.
 func headerBytes(h map[string][]string) int64 {
-	var n int64
+	if h == nil {
+		return 0
+	}
+	n := int64(headerMapBytes)
 	for k, vs := range h {
-		n += int64(len(k))
+		n += int64(len(k)) + headerKeyBytes
 		for _, v := range vs {
-			n += int64(len(v))
+			n += int64(len(v)) + headerValueBytes
 		}
 	}
 	return n
