@@ -1,6 +1,6 @@
 {
   "name": "chat-archive-browser-acceptance",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Pinned test-only browser tooling; never bundled into the native plug-in",
   "engines": {
