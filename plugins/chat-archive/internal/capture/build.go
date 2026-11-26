@@ -133,10 +133,24 @@ func piecesFor(sp *canon.Split, refs []wire.Hash) []canon.Piece {
 		want[h] = true
 	}
 	out := make([]canon.Piece, 0, len(refs))
+	total := 0
 	for _, p := range sp.Pieces {
 		if want[p.Hash] {
 			out = append(out, p)
+			total += len(p.Bytes)
 		}
+	}
+	// A piece's bytes can be a slice of a much larger buffer: a decoder's, grown by doubling (a
+	// deflate body declares no size, so 17 MiB decoded sits in a 32 MiB buffer), or a body other
+	// pieces were cut from. A queued envelope would keep that whole buffer alive, which its length
+	// does not show, so the pieces are copied into one allocation of exactly their bytes. The hold
+	// budget then charges what the envelope keeps (retainedBytes).
+	arena := make([]byte, total)
+	off := 0
+	for i := range out {
+		n := copy(arena[off:], out[i].Bytes)
+		out[i].Bytes = arena[off : off+n : off+n]
+		off += n
 	}
 	return out
 }

@@ -35,9 +35,12 @@ const (
 
 // retainedBytes estimates what a queued envelope keeps alive: its keys, the body JSON's capacity,
 // the refs' capacity, each piece's bytes and content type with its overhead, and extra (the commit
-// callback's data). A piece's bytes are counted by length: pieces of one split may share a backing
-// array, so their length is counted with an eighth more for the allocator's size classes.
-// TestHeldBytesCoversAllocation pins that the estimate covers the measured heap per envelope.
+// callback's data). A piece's bytes are counted by length with an eighth more for the allocator's
+// size classes: piecesFor copies a split's pieces into one allocation of exactly their bytes (a
+// usage failure body is its own string copy), so no piece keeps a larger decoder or body buffer
+// alive. TestHeldBytesCoversAllocation pins that the estimate covers the measured heap per
+// envelope; TestHoldChargesDecodedBuffers and TestHoldSpeechCeiling pin it for decoded bodies whose
+// decoder buffer is far larger than the body.
 func retainedBytes(env outbox.NewEnvelope, extra int64) int64 {
 	n := int64(envelopeOverhead+len(env.Key)+len(env.AltKey)+cap(env.Body)+32*cap(env.Refs)+pieceOverhead*cap(env.Pieces)) + extra
 	for _, p := range env.Pieces {
