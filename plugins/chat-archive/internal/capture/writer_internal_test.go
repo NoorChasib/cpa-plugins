@@ -43,7 +43,7 @@ func writerRuntime(t *testing.T, write func(ctx context.Context, envs []outbox.N
 	t.Cleanup(func() { ob.Close() })
 	m, _ := mask.New(mask.Config{})
 	rt := &Runtime{opts: Options{Engine: e, Outbox: ob, Workers: 1, Masker: NewMaskerHolder(m, 0, 1<<20)}, prefix: NewPrefixMap(),
-		writes: make(chan writeReq, 1024)}
+		writes: make(chan writeReq, WriteQueueEntries)}
 	rt.initContexts()
 	rt.obWrite = func(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
 		return write(ctx, envs, ob.Write)
@@ -55,7 +55,7 @@ func writerRuntime(t *testing.T, write func(ctx context.Context, envs []outbox.N
 }
 
 // queueEnv hands env to the writer as a producer does.
-func queueEnv(rt *Runtime, env outbox.NewEnvelope) bool { return rt.write(env, nil, nil) }
+func queueEnv(rt *Runtime, env outbox.NewEnvelope) bool { return rt.write(env, nil, nil, 0, 0) }
 
 func syntheticEnv(i int) outbox.NewEnvelope {
 	return outbox.NewEnvelope{Kind: wire.KindExchangeDone, Key: fmt.Sprintf("ex/writer-%04d/completion", i), CreatedAt: time.Now(),

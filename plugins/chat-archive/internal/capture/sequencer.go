@@ -348,19 +348,19 @@ func (rt *Runtime) onControl(sq *seqState, c hooks.Control) {
 	switch {
 	case c.Attempt != nil:
 		if env, err := rt.buildAttempt(c.Attempt); err == nil {
-			rt.write(env, nil, nil)
+			rt.write(env, nil, nil, 0, 0)
 		}
 	case c.Begin != nil:
 		ms := rt.opts.Masker.Get()
 		kept, hints, _ := headers.FilterRequest(c.Begin.Req.Headers, ms.Masker, rt.opts.HMACKeyID, rt.opts.HMACKey)
 		if env, _, err := rt.buildBegin(c.Begin, splitResult{dropped: c.Begin.MetaOnly}, kept, hints); err == nil {
-			if rt.write(env, nil, nil) {
+			if rt.write(env, nil, nil, 0, 0) {
 				e.NoteWritten(c.Begin.Req.RequestID, true)
 			}
 		}
 	case c.Response != nil:
 		if env, _, _, err := rt.buildResponse(c.Response, splitResult{dropped: c.Response.MetaOnly}); err == nil {
-			if rt.write(env, nil, nil) {
+			if rt.write(env, nil, nil, 0, 0) {
 				e.NoteWritten(c.Response.RequestID, false)
 			}
 		}
@@ -611,7 +611,7 @@ func (rt *Runtime) metaResponse(r *hooks.Response, reason string) {
 	if err != nil {
 		return
 	}
-	if rt.write(env, nil, nil) {
+	if rt.write(env, nil, nil, 0, 0) {
 		rt.opts.Engine.NoteWritten(r.RequestID, false)
 	}
 }

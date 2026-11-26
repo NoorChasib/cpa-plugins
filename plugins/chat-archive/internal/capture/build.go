@@ -220,6 +220,14 @@ type beginCommit struct {
 	dropped uint64
 }
 
+// bytes is what the commit callback keeps for a queued begin (the hold's extra); 0 for none.
+func (c *beginCommit) bytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return int64(64 + len(c.key) + 32*cap(c.ids))
+}
+
 // topOf returns a reader of the top-level string fields of body (canon.TopKeys). body is still
 // compressed when the split decoded it (flag gunzipped or content_decoded), so the fields then come from
 // the split; reading body left a decoded response without its id, never linkable to a transcript. sp
@@ -342,6 +350,14 @@ type respCommit struct {
 	beginKey, key, responseID, execSession string
 	index                                  uint32
 	ids                                    []wire.Hash
+}
+
+// bytes is what the commit callback keeps for a queued response (the hold's extra); 0 for none.
+func (c *respCommit) bytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return int64(96 + len(c.beginKey) + len(c.key) + len(c.responseID) + len(c.execSession) + 32*cap(c.ids))
 }
 
 // buildAttempt builds exchange.attempt.
