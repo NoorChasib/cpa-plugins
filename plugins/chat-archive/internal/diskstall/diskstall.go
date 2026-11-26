@@ -242,6 +242,18 @@ func diskstallGate(id C.int, op C.int) C.int {
 	return C.int(fail)
 }
 
+// hold blocks one operation until the rule's Hold closes or the rule is disarmed. It is its own
+// frame, so a test can tell from a goroutine's stack which caller is held at the gate, apart from
+// one only delayed (diskstall.(*Handle).hold).
+//
+//go:noinline
+func (h *Handle) hold() {
+	select {
+	case <-h.rule.Hold:
+	case <-h.released:
+	}
+}
+
 // wait blocks one operation as the rule says and records the wait.
 func (h *Handle) wait() {
 	r := &h.rule
@@ -265,10 +277,13 @@ func (h *Handle) wait() {
 	h.stats.MaxWaiting = max(h.stats.MaxWaiting, h.stats.Waiting)
 	h.bump()
 	mu.Unlock()
-	select {
-	case <-r.Hold:
-	case <-timer:
-	case <-h.released:
+	if r.Hold != nil {
+		h.hold()
+	} else {
+		select {
+		case <-timer:
+		case <-h.released:
+		}
 	}
 	d := time.Since(start)
 	mu.Lock()

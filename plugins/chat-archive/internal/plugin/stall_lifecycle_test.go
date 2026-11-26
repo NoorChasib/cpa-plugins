@@ -134,8 +134,8 @@ func (s *syncSteps) release() {
 	})
 }
 
-// step walks the syncs as they come: each held sync whose goroutine's stack does not show every one
-// of target is let through, until one does, which stays held until release. It fails when none of
+// step walks the syncs as they come: each held sync whose held goroutine's stack does not show every
+// one of target is let through, until one does, which stays held until release. It fails when none of
 // the armed syncs does.
 func (s *syncSteps) step(target ...string) *diskstall.Handle {
 	s.t.Helper()
@@ -143,7 +143,7 @@ func (s *syncSteps) step(target ...string) *diskstall.Handle {
 		if !s.hs[i].WaitFor(15*time.Second, func(st diskstall.Stats) bool { return st.Waiting == 1 }) {
 			s.t.Fatalf("WAL sync %d never came", i)
 		}
-		if stackHas(target...) {
+		if heldIn(target...) {
 			return s.hs[i]
 		}
 		close(s.holds[i])
@@ -243,7 +243,7 @@ func (r *stallRun) holdWriteMu() (*diskstall.Handle, func()) {
 	if !h.WaitFor(5*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		r.t.Fatal("the replay's commit never reached the held sync")
 	}
-	if !stackHas("(*Outbox).Replay") {
+	if !heldIn("(*Outbox).Replay") {
 		r.t.Fatal("the held sync is not the replay's commit")
 	}
 	var once sync.Once
