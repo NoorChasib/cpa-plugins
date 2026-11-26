@@ -1,0 +1,26 @@
+# Chat Archive 0.1.6
+
+Keeps capturing through outbox disk stalls and write failures of up to a minute. 0.1.5 dropped what its writer could not write within 10 seconds.
+
+## What changed since 0.1.5
+
+- **A stalled outbox write no longer drops captures.** 0.1.5 gave each write 10 seconds. When the write timed out or failed once, 0.1.5 dropped the group of up to 50 envelopes as `dropped.disk_hard`, and then dropped every group untried for the next 5 seconds. 0.1.6's writer has no write timeout while the plugin runs. It waits for a slow disk, and for another user of the outbox's write connection, while the envelopes behind it wait in its queue. A write that fails with an error a retry can fix (busy, locked, an I/O error, a full disk, a blob file error) is retried in order for 60 seconds. On the stall test harness, at about 90 envelopes a second, 60-second stalls lost nothing. The harness ran a slow commit, a stalled connection user, a stalled write-mutex holder and a run of failing writes, with bursts of 640 envelopes, 4 MiB bodies and live streams. The same 12-second stall lost 1,355 of 1,440 envelopes on 0.1.5. See [REFERENCE.md](../REFERENCE.md#outbox-write-stalls).
+- **The write queue is deeper and its memory has a fixed bound.** The writer's queue holds 16,384 envelopes, up from 1,024. A 64 MiB hold budget caps the bytes that queued envelopes keep beyond what the content pool and the usage queue already charge. One envelope may hold at most 32 MiB. A begin or response over that limit is written as metadata only (`dropped.body_budget`). An envelope still over it is not written (`dropped.hold_oversize`). Queued envelopes therefore add at most about 67 MiB to the plugin's budgets. The status route's new `write_path` block shows the queue's length and the hold's bytes, each with its peak.
+- **`write_unavailable` is now an alert only.** It is raised when a write fails, or when a write has not returned after 10 seconds. It clears with the next successful write, and nothing is dropped because of it.
+- **Hooks that a configured plugin cannot capture are counted.** The new `dropped.storage_unavailable` counts hook calls, not envelopes. It covers calls that arrive while capture is configured on but cannot run: a secret that cannot be read, no working directory, an outbox that cannot be opened, or a reconfigure between its stop and its start. This includes the first start after `capture: off`. 0.1.5 let these calls pass through without a count.
+- **Budgets charge more of what they hold.** A queued body's decoded headers are now charged to the content pool with the body. A usage record that does not fit its queue sheds its failure body, then its response headers, and is dropped (`dropped.usage_queue`) only when even the bare record does not fit. Every step charges the record's metadata and its decoded response headers in full.
+- **REFERENCE.md gives each `dropped.*` counter its unit:** a body kept as metadata, a whole envelope, a usage record step, a stream event, a hook call, or a media fetch.
+
+## Upgrading
+
+In CPA's Plugin Store, refresh the catalog and select **Update** for Chat Archive. Nothing changes in the configuration. The outbox schema is unchanged, so your settings and local outbox are kept, and going back to 0.1.5 works the same way. The update runs 0.1.5's stop, which keeps capturing the exchanges already open, so no quiet switch is needed.
+
+No server update is needed. The archive reads the two new counters like the other `dropped.*` counters, and its `capture_drop` alert reports them. Expect a few `dropped.storage_unavailable` after a reconfigure that restarts capture: they are hook calls that arrived between the old runtime's stop and the new one's start.
+
+## Known limits
+
+- **A stall during a stop or reconfigure still holds it, as in 0.1.5.** The stop's 25-second deadline now also ends a write that is waiting for the connection, and a retry's backoff. The writer then counts what it has not written as `dropped.stopped`, without touching the disk. A write already inside SQLite's commit, a blob file's fsync or the outbox's write mutex returns only when the disk does. So do the maintenance checkpoint, the outbox close and the status snapshot.
+- **A run of failing writes longer than a minute still drops.** The group at the head of the queue is dropped as `dropped.disk_hard` once an attempt started 60 seconds after its first failure fails too. Each later group gets its own 60 seconds.
+- **Past the budgets, bodies are shed with their counters, as before.** Examples: more large bodies than the 256 MiB content pool holds during a stall (`body_budget`), a burst larger than the worker queue (`handoff_full`), or a hold budget filled by unusually large metadata (`control_full`). Disk pressure levels 2 and 3 behave as in 0.1.5.
+- **`dropped.storage_unavailable` counted by an instance that CPA has already unloaded is not reported.** For example, a hook that reaches the old version after its quiesce returned. That instance saved its counters at its stop, and nothing runs after it.
+- The 0.1.5 limits still apply, except the stalled-write one, which this release fixes.
