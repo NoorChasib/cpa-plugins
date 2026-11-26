@@ -46,11 +46,17 @@ type stallRun struct {
 	hookNs atomic.Int64 // longest single hook call
 	heap   atomic.Uint64
 	live   atomic.Uint64 // peak live heap after a GC (runtime/metrics /gc/heap/live:bytes)
-	pool   atomic.Int64
+	pool   atomic.Int64  // peak content-pool reservation (Pool.Used, which includes the stream part)
+	stream atomic.Int64  // peak stream part of it (Pool.StreamUsed), a sub-limit, never added to pool
 	stop   chan struct{}
 	wg     sync.WaitGroup
 	prefix string
 	text   string // the request body's text (small unless a run sets withBody)
+	resp   string // the response's text (small unless a run sets withResponse)
+	// suffixes are the key suffixes one exchange stores ("/begin/0", ...), from the calibration, so
+	// a run can tell which offered envelopes are stored, not only how many rows there are.
+	suffixes []string
+	holders  sync.WaitGroup // synthetic write-connection holders, joined before a result
 }
 
 // stallResult is what a run measured. Counts and durations only.
@@ -64,8 +70,11 @@ type stallResult struct {
 	Stop      time.Duration     // the stop's duration (0 when the run did not stop)
 	PeakHeap  uint64            // peak Go heap in use, bytes (garbage not yet collected included)
 	PeakLive  uint64            // peak live heap marked by a GC, bytes
-	Drain     time.Duration     // from the release until the backlog offered by then was stored (sweep only)
-	PeakPool  int64             // peak content-pool reservation, bytes
+	Drain     time.Duration     // from the release until every key offered before it was stored (sweep only; -1: never)
+	Backlog   int               // keys offered before the release and not stored at it (sweep only)
+	DrainRate float64           // Backlog / Drain, envelopes per second (sweep only)
+	PeakPool  int64             // peak content-pool reservation, bytes (stream reservations included)
+	PeakStrm  int64             // peak stream sub-budget reservation, bytes (a part of PeakPool)
 	Rule      diskstall.Stats
 }
 
@@ -79,9 +88,10 @@ func (r stallResult) String() string {
 	for _, k := range keys {
 		d = append(d, fmt.Sprintf("%s=%d", k, r.Dropped[k]))
 	}
-	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d rule{matched=%d affected=%d max_wait=%v}",
+	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v backlog=%d drain_rate=%.0f/s peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d peak_stream_kib=%d rule{matched=%d affected=%d max_wait=%v}",
 		r.Exchanges, r.Offered, r.Stored, r.Lost, strings.Join(d, ","), r.HookMax.Round(time.Microsecond), r.Stop.Round(time.Millisecond),
-		r.Drain.Round(time.Millisecond), float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
+		r.Drain.Round(time.Millisecond), r.Backlog, r.DrainRate, float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.PeakStrm/1024,
+		r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
 }
 
 func setProbeInterval(t *testing.T, d time.Duration) {
@@ -117,9 +127,24 @@ func newStallRun(t *testing.T) *stallRun {
 	t.Cleanup(r.end)
 	r.exchange("cal-1")
 	r.exchange("cal-2")
-	r.perEx = r.settle(1) / 2
-	if r.perEx < 3 {
-		t.Fatalf("calibration stored %d envelopes per exchange", r.perEx)
+	// An exchange's completion is written after its begin and response (it waits for their work,
+	// and the writer is FIFO), so once the second one's completion is stored both are complete.
+	plugintest.WaitFor(t, "the calibration exchanges", func() bool { return r.has("ex/cal-2/completion") })
+	rows, err := r.db.Query(`SELECT key FROM envelopes WHERE key LIKE 'ex/cal-1/%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		r.suffixes = append(r.suffixes, strings.TrimPrefix(k, "ex/cal-1"))
+	}
+	rows.Close()
+	r.perEx = len(r.suffixes)
+	if r.perEx < 3 || r.count() != 2*r.perEx {
+		t.Fatalf("calibration stored %d envelopes per exchange, %d in all", r.perEx, r.count())
 	}
 	r.n.Store(0)
 	r.hookNs.Store(0)
@@ -157,11 +182,17 @@ func (r *stallRun) sample() {
 		if live[0].Value.Kind() == metrics.KindUint64 {
 			peak(&r.live, live[0].Value.Uint64())
 		}
-		for v := e.Pool.Used() + e.Pool.StreamUsed(); ; {
-			if old := r.pool.Load(); v <= old || r.pool.CompareAndSwap(old, v) {
-				break
+		// Pool.Used already includes the stream reservations (TryReserveStream takes both), so the
+		// stream part is its own peak, never added to the total.
+		peakI := func(a *atomic.Int64, v int64) {
+			for {
+				if old := a.Load(); v <= old || a.CompareAndSwap(old, v) {
+					return
+				}
 			}
 		}
+		peakI(&r.pool, e.Pool.Used())
+		peakI(&r.stream, e.Pool.StreamUsed())
 		select {
 		case <-r.stop:
 			return
@@ -190,8 +221,11 @@ func (r *stallRun) exchange(rid string) {
 	}
 	r.hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "claude", plugintest.ClaudeBody(text), nil, meta))
 	r.hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth(rid))
-	r.hook(protocol.MethodResponseInterceptAfter, plugintest.Response(rid, "claude",
-		[]byte(`{"id":"msg_stall","type":"message","role":"assistant","content":[{"type":"text","text":"synthetic"}],"stop_reason":"end_turn"}`), meta))
+	resp := "synthetic"
+	if r.resp != "" {
+		resp = rid + " " + r.resp
+	}
+	r.hook(protocol.MethodResponseInterceptAfter, plugintest.Response(rid, "claude", claudeReply(resp), meta))
 	r.hook(protocol.MethodRequestComplete, plugintest.Complete(rid, "succeeded", meta))
 }
 
@@ -214,6 +248,20 @@ func (r *stallRun) withBody(kib int) {
 	}
 }
 
+// withResponse makes every later exchange's response text about kib KiB, distinct per exchange.
+func (r *stallRun) withResponse(kib int) {
+	if kib > 0 {
+		r.resp = strings.Repeat("synthetic answer ", kib*1024/17)
+	}
+}
+
+// claudeReply is a non-stream Claude message whose text is text.
+func claudeReply(text string) []byte {
+	b, _ := json.Marshal(map[string]any{"id": "msg_stall", "type": "message", "role": "assistant",
+		"content": []map[string]any{{"type": "text", "text": text}}, "stop_reason": "end_turn"})
+	return b
+}
+
 // loadFor drives exchanges every every for d.
 func (r *stallRun) loadFor(d, every time.Duration) {
 	r.load(int(d/every), every)
@@ -228,22 +276,80 @@ func (r *stallRun) count() int {
 	return n
 }
 
-// settle waits until the stored count holds still for quiet and returns it.
-func (r *stallRun) settle(atLeast int) int {
+// has reports whether key is stored.
+func (r *stallRun) has(key string) bool {
+	var n int
+	if err := r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE key = ?`, key).Scan(&n); err != nil {
+		r.t.Fatalf("has: %v", err)
+	}
+	return n > 0
+}
+
+// storedOf returns how many of the keys that load exchanges 1..upTo offer are stored. It names the
+// keys, so envelopes that later traffic stores cannot make up for lost older ones.
+func (r *stallRun) storedOf(upTo int) int {
+	want := make(map[string]bool, len(r.suffixes))
+	for _, s := range r.suffixes {
+		want[s] = true
+	}
+	rows, err := r.db.Query(`SELECT key FROM envelopes WHERE key LIKE ? AND NOT (state = 3 AND dead_reason IS 'superseded')`, "ex/"+r.prefix+"-%")
+	if err != nil {
+		r.t.Fatalf("storedOf: %v", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			r.t.Fatalf("storedOf: %v", err)
+		}
+		rest := strings.TrimPrefix(k, "ex/"+r.prefix+"-")
+		i := strings.IndexByte(rest, '/')
+		if i <= 0 {
+			continue
+		}
+		var x int
+		if _, err := fmt.Sscan(rest[:i], &x); err == nil && x >= 1 && x <= upTo && want[rest[i:]] {
+			n++
+		}
+	}
+	return n
+}
+
+// wholeLoss sums the dropped counters that stand for a whole envelope not stored. A body shed at
+// admission (body_budget, handoff_full) keeps its envelope as metadata, so it is not one.
+func (r *stallRun) wholeLoss() int {
+	d := r.h.Plugin.Engine().Stats.Dropped()
+	return int(d["disk_hard"] + d["stopped"] + d["control_full"] + d["duplicate_key"] + d["encode_error"])
+}
+
+// settle waits until every envelope the run offered is accounted for, stored or counted as a
+// whole-envelope loss, and returns the stored count. That is the drain signal: a quiet period is
+// not one once a writer may back off for seconds. A run that loses an envelope without a counter
+// never settles, and fails here.
+func (r *stallRun) settle() int {
 	r.t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	last, since := -1, time.Now()
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		n := r.count()
-		if n != last {
-			last, since = n, time.Now()
-		} else if n >= atLeast && time.Since(since) > 300*time.Millisecond {
+		offered := (int(r.n.Load()) + 2) * r.perEx
+		if n := r.count(); n+r.wholeLoss() >= offered {
 			return n
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	r.t.Fatalf("outbox count did not settle (last %d)", last)
-	return last
+	r.t.Fatalf("not every offered envelope was stored or counted: stored %d, counted %d, offered %d", r.count(), r.wholeLoss(), (int(r.n.Load())+2)*r.perEx)
+	return 0
+}
+
+// quiet waits until the uploader has acknowledged everything stored, so the directory-wide WAL
+// gate armed next is not taken by the uploader's ack commit instead of the intended holder.
+func (r *stallRun) quiet() {
+	r.t.Helper()
+	plugintest.WaitFor(r.t, "the uploader to ack the stored envelopes", func() bool {
+		var n int
+		_ = r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE state = 0`).Scan(&n)
+		return n == 0
+	})
 }
 
 // arm adds a rule for this run's outbox.
@@ -262,13 +368,20 @@ func (r *stallRun) arm(rule diskstall.Rule) *diskstall.Handle {
 // writes no page, and its commit never syncs; TestProbeWriteTouchesNoFile.)
 func (r *stallRun) holdOther() (*diskstall.Handle, func()) {
 	r.t.Helper()
+	r.quiet()
 	hold := make(chan struct{})
 	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.WAL, Hold: hold})
+	r.holders.Add(1)
 	go func() {
+		defer r.holders.Done()
 		_, _ = r.ob.SaveOpenRequests(context.Background(), []outbox.OpenRequest{{RequestID: "stall-holder", TouchedAt: time.Now()}})
 	}()
 	if !h.WaitFor(5*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		r.t.Fatal("the holder's commit never reached the held sync")
+	}
+	// The gate is directory-wide: check that the held sync is the holder's, not the writer's.
+	if !stackHas("(*Outbox).SaveOpenRequests") || stackHas("(*Runtime).flush", "(*Outbox).Write") {
+		r.t.Fatal("the held sync is not the synthetic holder's commit")
 	}
 	var once sync.Once
 	release := func() { once.Do(func() { close(hold) }) }
@@ -276,14 +389,29 @@ func (r *stallRun) holdOther() (*diskstall.Handle, func()) {
 	return h, release
 }
 
+// joinHolders waits for the synthetic holders to return after their release.
+func (r *stallRun) joinHolders() {
+	done := make(chan struct{})
+	go func() { r.holders.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		r.t.Fatal("a synthetic holder did not return after its release")
+	}
+}
+
 // holdCapture makes the capture writer's own next commit stall until release.
 func (r *stallRun) holdCapture() (*diskstall.Handle, func()) {
 	r.t.Helper()
+	r.quiet()
 	hold := make(chan struct{})
 	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.WAL, Hold: hold})
 	r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1)))
 	if !h.WaitFor(5*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		r.t.Fatal("the capture commit never reached the held sync")
+	}
+	if !stackHas("(*Runtime).flush", "(*Outbox).Write") {
+		r.t.Fatal("the held sync is not the capture writer's commit")
 	}
 	var once sync.Once
 	release := func() { once.Do(func() { close(hold) }) }
@@ -301,8 +429,9 @@ func (r *stallRun) shutdown() time.Duration {
 // result counts what the run lost; call it after the stop or once the outbox settled.
 func (r *stallRun) result(h *diskstall.Handle, stop time.Duration) stallResult {
 	r.end()
+	r.joinHolders()
 	res := stallResult{Exchanges: int(r.n.Load()), Dropped: map[string]uint64{}, HookMax: time.Duration(r.hookNs.Load()),
-		Stop: stop, PeakHeap: r.heap.Load(), PeakLive: r.live.Load(), PeakPool: r.pool.Load()}
+		Stop: stop, PeakHeap: r.heap.Load(), PeakLive: r.live.Load(), PeakPool: r.pool.Load(), PeakStrm: r.stream.Load()}
 	res.Offered = (res.Exchanges + 2) * r.perEx // the two calibration exchanges are stored too
 	res.Stored = r.count()
 	res.Lost = res.Offered - res.Stored
@@ -325,7 +454,7 @@ func TestStallHarnessShortCommitStallLosesNothing(t *testing.T) {
 	h, release := r.holdCapture()
 	time.AfterFunc(2*time.Second, release)
 	r.loadFor(3*time.Second, 50*time.Millisecond)
-	r.settle(1)
+	r.settle()
 	res := r.result(h, 0)
 	t.Log(res)
 	if res.Lost != 0 || len(res.Dropped) != 0 {
@@ -351,7 +480,7 @@ func TestStallHarnessStallPastWriteTimeoutDropsGroup(t *testing.T) {
 	h, release := r.holdOther()
 	time.AfterFunc(12*time.Second, release)
 	r.loadFor(17*time.Second, 100*time.Millisecond)
-	r.settle(1)
+	r.settle()
 	res := r.result(h, 0)
 	t.Log(res)
 	if res.Lost == 0 || res.Dropped["disk_hard"] == 0 {
@@ -378,11 +507,12 @@ func TestStallHarnessStallPastWriteTimeoutDropsGroup(t *testing.T) {
 func TestStallHarnessFailedSyncDropsGroup(t *testing.T) {
 	setProbeInterval(t, time.Second)
 	r := newStallRun(t)
+	r.quiet() // else the uploader's ack commit may take the one failed sync
 	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.WAL, Count: 1, Fail: diskstall.IOErrFsync})
 	r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1)))
 	plugintest.WaitFor(t, "the failed sync", func() bool { return h.Stats().Affected == 1 })
 	r.loadFor(2*time.Second, 50*time.Millisecond)
-	r.settle(1)
+	r.settle()
 	res := r.result(h, 0)
 	t.Log(res)
 	if res.Lost <= r.perEx || uint64(res.Lost) != res.Dropped["disk_hard"] {
@@ -507,7 +637,7 @@ func TestStallHarnessStopWaitsForStalledClose(t *testing.T) {
 		return o.CloseContext(ctx)
 	})
 	r := newStallRun(t)
-	r.settle(1)
+	r.settle()
 	hold := make(chan struct{})
 	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.MainDB, Hold: hold})
 	var once sync.Once
@@ -546,7 +676,7 @@ func TestStallHarnessStopWaitsForStalledSnapshot(t *testing.T) {
 	setVar(t, &plugin.FinalSaveTimeout, 300*time.Millisecond)
 	setVar(t, &plugin.CaptureStopMin, 300*time.Millisecond)
 	r := newStallRun(t)
-	r.settle(1)
+	r.settle()
 	unhold := r.h.Srv.Hold("POST " + wire.PathHeartbeat)
 	t.Cleanup(unhold)
 	done := r.stopAsync()
@@ -703,7 +833,8 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 		p1.Hook(protocol.MethodResponseInterceptStreamChunk, plugintest.Chunk("stall-ws", "openai-response", wsIndex, c, ws))
 		wsIndex++
 	}
-	before := r.settle(1)
+	plugintest.WaitFor(t, "the WebSocket's first response", func() bool { return r.has("ex/stall-ws/response/0") })
+	before := r.settle()
 	h, release := r.holdCapture()
 	time.AfterFunc(5*time.Second, release)
 	start := time.Now()
@@ -730,9 +861,12 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 // TestStallHarnessSweep measures 0.1.5 across stall lengths and holders, for the 0.1.6 design. It
 // takes minutes, so it runs only with CA_STALL_SWEEP=1. CA_STALL_SWEEP_S (a comma list of stall
 // seconds) picks lengths, CA_STALL_SWEEP_HOLDERS (a comma list of capture, other, fail and stop)
-// picks holders, CA_STALL_SWEEP_BODY_KIB sets each exchange's request text size for a body-heavy
-// load, and CA_STALL_SWEEP_SYNC_MS delays every outbox fsync for the whole run (a slow disk, to
-// measure how long the backlog takes to drain). It asserts nothing beyond the runs completing; it logs one line per run.
+// picks holders, CA_STALL_SWEEP_BODY_KIB and CA_STALL_SWEEP_RESP_KIB set each exchange's request and
+// response text sizes for a body-heavy load, CA_STALL_SWEEP_SYNC_MS delays every outbox fsync for
+// the whole run (a slow disk, to measure how long the backlog takes to drain and at what rate), and
+// CA_STALL_SWEEP_TAIL_S sets how long the load goes on after the release (default 6 s). It asserts
+// nothing beyond the runs completing and every envelope being stored or counted; it logs one line
+// per run.
 func TestStallHarnessSweep(t *testing.T) {
 	if os.Getenv("CA_STALL_SWEEP") != "1" {
 		t.Skip("set CA_STALL_SWEEP=1 to run the stall sweep")
@@ -742,9 +876,18 @@ func TestStallHarnessSweep(t *testing.T) {
 	if s := os.Getenv("CA_STALL_SWEEP_HOLDERS"); s != "" {
 		holders = strings.Split(s, ",")
 	}
-	var kib, syncMS int
+	var kib, respKiB, syncMS int
 	if s := os.Getenv("CA_STALL_SWEEP_BODY_KIB"); s != "" {
 		fmt.Sscan(s, &kib)
+	}
+	if s := os.Getenv("CA_STALL_SWEEP_RESP_KIB"); s != "" {
+		fmt.Sscan(s, &respKiB)
+	}
+	tail := 6 * time.Second
+	if s := os.Getenv("CA_STALL_SWEEP_TAIL_S"); s != "" {
+		var n int
+		fmt.Sscan(s, &n)
+		tail = time.Duration(n) * time.Second
 	}
 	if s := os.Getenv("CA_STALL_SWEEP_SYNC_MS"); s != "" {
 		fmt.Sscan(s, &syncMS)
@@ -768,6 +911,7 @@ func TestStallHarnessSweep(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-%ds", holder, s), func(t *testing.T) {
 				r := newStallRun(t)
 				r.withBody(kib)
+				r.withResponse(respKiB)
 				if syncMS > 0 { // a slow disk throughout: every outbox fsync takes this long
 					r.arm(diskstall.Rule{Ops: diskstall.Sync, Delay: time.Duration(syncMS) * time.Millisecond})
 				}
@@ -783,17 +927,19 @@ func TestStallHarnessSweep(t *testing.T) {
 					release = h.Disarm
 				}
 				stall := time.Duration(s) * time.Second
-				// Drain: from the release until every envelope offered by then (calibration included)
-				// is stored; -1 when that never happens before the load ends (the backlog was lost).
+				// Drain: from the release until every key of the exchanges offered before it is
+				// stored, named key by key (later traffic cannot stand in for a lost key); -1 when
+				// that never happens before the load ends (part of the backlog was lost).
 				drained, quit := make(chan time.Duration, 1), make(chan struct{})
+				var backlog atomic.Int64
 				time.AfterFunc(stall, func() {
+					upTo := int(r.n.Load()) - 1 // the exchange in flight may be partial
+					at := time.Now()
+					backlog.Store(int64(upTo*r.perEx - r.storedOf(upTo)))
 					release()
-					at, target := time.Now(), (int(r.n.Load())+2)*r.perEx-r.perEx // the exchange in flight may be partial
 					go func() {
-						var n int
 						for {
-							_ = r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE NOT (state = 3 AND dead_reason IS 'superseded')`).Scan(&n)
-							if n >= target {
+							if r.storedOf(upTo) >= upTo*r.perEx {
 								drained <- time.Since(at)
 								return
 							}
@@ -806,12 +952,15 @@ func TestStallHarnessSweep(t *testing.T) {
 						}
 					}()
 				})
-				r.loadFor(stall+6*time.Second, 100*time.Millisecond)
-				r.settle(1)
+				r.loadFor(stall+tail, 100*time.Millisecond)
+				r.settle()
 				close(quit)
 				res := r.result(h, 0)
-				res.Drain = <-drained
-				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d sync_ms=%d %v", holder, s, kib, syncMS, res)
+				res.Drain, res.Backlog = <-drained, int(backlog.Load())
+				if res.Drain > 0 {
+					res.DrainRate = float64(res.Backlog) / res.Drain.Seconds()
+				}
+				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d resp_kib=%d sync_ms=%d %v", holder, s, kib, respKiB, syncMS, res)
 			})
 		}
 	}
