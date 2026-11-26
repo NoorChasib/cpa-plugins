@@ -289,6 +289,10 @@ func (p *Plugin) status() map[string]any {
 		out["masker"] = rs.capture.MaskerStats()
 		out["runtime"] = readRuntime(rs, rs.capture, p.engine.Pool)
 		out["media_fetch_queue"] = rs.up.Media().Len()
+		q, qPeak := rs.capture.WriteQueue()
+		hold, holdPeak := rs.capture.HoldBytes()
+		out["write_path"] = map[string]int64{"queue": int64(q), "queue_peak": int64(qPeak), "queue_entries": capture.WriteQueueEntries,
+			"hold_bytes": hold, "hold_peak_bytes": holdPeak, "hold_budget_bytes": capture.HoldBytes}
 	}
 	if fixture.Enabled {
 		out["fixture_records"] = p.engine.Fixture.Snapshot()
