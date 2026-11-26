@@ -75,8 +75,54 @@ type stallResult struct {
 	DrainRate float64           // Backlog / Drain, envelopes per second (sweep only)
 	PeakPool  int64             // peak content-pool reservation, bytes (stream reservations included)
 	PeakStrm  int64             // peak stream sub-budget reservation, bytes (a part of PeakPool)
-	Rule      diskstall.Stats
+	// The finite-window service after the release (sweep only), measured on the named backlog keys:
+	// SvcT0 is the time until the first of them is stored, SvcMin the lowest storing rate over any
+	// window of 0.5, 1 and 2 s that starts at or after SvcT0 and ends before the backlog is stored.
+	SvcT0  time.Duration
+	SvcMin [3]float64
+	Rule   diskstall.Stats
 }
+
+// svcWindows are the window lengths of stallResult.SvcMin.
+var svcWindows = [3]time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+
+// svcSample is the count of named backlog keys stored at an offset from the release.
+type svcSample struct {
+	at     time.Duration
+	stored int
+}
+
+// service computes SvcT0 and SvcMin from samples taken from the release until the backlog was
+// stored (a busy period: the writer always had backlog keys left). A window that does not fit is 0.
+func service(samples []svcSample) (time.Duration, [3]float64) {
+	var mins [3]float64
+	first := 1
+	for first < len(samples) && samples[first].stored == samples[0].stored {
+		first++
+	}
+	if first >= len(samples) {
+		return 0, mins
+	}
+	t0, end := samples[first].at, samples[len(samples)-1].at
+	for w, d := range svcWindows {
+		best := -1.0
+		for i := first; i < len(samples) && samples[i].at+d <= end; i++ {
+			// The last sample at or before the window's end bounds what was stored by then from below.
+			j := i
+			for j+1 < len(samples) && samples[j+1].at <= samples[i].at+d {
+				j++
+			}
+			if got := float64(samples[j].stored-samples[i].stored) / d.Seconds(); best < 0 || got < best {
+				best = got
+			}
+		}
+		mins[w] = max(best, 0)
+	}
+	return t0, mins
+}
+
+// svcStep is the service sampler's period.
+const svcStep = 20 * time.Millisecond
 
 func (r stallResult) String() string {
 	keys := make([]string, 0, len(r.Dropped))
@@ -88,9 +134,10 @@ func (r stallResult) String() string {
 	for _, k := range keys {
 		d = append(d, fmt.Sprintf("%s=%d", k, r.Dropped[k]))
 	}
-	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v backlog=%d drain_rate=%.0f/s peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d peak_stream_kib=%d rule{matched=%d affected=%d max_wait=%v}",
+	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v backlog=%d drain_rate=%.0f/s svc_t0=%v svc_min{0.5s=%.0f/s,1s=%.0f/s,2s=%.0f/s} peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d peak_stream_kib=%d rule{matched=%d affected=%d max_wait=%v}",
 		r.Exchanges, r.Offered, r.Stored, r.Lost, strings.Join(d, ","), r.HookMax.Round(time.Microsecond), r.Stop.Round(time.Millisecond),
-		r.Drain.Round(time.Millisecond), r.Backlog, r.DrainRate, float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.PeakStrm/1024,
+		r.Drain.Round(time.Millisecond), r.Backlog, r.DrainRate, r.SvcT0.Round(time.Millisecond), r.SvcMin[0], r.SvcMin[1], r.SvcMin[2],
+		float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.PeakStrm/1024,
 		r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
 }
 
@@ -864,7 +911,10 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 // picks holders, CA_STALL_SWEEP_BODY_KIB and CA_STALL_SWEEP_RESP_KIB set each exchange's request and
 // response text sizes for a body-heavy load, CA_STALL_SWEEP_SYNC_MS delays every outbox fsync for
 // the whole run (a slow disk, to measure how long the backlog takes to drain and at what rate), and
-// CA_STALL_SWEEP_TAIL_S sets how long the load goes on after the release (default 6 s). It asserts
+// CA_STALL_SWEEP_TAIL_S sets how long the load goes on after the release (default 6 s), and
+// CA_STALL_SWEEP_BURST offers that many extra exchanges back to back just before the release (a late
+// burst, part of the backlog). Each run also reports the finite-window service after the release
+// (svc_t0, svc_min; see stallResult). It asserts
 // nothing beyond the runs completing and every envelope being stored or counted; it logs one line
 // per run.
 func TestStallHarnessSweep(t *testing.T) {
@@ -876,7 +926,10 @@ func TestStallHarnessSweep(t *testing.T) {
 	if s := os.Getenv("CA_STALL_SWEEP_HOLDERS"); s != "" {
 		holders = strings.Split(s, ",")
 	}
-	var kib, respKiB, syncMS int
+	var kib, respKiB, syncMS, burst int
+	if s := os.Getenv("CA_STALL_SWEEP_BURST"); s != "" {
+		fmt.Sscan(s, &burst)
+	}
 	if s := os.Getenv("CA_STALL_SWEEP_BODY_KIB"); s != "" {
 		fmt.Sscan(s, &kib)
 	}
@@ -935,14 +988,22 @@ func TestStallHarnessSweep(t *testing.T) {
 				// that never happens before the load ends (part of the backlog was lost).
 				drained, quit := make(chan time.Duration, 1), make(chan struct{})
 				var backlog atomic.Int64
+				var samples []svcSample // written by the drain goroutine, read after drained
 				time.AfterFunc(stall, func() {
+					for i := 0; i < burst; i++ { // a late burst, back to back
+						r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1)))
+					}
 					upTo := int(r.n.Load()) - 1 // the exchange in flight may be partial
 					at := time.Now()
-					backlog.Store(int64(upTo*r.perEx - r.storedOf(upTo)))
+					before := r.storedOf(upTo)
+					backlog.Store(int64(upTo*r.perEx - before))
 					release()
 					go func() {
+						samples = append(samples, svcSample{0, before})
 						for {
-							if r.storedOf(upTo) >= upTo*r.perEx {
+							n := r.storedOf(upTo)
+							samples = append(samples, svcSample{time.Since(at), n})
+							if n >= upTo*r.perEx {
 								drained <- time.Since(at)
 								return
 							}
@@ -950,7 +1011,7 @@ func TestStallHarnessSweep(t *testing.T) {
 							case <-quit:
 								drained <- -1
 								return
-							case <-time.After(20 * time.Millisecond):
+							case <-time.After(svcStep):
 							}
 						}
 					}()
@@ -962,8 +1023,9 @@ func TestStallHarnessSweep(t *testing.T) {
 				res.Drain, res.Backlog = <-drained, int(backlog.Load())
 				if res.Drain > 0 {
 					res.DrainRate = float64(res.Backlog) / res.Drain.Seconds()
+					res.SvcT0, res.SvcMin = service(samples)
 				}
-				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d resp_kib=%d sync_ms=%d %v", holder, s, kib, respKiB, syncMS, res)
+				t.Logf("holder=%s stall=%ds rate=10/s burst=%d body_kib=%d resp_kib=%d sync_ms=%d %v", holder, s, burst, kib, respKiB, syncMS, res)
 			})
 		}
 	}
@@ -988,5 +1050,26 @@ func TestStallHarnessSweep(t *testing.T) {
 			res := r.result(h, stop)
 			t.Logf("stop during other commit stall=%ds budget=%v %v", s, plugin.StopTimeout, res)
 		})
+	}
+}
+
+// TestStallHarnessServiceWindows checks the sweep's finite-window service computation on synthetic
+// samples: a 1 s pause before the first store, 100 keys per 0.5 s, then a 0.5 s pause in the middle.
+func TestStallHarnessServiceWindows(t *testing.T) {
+	var s []svcSample
+	stored := 0
+	for at := time.Duration(0); at <= 4*time.Second; at += svcStep {
+		pause := at <= time.Second || (at > 2*time.Second && at <= 2500*time.Millisecond)
+		if !pause {
+			stored += 4 // 200 per second
+		}
+		s = append(s, svcSample{at, stored})
+	}
+	t0, mins := service(s)
+	if t0 != time.Second+svcStep {
+		t.Fatalf("t0 = %v", t0)
+	}
+	if mins[0] != 0 || mins[1] < 95 || mins[1] > 105 || mins[2] < 145 || mins[2] > 155 {
+		t.Fatalf("windowed minimum rates = %v; want 0, about 100 and about 150 per second", mins)
 	}
 }
