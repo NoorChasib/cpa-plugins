@@ -585,7 +585,7 @@ func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 	if CanonFormat(s.format) == canon.FormatOpaque {
 		r.ContentType = ""
 	}
-	need := int64(len(r.Body)) * hooks.BodyReserveFactor
+	need := int64(len(r.Body))*hooks.BodyReserveFactor + hooks.HandoffHeaderBytes(r.Headers)
 	if !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		rt.metaResponse(r, "body_budget")
