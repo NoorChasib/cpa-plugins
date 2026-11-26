@@ -77,10 +77,7 @@ func newRig(t *testing.T, o rigOpts) *rig {
 	m, _ := mask.New(mask.Config{})
 	rt := &Runtime{opts: Options{Engine: e, Outbox: ob, Workers: 1, Masker: NewMaskerHolder(m, 0, 1<<20)}, prefix: NewPrefixMap(),
 		writes: make(chan writeReq, 1024)}
-	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
-	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
-	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
-	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
+	rt.initContexts()
 	safego.Loop(rt.runCtx, &rt.wg, "worker", e.Stats.Panic, rt.worker)
 	safego.Loop(rt.writerCtx, &rt.writerWG, "writer", e.Stats.Panic, rt.writer)
 	t.Cleanup(func() {

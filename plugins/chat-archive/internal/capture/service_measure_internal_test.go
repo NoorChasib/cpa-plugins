@@ -7,7 +7,6 @@ package capture
 // counts and durations only; every value is synthetic.
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,10 +43,7 @@ func newSvcRig(t *testing.T, workers int) *svcRig {
 	m, _ := mask.New(mask.Config{})
 	rt := &Runtime{opts: Options{Engine: e, Outbox: ob, Workers: workers, Masker: NewMaskerHolder(m, 0, 1<<20)}, prefix: NewPrefixMap(),
 		writes: make(chan writeReq, 1024)}
-	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
-	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
-	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
-	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
+	rt.initContexts()
 	s := &svcRig{e: e, rt: rt, stop: make(chan struct{})}
 	s.done.Add(1)
 	go func() {

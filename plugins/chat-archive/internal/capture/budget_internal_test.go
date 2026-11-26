@@ -25,7 +25,7 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 	m, _ := mask.New(mask.Config{})
 	rt := &Runtime{opts: Options{Engine: e, Outbox: ob, Workers: 1, Masker: NewMaskerHolder(m, 0, 1<<20)},
 		prefix: NewPrefixMap(), writes: make(chan writeReq, 4)}
-	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
+	rt.initContexts()
 	defer rt.drainStop()
 
 	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"synthetic budget text"}]}`)
@@ -40,19 +40,19 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 		t.Fatalf("pool after the worker handed the begin over = %d, want %d (held until written)", got, need)
 	}
 	r := <-rt.writes
-	var probe time.Time
-	rt.flush([]writeReq{r}, &probe)
+	rt.flush([]writeReq{r})
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after the writer committed = %d", got)
 	}
 	if items, _ := ob.Pending(context.Background(), time.Now(), 10, 1<<30); len(items) != 1 {
 		t.Fatalf("pending = %d", len(items))
 	}
-	// A request the writer drops (write_unavailable inside the probe interval) is released too.
-	e.Stats.SetFault("write_unavailable", true)
-	probe = time.Now()
+	// A request the writer drops (a permanent write error) is released too.
+	rt.obWrite = func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error) {
+		return outbox.WriteResult{}, outbox.ErrClosed
+	}
 	e.Pool.TryReserve(100)
-	rt.flush([]writeReq{{env: r.env, release: func() { e.Pool.Release(100) }}}, &probe)
+	rt.flush([]writeReq{{env: r.env, release: func() { e.Pool.Release(100) }}})
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after a dropped group = %d", got)
 	}

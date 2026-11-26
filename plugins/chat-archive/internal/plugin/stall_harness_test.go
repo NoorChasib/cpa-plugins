@@ -147,10 +147,11 @@ func (r stallResult) String() string {
 		r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
 }
 
-func setProbeInterval(t *testing.T, d time.Duration) {
-	old := capture.ProbeInterval
-	capture.ProbeInterval = d
-	t.Cleanup(func() { capture.ProbeInterval = old })
+// setRetryWindow sets how long the capture writer retries a failing group (capture.RetryWindow).
+func setRetryWindow(t *testing.T, d time.Duration) {
+	old := capture.RetryWindow
+	capture.RetryWindow = d
+	t.Cleanup(func() { capture.RetryWindow = old })
 }
 
 func setStopTimeout(t *testing.T, d time.Duration) {
@@ -550,30 +551,30 @@ func TestStallHarnessShortCommitStallLosesNothing(t *testing.T) {
 	}
 }
 
-// TestStallHarnessStallPastWriteTimeoutDropsGroup pins 0.1.5's known limit ("a stalled outbox write
-// still drops its group"): another user of the write connection stalls in its commit for 12 s,
-// longer than the capture writer's 10 s write timeout. The writer's group times out waiting for the
-// connection and is dropped as disk_hard, write_unavailable is raised, and every group the writer
-// takes in the 5 s probe interval after that is dropped untried, including the backlog queued
-// during the stall. Every lost envelope is counted; nothing waits in a hook; writes resume once a
-// probe succeeds.
-func TestStallHarnessStallPastWriteTimeoutDropsGroup(t *testing.T) {
+// TestStallHarnessStallPastOldWriteTimeoutLosesNothing flips 0.1.5's known limit ("a stalled outbox
+// write still drops its group"): another user of the write connection stalls in its commit for 12 s,
+// past 0.1.5's 10 s write timeout, which then dropped 600 of 688 envelopes as disk_hard. 0.1.6's
+// writer has no attempt timeout while running: it waits for the connection, write_unavailable is
+// raised as an alert while the attempt has not returned, and once the stall ends the backlog is
+// written in order. Nothing is lost or counted dropped, and no hook waits for the disk.
+func TestStallHarnessStallPastOldWriteTimeoutLosesNothing(t *testing.T) {
 	r := newStallRun(t)
 	h, release := r.holdOther()
+	var alerted atomic.Bool
+	time.AfterFunc(11500*time.Millisecond, func() { alerted.Store(r.h.Plugin.Engine().Stats.HasFault("write_unavailable")) })
 	time.AfterFunc(12*time.Second, release)
 	r.loadFor(17*time.Second, 100*time.Millisecond)
 	r.settle()
 	res := r.result(h, 0)
 	t.Log(res)
-	if res.Lost == 0 || res.Dropped["disk_hard"] == 0 {
-		t.Fatalf("a 12 s stall past the write timeout lost nothing: %v", res)
+	if res.Lost != 0 || len(res.Dropped) != 0 {
+		t.Fatalf("a 12 s stall of another connection user lost envelopes: %v", res)
 	}
-	if uint64(res.Lost) != res.Dropped["disk_hard"] {
-		t.Fatalf("lost %d envelopes but counted disk_hard %d", res.Lost, res.Dropped["disk_hard"])
+	if res.Rule.MaxWait < 12*time.Second {
+		t.Fatalf("the stall was %v", res.Rule.MaxWait)
 	}
-	// The loss covers the exchanges of the stall and the probe interval after the timeout, not one group.
-	if res.Lost < 50 {
-		t.Fatalf("lost only %d envelopes", res.Lost)
+	if !alerted.Load() {
+		t.Fatal("write_unavailable was not raised while the write waited past 10 s")
 	}
 	if res.HookMax > 500*time.Millisecond {
 		t.Fatalf("a hook waited %v during the stall", res.HookMax)
@@ -583,11 +584,11 @@ func TestStallHarnessStallPastWriteTimeoutDropsGroup(t *testing.T) {
 	}
 }
 
-// TestStallHarnessFailedSyncDropsGroup: one WAL fsync that fails (SQLITE_IOERR_FSYNC) on the capture
-// writer's commit drops that group as disk_hard, raises write_unavailable, and drops the groups
-// that follow inside the probe interval untried; the next probe clears the fault.
-func TestStallHarnessFailedSyncDropsGroup(t *testing.T) {
-	setProbeInterval(t, time.Second)
+// TestStallHarnessFailedSyncRetried flips 0.1.5's failed-sync pin, which dropped the group and every
+// group after it inside the probe interval: one WAL fsync that fails (SQLITE_IOERR_FSYNC) on the
+// capture writer's commit raises write_unavailable, and the writer retries the same group after a
+// backoff, in order, with no probe gate. Nothing is lost; the next successful write clears the fault.
+func TestStallHarnessFailedSyncRetried(t *testing.T) {
 	r := newStallRun(t)
 	r.quiet() // else the uploader's ack commit may take the one failed sync
 	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.WAL, Count: 1, Fail: diskstall.IOErrFsync})
@@ -597,8 +598,8 @@ func TestStallHarnessFailedSyncDropsGroup(t *testing.T) {
 	r.settle()
 	res := r.result(h, 0)
 	t.Log(res)
-	if res.Lost <= r.perEx || uint64(res.Lost) != res.Dropped["disk_hard"] {
-		t.Fatalf("one failed sync: %v (want the group and the untried groups after it, all counted disk_hard)", res)
+	if res.Lost != 0 || len(res.Dropped) != 0 {
+		t.Fatalf("one failed sync lost envelopes: %v", res)
 	}
 	if r.h.Plugin.Engine().Stats.HasFault("write_unavailable") {
 		t.Fatal("write_unavailable still raised after the disk recovered")
