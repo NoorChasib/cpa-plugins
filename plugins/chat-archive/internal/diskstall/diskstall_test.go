@@ -161,3 +161,23 @@ func TestDelayAndSkip(t *testing.T) {
 		t.Fatalf("stats %+v", s)
 	}
 }
+
+// TestProbeWriteTouchesNoFile pins what the capture writer's write probe (used while
+// write_unavailable is raised) does at the disk: its UPDATE sets a value to itself, SQLite skips
+// the unchanged cell, and the commit writes and syncs nothing. The probe therefore proves the write
+// connection and lock are free, not that the disk takes writes: a WAL that still fails its fsync
+// passes the probe.
+func TestProbeWriteTouchesNoFile(t *testing.T) {
+	ob, dir := openOutbox(t)
+	h := diskstall.Arm(diskstall.Rule{Dir: dir, Ops: diskstall.Write | diskstall.Sync, Fail: diskstall.IOErr})
+	defer h.Disarm()
+	if err := ob.ProbeWrite(context.Background()); err != nil {
+		t.Fatalf("probe on a failing disk: %v", err)
+	}
+	if n := h.Stats().Matched; n != 0 {
+		t.Fatalf("the probe wrote or synced %d times", n)
+	}
+	if _, err := ob.Write(context.Background(), []outbox.NewEnvelope{env(t, "ds-probe")}); err == nil {
+		t.Fatal("a real write passed the failing disk")
+	}
+}
