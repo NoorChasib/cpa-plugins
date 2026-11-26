@@ -8,6 +8,7 @@ package capture
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -317,5 +318,129 @@ func TestHeldBytesCoversAllocation(t *testing.T) {
 				t.Fatalf("%s keeps %d B per envelope alive, over the estimate %d B", name, live/n, est/n)
 			}
 		})
+	}
+}
+
+// speechResponse returns a non-stream speech response whose zlib (Content-Encoding deflate) body
+// decodes to size bytes of synthetic binary audio, with its pool reservation taken as the hook
+// takes it. Deflate declares no decoded size, so the decoder's buffer grows by doubling and ends
+// with far more capacity than the decoded length.
+func speechResponse(t *testing.T, e *hooks.Engine, id string, size int) *hooks.Response {
+	t.Helper()
+	unit := make([]byte, 4096)
+	for i := range unit {
+		unit[i] = byte(0x80 | (i*7+len(id))&0x7f) // never valid UTF-8, so the attachment is the decoded bytes
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	for n := 0; n < size; n += len(unit) {
+		zw.Write(unit[:min(len(unit), size-n)])
+	}
+	zw.Close()
+	body := z.Bytes()
+	need := int64(len(body)) * hooks.BodyReserveFactor
+	if !e.Pool.TryReserve(need) {
+		t.Fatal("reserve")
+	}
+	return &hooks.Response{RequestID: id, SourceFormat: "openai-speech", StatusCode: 200, Body: body,
+		ContentType: "audio/mpeg", ContentEncoding: "deflate", ObservedAt: time.Now(), Reserved: need}
+}
+
+// liveAfter returns the heap f leaves reachable, measured across a GC before and after it.
+func liveAfter(f func()) int64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
+}
+
+func nonZero(d map[string]uint64) map[string]uint64 {
+	out := map[string]uint64{}
+	for k, v := range d {
+		if v != 0 {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func queuedPieceBytes(rt *Runtime) (pieces, n int) {
+	for i := len(rt.writes); i > 0; i-- {
+		r := <-rt.writes
+		for _, p := range r.env.Pieces {
+			n += len(p.Bytes)
+			pieces++
+		}
+		rt.writes <- r
+	}
+	return pieces, n
+}
+
+// TestHoldChargesDecodedBuffers: with the writer held, three deflate speech responses that each
+// decode to 17 MiB are queued through the response builder. What they keep alive, beyond their pool
+// reservations, is at most what the hold charged them, so the hold budget bounds the queued bytes
+// even when the decoder's buffer is far larger than the body it decoded.
+func TestHoldChargesDecodedBuffers(t *testing.T) {
+	rt, e := holdRuntime(t, HoldBytes, 1)
+	const n, size = 3, 17 << 20
+	live := liveAfter(func() {
+		for i := 0; i < n; i++ {
+			rt.doResponse(speechResponse(t, e, fmt.Sprintf("speech-%d", i), size))
+		}
+	})
+	if d := nonZero(e.Stats.Dropped()); len(d) != 0 {
+		t.Fatalf("dropped %v, want none", d)
+	}
+	if pieces, b := queuedPieceBytes(rt); len(rt.writes) != n || pieces != n || b != n*size {
+		t.Fatalf("%d queued with %d pieces of %d bytes, want %d of %d bytes", len(rt.writes), pieces, b, n, size)
+	}
+	hold, _ := rt.HoldBytes()
+	pool := e.Pool.Used()
+	t.Logf("live %.2f MiB, hold %.2f MiB, pool %.2f MiB", float64(live)/(1<<20), float64(hold)/(1<<20), float64(pool)/(1<<20))
+	if hold > HoldBytes || live-pool > hold {
+		t.Fatalf("queued responses keep %d bytes beyond their pool reservations, the hold charged %d (budget %d)", live-pool, hold, int64(HoldBytes))
+	}
+}
+
+// TestHoldSpeechCeiling: at the per-envelope ceiling, a deflate speech response whose decoded
+// body would hold more than HoldEnvelopeMax is written as metadata only (body_budget, never
+// hold_oversize) with its reservation handed to the writer; one just under it is queued with its
+// body, and what it keeps alive beyond its reservation stays within its charge.
+func TestHoldSpeechCeiling(t *testing.T) {
+	rt, e := holdRuntime(t, HoldBytes, 1)
+	over := speechResponse(t, e, "speech-over", 30<<20)
+	rt.doResponse(over)
+	if d := e.Stats.Dropped(); d["body_budget"] != 1 || d["hold_oversize"] != 0 {
+		t.Fatalf("dropped %v, want body_budget 1", d)
+	}
+	r := <-rt.writes
+	var er wire.ExchangeResponse
+	if err := json.Unmarshal(r.env.Body, &er); err != nil || er.Body.Dropped != wire.DroppedBodyBudget || len(r.env.Pieces) != 0 {
+		t.Fatalf("response body dropped %q with %d pieces (%v), want metadata only", er.Body.Dropped, len(r.env.Pieces), err)
+	}
+	if e.Pool.Used() != over.Reserved && over.Reserved > 0 {
+		t.Fatalf("pool %d, want the reservation %d handed to the writer", e.Pool.Used(), over.Reserved)
+	}
+	rt.finished(r)
+	if now, _ := rt.HoldBytes(); now != 0 || e.Pool.Used() != 0 {
+		t.Fatalf("hold %d, pool %d after the writer finished", now, e.Pool.Used())
+	}
+
+	const size = 27 << 20
+	live := liveAfter(func() { rt.doResponse(speechResponse(t, e, "speech-under", size)) })
+	if d := nonZero(e.Stats.Dropped()); d["body_budget"] != 1 || len(d) != 1 {
+		t.Fatalf("dropped %v, want only the earlier body_budget", d)
+	}
+	if pieces, b := queuedPieceBytes(rt); pieces != 1 || b != size {
+		t.Fatalf("%d pieces of %d bytes queued, want the %d-byte body", pieces, b, size)
+	}
+	hold, _ := rt.HoldBytes()
+	pool := e.Pool.Used()
+	t.Logf("under the ceiling: live %.2f MiB, hold %.2f MiB, pool %.2f MiB", float64(live)/(1<<20), float64(hold)/(1<<20), float64(pool)/(1<<20))
+	if hold > HoldEnvelopeMax || live-pool > hold {
+		t.Fatalf("a queued response keeps %d bytes beyond its reservation, the hold charged %d (ceiling %d)", live-pool, hold, int64(HoldEnvelopeMax))
 	}
 }
