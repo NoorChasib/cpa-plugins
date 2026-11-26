@@ -53,12 +53,12 @@ type Code int
 
 // Result codes for Rule.Fail (sqlite3.h primary and extended codes).
 const (
-	IOErrRead  Code = 10 | 1<<8  // SQLITE_IOERR_READ
-	IOErrWrite Code = 10 | 3<<8  // SQLITE_IOERR_WRITE
-	IOErrFsync Code = 10 | 4<<8  // SQLITE_IOERR_FSYNC
-	IOErrTrunc Code = 10 | 6<<8  // SQLITE_IOERR_TRUNCATE
-	Full       Code = 13         // SQLITE_FULL
-	IOErr      Code = 10         // SQLITE_IOERR
+	IOErrRead  Code = 10 | 1<<8   // SQLITE_IOERR_READ
+	IOErrWrite Code = 10 | 3<<8   // SQLITE_IOERR_WRITE
+	IOErrFsync Code = 10 | 4<<8   // SQLITE_IOERR_FSYNC
+	IOErrTrunc Code = 10 | 6<<8   // SQLITE_IOERR_TRUNCATE
+	Full       Code = 13          // SQLITE_FULL
+	IOErr      Code = 10          // SQLITE_IOERR
 	noFailure  Code = C.SQLITE_OK // the operation runs after its wait
 )
 
