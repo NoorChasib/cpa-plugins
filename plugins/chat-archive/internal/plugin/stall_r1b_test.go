@@ -166,3 +166,22 @@ func TestStallStopAndReconfigureBounded(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusShowsWritePath: the status route reports the write channel's length and peak against
+// its depth and the hold budget's bytes and peak against the budget (plugin 0.1.6).
+func TestStatusShowsWritePath(t *testing.T) {
+	h := plugintest.New(t, nil, "")
+	plugintest.WaitFor(t, "the runtime", func() bool { ob, _, _ := h.Plugin.Runtime(); return ob != nil })
+	wp, ok := statusJSON(t, h.Plugin)["write_path"].(map[string]any)
+	if !ok {
+		t.Fatal("no write_path on the status route")
+	}
+	if wp["queue_entries"] != float64(capture.WriteQueueEntries) || wp["hold_budget_bytes"] != float64(capture.HoldBytes) {
+		t.Fatalf("write_path %v", wp)
+	}
+	for _, k := range []string{"queue", "queue_peak", "hold_bytes", "hold_peak_bytes"} {
+		if _, ok := wp[k].(float64); !ok {
+			t.Fatalf("write_path.%s missing: %v", k, wp)
+		}
+	}
+}
