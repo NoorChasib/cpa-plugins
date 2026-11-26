@@ -143,13 +143,15 @@ func piecesFor(sp *canon.Split, refs []wire.Hash) []canon.Piece {
 	// A piece's bytes can be a slice of a much larger buffer: a decoder's, grown by doubling (a
 	// deflate body declares no size, so 17 MiB decoded sits in a 32 MiB buffer), or a body other
 	// pieces were cut from. A queued envelope would keep that whole buffer alive, which its length
-	// does not show, so the pieces are copied into one allocation of exactly their bytes. The hold
-	// budget then charges what the envelope keeps (retainedBytes).
+	// does not show, so the pieces are copied into one allocation of exactly their bytes. A MIME type
+	// parsed from a data URL is likewise a slice of the whole decoded URL string, so each piece gets
+	// its own copy. The hold budget then charges what the envelope keeps (retainedBytes).
 	arena := make([]byte, total)
 	off := 0
 	for i := range out {
 		n := copy(arena[off:], out[i].Bytes)
 		out[i].Bytes = arena[off : off+n : off+n]
+		out[i].ContentType = strings.Clone(out[i].ContentType)
 		off += n
 	}
 	return out
