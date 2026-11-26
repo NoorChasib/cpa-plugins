@@ -9,7 +9,7 @@ Keeps capturing through outbox disk stalls and write failures of up to a minute.
 - **`write_unavailable` is now an alert only.** It is raised when a write fails, or when a write has not returned after 10 seconds. It clears with the next successful write, and nothing is dropped because of it.
 - **Hooks that a configured plugin cannot capture are counted.** The new `dropped.storage_unavailable` counts hook calls, not envelopes. It covers calls that arrive while capture is configured on but cannot run: a secret that cannot be read, no working directory, an outbox that cannot be opened, or a reconfigure between its stop and its start. This includes the first start after `capture: off`. 0.1.5 let these calls pass through without a count.
 - **Budgets charge more of what they hold.** A queued body's decoded headers are now charged to the content pool with the body. A usage record that does not fit its queue sheds its failure body, then its response headers, and is dropped only when even the bare record does not fit; `dropped.usage_queue` counts the record once whichever step it reaches. Every step charges the record's metadata and its decoded response headers in full.
-- **REFERENCE.md gives each `dropped.*` counter its unit:** a body kept as metadata, a whole envelope, a usage record step, a stream event, a hook call, or a media fetch.
+- **REFERENCE.md gives each `dropped.*` counter its unit:** a body kept as metadata, a whole envelope, a usage record that failed its whole-record reservation (counted again if the usage channel is full), a stream event, a hook call, or a media fetch.
 
 ## Upgrading
 
