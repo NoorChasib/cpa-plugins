@@ -67,19 +67,33 @@ type Runtime struct {
 	// obWrite is the outbox write (Outbox.Write unless a test replaces it).
 	obWrite func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
 
+	// hold is the write path's byte budget (hold.go); queuePeak the write channel's peak length.
+	hold      *holdBudget
+	queuePeak atomic.Int64
+
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
-// counted against (the body's content-pool reservation, or a usage item's queue bytes); the
-// writer calls it after the outbox transaction that wrote the envelope returned, or when it
-// drops the envelope, so a queued envelope's pieces and the writer's compressed copies stay
-// inside the budget until they are on disk.
+// counted against (the body's content-pool reservation, or a usage item's queue bytes), and held
+// is what it reserved from the hold budget for the bytes it keeps beyond that; the writer returns
+// both after the outbox transaction that wrote the envelope returned, or when it drops the
+// envelope, so a queued envelope's pieces and the writer's compressed copies stay inside the
+// budgets until they are on disk.
 type writeReq struct {
 	env     outbox.NewEnvelope
 	commit  func(inserted bool)
 	release func()
+	held    int64
+}
+
+// finished returns a written or dropped envelope's budgets.
+func (rt *Runtime) finished(r writeReq) {
+	if r.release != nil {
+		r.release()
+	}
+	rt.hold.release(r.held)
 }
 
 func (rt *Runtime) stats() *hooks.Stats { return rt.opts.Engine.Stats }
@@ -96,7 +110,7 @@ func Start(opts Options) *Runtime {
 	if opts.Prefix == nil {
 		opts.Prefix = NewPrefixMap()
 	}
-	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, 1024)}
+	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, WriteQueueEntries)}
 	rt.initContexts()
 	rec := opts.Engine.Stats.Panic
 	ps := opts.Outbox.Pressure()
@@ -117,6 +131,9 @@ func (rt *Runtime) initContexts() {
 	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
 	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
 	rt.cut, rt.cutStop = context.WithCancel(context.Background())
+	if rt.hold == nil {
+		rt.hold = newHoldBudget(HoldBytes)
+	}
 }
 
 func (rt *Runtime) setPressure(ps outbox.PressureState) {
@@ -204,25 +221,35 @@ func (rt *Runtime) drainChannels(by time.Time) {
 }
 
 // write hands an envelope to the writer. It blocks until accepted or the runtime drains. It
-// owns release (nil for envelopes with no budget): called at once when the envelope is not
-// accepted, else by the writer once the envelope is written or dropped.
-func (rt *Runtime) write(env outbox.NewEnvelope, commit func(bool), release func()) bool {
-	if !wire.ValidKey(env.Key) {
-		rt.stats().Drop("encode_error")
+// owns release (nil for envelopes with no budget), which returns carried bytes: called at once
+// when the envelope is not accepted, else by the writer once the envelope is written or dropped.
+// extra is the commit callback's data. The envelope first reserves what it keeps beyond carried
+// from the hold budget, in FIFO order; one over HoldEnvelopeMax is not written (hold_oversize).
+func (rt *Runtime) write(env outbox.NewEnvelope, commit func(bool), release func(), carried, extra int64) bool {
+	fail := func(name string) bool {
+		rt.stats().Drop(name)
 		if release != nil {
 			release()
 		}
 		return false
 	}
+	if !wire.ValidKey(env.Key) {
+		return fail("encode_error")
+	}
+	held := heldBytes(env, extra, carried)
+	if held > HoldEnvelopeMax {
+		return fail("hold_oversize")
+	}
+	if !rt.hold.acquire(rt.drainCtx, held) {
+		return fail("stopped")
+	}
 	select {
-	case rt.writes <- writeReq{env: env, commit: commit, release: release}:
+	case rt.writes <- writeReq{env: env, commit: commit, release: release, held: held}:
+		rt.noteQueue()
 		return true
 	case <-rt.drainCtx.Done():
-		rt.stats().Drop("stopped")
-		if release != nil {
-			release()
-		}
-		return false
+		rt.hold.release(held)
+		return fail("stopped")
 	}
 }
 
@@ -305,8 +332,16 @@ func (rt *Runtime) doBegin(b *hooks.Begin) {
 	if err != nil {
 		return
 	}
+	if sr.sp != nil && heldBytes(env, commit.bytes(), reserved) > HoldEnvelopeMax {
+		// Its split outgrew its reservation by more than one envelope may hold (a highly compressed
+		// body, say): the body is shed and the begin written as metadata only.
+		e.Stats.Drop("body_budget")
+		if env, commit, err = rt.buildBegin(b, splitResult{dropped: wire.DroppedBodyBudget}, kept, hints); err != nil {
+			return
+		}
+	}
 	handed = true
-	written = rt.write(env, rt.beginCommitted(commit), rt.poolRelease(reserved))
+	written = rt.write(env, rt.beginCommitted(commit), rt.poolRelease(reserved), reserved, commit.bytes())
 }
 
 func (rt *Runtime) beginCommitted(c *beginCommit) func(bool) {
@@ -345,12 +380,19 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 	if err != nil {
 		return
 	}
+	if sr.sp != nil && heldBytes(env, commit.bytes(), reserved) > HoldEnvelopeMax {
+		// As in doBegin: the body is shed and the response written as metadata only.
+		e.Stats.Drop("body_budget")
+		if env, commit, urls, err = rt.buildResponse(r, splitResult{dropped: wire.DroppedBodyBudget}); err != nil {
+			return
+		}
+	}
 	handed = true
 	written = rt.write(env, func(inserted bool) {
 		if inserted && commit != nil {
 			rt.prefix.ResponseCommitted(commit.beginKey, commit.key, commit.index, commit.ids, commit.execSession, commit.responseID)
 		}
-	}, rt.poolRelease(reserved))
+	}, rt.poolRelease(reserved), reserved, commit.bytes())
 	if written && rt.opts.Media != nil {
 		for i, u := range urls {
 			exp := time.Now().Add(time.Hour).UTC()
@@ -376,7 +418,7 @@ func (rt *Runtime) doUsage(u *hooks.UsageItem) {
 		release()
 		return
 	}
-	rt.write(env, nil, release)
+	rt.write(env, nil, release, n, 0)
 }
 
 // completeDeferred writes a completion whose Handoff work just finished.
@@ -397,16 +439,27 @@ func (rt *Runtime) completeDeferredBy(d *hooks.Done, by time.Time) {
 		rt.stats().Drop("encode_error")
 		return
 	}
-	t := time.NewTimer(max(time.Until(by), 0))
-	defer t.Stop()
+	held := heldBytes(env, 0, 0)
+	if held > HoldEnvelopeMax {
+		rt.stats().Drop("hold_oversize")
+		return
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), by)
+	defer cancel()
+	if !rt.hold.acquire(ctx, held) {
+		rt.stats().Drop("stopped")
+		return
+	}
+	req := writeReq{env: env, held: held}
 	select {
-	case rt.writes <- writeReq{env: env}:
+	case rt.writes <- req:
 		return
 	default:
 	}
 	select {
-	case rt.writes <- writeReq{env: env}:
-	case <-t.C:
+	case rt.writes <- req:
+	case <-ctx.Done():
+		rt.hold.release(held)
 		rt.stats().Drop("stopped")
 	}
 }
@@ -416,7 +469,7 @@ func (rt *Runtime) writeCompletion(d *hooks.Done, cs hooks.CompletionState) {
 	if err != nil {
 		return
 	}
-	rt.write(env, nil, nil)
+	rt.write(env, nil, nil, 0, 0)
 }
 
 // ---- writer ----
@@ -524,9 +577,7 @@ func (rt *Runtime) flush(group []writeReq) {
 	// the envelopes are written or dropped.
 	defer func() {
 		for _, r := range group {
-			if r.release != nil {
-				r.release()
-			}
+			rt.finished(r)
 		}
 	}()
 	drop := func(name string) {

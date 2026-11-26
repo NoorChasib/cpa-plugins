@@ -54,9 +54,7 @@ func newSvcRig(t *testing.T, workers int) *svcRig {
 				s.mu.Lock()
 				s.outs = append(s.outs, time.Now())
 				s.mu.Unlock()
-				if w.release != nil {
-					w.release()
-				}
+				rt.finished(w)
 				if w.commit != nil {
 					w.commit(true)
 				}
