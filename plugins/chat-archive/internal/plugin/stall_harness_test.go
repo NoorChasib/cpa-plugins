@@ -385,6 +385,41 @@ func TestStallHarnessStopWaitsForStalledCommit(t *testing.T) {
 	}
 }
 
+// TestStallHarnessStopWaitsForStalledMaintenance: the same limit reaches the whole stop, not only
+// the writer. Maintenance's wal_checkpoint(TRUNCATE) (every GCEvery) is the only outbox call that
+// syncs the main database file, so holding main-database syncs stalls maintenance inside the
+// checkpoint while it holds the single write connection. The stop cancels the maintenance loop and
+// then waits for it without a bound (rs.wg.Wait), so it returns only when the checkpoint does.
+func TestStallHarnessStopWaitsForStalledMaintenance(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	for _, v := range []struct {
+		p *time.Duration
+		d time.Duration
+	}{{&plugin.SnapshotEvery, 20 * time.Millisecond}, {&plugin.GCEvery, 50 * time.Millisecond}} {
+		old := *v.p
+		*v.p = v.d
+		t.Cleanup(func() { *v.p = old })
+	}
+	r := newStallRun(t)
+	hold := make(chan struct{})
+	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.MainDB, Hold: hold})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1))) // WAL frames for the checkpoint to copy
+	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
+		t.Fatal("maintenance's checkpoint never reached the held main-database sync")
+	}
+	stallEnd := time.Now().Add(5 * time.Second)
+	time.AfterFunc(time.Until(stallEnd), release)
+	stop := r.shutdown()
+	res := r.result(h, stop)
+	t.Log(res)
+	if time.Now().Before(stallEnd) || stop < 2*time.Second+plugin.StopCloseMargin+time.Second {
+		t.Fatalf("the stop returned in %v, before the 5 s maintenance stall ended", stop)
+	}
+}
+
 // TestStallHarnessSweep measures 0.1.5 across stall lengths and holders, for the 0.1.6 design. It
 // takes minutes, so it runs only with CA_STALL_SWEEP=1 (and CA_STALL_SWEEP_S, a comma list of stall
 // seconds, to pick lengths). It asserts nothing beyond the runs completing; it logs one line per run.
@@ -401,16 +436,23 @@ func TestStallHarnessSweep(t *testing.T) {
 			secs = append(secs, n)
 		}
 	}
-	for _, holder := range []string{"capture", "other"} {
+	// capture: the writer's own commit stalls; other: another write-connection user's commit
+	// stalls and the writer waits for the connection; fail: every WAL write and sync fails
+	// (SQLITE_IOERR) for the whole period.
+	for _, holder := range []string{"capture", "other", "fail"} {
 		for _, s := range secs {
 			t.Run(fmt.Sprintf("%s-%ds", holder, s), func(t *testing.T) {
 				r := newStallRun(t)
 				var h *diskstall.Handle
 				var release func()
-				if holder == "capture" {
+				switch holder {
+				case "capture":
 					h, release = r.holdCapture()
-				} else {
+				case "other":
 					h, release = r.holdOther()
+				default:
+					h = r.arm(diskstall.Rule{Ops: diskstall.Write | diskstall.Sync, Files: diskstall.WAL, Fail: diskstall.IOErr})
+					release = h.Disarm
 				}
 				stall := time.Duration(s) * time.Second
 				time.AfterFunc(stall, release)
