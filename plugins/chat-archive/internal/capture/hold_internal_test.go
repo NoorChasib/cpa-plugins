@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -402,6 +403,61 @@ func TestHoldChargesDecodedBuffers(t *testing.T) {
 	t.Logf("live %.2f MiB, hold %.2f MiB, pool %.2f MiB", float64(live)/(1<<20), float64(hold)/(1<<20), float64(pool)/(1<<20))
 	if hold > HoldBytes || live-pool > hold {
 		t.Fatalf("queued responses keep %d bytes beyond their pool reservations, the hold charged %d (budget %d)", live-pool, hold, int64(HoldBytes))
+	}
+}
+
+// imageBegin returns a gzip-encoded chat begin whose one user message carries an image as a
+// base64 data URL that decodes to size bytes of synthetic binary, with its pool reservation taken
+// as the hook takes it. The MIME type is lowercase, so the splitter's normalized type is a slice of
+// the decoded URL string unless the queue copies it.
+func imageBegin(t *testing.T, e *hooks.Engine, id string, size int) *hooks.Begin {
+	t.Helper()
+	img := make([]byte, size)
+	for i := range img {
+		img[i] = byte(0x80 | (i*7+len(id))&0x7f) // never valid UTF-8
+	}
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(img)
+	body, _ := json.Marshal(map[string]any{"model": "m", "messages": []any{map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": "synthetic " + id},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}},
+	}}}})
+	var z bytes.Buffer
+	zw := gzip.NewWriter(&z)
+	zw.Write(body)
+	zw.Close()
+	gz := z.Bytes()
+	h := map[string][]string{"Content-Type": {"application/json"}, "Content-Encoding": {"gzip"}}
+	need := int64(len(gz))*hooks.BodyReserveFactor + hooks.HandoffHeaderBytes(h)
+	if !e.Pool.TryReserve(need) {
+		t.Fatal("reserve")
+	}
+	return &hooks.Begin{Req: protocol.BeforeAuth{RequestID: id, SourceFormat: "openai", Body: gz, BodyLen: len(gz), Headers: h},
+		ObservedAt: time.Now(), Reserved: need}
+}
+
+// TestHoldChargesDataURLPieces: with the writer held, seven chat begins whose images come from
+// 6 MiB data URLs are queued through the begin builder. A data URL's MIME type is parsed out of the
+// whole decoded URL string, so a queued piece that kept that type uncopied would keep the URL alive
+// too. What the begins keep alive beyond their pool reservations is at most what the hold charged.
+func TestHoldChargesDataURLPieces(t *testing.T) {
+	rt, e := holdRuntime(t, HoldBytes, 1)
+	const n, size = 7, 6 << 20
+	live := liveAfter(func() {
+		for i := 0; i < n; i++ {
+			rt.doBegin(imageBegin(t, e, fmt.Sprintf("image-%d", i), size))
+		}
+	})
+	if d := nonZero(e.Stats.Dropped()); len(d) != 0 {
+		t.Fatalf("dropped %v, want none", d)
+	}
+	if _, b := queuedPieceBytes(rt); len(rt.writes) != n || b < n*size {
+		t.Fatalf("%d queued with %d piece bytes, want %d with at least %d", len(rt.writes), b, n, n*size)
+	}
+	hold, _ := rt.HoldBytes()
+	pool := e.Pool.Used()
+	t.Logf("live %.2f MiB, hold %.2f MiB, pool %.2f MiB", float64(live)/(1<<20), float64(hold)/(1<<20), float64(pool)/(1<<20))
+	if hold > HoldBytes || live-pool > hold {
+		t.Fatalf("queued begins keep %d bytes beyond their pool reservations, the hold charged %d (budget %d)", live-pool, hold, int64(HoldBytes))
 	}
 }
 
