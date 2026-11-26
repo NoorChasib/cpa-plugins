@@ -65,6 +65,8 @@ type stallResult struct {
 	Offered   int               // envelopes the exchanges would have stored without a stall
 	Stored    int               // envelopes in the outbox after the stop
 	Lost      int               // Offered - Stored
+	Counted   int               // whole-envelope losses the counters record (wholeLoss)
+	Shed      int               // bodies shed at admission, envelope kept as metadata (body_budget, handoff_full)
 	Dropped   map[string]uint64 // non-zero dropped counters
 	HookMax   time.Duration     // longest hook call
 	Stop      time.Duration     // the stop's duration (0 when the run did not stop)
@@ -134,9 +136,13 @@ func (r stallResult) String() string {
 	for _, k := range keys {
 		d = append(d, fmt.Sprintf("%s=%d", k, r.Dropped[k]))
 	}
-	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v backlog=%d drain_rate=%.0f/s svc_t0=%v svc_min{0.5s=%.0f/s,1s=%.0f/s,2s=%.0f/s} peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d peak_stream_kib=%d rule{matched=%d affected=%d max_wait=%v}",
-		r.Exchanges, r.Offered, r.Stored, r.Lost, strings.Join(d, ","), r.HookMax.Round(time.Microsecond), r.Stop.Round(time.Millisecond),
-		r.Drain.Round(time.Millisecond), r.Backlog, r.DrainRate, r.SvcT0.Round(time.Millisecond), r.SvcMin[0], r.SvcMin[1], r.SvcMin[2],
+	drain := r.Drain.Round(time.Millisecond).String()
+	if r.Drain < 0 {
+		drain = "never"
+	}
+	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d counted=%d shed=%d dropped{%s} hook_max=%v stop=%v drain=%s backlog=%d drain_rate=%.0f/s svc_t0=%v svc_min{0.5s=%.0f/s,1s=%.0f/s,2s=%.0f/s} peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d peak_stream_kib=%d rule{matched=%d affected=%d max_wait=%v}",
+		r.Exchanges, r.Offered, r.Stored, r.Lost, r.Counted, r.Shed, strings.Join(d, ","), r.HookMax.Round(time.Microsecond), r.Stop.Round(time.Millisecond),
+		drain, r.Backlog, r.DrainRate, r.SvcT0.Round(time.Millisecond), r.SvcMin[0], r.SvcMin[1], r.SvcMin[2],
 		float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.PeakStrm/1024,
 		r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
 }
@@ -314,10 +320,13 @@ func (r *stallRun) loadFor(d, every time.Duration) {
 	r.load(int(d/every), every)
 }
 
-// count returns the envelopes stored in the outbox (a superseded dead letter is not one).
+// count returns the envelopes stored in the outbox for the run's own exchanges, the calibration's
+// and the load's (a superseded dead letter is not one). Envelopes a test stores outside the load
+// (a WebSocket, say) are not offered, so they are not counted here either.
 func (r *stallRun) count() int {
 	var n int
-	if err := r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE NOT (state = 3 AND dead_reason IS 'superseded')`).Scan(&n); err != nil {
+	if err := r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE (key GLOB 'ex/cal-[0-9]*' OR key GLOB ?) AND NOT (state = 3 AND dead_reason IS 'superseded')`,
+		"ex/"+r.prefix+"-[0-9]*").Scan(&n); err != nil {
 		r.t.Fatalf("count: %v", err)
 	}
 	return n
@@ -333,22 +342,33 @@ func (r *stallRun) has(key string) bool {
 }
 
 // storedOf returns how many of the keys that load exchanges 1..upTo offer are stored. It names the
-// keys, so envelopes that later traffic stores cannot make up for lost older ones.
+// keys, so envelopes that later traffic stores cannot make up for lost older ones. Call it from the
+// test goroutine only; other goroutines use storedOfErr (t.Fatalf must not run off the test's own
+// goroutine).
 func (r *stallRun) storedOf(upTo int) int {
+	n, err := r.storedOfErr(upTo)
+	if err != nil {
+		r.t.Fatalf("storedOf: %v", err)
+	}
+	return n
+}
+
+// storedOfErr is storedOf returning its error, for the sweep's release and service goroutines.
+func (r *stallRun) storedOfErr(upTo int) (int, error) {
 	want := make(map[string]bool, len(r.suffixes))
 	for _, s := range r.suffixes {
 		want[s] = true
 	}
 	rows, err := r.db.Query(`SELECT key FROM envelopes WHERE key LIKE ? AND NOT (state = 3 AND dead_reason IS 'superseded')`, "ex/"+r.prefix+"-%")
 	if err != nil {
-		r.t.Fatalf("storedOf: %v", err)
+		return 0, err
 	}
 	defer rows.Close()
 	n := 0
 	for rows.Next() {
 		var k string
 		if err := rows.Scan(&k); err != nil {
-			r.t.Fatalf("storedOf: %v", err)
+			return 0, err
 		}
 		rest := strings.TrimPrefix(k, "ex/"+r.prefix+"-")
 		i := strings.IndexByte(rest, '/')
@@ -360,7 +380,7 @@ func (r *stallRun) storedOf(upTo int) int {
 			n++
 		}
 	}
-	return n
+	return n, rows.Err()
 }
 
 // wholeLoss sums the dropped counters that stand for a whole envelope not stored. A body shed at
@@ -370,17 +390,30 @@ func (r *stallRun) wholeLoss() int {
 	return int(d["disk_hard"] + d["stopped"] + d["control_full"] + d["duplicate_key"] + d["encode_error"])
 }
 
+// shed sums the counters of bodies shed at admission whose envelope is kept (as metadata): they
+// are neither stored losses nor part of stored + counted = offered.
+func (r *stallRun) shed() int {
+	d := r.h.Plugin.Engine().Stats.Dropped()
+	return int(d["body_budget"] + d["handoff_full"])
+}
+
 // settle waits until every envelope the run offered is accounted for, stored or counted as a
 // whole-envelope loss, and returns the stored count. That is the drain signal: a quiet period is
 // not one once a writer may back off for seconds. A run that loses an envelope without a counter
-// never settles, and fails here.
+// never settles, and fails here. Call it once the load has ended. The equation is exact: stored
+// plus counted above offered means an envelope was both stored and counted (or counted twice),
+// which fails at once instead of passing as settled.
 func (r *stallRun) settle() int {
 	r.t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		offered := (int(r.n.Load()) + 2) * r.perEx
-		if n := r.count(); n+r.wholeLoss() >= offered {
+		n := r.count() // stored first: an envelope never moves from stored to counted
+		switch c := r.wholeLoss(); {
+		case n+c == offered:
 			return n
+		case n+c > offered:
+			r.t.Fatalf("stored %d plus counted %d is more than offered %d: an envelope was both stored and counted, or counted twice", n, c, offered)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -426,8 +459,9 @@ func (r *stallRun) holdOther() (*diskstall.Handle, func()) {
 	if !h.WaitFor(5*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		r.t.Fatal("the holder's commit never reached the held sync")
 	}
-	// The gate is directory-wide: check that the held sync is the holder's, not the writer's.
-	if !stackHas("(*Outbox).SaveOpenRequests") || stackHas("(*Runtime).flush", "(*Outbox).Write") {
+	// The gate is directory-wide: check that the goroutine held at it is the holder's, not the
+	// writer's or the uploader's.
+	if !heldIn("(*Outbox).SaveOpenRequests") {
 		r.t.Fatal("the held sync is not the synthetic holder's commit")
 	}
 	var once sync.Once
@@ -457,7 +491,7 @@ func (r *stallRun) holdCapture() (*diskstall.Handle, func()) {
 	if !h.WaitFor(5*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		r.t.Fatal("the capture commit never reached the held sync")
 	}
-	if !stackHas("(*Runtime).flush", "(*Outbox).Write") {
+	if !heldIn("(*Runtime).flush", "(*Outbox).Write") {
 		r.t.Fatal("the held sync is not the capture writer's commit")
 	}
 	var once sync.Once
@@ -482,6 +516,7 @@ func (r *stallRun) result(h *diskstall.Handle, stop time.Duration) stallResult {
 	res.Offered = (res.Exchanges + 2) * r.perEx // the two calibration exchanges are stored too
 	res.Stored = r.count()
 	res.Lost = res.Offered - res.Stored
+	res.Counted, res.Shed = r.wholeLoss(), r.shed()
 	for k, v := range r.h.Plugin.Engine().Stats.Dropped() {
 		if v != 0 {
 			res.Dropped[k] = v
@@ -617,6 +652,9 @@ func TestStallHarnessStopWaitsForStalledMaintenance(t *testing.T) {
 	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		t.Fatal("maintenance's checkpoint never reached the held main-database sync")
 	}
+	if !heldIn("(*Outbox).Maintain") {
+		t.Fatalf("the held main-database sync is not maintenance's checkpoint: held %s", heldFuncs())
+	}
 	stallEnd := time.Now().Add(5 * time.Second)
 	time.AfterFunc(time.Until(stallEnd), release)
 	stop := r.shutdown()
@@ -646,6 +684,92 @@ func stackHas(subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// heldStacks returns, for each goroutine held at a diskstall Hold gate, its stack joined with the
+// stacks of the goroutines that created it through go-sqlite3: a statement run with a cancellable
+// context runs in a goroutine go-sqlite3 starts ((*SQLiteStmt).exec), so the caller's frames
+// (Maintain, CloseContext, ...) are in its creator, linked by "created by ... in goroutine N".
+func heldStacks() []string {
+	buf := make([]byte, 16<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	byID := map[string]string{}
+	var held []string
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		var id string
+		if _, err := fmt.Sscanf(g, "goroutine %s", &id); err == nil {
+			byID[id] = g
+		}
+		if strings.Contains(g, "diskstall.(*Handle).hold") {
+			held = append(held, g)
+		}
+	}
+	for i, g := range held {
+		cur := g
+		for range 8 {
+			j := strings.Index(cur, "created by github.com/mattn/go-sqlite3.")
+			if j < 0 {
+				break
+			}
+			var parent string
+			if k := strings.Index(cur[j:], " in goroutine "); k >= 0 {
+				fmt.Sscan(cur[j+k+len(" in goroutine "):], &parent)
+			}
+			p, ok := byID[parent]
+			if !ok {
+				break
+			}
+			held[i] += "\n" + p
+			cur = p
+		}
+	}
+	return held
+}
+
+// heldIn reports whether a goroutine held at a diskstall Hold gate (with its go-sqlite3 creators)
+// shows every one of subs: the caller blocked inside the VFS, not merely a goroutine that exists
+// elsewhere with those frames (a writer waiting for the connection behind another holder also
+// shows flush and Write).
+func heldIn(subs ...string) bool {
+	for _, g := range heldStacks() {
+		all := true
+		for _, sub := range subs {
+			if !strings.Contains(g, sub) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// heldFuncs lists, for each goroutine held at a diskstall Hold gate, its function names innermost
+// first and then its go-sqlite3 creators' (no file paths or arguments), for failure messages.
+func heldFuncs() string {
+	var out []string
+	for _, g := range heldStacks() {
+		var fns []string
+		for _, l := range strings.Split(g, "\n") {
+			if strings.HasPrefix(l, "goroutine ") || strings.HasPrefix(l, "created by ") {
+				continue
+			}
+			if l == "" || strings.HasPrefix(l, "\t") {
+				continue
+			}
+			if i := strings.LastIndexByte(l, '('); i > 0 {
+				l = l[:i]
+			}
+			if j := strings.LastIndexByte(l, '/'); j >= 0 {
+				l = l[j+1:]
+			}
+			fns = append(fns, l)
+		}
+		out = append(out, strings.Join(fns, " < "))
+	}
+	return strings.Join(out, "; ")
 }
 
 // ownedNow reports whether the outbox's flock is still held, by trying it on a new open file
@@ -694,8 +818,8 @@ func TestStallHarnessStopWaitsForStalledClose(t *testing.T) {
 	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		t.Fatal("the close's checkpoint never reached the held main-database sync")
 	}
-	if !closing.Load() || !stackHas("(*Outbox).CloseContext") {
-		t.Fatal("the held main-database sync is not the stop's close")
+	if !closing.Load() || !heldIn("(*Outbox).CloseContext") {
+		t.Fatalf("the held main-database sync is not the stop's close: held %s", heldFuncs())
 	}
 	stallEnd := time.Now().Add(4 * time.Second)
 	time.AfterFunc(time.Until(stallEnd), release)
@@ -740,7 +864,7 @@ func TestStallHarnessStopWaitsForStalledSnapshot(t *testing.T) {
 	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting >= 1 }) {
 		t.Fatal("no outbox read reached the hold")
 	}
-	if !stackHas("(*Plugin).stopRuntime", "(*Plugin).refreshSnapshot", "(*Outbox).Stats") {
+	if !heldIn("(*Plugin).stopRuntime", "(*Plugin).refreshSnapshot", "(*Outbox).Stats") {
 		t.Fatal("the held read is not the stop's snapshot")
 	}
 	stallEnd := time.Now().Add(4 * time.Second)
@@ -786,7 +910,7 @@ func TestStallHarnessStopWaitsForStalledOpenRetry(t *testing.T) {
 	if !hd.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
 		t.Fatal("the retried open never reached the held sync")
 	}
-	if !stackHas("outbox.OpenContext") {
+	if !heldIn("outbox.OpenContext") {
 		t.Fatal("the held sync is not the retried open's")
 	}
 	stallEnd := time.Now().Add(4 * time.Second)
@@ -915,8 +1039,8 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 // CA_STALL_SWEEP_BURST offers that many extra exchanges back to back just before the release (a late
 // burst, part of the backlog). Each run also reports the finite-window service after the release
 // (svc_t0, svc_min; see stallResult). It asserts
-// nothing beyond the runs completing and every envelope being stored or counted; it logs one line
-// per run.
+// nothing beyond the runs completing and stored + counted = offered exactly (counted: whole-envelope
+// losses; shed bodies are reported apart, as shed); it logs one line per run.
 func TestStallHarnessSweep(t *testing.T) {
 	if os.Getenv("CA_STALL_SWEEP") != "1" {
 		t.Skip("set CA_STALL_SWEEP=1 to run the stall sweep")
@@ -986,22 +1110,36 @@ func TestStallHarnessSweep(t *testing.T) {
 				// Drain: from the release until every key of the exchanges offered before it is
 				// stored, named key by key (later traffic cannot stand in for a lost key); -1 when
 				// that never happens before the load ends (part of the backlog was lost).
+				// The release and the service sampler run off the test goroutine, so they never call
+				// t.Fatalf: an error is carried back in sampleErr (written before the one send on
+				// drained, read after it) and fails the run here.
 				drained, quit := make(chan time.Duration, 1), make(chan struct{})
 				var backlog atomic.Int64
 				var samples []svcSample // written by the drain goroutine, read after drained
-				time.AfterFunc(stall, func() {
+				var sampleErr error
+				tm := time.AfterFunc(stall, func() {
 					for i := 0; i < burst; i++ { // a late burst, back to back
 						r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1)))
 					}
 					upTo := int(r.n.Load()) - 1 // the exchange in flight may be partial
 					at := time.Now()
-					before := r.storedOf(upTo)
+					before, err := r.storedOfErr(upTo)
 					backlog.Store(int64(upTo*r.perEx - before))
 					release()
+					if err != nil {
+						sampleErr = err
+						drained <- -1
+						return
+					}
 					go func() {
 						samples = append(samples, svcSample{0, before})
 						for {
-							n := r.storedOf(upTo)
+							n, err := r.storedOfErr(upTo)
+							if err != nil {
+								sampleErr = err
+								drained <- -1
+								return
+							}
 							samples = append(samples, svcSample{time.Since(at), n})
 							if n >= upTo*r.perEx {
 								drained <- time.Since(at)
@@ -1017,10 +1155,17 @@ func TestStallHarnessSweep(t *testing.T) {
 					}()
 				})
 				r.loadFor(stall+tail, 100*time.Millisecond)
+				if tm.Stop() { // the release never ran: run it, and there is no drain to measure
+					release()
+					drained <- -1
+				}
 				r.settle()
 				close(quit)
 				res := r.result(h, 0)
 				res.Drain, res.Backlog = <-drained, int(backlog.Load())
+				if sampleErr != nil {
+					t.Fatalf("the sweep's release or service sampler failed: %v", sampleErr)
+				}
 				if res.Drain > 0 {
 					res.DrainRate = float64(res.Backlog) / res.Drain.Seconds()
 					res.SvcT0, res.SvcMin = service(samples)
@@ -1040,6 +1185,9 @@ func TestStallHarnessSweep(t *testing.T) {
 			stop := r.shutdown()
 			res := r.result(h, stop)
 			t.Logf("stop during capture commit stall=%ds budget=%v %v", s, plugin.StopTimeout, res)
+			if res.Stored+res.Counted != res.Offered {
+				t.Errorf("stored %d + counted %d != offered %d", res.Stored, res.Counted, res.Offered)
+			}
 		})
 		t.Run(fmt.Sprintf("stop-other-%ds", s), func(t *testing.T) {
 			r := newStallRun(t)
@@ -1049,6 +1197,9 @@ func TestStallHarnessSweep(t *testing.T) {
 			stop := r.shutdown()
 			res := r.result(h, stop)
 			t.Logf("stop during other commit stall=%ds budget=%v %v", s, plugin.StopTimeout, res)
+			if res.Stored+res.Counted != res.Offered {
+				t.Errorf("stored %d + counted %d != offered %d", res.Stored, res.Counted, res.Offered)
+			}
 		})
 	}
 }
