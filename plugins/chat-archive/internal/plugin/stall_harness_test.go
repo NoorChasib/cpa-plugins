@@ -860,7 +860,7 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 
 // TestStallHarnessSweep measures 0.1.5 across stall lengths and holders, for the 0.1.6 design. It
 // takes minutes, so it runs only with CA_STALL_SWEEP=1. CA_STALL_SWEEP_S (a comma list of stall
-// seconds) picks lengths, CA_STALL_SWEEP_HOLDERS (a comma list of capture, other, fail and stop)
+// seconds) picks lengths, CA_STALL_SWEEP_HOLDERS (a comma list of capture, other, writemu, fail and stop)
 // picks holders, CA_STALL_SWEEP_BODY_KIB and CA_STALL_SWEEP_RESP_KIB set each exchange's request and
 // response text sizes for a body-heavy load, CA_STALL_SWEEP_SYNC_MS delays every outbox fsync for
 // the whole run (a slow disk, to measure how long the backlog takes to drain and at what rate), and
@@ -901,8 +901,9 @@ func TestStallHarnessSweep(t *testing.T) {
 		}
 	}
 	// capture: the writer's own commit stalls; other: another write-connection user's commit
-	// stalls and the writer waits for the connection; fail: every WAL write and sync fails
-	// (SQLITE_IOERR) for the whole period.
+	// stalls and the writer waits for the connection; writemu: a transaction holding the outbox's
+	// write mutex (a replay) stalls and the writer waits on the mutex; fail: every WAL write and
+	// sync fails (SQLITE_IOERR) for the whole period.
 	for _, holder := range holders {
 		if holder == "stop" {
 			continue
@@ -922,6 +923,8 @@ func TestStallHarnessSweep(t *testing.T) {
 					h, release = r.holdCapture()
 				case "other":
 					h, release = r.holdOther()
+				case "writemu":
+					h, release = r.holdWriteMu()
 				default:
 					h = r.arm(diskstall.Rule{Ops: diskstall.Write | diskstall.Sync, Files: diskstall.WAL, Fail: diskstall.IOErr})
 					release = h.Disarm
