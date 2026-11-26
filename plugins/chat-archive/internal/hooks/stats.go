@@ -32,7 +32,7 @@ func (h Hook) String() string { return hookNames[h] }
 // the outbox skipped because their key was already queued: the envelope it skipped is not stored.
 var DroppedNames = []string{"body_budget", "handoff_full", "control_full", "usage_queue", "stream_overflow",
 	"mask_timeout", "oversize", "oversize_rpc", "parse_error", "disk_guard", "outbox_cap", "disk_hard",
-	"encode_error", "stopped", "media_fetch", "duplicate_key", "hold_oversize"}
+	"encode_error", "stopped", "media_fetch", "duplicate_key", "hold_oversize", "storage_unavailable"}
 
 // OtherNames are plugin counters that are not drops. recovered_refused counts the saved counters of an
 // earlier boot that the archive refused for good, so they were deleted unreported (uploader).

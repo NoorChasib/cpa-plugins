@@ -272,9 +272,14 @@ func (p *Plugin) startRuntime(cfg config.Config) {
 		p.setState(StateUnconfigured, why)
 		return
 	}
+	// Capture is configured on: until startWith opens admission, hooks pass through and each one a
+	// running runtime would have admitted is counted dropped.storage_unavailable. Published before
+	// the secret resolution and the outbox open, so a slow first open after a reconfigure from off
+	// is counted too, not lost silently.
+	unavailable := &hooks.Config{Capture: config.CaptureOff, MaxRPC: cfg.MaxRPCMiB << 20, Unavailable: cfg.Capture}
+	e.SetConfig(unavailable)
 	secrets, err := cfg.Resolve()
 	if err != nil {
-		e.SetConfig(&hooks.Config{Capture: config.CaptureOff, MaxRPC: cfg.MaxRPCMiB << 20})
 		p.setState(StateConfigError, "secret_unavailable")
 		return
 	}
@@ -290,9 +295,9 @@ func (p *Plugin) startRuntime(cfg config.Config) {
 		MinFreePercent: cfg.MinFreePercent, Retention: time.Duration(cfg.ReplayRetentionHours) * time.Hour}
 	ob, err := outbox.Open(opts)
 	if err != nil {
-		// Capture stays off (hooks pass through) while a background loop retries the open, so
-		// one failed open never leaves the plugin unavailable until the next config change.
-		e.SetConfig(&hooks.Config{Capture: config.CaptureOff, MaxRPC: cfg.MaxRPCMiB << 20})
+		// Capture stays off (hooks pass through, counted storage_unavailable) while a background
+		// loop retries the open, so one failed open never leaves the plugin unavailable until the
+		// next config change.
 		p.setState(StateUnavailable, "outbox_unavailable")
 		p.startOpenRetry(cfg, secrets, opts)
 		return

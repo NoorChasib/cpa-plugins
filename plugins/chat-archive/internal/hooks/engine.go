@@ -57,6 +57,11 @@ type Config struct {
 	HMACKeyID  string
 	HMACKey    []byte
 	Labels     LabelCache
+	// Unavailable is the configured capture mode (full or metadata) while capture is configured on
+	// but no runtime accepts hooks (the secret, the working directory or the outbox is unavailable,
+	// or a start has not finished): each hook call a running runtime would have admitted is counted
+	// dropped.storage_unavailable. Empty counts nothing (capture off, or not configured).
+	Unavailable string
 }
 
 // LabelCache is the label loop's in-memory cache as usage.handle reads it.
@@ -573,16 +578,33 @@ func minNonZero(a, b int64) int64 {
 	return min(a, b)
 }
 
-func (e *Engine) admit() bool {
+func (e *Engine) admit() bool { return e.admitEvent(false) }
+
+// admitEvent opens an admitted section for one hook call. While stopping, the call is counted
+// stopped; while stopped with capture still configured on (between a stop and the next start, or a
+// final stop before the config goes off) it is counted storage_unavailable, a payload chunk (chunk)
+// only in full capture.
+func (e *Engine) admitEvent(chunk bool) bool {
 	e.inflight.Add(1)
-	if e.state.Load() != StateRunning {
+	if s := e.state.Load(); s != StateRunning {
 		e.inflight.Add(-1)
-		if e.state.Load() == StateStopping {
+		switch cfg := e.cfg.Load(); {
+		case s == StateStopping:
 			e.Stats.Drop("stopped")
+		case cfg.Configured && (cfg.Capture == "full" || (cfg.Capture == "metadata" && !chunk)):
+			e.Stats.Drop("storage_unavailable")
 		}
 		return false
 	}
 	return true
+}
+
+// unavailable counts one hook call as storage_unavailable when cfg says capture is configured on
+// but unavailable; a payload chunk (chunk) counts only in full capture, which takes chunks.
+func (e *Engine) unavailable(cfg *Config, chunk bool) {
+	if cfg.Unavailable == "full" || (cfg.Unavailable == "metadata" && !chunk) {
+		e.Stats.Drop("storage_unavailable")
+	}
 }
 
 func (e *Engine) leave() { e.inflight.Add(-1) }

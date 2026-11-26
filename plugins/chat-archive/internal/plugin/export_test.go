@@ -13,3 +13,6 @@ func SetCloseOutbox(t *testing.T, f func(*outbox.Outbox, context.Context) error)
 	closeOutbox = f
 	t.Cleanup(func() { closeOutbox = old })
 }
+
+// SetDefaultDataDir replaces the plugin's default data directory (empty: no working directory).
+func SetDefaultDataDir(p *Plugin, dir string) { p.defaultDataDir = dir }

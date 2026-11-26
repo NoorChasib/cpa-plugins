@@ -86,6 +86,9 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 	}
 	out := okClear(headers.ArchiveHeaderNames(req.Headers))
 	defer e.finish(HookBeforeAuth, req.RequestID, start)
+	if !cfg.Configured && req.RequestID != "" {
+		e.unavailable(cfg, false)
+	}
 	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" || !e.admit() {
 		return out
 	}
@@ -171,6 +174,9 @@ func (e *Engine) AfterAuth(raw []byte) []byte {
 		return OK
 	}
 	defer e.finish(HookAfterAuth, req.RequestID, start)
+	if !cfg.Configured && req.RequestID != "" {
+		e.unavailable(cfg, false)
+	}
 	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" || !e.admit() {
 		return OK
 	}
@@ -219,6 +225,9 @@ func (e *Engine) Response(raw []byte) []byte {
 		return OK
 	}
 	defer e.finish(HookResponse, req.RequestID, start)
+	if !cfg.Configured && req.RequestID != "" && !(req.OriginalAbsent && modelDirectory(req.Model, req.RequestedModel, req.Meta)) {
+		e.unavailable(cfg, false) // a model-directory call would have been ignored
+	}
 	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" {
 		return OK
 	}
@@ -330,7 +339,11 @@ func (e *Engine) StreamChunk(raw []byte) []byte {
 		hook = HookStreamHeaderInit
 	}
 	defer e.finish(hook, req.RequestID, start)
-	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" || !e.admit() {
+	payload := req.ChunkIndex != protocol.StreamHeaderInit
+	if !cfg.Configured && req.RequestID != "" {
+		e.unavailable(cfg, payload)
+	}
+	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" || !e.admitEvent(payload) {
 		return OK
 	}
 	defer e.leave()
@@ -435,6 +448,9 @@ func (e *Engine) Complete(raw []byte) []byte {
 		return OK
 	}
 	e.finish(HookLifecycle, req.RequestID, start)
+	if !cfg.Configured && req.RequestID != "" && !modelDirectory(req.Model, req.RequestedModel, req.Meta) {
+		e.unavailable(cfg, false) // a model-directory completion would have been ignored
+	}
 	if !cfg.Configured || cfg.Capture == "off" || req.RequestID == "" {
 		return OK
 	}
@@ -469,6 +485,9 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 	if len(raw) > protocol.MaxUsage {
 		e.Stats.Drop("oversize_rpc")
 		return OK
+	}
+	if !cfg.Configured {
+		e.unavailable(cfg, false)
 	}
 	if !cfg.Configured || cfg.Capture == "off" {
 		return OK
