@@ -505,7 +505,8 @@ func (e *Engine) UsageHook(raw []byte) []byte {
 	}
 	defer e.leave()
 	// The record reserves its bytes from the usage budget whole; when it does not fit it sheds its failure body, then
-	// its response headers, and a record that does not fit even bare is dropped whole. Each step counts usage_queue once.
+	// its response headers, and a record that does not fit even bare is dropped whole. A failed whole reservation counts
+	// usage_queue once, however many steps follow; a full usage channel drops the record and counts it once more.
 	// Every step charges the metadata the record keeps (usageMetaBytes), whose fields have no cap of their own.
 	meta := usageMetaBytes(&rec)
 	size := int64(len(rec.FailureBody)) + headerBytes(rec.ResponseHeaders) + meta
