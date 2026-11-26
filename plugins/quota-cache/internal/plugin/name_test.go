@@ -11,9 +11,12 @@ import (
 // CPA's Plugins page shows the name a plugin registers with, so it is the
 // catalog's display name; the ID keeps keying the configuration and routes.
 func TestRegistersItsDisplayName(t *testing.T) {
+	// The temporary directory comes first: cleanups run last in, first out,
+	// so the plugin shuts down, waiting for its writers, before the directory
+	// is removed.
+	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
 	p := New(newRefreshHost())
 	t.Cleanup(p.Shutdown)
-	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
 	raw, err := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("cache-path: " + path + "\nrequest-spacing: 1s\n")})
 	if err != nil {
 		t.Fatal(err)

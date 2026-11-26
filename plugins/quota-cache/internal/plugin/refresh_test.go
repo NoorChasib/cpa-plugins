@@ -369,9 +369,12 @@ func TestARefreshFileThatCouldNotBeOpenedIsWarnedOncePerChange(t *testing.T) {
 func refreshPlugin(t *testing.T) (*Plugin, *refreshHost, string) {
 	t.Helper()
 	host := newRefreshHost()
+	// The temporary directory comes first: cleanups run last in, first out,
+	// so the plugin shuts down, waiting for its writers, before the directory
+	// is removed.
+	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
 	p := New(host)
 	t.Cleanup(p.Shutdown)
-	path := filepath.Join(t.TempDir(), "cache", "snapshot.json")
 	raw, _ := json.Marshal(protocol.LifecycleRequest{SchemaVersion: 6, ConfigYAML: []byte("cache-path: " + path + "\nrequest-spacing: 1s\n")})
 	if _, err := p.Handle(protocol.MethodPluginRegister, raw); err != nil {
 		t.Fatal(err)
