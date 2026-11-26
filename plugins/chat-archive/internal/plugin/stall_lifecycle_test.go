@@ -7,7 +7,9 @@ package plugin_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,5 +277,57 @@ func TestStallHarnessStopWaitsForWriterOnWriteMu(t *testing.T) {
 	}
 	if res.Lost == 0 || uint64(res.Lost) != res.Dropped["stopped"] {
 		t.Fatalf("want the queued work and the group on the mutex lost and counted stopped: %v", res)
+	}
+}
+
+// TestStallHarnessCheckpointModes measures, for the design's maintenance-checkpoint choice, how long
+// wal_checkpoint(TRUNCATE) and wal_checkpoint(PASSIVE) hold a connection after the same body-heavy
+// load on a slow disk (every outbox fsync delayed CA_STALL_SWEEP_SYNC_MS, default 80 ms), and how
+// many syncs each issues. In the plugin the checkpoint runs on the single write connection, so its
+// duration is what the capture writer waits. Opt-in (CA_STALL_SWEEP=1); it logs, asserts nothing.
+func TestStallHarnessCheckpointModes(t *testing.T) {
+	if os.Getenv("CA_STALL_SWEEP") != "1" {
+		t.Skip("set CA_STALL_SWEEP=1 to run the checkpoint measurement")
+	}
+	syncMS := 80
+	if s := os.Getenv("CA_STALL_SWEEP_SYNC_MS"); s != "" {
+		fmt.Sscan(s, &syncMS)
+	}
+	setVar(t, &plugin.GCEvery, time.Hour) // no maintenance checkpoint during the load
+	for _, mode := range []string{"TRUNCATE", "PASSIVE", "TRUNCATE", "PASSIVE"} {
+		t.Run(mode, func(t *testing.T) {
+			r := newStallRun(t)
+			r.withBody(64)
+			r.withResponse(64)
+			r.arm(diskstall.Rule{Ops: diskstall.Sync, Delay: time.Duration(syncMS) * time.Millisecond})
+			r.loadFor(10*time.Second, 100*time.Millisecond)
+			r.settle()
+			r.quiet()
+			count := r.arm(diskstall.Rule{Ops: diskstall.Sync}) // counts syncs (no wait)
+			u := url.URL{Scheme: "file", Path: r.ob.Path(), RawQuery: "_busy_timeout=10000"}
+			db, err := sql.Open("sqlite3", u.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var walBefore int64
+			if fi, err := os.Stat(r.ob.Path() + "-wal"); err == nil {
+				walBefore = fi.Size()
+			}
+			before := count.Stats().Matched
+			start := time.Now()
+			var busy, logFrames, ckpt int
+			if err := db.QueryRow("PRAGMA wal_checkpoint("+mode+")").Scan(&busy, &logFrames, &ckpt); err != nil {
+				t.Fatal(err)
+			}
+			d := time.Since(start)
+			var walAfter int64
+			if fi, err := os.Stat(r.ob.Path() + "-wal"); err == nil {
+				walAfter = fi.Size()
+			}
+			t.Logf("mode=%s sync_ms=%d checkpoint=%v syncs=%d busy=%d frames=%d checkpointed=%d wal_kib_before=%d wal_kib_after=%d",
+				mode, syncMS, d.Round(time.Millisecond), count.Stats().Matched-before, busy, logFrames, ckpt, walBefore/1024, walAfter/1024)
+			r.result(nil, 0)
+		})
 	}
 }
