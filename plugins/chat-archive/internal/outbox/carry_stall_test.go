@@ -68,3 +68,44 @@ func TestCarryStampPrecedesStalledCommit(t *testing.T) {
 		t.Fatalf("the take found %d rows; 0.1.5 stamps the save before its stalled commit, so none is fresh", len(nums))
 	}
 }
+
+// TestCarryAdoptableAcrossInterveningRun pins the K10 carry-binding gap (design revision 4): saved
+// carry rows record only saved_at, not the run that produced them. A run that opened the outbox and
+// took no carry (its take failed, or it never reached it) leaves the first run's rows in place, and
+// a third run opening within the max age adopts them, although the second run came between and
+// may have stored newer keys from that numbering.
+func TestCarryAdoptableAcrossInterveningRun(t *testing.T) {
+	ctx := context.Background()
+	c := &lockedClock{t: time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)}
+	dir := filepath.Join(t.TempDir(), "data")
+	open := func() *Outbox {
+		o, err := Open(Options{Dir: dir, CapBytes: 1 << 40, Retention: 168 * time.Hour, Now: c.now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	first := open()
+	if _, err := first.SaveCarry(ctx, []OpenRequest{{RequestID: "carry-chain", NextInputSeq: 1, NextResponse: 1}},
+		[]Numbering{{RequestID: "carry-chain", NextInputSeq: 1, NextResponse: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	c.add(10 * time.Second)
+	second := open() // a run that never took the carry
+	second.Close()
+	c.add(10 * time.Second)
+	third := open()
+	defer third.Close()
+	reqs, err := third.TakeOpenRequests(ctx, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nums, err := third.TakeNumbering(ctx, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 1 || len(nums) != 1 {
+		t.Fatalf("the third run took %d open requests and %d numbering rows; 0.1.5 adopts the first run's carry past an intervening run", len(reqs), len(nums))
+	}
+}
