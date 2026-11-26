@@ -135,8 +135,8 @@ func TestHoldWriteOverCeilingCounted(t *testing.T) {
 
 // TestHoldSplitOverCeilingShedsBody: a begin whose gzip body decodes to far more than its
 // reservation (4 × the compressed size), past the ceiling, keeps its envelope as metadata only:
-// the body is counted body_budget, nothing is counted hold_oversize, and the reservation is
-// handed to the writer with the metadata envelope.
+// the body is counted body_budget, nothing is counted hold_oversize, and the metadata envelope
+// keeps only its own bytes of the reservation for the writer (the rest is returned at once).
 func TestHoldSplitOverCeilingShedsBody(t *testing.T) {
 	rt, e := holdRuntime(t, HoldBytes, 1)
 	text := strings.Repeat("synthetic highly compressible text ", (40<<20)/35)
@@ -161,8 +161,8 @@ func TestHoldSplitOverCeilingShedsBody(t *testing.T) {
 	if err := json.Unmarshal(r.env.Body, &eb); err != nil || eb.Body.Dropped != wire.DroppedBodyBudget || len(r.env.Pieces) != 0 {
 		t.Fatalf("begin body dropped %q with %d pieces (%v), want metadata only", eb.Body.Dropped, len(r.env.Pieces), err)
 	}
-	if e.Pool.Used() != need {
-		t.Fatalf("pool %d, want the reservation %d still held for the writer", e.Pool.Used(), need)
+	if kept := e.Pool.Used(); kept < retainedBytes(r.env, 0) || kept > retainedBytes(r.env, 0)+4096 || kept >= need {
+		t.Fatalf("pool %d, want the metadata envelope's retained %d of the reservation %d", kept, retainedBytes(r.env, 0), need)
 	}
 	rt.finished(r)
 	if e.Pool.Used() != 0 {
@@ -467,7 +467,7 @@ func TestHoldChargesDataURLPieces(t *testing.T) {
 
 // TestHoldSpeechCeiling: at the per-envelope ceiling, a deflate speech response whose decoded
 // body would hold more than HoldEnvelopeMax is written as metadata only (body_budget, never
-// hold_oversize) with its reservation handed to the writer; one just under it is queued with its
+// hold_oversize) with what it retains of its reservation handed to the writer; one just under it is queued with its
 // body, and what it keeps alive beyond its reservation stays within its charge.
 func TestHoldSpeechCeiling(t *testing.T) {
 	rt, e := holdRuntime(t, HoldBytes, 1)
@@ -481,8 +481,8 @@ func TestHoldSpeechCeiling(t *testing.T) {
 	if err := json.Unmarshal(r.env.Body, &er); err != nil || er.Body.Dropped != wire.DroppedBodyBudget || len(r.env.Pieces) != 0 {
 		t.Fatalf("response body dropped %q with %d pieces (%v), want metadata only", er.Body.Dropped, len(r.env.Pieces), err)
 	}
-	if e.Pool.Used() != over.Reserved && over.Reserved > 0 {
-		t.Fatalf("pool %d, want the reservation %d handed to the writer", e.Pool.Used(), over.Reserved)
+	if kept := e.Pool.Used(); kept < retainedBytes(r.env, 0) || kept > retainedBytes(r.env, 0)+4096 {
+		t.Fatalf("pool %d, want the metadata envelope's retained %d handed to the writer", kept, retainedBytes(r.env, 0))
 	}
 	rt.finished(r)
 	if now, _ := rt.HoldBytes(); now != 0 || e.Pool.Used() != 0 {

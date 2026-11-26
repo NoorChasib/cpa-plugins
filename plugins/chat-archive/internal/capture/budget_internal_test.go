@@ -12,9 +12,10 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/mask"
 )
 
-// TestBodyReservationHeldUntilWritten: a begin's content-pool reservation travels with its
-// envelope to the writer and is released only after the outbox transaction, so a slow writer
-// cannot hold pieces outside every budget while hooks admit new bodies into the freed pool.
+// TestBodyReservationHeldUntilWritten: the part of a begin's content-pool reservation that its
+// envelope retains travels with the envelope to the writer and is released only after the outbox
+// transaction, so a slow writer cannot hold pieces outside every budget while hooks admit new
+// bodies into the freed pool.
 func TestBodyReservationHeldUntilWritten(t *testing.T) {
 	e := hooks.NewEngine()
 	ob, err := outbox.Open(outbox.Options{Dir: filepath.Join(t.TempDir(), "data"), CapBytes: 1 << 40, Retention: time.Hour})
@@ -36,10 +37,10 @@ func TestBodyReservationHeldUntilWritten(t *testing.T) {
 	b := &hooks.Begin{Req: protocol.BeforeAuth{RequestID: "budget-1", SourceFormat: "claude", Body: body, BodyLen: len(body)},
 		ObservedAt: time.Now(), Reserved: need}
 	rt.doBegin(b)
-	if got := e.Pool.Used(); got != need {
-		t.Fatalf("pool after the worker handed the begin over = %d, want %d (held until written)", got, need)
-	}
 	r := <-rt.writes
+	if got, want := e.Pool.Used(), min(need, retainedBytes(r.env, 0)); got < want || got > need {
+		t.Fatalf("pool after the worker handed the begin over = %d, want what the envelope retains (%d, at most the reservation %d) held until written", got, want, need)
+	}
 	rt.flush([]writeReq{r})
 	if got := e.Pool.Used(); got != 0 {
 		t.Fatalf("pool after the writer committed = %d", got)

@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,11 +77,12 @@ type Runtime struct {
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
-// counted against (the body's content-pool reservation, or a usage item's queue bytes), and held
-// is what it reserved from the hold budget for the bytes it keeps beyond that; the writer returns
-// both after the outbox transaction that wrote the envelope returned, or when it drops the
-// envelope, so a queued envelope's pieces and the writer's compressed copies stay inside the
-// budgets until they are on disk.
+// counted against (what is left of the body's content-pool reservation once trimKept cut it down to
+// the bytes the envelope retains, or a usage item's queue bytes), and held is what it reserved from
+// the hold budget for the bytes it keeps beyond that; the writer returns both after the outbox
+// transaction that wrote the envelope returned, or when it drops the envelope, so a queued
+// envelope's pieces stay inside the budgets until they are on disk. The writer's compressed copy
+// is made for one piece or envelope at a time while it inserts it and is garbage once inserted.
 type writeReq struct {
 	env     outbox.NewEnvelope
 	commit  func(inserted bool)
@@ -304,6 +306,21 @@ func (rt *Runtime) poolRelease(n int64) func() {
 	return func() { p.Release(n) }
 }
 
+// trimKept releases a built envelope's content-pool reservation down to the bytes the envelope
+// retains (retainedBytes) and returns what is left, which the writer releases once the envelope is
+// written or dropped. The reservation (BodyReserveFactor times the raw body, plus its decoded
+// headers) covers the raw body, the decoded body and the split while the worker builds; once the
+// envelope is built only its own bytes stay alive, so a queued begin or response holds about its
+// envelope's size in the pool during a stall instead of four times its body. When the envelope
+// retains more than its reservation, the whole reservation is kept and the hold budget charges the
+// rest (heldBytes). The caller drops its references to the raw body, the headers and the split
+// before calling it, so nothing the released bytes covered stays reachable.
+func (rt *Runtime) trimKept(reserved int64, env outbox.NewEnvelope, extra int64) int64 {
+	keep := min(reserved, retainedBytes(env, extra))
+	rt.opts.Engine.Pool.Release(reserved - keep)
+	return keep
+}
+
 func (rt *Runtime) doBegin(b *hooks.Begin) {
 	e := rt.opts.Engine
 	written := false
@@ -340,6 +357,8 @@ func (rt *Runtime) doBegin(b *hooks.Begin) {
 			return
 		}
 	}
+	b.Req.Body, b.Req.Headers = nil, nil
+	reserved = rt.trimKept(reserved, env, commit.bytes())
 	handed = true
 	written = rt.write(env, rt.beginCommitted(commit), rt.poolRelease(reserved), reserved, commit.bytes())
 }
@@ -387,6 +406,12 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 			return
 		}
 	}
+	// A media URL can be a slice of the decoded body; the copies keep only their own bytes.
+	for i := range urls {
+		urls[i].URL, urls[i].MaskedURL = strings.Clone(urls[i].URL), strings.Clone(urls[i].MaskedURL)
+	}
+	r.Body, r.Headers = nil, nil
+	reserved = rt.trimKept(reserved, env, commit.bytes())
 	handed = true
 	written = rt.write(env, func(inserted bool) {
 		if inserted && commit != nil {
