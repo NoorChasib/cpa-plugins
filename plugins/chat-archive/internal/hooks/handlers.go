@@ -108,7 +108,7 @@ func (e *Engine) BeforeAuth(raw []byte) []byte {
 		e.metaBegin(b, "")
 		return out
 	}
-	need := int64(req.BodyLen) * BodyReserveFactor
+	need := int64(req.BodyLen)*BodyReserveFactor + HandoffHeaderBytes(req.Headers)
 	if !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.record(HookBeforeAuth, 0, req.BodyLen, "body_budget")
@@ -249,7 +249,7 @@ func (e *Engine) Response(raw []byte) []byte {
 		e.metaResponse(r, "")
 		return OK
 	}
-	need := int64(req.BodyLen) * BodyReserveFactor
+	need := int64(req.BodyLen)*BodyReserveFactor + HandoffHeaderBytes(req.ResponseHeaders)
 	if !e.Pool.TryReserve(need) {
 		e.Stats.Drop("body_budget")
 		e.metaResponse(r, wire.DroppedBodyBudget)
@@ -549,6 +549,10 @@ const (
 	headerKeyBytes   = 128 + 4*16
 	headerValueBytes = 2 * 16
 )
+
+// HandoffHeaderBytes is the content-pool charge of a Handoff item's decoded headers, taken with its body's 4 × and
+// released with it: a queued body's headers are charged until the writer wrote its envelope, like the body.
+func HandoffHeaderBytes(h map[string][]string) int64 { return headerBytes(h) }
 
 // headerBytes is what decoded response headers hold: the keys' and values' contents and their container storage.
 func headerBytes(h map[string][]string) int64 {
