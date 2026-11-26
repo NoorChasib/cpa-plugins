@@ -347,12 +347,16 @@ func speechResponse(t *testing.T, e *hooks.Engine, id string, size int) *hooks.R
 		ContentType: "audio/mpeg", ContentEncoding: "deflate", ObservedAt: time.Now(), Reserved: need}
 }
 
-// liveAfter returns the heap f leaves reachable, measured across a GC before and after it.
+// liveAfter returns the heap f leaves reachable, measured across two GCs before and after it. One
+// collection can leave a large unreachable object standing (one of f's, still referenced from a
+// frame the collector scanned conservatively); the second frees it.
 func liveAfter(f func()) int64 {
 	var before, after runtime.MemStats
 	runtime.GC()
+	runtime.GC()
 	runtime.ReadMemStats(&before)
 	f()
+	runtime.GC()
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
