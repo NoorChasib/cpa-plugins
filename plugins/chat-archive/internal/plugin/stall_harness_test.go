@@ -11,14 +11,17 @@ package plugin_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,6 +31,7 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
 )
 
 // stallRun is one plugin under the harness.
@@ -44,6 +48,7 @@ type stallRun struct {
 	stop   chan struct{}
 	wg     sync.WaitGroup
 	prefix string
+	text   string // the request body's text (small unless a run sets withBody)
 }
 
 // stallResult is what a run measured. Counts and durations only.
@@ -94,7 +99,7 @@ func newStallRun(t *testing.T) *stallRun {
 		t.Fatal(err)
 	}
 	h := plugintest.New(t, nil, "")
-	r := &stallRun{t: t, h: h, stop: make(chan struct{}), prefix: "stall"}
+	r := &stallRun{t: t, h: h, stop: make(chan struct{}), prefix: "stall", text: "synthetic stall text"}
 	plugintest.WaitFor(t, "runtime", func() bool { r.ob, _, _ = h.Plugin.Runtime(); return r.ob != nil })
 	u := url.URL{Scheme: "file", Path: r.ob.Path(), RawQuery: "mode=ro&_query_only=true"}
 	db, err := sql.Open("sqlite3", u.String())
@@ -167,7 +172,11 @@ func (r *stallRun) hook(method string, raw []byte) {
 // exchange drives one synthetic non-stream exchange through the hooks.
 func (r *stallRun) exchange(rid string) {
 	meta := plugintest.Meta("/v1/messages")
-	r.hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "claude", plugintest.ClaudeBody("synthetic stall text"), nil, meta))
+	text := r.text
+	if len(text) > 1024 {
+		text = rid + " " + text // distinct pieces, so dedupe does not hide the bytes
+	}
+	r.hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth(rid, "claude", plugintest.ClaudeBody(text), nil, meta))
 	r.hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth(rid))
 	r.hook(protocol.MethodResponseInterceptAfter, plugintest.Response(rid, "claude",
 		[]byte(`{"id":"msg_stall","type":"message","role":"assistant","content":[{"type":"text","text":"synthetic"}],"stop_reason":"end_turn"}`), meta))
@@ -181,6 +190,15 @@ func (r *stallRun) load(n int, every time.Duration) {
 		r.exchange(fmt.Sprintf("%s-%d", r.prefix, r.n.Add(1)))
 		next = next.Add(every)
 		time.Sleep(time.Until(next))
+	}
+}
+
+// withBody makes every later exchange's request text about kib KiB of synthetic filler, for the
+// body-heavy load (the content pool and the write queue's bytes, not only its entries). Each
+// exchange gets distinct text, so the outbox's piece dedupe does not hide the bytes.
+func (r *stallRun) withBody(kib int) {
+	if kib > 0 {
+		r.text = strings.Repeat("synthetic filler ", kib*1024/17)
 	}
 }
 
@@ -420,14 +438,301 @@ func TestStallHarnessStopWaitsForStalledMaintenance(t *testing.T) {
 	}
 }
 
+// stackHas reports whether one goroutine's stack contains every one of subs (function names).
+// A goroutine held in the VFS shows its Go frames through the cgo callback, so this tells which
+// step of the stop a held operation belongs to.
+func stackHas(subs ...string) bool {
+	buf := make([]byte, 16<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		all := true
+		for _, sub := range subs {
+			if !strings.Contains(g, sub) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedNow reports whether the outbox's flock is still held, by trying it on a new open file
+// description of the lock file (no SQLite I/O).
+func ownedNow(t *testing.T, dir string) bool {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(dir, "outbox.sqlite.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}
+
+// stopAsync starts the final stop and returns a channel that yields its duration.
+func (r *stallRun) stopAsync() <-chan time.Duration {
+	done := make(chan time.Duration, 1)
+	go func() { done <- r.shutdown() }()
+	return done
+}
+
+// TestStallHarnessStopWaitsForStalledClose: an idle outbox still hangs the stop. Nothing is
+// queued and no write-connection user is busy when the stop begins, but the close itself writes
+// (the clean mark) and runs wal_checkpoint(TRUNCATE), which syncs the main database; the close's
+// context cannot reach that sync, so the stop returns only when the stall ends. The flock stays
+// held until the close returns, which is what keeps a successor off the file meanwhile.
+func TestStallHarnessStopWaitsForStalledClose(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	var closing atomic.Bool
+	plugin.SetCloseOutbox(t, func(o *outbox.Outbox, ctx context.Context) error {
+		closing.Store(true)
+		return o.CloseContext(ctx)
+	})
+	r := newStallRun(t)
+	r.settle(1)
+	hold := make(chan struct{})
+	h := r.arm(diskstall.Rule{Ops: diskstall.Sync, Files: diskstall.MainDB, Hold: hold})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	done := r.stopAsync()
+	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
+		t.Fatal("the close's checkpoint never reached the held main-database sync")
+	}
+	if !closing.Load() || !stackHas("(*Outbox).CloseContext") {
+		t.Fatal("the held main-database sync is not the stop's close")
+	}
+	stallEnd := time.Now().Add(4 * time.Second)
+	time.AfterFunc(time.Until(stallEnd), release)
+	time.Sleep(time.Until(stallEnd.Add(-time.Second)))
+	if !ownedNow(t, filepath.Join(r.h.Dir, "data")) {
+		t.Fatal("the flock was released while the close was still inside SQLite")
+	}
+	stop := <-done
+	res := r.result(h, stop)
+	t.Log(res)
+	if time.Now().Before(stallEnd) || stop < 2*time.Second+plugin.StopCloseMargin+time.Second {
+		t.Fatalf("the stop returned in %v, before the close's stall ended", stop)
+	}
+}
+
+// TestStallHarnessStopWaitsForStalledSnapshot: the stop's status-snapshot read is bounded by a
+// context, but a read held inside the VFS ignores it, so the stop waits for the read. The read
+// connection must read pages after a write it has not seen, so the test writes once after the
+// final heartbeat began (the uploader's loops have exited by then) and holds every outbox read.
+func TestStallHarnessStopWaitsForStalledSnapshot(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	setVar(t, &plugin.SnapshotEvery, time.Hour) // only the stop's snapshot reads after the write below
+	// Leave the uploader time for its final heartbeat inside the 2 s budget (with the production
+	// split the uploader's deadline is already past at a 2 s budget and the heartbeat is skipped).
+	setVar(t, &plugin.FinalSaveTimeout, 300*time.Millisecond)
+	setVar(t, &plugin.CaptureStopMin, 300*time.Millisecond)
+	r := newStallRun(t)
+	r.settle(1)
+	unhold := r.h.Srv.Hold("POST " + wire.PathHeartbeat)
+	t.Cleanup(unhold)
+	done := r.stopAsync()
+	plugintest.WaitFor(t, "the final heartbeat", func() bool { return stackHas("(*Uploader).StopBy", "(*Client).Heartbeat") })
+	if _, err := r.ob.SaveOpenRequests(context.Background(), []outbox.OpenRequest{{RequestID: "stall-snapshot", TouchedAt: time.Now()}}); err != nil {
+		t.Fatal(err)
+	}
+	hold := make(chan struct{})
+	h := r.arm(diskstall.Rule{Ops: diskstall.Read, Files: diskstall.MainDB | diskstall.WAL, Hold: hold})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	unhold()
+	if !h.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting >= 1 }) {
+		t.Fatal("no outbox read reached the hold")
+	}
+	if !stackHas("(*Plugin).stopRuntime", "(*Plugin).refreshSnapshot", "(*Outbox).Stats") {
+		t.Fatal("the held read is not the stop's snapshot")
+	}
+	stallEnd := time.Now().Add(4 * time.Second)
+	time.AfterFunc(time.Until(stallEnd), release)
+	stop := <-done
+	res := r.result(h, stop)
+	t.Log(res)
+	if time.Now().Before(stallEnd) || stop < 2*time.Second+plugin.StopCloseMargin+time.Second {
+		t.Fatalf("the stop returned in %v, before the snapshot's stall ended", stop)
+	}
+}
+
+// TestStallHarnessStopWaitsForStalledOpenRetry: with no runtime, a stop still waits for the
+// background open loop (cancelOpenRetry waits on it), and an open stalled in its first commit (the
+// run row) ignores the cancel. The stop's deadline starts only after that wait, so the stop lasts
+// the stall.
+func TestStallHarnessStopWaitsForStalledOpenRetry(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	setVar(t, &plugin.OpenRetryMin, 20*time.Millisecond)
+	if err := diskstall.Install(); err != nil {
+		t.Fatal(err)
+	}
+	h := plugintest.New(t, nil, "")
+	p := h.Plugin
+	data := filepath.Join(h.Dir, "data")
+	p.Handle(protocol.MethodPluginQuiesce, nil)
+	if err := os.Chmod(data, 0o755); err != nil { // the hardened open refuses a group-readable directory
+		t.Fatal(err)
+	}
+	p.Handle(protocol.MethodPluginReconfigure, plugintest.Lifecycle(h.YAML))
+	if st, _ := p.State(); st != plugin.StateUnavailable {
+		t.Fatalf("state %s, want the open retry", st)
+	}
+	hold := make(chan struct{})
+	hd := diskstall.Arm(diskstall.Rule{Dir: h.Dir, Ops: diskstall.Sync, Files: diskstall.WAL, Hold: hold})
+	t.Cleanup(hd.Disarm)
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	if err := os.Chmod(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !hd.WaitFor(10*time.Second, func(s diskstall.Stats) bool { return s.Waiting == 1 }) {
+		t.Fatal("the retried open never reached the held sync")
+	}
+	if !stackHas("outbox.OpenContext") {
+		t.Fatal("the held sync is not the retried open's")
+	}
+	stallEnd := time.Now().Add(4 * time.Second)
+	time.AfterFunc(time.Until(stallEnd), release)
+	start := time.Now()
+	p.Shutdown()
+	stop := time.Since(start)
+	t.Logf("stop=%v rule{affected=%d max_wait=%v}", stop.Round(time.Millisecond), hd.Stats().Affected, hd.Stats().MaxWait.Round(time.Millisecond))
+	if time.Now().Before(stallEnd) || stop < 2*time.Second+plugin.StopCloseMargin+time.Second {
+		t.Fatalf("the stop returned in %v, before the retried open's stall ended", stop)
+	}
+}
+
+// savedDrops returns the dropped counters the outbox holds for boots (summed), as the next boot
+// would report them.
+func (r *stallRun) savedDrops() map[string]uint64 {
+	rows, err := r.db.Query(`SELECT value FROM metadata WHERE key LIKE 'boot\_counters/%' ESCAPE '\'`)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]uint64{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			r.t.Fatal(err)
+		}
+		var b outbox.BootCounters
+		if err := json.Unmarshal([]byte(v), &b); err != nil {
+			r.t.Fatal(err)
+		}
+		for k, n := range b.Dropped {
+			out[k] += n
+		}
+	}
+	return out
+}
+
+// lastRunClean reports whether the newest run row is marked clean.
+func (r *stallRun) lastRunClean() bool {
+	var clean int
+	if err := r.db.QueryRow(`SELECT clean FROM runs ORDER BY started_at DESC LIMIT 1`).Scan(&clean); err != nil {
+		r.t.Fatal(err)
+	}
+	return clean == 1
+}
+
+// TestStallHarnessDropsPastDeadlineNotSaved pins what 0.1.5 loses from the record when a commit
+// stall spans the stop's deadline: the capture drain counts the queued work dropped.stopped after
+// the final heartbeat, the stop's counter save then runs with a context that already expired, and
+// the close skips the clean mark. The engine counted the drops, but the outbox (what the next boot
+// reports) holds none of them, and the run is left unclean.
+func TestStallHarnessDropsPastDeadlineNotSaved(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	r := newStallRun(t)
+	h, release := r.holdCapture()
+	r.loadFor(time.Second, 50*time.Millisecond)
+	stallEnd := time.Now().Add(5 * time.Second)
+	time.AfterFunc(time.Until(stallEnd), release)
+	stop := r.shutdown()
+	res := r.result(h, stop)
+	t.Log(res)
+	saved := r.savedDrops()
+	t.Logf("saved dropped.stopped=%d", saved["stopped"])
+	if res.Dropped["stopped"] == 0 || uint64(res.Lost) != res.Dropped["stopped"] {
+		t.Fatalf("want the queued work lost and counted stopped: %v", res)
+	}
+	if saved["stopped"] >= res.Dropped["stopped"] {
+		t.Fatalf("the outbox saved %d of %d stopped drops; 0.1.5 saves none past the deadline", saved["stopped"], res.Dropped["stopped"])
+	}
+	if r.lastRunClean() {
+		t.Fatal("the run was marked clean though the close ran past its deadline")
+	}
+}
+
+// TestStallHarnessCarryLostPastDeadline pins the numbering loss across an update when a commit
+// stall spans the quiesce's deadline: the stop's SaveCarry runs with an expired context, so the
+// new instance finds no saved numbering for a WebSocket left open across the update, reuses
+// input sequence 0 and response index 0, and its continuation is skipped as duplicate_key.
+func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
+	setStopTimeout(t, 2*time.Second)
+	setStopDrain(t, 300*time.Millisecond)
+	r := newStallRun(t)
+	p1 := r.h.Plugin
+	ws := map[string]any{"request_path": "/v1/responses", "execution_session_id": "stall-session"}
+	p1.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth("stall-ws", "openai-response", []byte(`{"type":"response.create","input":"turn0"}`), nil, ws))
+	p1.Hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth("stall-ws"))
+	p1.Hook(protocol.MethodResponseInterceptStreamChunk, plugintest.Chunk("stall-ws", "openai-response", -1, nil, ws))
+	wsIndex := 0
+	for _, c := range wsTurn("resp_s0", "", "synthetic") {
+		p1.Hook(protocol.MethodResponseInterceptStreamChunk, plugintest.Chunk("stall-ws", "openai-response", wsIndex, c, ws))
+		wsIndex++
+	}
+	before := r.settle(1)
+	h, release := r.holdCapture()
+	time.AfterFunc(5*time.Second, release)
+	start := time.Now()
+	p1.Handle(protocol.MethodPluginQuiesce, nil)
+	t.Logf("quiesce=%v stored_before=%d rule{max_wait=%v}", time.Since(start).Round(time.Millisecond), before, h.Stats().MaxWait.Round(time.Millisecond))
+
+	p2 := plugin.New(nil)
+	if _, err := p2.Handle(protocol.MethodPluginRegister, plugintest.Lifecycle(r.h.YAML)); err != nil {
+		t.Fatalf("register new instance: %v", err)
+	}
+	t.Cleanup(p2.Shutdown)
+	p2.Hook(protocol.MethodRequestInterceptBefore, plugintest.BeforeAuth("stall-ws", "openai-response",
+		[]byte(`{"type":"response.create","input":"turn1","previous_response_id":"resp_s0"}`), nil, ws))
+	p2.Hook(protocol.MethodRequestInterceptAfter, plugintest.AfterAuth("stall-ws"))
+	for _, c := range wsTurn("resp_s1", "resp_s0", "synthetic") {
+		p2.Hook(protocol.MethodResponseInterceptStreamChunk, plugintest.Chunk("stall-ws", "openai-response", wsIndex, c, ws))
+		wsIndex++
+	}
+	p2.Hook(protocol.MethodRequestComplete, plugintest.Complete("stall-ws", "canceled", ws))
+	plugintest.WaitFor(t, "the continuation's duplicate", func() bool { return p2.Engine().Stats.Dropped()["duplicate_key"] > 0 })
+	t.Logf("new instance dropped=%v", p2.Engine().Stats.Dropped())
+}
+
 // TestStallHarnessSweep measures 0.1.5 across stall lengths and holders, for the 0.1.6 design. It
-// takes minutes, so it runs only with CA_STALL_SWEEP=1 (and CA_STALL_SWEEP_S, a comma list of stall
-// seconds, to pick lengths). It asserts nothing beyond the runs completing; it logs one line per run.
+// takes minutes, so it runs only with CA_STALL_SWEEP=1. CA_STALL_SWEEP_S (a comma list of stall
+// seconds) picks lengths, CA_STALL_SWEEP_HOLDERS (a comma list of capture, other, fail and stop)
+// picks holders, and CA_STALL_SWEEP_BODY_KIB sets each exchange's request text size for a
+// body-heavy load. It asserts nothing beyond the runs completing; it logs one line per run.
 func TestStallHarnessSweep(t *testing.T) {
 	if os.Getenv("CA_STALL_SWEEP") != "1" {
 		t.Skip("set CA_STALL_SWEEP=1 to run the stall sweep")
 	}
 	secs := []int{1, 5, 9, 11, 15, 20, 30}
+	holders := []string{"capture", "other", "fail"}
+	if s := os.Getenv("CA_STALL_SWEEP_HOLDERS"); s != "" {
+		holders = strings.Split(s, ",")
+	}
+	var kib int
+	if s := os.Getenv("CA_STALL_SWEEP_BODY_KIB"); s != "" {
+		fmt.Sscan(s, &kib)
+	}
 	if s := os.Getenv("CA_STALL_SWEEP_S"); s != "" {
 		secs = nil
 		for _, f := range strings.Split(s, ",") {
@@ -439,10 +744,14 @@ func TestStallHarnessSweep(t *testing.T) {
 	// capture: the writer's own commit stalls; other: another write-connection user's commit
 	// stalls and the writer waits for the connection; fail: every WAL write and sync fails
 	// (SQLITE_IOERR) for the whole period.
-	for _, holder := range []string{"capture", "other", "fail"} {
+	for _, holder := range holders {
+		if holder == "stop" {
+			continue
+		}
 		for _, s := range secs {
 			t.Run(fmt.Sprintf("%s-%ds", holder, s), func(t *testing.T) {
 				r := newStallRun(t)
+				r.withBody(kib)
 				var h *diskstall.Handle
 				var release func()
 				switch holder {
@@ -459,9 +768,12 @@ func TestStallHarnessSweep(t *testing.T) {
 				r.loadFor(stall+6*time.Second, 100*time.Millisecond)
 				r.settle(1)
 				res := r.result(h, 0)
-				t.Logf("holder=%s stall=%ds rate=10/s %v", holder, s, res)
+				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d %v", holder, s, kib, res)
 			})
 		}
+	}
+	if os.Getenv("CA_STALL_SWEEP_HOLDERS") != "" && !strings.Contains(os.Getenv("CA_STALL_SWEEP_HOLDERS"), "stop") {
+		return
 	}
 	for _, s := range secs {
 		t.Run(fmt.Sprintf("stop-capture-%ds", s), func(t *testing.T) {
