@@ -60,10 +60,15 @@ type Runtime struct {
 	writerWG  sync.WaitGroup
 	writerCtx context.Context
 	writerEnd context.CancelFunc
+	// cut is the writer's outbox context: it has no deadline while the runtime runs, so the writer
+	// never gives up on a stalled or failing disk, and StopBy cancels it at the stop's deadline.
+	cut     context.Context
+	cutStop context.CancelFunc
+	// obWrite is the outbox write (Outbox.Write unless a test replaces it).
+	obWrite func(context.Context, []outbox.NewEnvelope) (outbox.WriteResult, error)
 
 	activeStreams atomic.Int64
 	streamAccum   atomic.Int64
-	stopBy        atomic.Int64 // StopBy's deadline (unix ns), 0 while running
 }
 
 // writeReq is one envelope for the writer. release returns the budget the envelope's bytes are
@@ -92,10 +97,7 @@ func Start(opts Options) *Runtime {
 		opts.Prefix = NewPrefixMap()
 	}
 	rt := &Runtime{opts: opts, prefix: opts.Prefix, writes: make(chan writeReq, 1024)}
-	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
-	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
-	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
-	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
+	rt.initContexts()
 	rec := opts.Engine.Stats.Panic
 	ps := opts.Outbox.Pressure()
 	rt.setPressure(ps)
@@ -105,6 +107,16 @@ func Start(opts Options) *Runtime {
 	safego.Loop(rt.seqCtx, &rt.seqWG, "stream", rec, rt.sequencer)
 	safego.Loop(rt.writerCtx, &rt.writerWG, "writer", rec, rt.writer)
 	return rt
+}
+
+// initContexts creates the runtime's contexts: the workers', the stream goroutine's, the drain's,
+// the writer's and the writer's outbox context (cut).
+func (rt *Runtime) initContexts() {
+	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
+	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
+	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
+	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
+	rt.cut, rt.cutStop = context.WithCancel(context.Background())
 }
 
 func (rt *Runtime) setPressure(ps outbox.PressureState) {
@@ -125,17 +137,20 @@ func (rt *Runtime) Stop() { rt.StopBy(time.Time{}) }
 // queued bodies and usage items; then the writer flushes what it holds, its outbox writes also
 // bounded by deadline. Past the drain bound, unfinished bodies and whatever is still queued are
 // counted stopped and released, never written; an exchange's completion that waited for a drained
-// body is still handed to the writer until deadline (or DrainTimeout), else counted stopped.
+// body is still handed to the writer until deadline (or DrainTimeout), else counted stopped. The
+// writer's outbox context (cut) ends at the same time: a write still waiting for the connection or
+// in a retry's backoff then stops, and its group is counted stopped.
 func (rt *Runtime) StopBy(deadline time.Time) {
 	bound := DrainTimeout
 	finalBy := time.Now().Add(DrainTimeout)
 	if !deadline.IsZero() {
 		finalBy = deadline
 		bound = min(bound, max(time.Until(deadline), 0))
-		rt.stopBy.Store(deadline.UnixNano())
 	}
 	expire := time.AfterFunc(bound, rt.drainStop)
 	defer expire.Stop()
+	cut := time.AfterFunc(max(time.Until(finalBy), 0), rt.cutStop)
+	defer func() { cut.Stop(); rt.cutStop() }()
 	rt.seqCancel()
 	rt.seqWG.Wait()
 	rt.runCancel()
@@ -413,8 +428,16 @@ const (
 	groupLinger    = 25 * time.Millisecond
 )
 
-// ProbeInterval is the write-probe interval while write_unavailable is raised.
-var ProbeInterval = 5 * time.Second
+// Write retries: a group whose outbox write fails is written again, in order, after a backoff that
+// doubles from RetryBackoffMin to RetryBackoffMax, for RetryWindow from its first failed attempt. It
+// is dropped (disk_hard) only when an attempt that started RetryWindow or more after the first
+// failure fails too. WriteAlertAfter raises write_unavailable for an attempt that has not returned.
+var (
+	RetryWindow     = 60 * time.Second
+	RetryBackoffMin = 25 * time.Millisecond
+	RetryBackoffMax = 2 * time.Second
+	WriteAlertAfter = 10 * time.Second
+)
 
 func reqBytes(r writeReq) int64 {
 	n := int64(len(r.env.Body))
@@ -425,7 +448,6 @@ func reqBytes(r writeReq) int64 {
 }
 
 func (rt *Runtime) writer(ctx context.Context) {
-	var lastProbe time.Time
 	for {
 		safego.Checkpoint("writer")
 		var group []writeReq
@@ -439,7 +461,7 @@ func (rt *Runtime) writer(ctx context.Context) {
 				case r := <-rt.writes:
 					group = append(group, r)
 					if len(group) >= groupEnvelopes {
-						rt.flush(group, &lastProbe)
+						rt.flush(group)
 						group = nil
 					}
 					continue
@@ -448,7 +470,7 @@ func (rt *Runtime) writer(ctx context.Context) {
 				break
 			}
 			if len(group) > 0 {
-				rt.flush(group, &lastProbe)
+				rt.flush(group)
 			}
 			return
 		}
@@ -467,11 +489,37 @@ func (rt *Runtime) writer(ctx context.Context) {
 			}
 		}
 		timer.Stop()
-		rt.flush(group, &lastProbe)
+		rt.flush(group)
 	}
 }
 
-func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
+// outboxWrite is one write attempt of envs, bounded only by ctx. write_unavailable is raised when
+// the attempt has not returned after WriteAlertAfter, so a stalled disk alerts while it holds the
+// writer.
+func (rt *Runtime) outboxWrite(ctx context.Context, envs []outbox.NewEnvelope) (outbox.WriteResult, error) {
+	fired := make(chan struct{})
+	alert := time.AfterFunc(WriteAlertAfter, func() {
+		defer close(fired)
+		rt.stats().SetFault("write_unavailable", true)
+	})
+	defer func() {
+		if !alert.Stop() {
+			<-fired // the alert ran or is running: let it finish before the caller clears the fault
+		}
+	}()
+	if rt.obWrite != nil {
+		return rt.obWrite(ctx, envs)
+	}
+	return rt.opts.Outbox.Write(ctx, envs)
+}
+
+// flush writes one group. While the runtime runs it never gives up on a stall: an attempt has no
+// timeout, and a failed attempt is retried in order (RetryWindow). Only a permanent error, pressure
+// level 3 or a failure run past RetryWindow drops the group (disk_hard). Once the stop's deadline
+// cut the writer's context, a group not yet written is counted stopped: the cut is checked before
+// the pressure check (no file-system call after the deadline) and right before every attempt, so
+// no attempt enters Outbox.Write, whose write mutex cannot be cancelled, after the deadline.
+func (rt *Runtime) flush(group []writeReq) {
 	// Every path out of flush, a recovered panic included, returns the group's budgets: by then
 	// the envelopes are written or dropped.
 	defer func() {
@@ -481,9 +529,6 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 			}
 		}
 	}()
-	ob := rt.opts.Outbox
-	ps := ob.Pressure()
-	rt.setPressure(ps)
 	drop := func(name string) {
 		for _, r := range group {
 			rt.stats().Drop(name)
@@ -492,58 +537,64 @@ func (rt *Runtime) flush(group []writeReq, lastProbe *time.Time) {
 			}
 		}
 	}
+	if rt.cut.Err() != nil {
+		drop("stopped")
+		return
+	}
+	ps := rt.opts.Outbox.Pressure()
+	rt.setPressure(ps)
 	if ps.Level >= outbox.PressureHard {
 		drop("disk_hard")
 		return
-	}
-	if rt.stats().HasFault("write_unavailable") {
-		if time.Since(*lastProbe) < ProbeInterval {
-			drop("disk_hard")
-			return
-		}
-		*lastProbe = time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err := ob.ProbeWrite(ctx)
-		cancel()
-		if err != nil {
-			drop("disk_hard")
-			return
-		}
-		rt.stats().SetFault("write_unavailable", false)
 	}
 	envs := make([]outbox.NewEnvelope, len(group))
 	for i, r := range group {
 		envs[i] = r.env
 	}
 	var res outbox.WriteResult
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		budget := 10 * time.Second
-		if by := rt.stopBy.Load(); by != 0 {
-			// A stop's deadline bounds the final flush too.
-			if budget = min(budget, time.Until(time.Unix(0, by))); budget <= 0 {
-				drop("stopped")
-				return
-			}
+	var first time.Time // the start of the group's first failed attempt
+	backoff := RetryBackoffMin
+	for {
+		if rt.cut.Err() != nil {
+			drop("stopped")
+			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), budget)
-		res, err = ob.Write(ctx, envs)
-		cancel()
-		if err == nil || !outbox.Retryable(err) {
+		start := time.Now()
+		var err error
+		if res, err = rt.outboxWrite(rt.cut, envs); err == nil {
 			break
 		}
-		time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
-	}
-	if err != nil {
-		if by := rt.stopBy.Load(); by != 0 && !time.Now().Before(time.Unix(0, by)) {
+		if rt.cut.Err() != nil {
 			drop("stopped") // the stop's deadline cut the write, not the disk
 			return
 		}
 		rt.stats().SetFault("write_unavailable", true)
-		*lastProbe = time.Now()
-		drop("disk_hard")
-		return
+		if outbox.Permanent(err) {
+			drop("disk_hard")
+			return
+		}
+		if first.IsZero() {
+			first = start
+		}
+		end := first.Add(RetryWindow)
+		if !start.Before(end) {
+			drop("disk_hard") // an attempt started at or after the window's end failed too
+			return
+		}
+		// The wait never ends past the window's end, so one attempt always starts at or after it.
+		if wait := min(backoff, time.Until(end)); wait > 0 {
+			t := time.NewTimer(wait)
+			select {
+			case <-rt.cut.Done():
+				t.Stop()
+				drop("stopped")
+				return
+			case <-t.C:
+			}
+		}
+		backoff = min(2*backoff, RetryBackoffMax)
 	}
+	rt.stats().SetFault("write_unavailable", false)
 	// A skipped key is an envelope that is not stored. Keys are unique per exchange part, and a new
 	// plugin instance continues the open requests' numbering (hooks.Engine.Adopt), so this counts a loss.
 	// A bare completion key already queued moves the completion to its started_at key instead.

@@ -27,10 +27,7 @@ func stoppingRuntime(t *testing.T, withWriter bool) (*Runtime, *hooks.Engine, *o
 	t.Cleanup(func() { ob.Close() })
 	m, _ := mask.New(mask.Config{})
 	rt := &Runtime{opts: Options{Engine: e, Outbox: ob, Workers: 1, Masker: NewMaskerHolder(m, 0, 1<<20)}, prefix: NewPrefixMap()}
-	rt.runCtx, rt.runCancel = context.WithCancel(context.Background())
-	rt.seqCtx, rt.seqCancel = context.WithCancel(context.Background())
-	rt.drainCtx, rt.drainStop = context.WithCancel(context.Background())
-	rt.writerCtx, rt.writerEnd = context.WithCancel(context.Background())
+	rt.initContexts()
 	if withWriter {
 		rt.writes = make(chan writeReq, 4)
 		safego.Loop(rt.writerCtx, &rt.writerWG, "writer", e.Stats.Panic, rt.writer)
