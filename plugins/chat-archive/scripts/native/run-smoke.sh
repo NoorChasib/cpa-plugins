@@ -31,7 +31,7 @@ CGO_ENABLED=1 go -C "$WORK/source" build -trimpath \
 CGO_ENABLED=1 go -C "$WORK/source-failover" build -trimpath \
   -ldflags "-X main.Version=$CPA_FAILOVER_VERSION -X main.Commit=$CPA_FAILOVER_PIN" -o "$WORK/cpa-failover" ./cmd/server
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
-  -ldflags "$LIBFLAGS=0.1.5" -o "$WORK/chat-archive-production.so" .
+  -ldflags "$LIBFLAGS=0.1.6" -o "$WORK/chat-archive-production.so" .
 # A second production build with a higher version, for the reload case (a different file and
 # different bytes, so CPA loads a new instance while the old one is quiesced).
 CGO_ENABLED=1 go -C "$ROOT" build -trimpath -buildmode=c-shared \
