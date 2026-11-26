@@ -1,12 +1,57 @@
 package capture
 
-// K10 harness pins for design revision 3 (R4b's units): how plugin 0.1.5's stop accounts for a
-// stream it cuts. Both pin current behaviour that the 0.1.6 design changes.
+// K10 harness pins for design revisions 3 and 4 (R4b's units): how plugin 0.1.5's stop accounts for
+// a stream it cuts. Each pins current behaviour that the 0.1.6 design changes.
 
 import (
 	"testing"
 	"time"
+
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/safego"
 )
+
+// TestStopExitCountsOneStoppedPerAccumulator (revision 4): a RequestID that CPA reuses can hold two
+// lifecycles' stream segments in one accumulator: the earlier lifecycle's, parked at the later
+// header-init, and the later one's. When a stop's drain bound has passed, the stream goroutine's
+// exit path counts dropped.stopped once per accumulator, so two lost responses count one.
+func TestStopExitCountsOneStoppedPerAccumulator(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	rid := "exit-reused"
+	r.ba(rid, "synthetic-a")
+	r.aa(rid)
+	r.chunk(rid, -1, "")
+	r.chunk(rid, 0, evCreated("resp_a"))
+	r.chunk(rid, 1, evItem("synthetic"))
+	r.ba(rid, "synthetic-b") // a later lifecycle under the same RequestID
+	r.aa(rid)
+	r.chunk(rid, -1, "")
+	r.chunk(rid, 0, evCreated("resp_b"))
+	r.chunk(rid, 1, evItem("synthetic"))
+	r.feedAttempts()
+	n := uint64(len(r.streams))
+	for _, it := range r.streams { // to the real stream goroutine, in hook order
+		r.e.Stream <- it
+	}
+	r.streams = nil
+	before := r.e.Stats.Dropped()["stopped"]
+	safego.Loop(r.rt.seqCtx, &r.rt.seqWG, "stream", r.e.Stats.Panic, r.rt.sequencer)
+	deadline := time.Now().Add(5 * time.Second)
+	for !r.e.ChunksProcessed(rid, n) || r.rt.ActiveStreams() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stream goroutine did not process the %d items", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := r.counter("segments_parked"); got != 1 {
+		t.Fatalf("segments_parked %d; the earlier lifecycle's segment was not parked", got)
+	}
+	r.rt.drainStop() // the drain bound passed
+	r.rt.seqCancel()
+	r.rt.seqWG.Wait()
+	if got := r.e.Stats.Dropped()["stopped"] - before; got != 1 {
+		t.Fatalf("exit counted stopped %d for one accumulator holding two lifecycles' segments", got)
+	}
+}
 
 // TestStopDrainCountsQueuedChunksEach: the stop's drain counts dropped.stopped once per queued
 // stream item, although the items of one stream segment would have formed a single response. The
