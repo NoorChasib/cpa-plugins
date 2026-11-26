@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/metrics"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ type stallRun struct {
 	n      atomic.Int64
 	hookNs atomic.Int64 // longest single hook call
 	heap   atomic.Uint64
+	live   atomic.Uint64 // peak live heap after a GC (runtime/metrics /gc/heap/live:bytes)
 	pool   atomic.Int64
 	stop   chan struct{}
 	wg     sync.WaitGroup
@@ -60,7 +62,9 @@ type stallResult struct {
 	Dropped   map[string]uint64 // non-zero dropped counters
 	HookMax   time.Duration     // longest hook call
 	Stop      time.Duration     // the stop's duration (0 when the run did not stop)
-	PeakHeap  uint64            // peak Go heap in use, bytes
+	PeakHeap  uint64            // peak Go heap in use, bytes (garbage not yet collected included)
+	PeakLive  uint64            // peak live heap marked by a GC, bytes
+	Drain     time.Duration     // from the release until the backlog offered by then was stored (sweep only)
 	PeakPool  int64             // peak content-pool reservation, bytes
 	Rule      diskstall.Stats
 }
@@ -75,9 +79,9 @@ func (r stallResult) String() string {
 	for _, k := range keys {
 		d = append(d, fmt.Sprintf("%s=%d", k, r.Dropped[k]))
 	}
-	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v peak_heap_mib=%.1f peak_pool_kib=%d rule{matched=%d affected=%d max_wait=%v}",
+	return fmt.Sprintf("exchanges=%d offered=%d stored=%d lost=%d dropped{%s} hook_max=%v stop=%v drain=%v peak_heap_mib=%.1f peak_live_mib=%.1f peak_pool_kib=%d rule{matched=%d affected=%d max_wait=%v}",
 		r.Exchanges, r.Offered, r.Stored, r.Lost, strings.Join(d, ","), r.HookMax.Round(time.Microsecond), r.Stop.Round(time.Millisecond),
-		float64(r.PeakHeap)/(1<<20), r.PeakPool/1024, r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
+		r.Drain.Round(time.Millisecond), float64(r.PeakHeap)/(1<<20), float64(r.PeakLive)/(1<<20), r.PeakPool/1024, r.Rule.Matched, r.Rule.Affected, r.Rule.MaxWait.Round(time.Millisecond))
 }
 
 func setProbeInterval(t *testing.T, d time.Duration) {
@@ -138,12 +142,20 @@ func (r *stallRun) sample() {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	var ms runtime.MemStats
+	live := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	peak := func(a *atomic.Uint64, v uint64) {
+		for {
+			if old := a.Load(); v <= old || a.CompareAndSwap(old, v) {
+				return
+			}
+		}
+	}
 	for {
 		runtime.ReadMemStats(&ms)
-		for v := ms.HeapInuse; ; {
-			if old := r.heap.Load(); v <= old || r.heap.CompareAndSwap(old, v) {
-				break
-			}
+		peak(&r.heap, ms.HeapInuse)
+		metrics.Read(live)
+		if live[0].Value.Kind() == metrics.KindUint64 {
+			peak(&r.live, live[0].Value.Uint64())
 		}
 		for v := e.Pool.Used() + e.Pool.StreamUsed(); ; {
 			if old := r.pool.Load(); v <= old || r.pool.CompareAndSwap(old, v) {
@@ -290,7 +302,7 @@ func (r *stallRun) shutdown() time.Duration {
 func (r *stallRun) result(h *diskstall.Handle, stop time.Duration) stallResult {
 	r.end()
 	res := stallResult{Exchanges: int(r.n.Load()), Dropped: map[string]uint64{}, HookMax: time.Duration(r.hookNs.Load()),
-		Stop: stop, PeakHeap: r.heap.Load(), PeakPool: r.pool.Load()}
+		Stop: stop, PeakHeap: r.heap.Load(), PeakLive: r.live.Load(), PeakPool: r.pool.Load()}
 	res.Offered = (res.Exchanges + 2) * r.perEx // the two calibration exchanges are stored too
 	res.Stored = r.count()
 	res.Lost = res.Offered - res.Stored
@@ -718,8 +730,9 @@ func TestStallHarnessCarryLostPastDeadline(t *testing.T) {
 // TestStallHarnessSweep measures 0.1.5 across stall lengths and holders, for the 0.1.6 design. It
 // takes minutes, so it runs only with CA_STALL_SWEEP=1. CA_STALL_SWEEP_S (a comma list of stall
 // seconds) picks lengths, CA_STALL_SWEEP_HOLDERS (a comma list of capture, other, fail and stop)
-// picks holders, and CA_STALL_SWEEP_BODY_KIB sets each exchange's request text size for a
-// body-heavy load. It asserts nothing beyond the runs completing; it logs one line per run.
+// picks holders, CA_STALL_SWEEP_BODY_KIB sets each exchange's request text size for a body-heavy
+// load, and CA_STALL_SWEEP_SYNC_MS delays every outbox fsync for the whole run (a slow disk, to
+// measure how long the backlog takes to drain). It asserts nothing beyond the runs completing; it logs one line per run.
 func TestStallHarnessSweep(t *testing.T) {
 	if os.Getenv("CA_STALL_SWEEP") != "1" {
 		t.Skip("set CA_STALL_SWEEP=1 to run the stall sweep")
@@ -729,9 +742,12 @@ func TestStallHarnessSweep(t *testing.T) {
 	if s := os.Getenv("CA_STALL_SWEEP_HOLDERS"); s != "" {
 		holders = strings.Split(s, ",")
 	}
-	var kib int
+	var kib, syncMS int
 	if s := os.Getenv("CA_STALL_SWEEP_BODY_KIB"); s != "" {
 		fmt.Sscan(s, &kib)
+	}
+	if s := os.Getenv("CA_STALL_SWEEP_SYNC_MS"); s != "" {
+		fmt.Sscan(s, &syncMS)
 	}
 	if s := os.Getenv("CA_STALL_SWEEP_S"); s != "" {
 		secs = nil
@@ -752,6 +768,9 @@ func TestStallHarnessSweep(t *testing.T) {
 			t.Run(fmt.Sprintf("%s-%ds", holder, s), func(t *testing.T) {
 				r := newStallRun(t)
 				r.withBody(kib)
+				if syncMS > 0 { // a slow disk throughout: every outbox fsync takes this long
+					r.arm(diskstall.Rule{Ops: diskstall.Sync, Delay: time.Duration(syncMS) * time.Millisecond})
+				}
 				var h *diskstall.Handle
 				var release func()
 				switch holder {
@@ -764,11 +783,35 @@ func TestStallHarnessSweep(t *testing.T) {
 					release = h.Disarm
 				}
 				stall := time.Duration(s) * time.Second
-				time.AfterFunc(stall, release)
+				// Drain: from the release until every envelope offered by then (calibration included)
+				// is stored; -1 when that never happens before the load ends (the backlog was lost).
+				drained, quit := make(chan time.Duration, 1), make(chan struct{})
+				time.AfterFunc(stall, func() {
+					release()
+					at, target := time.Now(), (int(r.n.Load())+2)*r.perEx-r.perEx // the exchange in flight may be partial
+					go func() {
+						var n int
+						for {
+							_ = r.db.QueryRow(`SELECT count(*) FROM envelopes WHERE NOT (state = 3 AND dead_reason IS 'superseded')`).Scan(&n)
+							if n >= target {
+								drained <- time.Since(at)
+								return
+							}
+							select {
+							case <-quit:
+								drained <- -1
+								return
+							case <-time.After(20 * time.Millisecond):
+							}
+						}
+					}()
+				})
 				r.loadFor(stall+6*time.Second, 100*time.Millisecond)
 				r.settle(1)
+				close(quit)
 				res := r.result(h, 0)
-				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d %v", holder, s, kib, res)
+				res.Drain = <-drained
+				t.Logf("holder=%s stall=%ds rate=10/s body_kib=%d sync_ms=%d %v", holder, s, kib, syncMS, res)
 			})
 		}
 	}
