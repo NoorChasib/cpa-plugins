@@ -7,8 +7,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/safego"
 )
+
+// beginsWritten waits until the rig's worker has finished every Handoff item of rid (the
+// before-auth bodies): until then the drain would count a queued begin stopped, and a worker still
+// in rt.write when the drain bound passes counts its begin stopped too, so a pin that measures
+// stream units only must not start before. (Revision 5: this made the three pins below flaky.)
+func (r *rig) beginsWritten(rid string) {
+	r.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pending := int32(0)
+		r.e.With(rid, false, func(en *hooks.Entry) { pending = en.Pending })
+		if pending == 0 && len(r.e.Handoff) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			r.t.Fatalf("the rig's worker did not finish %d Handoff items", pending)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 // TestStopExitCountsOneStoppedPerAccumulator (revision 4): a RequestID that CPA reuses can hold two
 // lifecycles' stream segments in one accumulator: the earlier lifecycle's, parked at the later
@@ -33,6 +54,7 @@ func TestStopExitCountsOneStoppedPerAccumulator(t *testing.T) {
 		r.e.Stream <- it
 	}
 	r.streams = nil
+	r.beginsWritten(rid)
 	before := r.e.Stats.Dropped()["stopped"]
 	safego.Loop(r.rt.seqCtx, &r.rt.seqWG, "stream", r.e.Stats.Panic, r.rt.sequencer)
 	deadline := time.Now().Add(5 * time.Second)
@@ -71,6 +93,7 @@ func TestStopDrainCountsQueuedChunksEach(t *testing.T) {
 		r.e.Stream <- it
 	}
 	r.streams = nil
+	r.beginsWritten(rid)
 	before := r.e.Stats.Dropped()["stopped"]
 	r.rt.drainChannels(time.Now())
 	if got := r.e.Stats.Dropped()["stopped"] - before; got != uint64(n) || n < 4 {
@@ -97,6 +120,7 @@ func TestStopDrainLeavesPendingCompletionUncounted(t *testing.T) {
 	if len(r.sq.pend[rid]) != 1 {
 		t.Fatalf("the completion is not held: %d pending", len(r.sq.pend[rid]))
 	}
+	r.beginsWritten(rid)
 	before := r.e.Stats.Dropped()
 	r.rt.drainStop() // the drain bound passed
 	r.rt.finishStreams(r.sq)
