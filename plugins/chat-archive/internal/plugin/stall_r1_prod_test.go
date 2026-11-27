@@ -5,7 +5,7 @@ package plugin_test
 // lognormal with production's 7-day shape (median 390 KiB, p99 2.2 MiB) capped at its largest
 // (5.3 MiB), offered at a stated rate of body bytes per minute (production: 32.8 MiB in the p99
 // active minute, 90.5 MiB in the peak minute). TestStallR1's production_bodies scenario offers 2 x
-// the peak minute through its stall, and fails when this driver is missing or the body bytes or
+// the peak minute through its stall (the p99 minute, 32.8 MiB, under the race detector), and fails when this driver is missing or the body bytes or
 // steady envelopes offered while the writer was held fall below the scenario's fixed stated rates; the opt-in TestStallR1PoolSustain
 // (CA_STALL_POOL_SWEEP=1) stalls at each rate until the first shed and records how long the pool
 // sustained it. Every value is synthetic: the bodies are random letters, and only their sizes
