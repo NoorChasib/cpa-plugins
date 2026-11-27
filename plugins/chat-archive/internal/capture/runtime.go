@@ -410,7 +410,10 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 	for i := range urls {
 		urls[i].URL, urls[i].MaskedURL = strings.Clone(urls[i].URL), strings.Clone(urls[i].MaskedURL)
 	}
-	r.Body, r.Headers = nil, nil
+	// ContentType and ContentEncoding are the decoded header values themselves (HeaderGet and a
+	// one-line HeaderList return them unchanged), so they go with the headers: the trim returns their
+	// charge, and the worker can wait on a full write queue with r still reachable.
+	r.Body, r.Headers, r.ContentType, r.ContentEncoding = nil, nil, "", ""
 	reserved = rt.trimKept(reserved, env, commit.bytes())
 	handed = true
 	written = rt.write(env, func(inserted bool) {

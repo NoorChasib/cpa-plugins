@@ -16,11 +16,13 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	sqlite "github.com/mattn/go-sqlite3"
 
@@ -295,4 +297,90 @@ func TestTrimmedPoolAdmitsMoreAndStillSheds(t *testing.T) {
 		rt.finished(<-rt.writes)
 	}
 	balanced(t, rt, e)
+}
+
+// bigHeaderValue returns an n-byte header value whose backing array reports to freed once it is
+// unreachable. Its bytes are synthetic letters.
+func bigHeaderValue(n int, freed *atomic.Int32) string {
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = 'a' + byte(i%26)
+	}
+	runtime.AddCleanup(&buf[0], func(f *atomic.Int32) { f.Add(1) }, freed)
+	return unsafe.String(&buf[0], n)
+}
+
+// blockedResponse builds a small non-stream response whose Content-Type and Content-Encoding header
+// values are each n bytes, with the item's fields taken from the headers and its reservation taken as
+// the response hook takes them. Nothing but the returned item references the values.
+func blockedResponse(t *testing.T, e *hooks.Engine, n int, freed *atomic.Int32) (*hooks.Response, int64) {
+	t.Helper()
+	h := http.Header{"Content-Type": {bigHeaderValue(n, freed)}, "Content-Encoding": {bigHeaderValue(n, freed)}}
+	body, _ := json.Marshal(map[string]any{"id": "msg_hdr", "type": "message", "role": "assistant",
+		"content": []map[string]any{{"type": "text", "text": synthText(9, 1024)}}, "stop_reason": "end_turn"})
+	need := int64(len(body))*hooks.BodyReserveFactor + hooks.HandoffHeaderBytes(h)
+	if !e.Pool.TryReserve(need) {
+		t.Fatal("reserve")
+	}
+	return &hooks.Response{RequestID: "hdr-r", SourceFormat: "claude", StatusCode: 200, Body: body, Headers: h,
+		ContentType: hooks.HeaderGet(h, "Content-Type"), ContentEncoding: hooks.HeaderList(h, "Content-Encoding"),
+		ObservedAt: time.Now(), Reserved: need}, need
+}
+
+// blockedBegin is blockedResponse for a begin.
+func blockedBegin(t *testing.T, e *hooks.Engine, n int, freed *atomic.Int32) (*hooks.Begin, int64) {
+	t.Helper()
+	h := http.Header{"Content-Type": {bigHeaderValue(n, freed)}, "Content-Encoding": {bigHeaderValue(n, freed)}}
+	body, _ := json.Marshal(map[string]any{"model": "m", "max_tokens": 1, "messages": []any{map[string]any{"role": "user", "content": synthText(10, 1024)}}})
+	need := int64(len(body))*hooks.BodyReserveFactor + hooks.HandoffHeaderBytes(h)
+	if !e.Pool.TryReserve(need) {
+		t.Fatal("reserve")
+	}
+	return &hooks.Begin{Req: protocol.BeforeAuth{RequestID: "hdr-b", SourceFormat: "claude", Body: body, BodyLen: len(body), Headers: h},
+		ObservedAt: time.Now(), Reserved: need}, need
+}
+
+// TestBlockedWorkerReleasesTrimmedHeaders: a worker waiting on a full write queue keeps its item
+// reachable. Once the trim has returned the decoded headers' charge to the pool, the worker must not
+// still hold those header strings: a response's ContentType and ContentEncoding are the header values
+// themselves, so with 8 MiB values each one would keep 8 MiB live that neither the pool nor the hold
+// counts. Every value is synthetic.
+func TestBlockedWorkerReleasesTrimmedHeaders(t *testing.T) {
+	const n = 8 << 20
+	for _, kind := range []string{"response", "begin"} {
+		t.Run(kind, func(t *testing.T) {
+			rt, e := holdRuntime(t, HoldBytes, 1)
+			rt.writes = make(chan writeReq) // no writer and no free slot: the worker waits in rt.write
+			var freed atomic.Int32
+			var need int64
+			var item any // the test keeps the item reachable, as the waiting worker does
+			done := make(chan struct{})
+			if kind == "response" {
+				r, nd := blockedResponse(t, e, n, &freed)
+				item, need = r, nd
+				go func() { defer close(done); rt.doResponse(r) }()
+			} else {
+				b, nd := blockedBegin(t, e, n, &freed)
+				item, need = b, nd
+				go func() { defer close(done); rt.doBegin(b) }()
+			}
+			waitUntil(t, "the reservation trimmed", 5*time.Second, func() bool { return e.Pool.Used() < need/4 })
+			deadline := time.Now().Add(5 * time.Second)
+			for freed.Load() < 2 && time.Now().Before(deadline) {
+				runtime.GC()
+				time.Sleep(10 * time.Millisecond)
+			}
+			hold, _ := rt.HoldBytes()
+			t.Logf("%s: reservation %d KiB, pool while blocked %d KiB, hold %d KiB, header values freed %d of 2",
+				kind, need>>10, e.Pool.Used()>>10, hold>>10, freed.Load())
+			if freed.Load() != 2 {
+				t.Fatalf("%s: %d of 2 header values freed while the worker waits with its pool charge returned (pool %d of %d)",
+					kind, freed.Load(), e.Pool.Used(), need)
+			}
+			rt.finished(<-rt.writes)
+			<-done
+			runtime.KeepAlive(item)
+			balanced(t, rt, e)
+		})
+	}
 }
