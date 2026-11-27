@@ -299,7 +299,13 @@ func TestStallR1(t *testing.T) {
 		{"large_bodies", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.large(stall) }},
 		{"production_bodies", "other", func(r *r1Run) {
 			r.steady(rate, stall+tail)
-			r.prod = r.bodies(7, 2*prodPeakMinMiB, stall, nil)
+			rate := 2 * prodPeakMinMiB
+			if raceEnabled {
+				// Under -race two workers cannot split 3 MiB of bodies a second (handoff_full, the
+				// pool far from full); the 60 s run and TestStallR1PoolSustain carry the pool figures.
+				rate = prodP99MinMiB
+			}
+			r.prod = r.bodies(7, rate, stall, nil)
 		}},
 		{"live_streams", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.streams(16, stall+2*time.Second) }},
 		{"write_mutex", "writemu", func(r *r1Run) { r.steady(rate, stall+tail) }},
