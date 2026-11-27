@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/diskstall"
+	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
@@ -53,8 +54,9 @@ func steadyPool(t *testing.T, r *stallRun) int64 {
 // (about their text plus an eighth, K22; 4 × the body only while a worker splits it); an open
 // stream's chunks at 1 × their bytes, in the stream sub-budget, which is part of Pool.Used (so the
 // two are never added); and a stream response, once its terminal event arrives, at what its
-// envelope retains, with its chunk reservation returned. After the release, everything is
-// returned.
+// envelope retains, with its chunk reservation returned. The stream's decoded headers are charged
+// once, from its first response's handoff until its completion retires the stream: after the
+// release only that charge is left, and the completion returns it.
 func TestStallHarnessPoolChargesEveryBodyClass(t *testing.T) {
 	r := newStallRun(t)
 	e := r.h.Plugin.Engine()
@@ -101,6 +103,12 @@ func TestStallHarnessPoolChargesEveryBodyClass(t *testing.T) {
 		nonStream, len(req), len(resp), openStream, chunkBytes, ended)
 
 	release()
+	hb := hooks.HandoffHeaderBytes(map[string][]string{"Content-Type": {"text/event-stream"}})
+	plugintest.WaitFor(t, "every written body's reservation returned", func() bool { return e.Pool.Used() == hb && e.Pool.StreamUsed() == 0 })
+	if left := steadyPool(t, r); left != hb {
+		t.Fatalf("pool %d after the release with the stream awaiting its completion, want its header charge %d", left, hb)
+	}
+	r.hook(protocol.MethodRequestComplete, plugintest.Complete("pool-ws", "succeeded", ws))
 	plugintest.WaitFor(t, "every reservation returned", func() bool { return e.Pool.Used() == 0 && e.Pool.StreamUsed() == 0 })
 }
 

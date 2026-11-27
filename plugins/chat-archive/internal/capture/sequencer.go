@@ -24,6 +24,7 @@ type segment struct {
 	asm          *stream.Assembler
 	re           stream.Reassembler
 	headers      http.Header
+	hdr          *hooks.HeaderCharge // headers' pool charge, taken at the first handoff, shared with handed-off responses
 	headerInitAt time.Time
 	firstChunkAt time.Time
 	chunks       uint32
@@ -130,9 +131,7 @@ func (rt *Runtime) sequencer(ctx context.Context) {
 		// later responses are marked truncated.
 		for rid, a := range sq.accs {
 			e.Stats.Drop("stopped")
-			for _, s := range a.segments() {
-				rt.releaseSeg(rid, s)
-			}
+			rt.retireAcc(rid, a)
 			e.With(rid, false, func(en *hooks.Entry) { en.Truncated = true })
 		}
 		rt.activeStreams.Store(0)
@@ -193,6 +192,7 @@ queued:
 		for _, s := range a.segments() {
 			rt.writeOpen(rid, a, s)
 		}
+		rt.retireAcc(rid, a)
 		delete(sq.accs, rid)
 	}
 	rt.activeStreams.Store(int64(len(sq.accs)))
@@ -217,10 +217,11 @@ func (rt *Runtime) writeOpen(rid string, a *acc, s *segment) {
 			rt.handOff(rid, a, s, r)
 		}
 	}
-	rt.releaseSeg(rid, s)
+	rt.retireSeg(rid, s)
 	a.remove(s)
 }
 
+// releaseSeg returns a segment's assembled stream state (at each handoff, and when it is retired).
 func (rt *Runtime) releaseSeg(rid string, s *segment) {
 	e := rt.opts.Engine
 	if s != nil && s.state > 0 {
@@ -230,6 +231,27 @@ func (rt *Runtime) releaseSeg(rid string, s *segment) {
 		e.With(rid, false, func(en *hooks.Entry) { en.StreamBytes -= st })
 		s.state = 0
 	}
+}
+
+// retireSeg is a segment's last use: its stream state is returned and it drops its reference to the
+// header charge, so the headers stay charged while any response handed off from it still holds them.
+func (rt *Runtime) retireSeg(rid string, s *segment) {
+	if s == nil {
+		return
+	}
+	rt.releaseSeg(rid, s)
+	s.hdr.Unref()
+	s.hdr, s.headers = nil, nil
+}
+
+// retireAcc retires every segment of an accumulator that is being dropped, the open one included
+// even when it has no reassembler (segments omits it then).
+func (rt *Runtime) retireAcc(rid string, a *acc) {
+	for _, s := range a.parked {
+		rt.retireSeg(rid, s)
+	}
+	rt.retireSeg(rid, a.cur)
+	a.parked, a.cur = nil, nil
 }
 
 // sweepAccs drops accumulators idle since before cutoff, with their pending completions. A segment
@@ -244,10 +266,9 @@ func (rt *Runtime) sweepAccs(sq *seqState, cutoff time.Time) {
 			if s.kept || slices.Contains(a.parked, s) {
 				s.cut = true
 				rt.writeOpen(rid, a, s)
-			} else {
-				rt.releaseSeg(rid, s)
 			}
 		}
+		rt.retireAcc(rid, a)
 		delete(sq.accs, rid)
 		delete(sq.pend, rid)
 		delete(sq.starts, rid)
@@ -300,7 +321,7 @@ func (rt *Runtime) onStream(sq *seqState, it hooks.StreamItem) {
 			if sameLifecycle(it, s) {
 				// Bootstrap retry: CPA ran the stream again and sent a second header-init for the
 				// same request. Discard what the previous attempt buffered.
-				rt.releaseSeg(it.RequestID, s)
+				rt.retireSeg(it.RequestID, s)
 			} else {
 				// A before-auth came between, or the record is not continuous: the segment may be
 				// an earlier lifecycle's. Keep it for the completion that claims it.
@@ -517,7 +538,7 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 		for _, r := range open {
 			rt.handOff(rid, a, newest, r)
 		}
-		rt.releaseSeg(rid, newest)
+		rt.retireSeg(rid, newest)
 		a.remove(newest)
 		for _, s := range cl.cands[:n-1] {
 			if !cl.release {
@@ -525,16 +546,14 @@ func (rt *Runtime) flushDone(sq *seqState, rid string, d *hooks.Done, cl claim) 
 					rt.handOff(rid, a, s, r)
 				}
 			}
-			rt.releaseSeg(rid, s)
+			rt.retireSeg(rid, s)
 			a.remove(s)
 		}
 	}
 	held := 0
 	if a != nil {
 		if held = a.held(); held == 0 {
-			for _, s := range a.segments() {
-				rt.releaseSeg(rid, s)
-			}
+			rt.retireAcc(rid, a)
 			delete(sq.accs, rid)
 		}
 	}
@@ -558,7 +577,10 @@ func (rt *Runtime) flushSeg(rid string, a *acc, s *segment, status string, at ti
 }
 
 // handOff converts a reassembled response's stream reservation into 4 × its size and hands it
-// to a worker; on budget or a full queue it writes metadata only.
+// to a worker; on budget or a full queue it writes metadata only. The segment's headers are charged
+// once, at its first handoff, and the charge is shared (HeaderCharge): the segment keeps its
+// reference until it is retired and the response holds its own, so a worker's trim cannot return
+// the bytes of a header map the segment still holds, and a later response is not charged again.
 func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 	e := rt.opts.Engine
 	rt.releaseSeg(rid, s)
@@ -585,20 +607,28 @@ func (rt *Runtime) handOff(rid string, a *acc, s *segment, sr stream.Response) {
 	if CanonFormat(s.format) == canon.FormatOpaque {
 		r.ContentType = ""
 	}
-	need := int64(len(r.Body))*hooks.BodyReserveFactor + hooks.HandoffHeaderBytes(r.Headers)
-	if !e.Pool.TryReserve(need) {
+	need := int64(len(r.Body)) * hooks.BodyReserveFactor
+	var hb int64
+	if s.hdr == nil {
+		hb = hooks.HandoffHeaderBytes(s.headers)
+	}
+	if !e.Pool.TryReserve(need + hb) {
 		e.Stats.Drop("body_budget")
 		rt.metaResponse(r, "body_budget")
 		return
 	}
-	r.Reserved = need
+	if hb > 0 {
+		s.hdr = hooks.NewHeaderCharge(e.Pool, hb)
+	}
+	r.Reserved, r.HeaderCharge = need, s.hdr.Ref()
 	e.With(rid, false, func(en *hooks.Entry) { en.Pending++ })
 	select {
 	case e.Handoff <- hooks.Work{Response: r}:
 	default:
 		e.With(rid, false, func(en *hooks.Entry) { en.Pending-- })
 		e.Pool.Release(need)
-		r.Reserved = 0
+		r.HeaderCharge.Unref() // the segment keeps its own reference
+		r.Reserved, r.HeaderCharge = 0, nil
 		e.Stats.Drop("handoff_full")
 		rt.metaResponse(r, "body_budget")
 	}

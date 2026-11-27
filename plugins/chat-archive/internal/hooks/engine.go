@@ -131,6 +131,47 @@ func (p *Pool) ReleaseStream(n int64) {
 	}
 }
 
+// HeaderCharge is the content-pool charge of one stream segment's decoded headers. The segment and
+// every response handed off from it reference the same header map, so the map is charged once and
+// shared: the segment holds a reference until it is retired, and each handed-off response holds one
+// until its worker drops the headers (or a stop drains it). Each holder drops its reference exactly
+// once; the pool gets the bytes back when the last one does. A nil *HeaderCharge is no charge.
+type HeaderCharge struct {
+	pool *Pool
+	n    int64
+	refs atomic.Int32
+}
+
+// NewHeaderCharge wraps n bytes already reserved from p, with one reference for the caller.
+func NewHeaderCharge(p *Pool, n int64) *HeaderCharge {
+	c := &HeaderCharge{pool: p, n: n}
+	c.refs.Store(1)
+	return c
+}
+
+// Ref adds a reference and returns c.
+func (c *HeaderCharge) Ref() *HeaderCharge {
+	if c != nil {
+		c.refs.Add(1)
+	}
+	return c
+}
+
+// Unref drops a reference; the last one returns the bytes to the pool.
+func (c *HeaderCharge) Unref() {
+	if c != nil && c.refs.Add(-1) == 0 {
+		c.pool.Release(c.n)
+	}
+}
+
+// Bytes is the charge's size.
+func (c *HeaderCharge) Bytes() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.n
+}
+
 // Used returns the reserved bytes; StreamUsed the stream part; Free what is left.
 func (p *Pool) Used() int64       { return p.used.Load() }
 func (p *Pool) StreamUsed() int64 { return p.streamUsed.Load() }
@@ -164,7 +205,10 @@ type Response struct {
 	ObservedAt      time.Time
 	Meta            protocol.Meta
 	Reserved        int64
-	MetaOnly        string
+	// HeaderCharge: a stream response's reference to its segment's shared header charge (Reserved
+	// is then its body's alone). Nil for a non-stream response, whose Reserved covers its headers.
+	HeaderCharge *HeaderCharge
+	MetaOnly     string
 
 	ResponseID, PrevResponseID string
 	HeaderInitAt, FirstChunkAt time.Time
