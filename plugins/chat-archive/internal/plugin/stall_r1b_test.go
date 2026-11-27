@@ -15,15 +15,16 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
 )
 
-// TestStallBeyondPoolShedsCounted: 512 KiB requests and responses at 10 exchanges/s through a 12 s
-// stall fill the 256 MiB content pool (4 × each body). Later bodies are shed at admission
+// TestStallBeyondPoolShedsCounted: 1.5 MiB requests and responses at 10 exchanges/s through a 12 s
+// stall fill the 256 MiB content pool (about 1.15 × each queued body once its envelope is built,
+// 4 × each body being split). Later bodies are shed at admission
 // (body_budget) and their envelopes kept as metadata: every offered envelope is stored, none is
 // lost whole, and the archived envelopes marked body_budget are exactly the counted sheds.
 func TestStallBeyondPoolShedsCounted(t *testing.T) {
 	r := newR1Run(t)
 	e := r.h.Plugin.Engine()
 	_, release := r.holdOther()
-	text := strings.Repeat("synthetic heavy body ", (512<<10)/21)
+	text := strings.Repeat("synthetic heavy body ", (3<<19)/21)
 	time.AfterFunc(12*time.Second, release)
 	r.loads.Add(1)
 	go func() {
