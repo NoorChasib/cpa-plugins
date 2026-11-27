@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/diskstall"
-	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/hooks"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/plugin/plugintest"
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/internal/protocol"
@@ -51,10 +49,11 @@ func steadyPool(t *testing.T, r *stallRun) int64 {
 
 // TestStallHarnessPoolChargesEveryBodyClass pins the accounting W is stated in. With the capture
 // writer's commit stalled, every queued body stays charged to the content pool until the writer's
-// transaction returns: a request and a non-stream response at 4 × their body length each; an open
+// transaction returns: a request and a non-stream response at what their built envelopes retain
+// (about their text plus an eighth, K22; 4 × the body only while a worker splits it); an open
 // stream's chunks at 1 × their bytes, in the stream sub-budget, which is part of Pool.Used (so the
-// two are never added); and a stream response, once its terminal event arrives, at 4 × the
-// reassembled body, with its chunk reservation returned. After the release, everything is
+// two are never added); and a stream response, once its terminal event arrives, at what its
+// envelope retains, with its chunk reservation returned. After the release, everything is
 // returned.
 func TestStallHarnessPoolChargesEveryBodyClass(t *testing.T) {
 	r := newStallRun(t)
@@ -71,10 +70,10 @@ func TestStallHarnessPoolChargesEveryBodyClass(t *testing.T) {
 	r.hook(protocol.MethodResponseInterceptAfter, plugintest.Response("pool-1", "claude", resp, meta))
 	r.hook(protocol.MethodRequestComplete, plugintest.Complete("pool-1", "succeeded", meta))
 	nonStream := steadyPool(t, r) - base
-	// P4a (0.1.6): each body's decoded headers are charged with it, at 1 × (the request has none here).
-	respHeaders := hooks.HandoffHeaderBytes(http.Header{"Content-Type": {"application/json"}, "Request-Id": {"req_synthetic"}})
-	if want := 4*(b64Len(len(req))+b64Len(len(resp))) + respHeaders; nonStream != want {
-		t.Fatalf("request and non-stream response charged %d bytes, want 4 × body lengths + response headers = %d", nonStream, want)
+	// Each envelope retains its text piece (length plus an eighth), its JSON and fixed overheads.
+	if lo, hi := int64(2*len(text)), int64(2*(len(text)+len(text)/8+4096)); nonStream < lo || nonStream > hi {
+		t.Fatalf("request and non-stream response charged %d bytes, want what their envelopes retain (%d to %d; 4 × the bodies is %d)",
+			nonStream, lo, hi, 4*(b64Len(len(req))+b64Len(len(resp))))
 	}
 
 	ws := map[string]any{"request_path": "/v1/responses", "execution_session_id": "pool-session"}
@@ -94,10 +93,9 @@ func TestStallHarnessPoolChargesEveryBodyClass(t *testing.T) {
 	}
 	r.hook(protocol.MethodResponseInterceptStreamChunk, plugintest.Chunk("pool-ws", "openai-response", 2, events[2], ws))
 	ended := steadyPool(t, r) - base - nonStream - 4*b64Len(len(open))
-	// The reassembled response also carries its segment's header-init headers at 1 × (P4a).
-	streamHeaders := hooks.HandoffHeaderBytes(http.Header{"Content-Type": {"text/event-stream"}})
-	if s := e.Pool.StreamUsed(); s != 0 || ended < 4*int64(len(text))+streamHeaders {
-		t.Fatalf("ended stream: stream part %d (want 0), pool delta %d (want 4 × the reassembled body + headers, at least %d)", s, ended, 4*int64(len(text))+streamHeaders)
+	if s := e.Pool.StreamUsed(); s != 0 || ended < int64(len(text)) || ended > int64(len(text)+len(text)/8+4096) {
+		t.Fatalf("ended stream: stream part %d (want 0), pool delta %d (want what the response envelope retains, %d to %d)",
+			s, ended, len(text), len(text)+len(text)/8+4096)
 	}
 	t.Logf("charged: request+response %d B for %d+%d B bodies; open stream %d B for %d B of chunks; ended stream %d B",
 		nonStream, len(req), len(resp), openStream, chunkBytes, ended)
