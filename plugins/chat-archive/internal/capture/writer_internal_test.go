@@ -157,7 +157,9 @@ func TestWriterRetryWindowBoundary(t *testing.T) {
 		mu.Lock()
 		first, last := starts[0], starts[len(starts)-1]
 		mu.Unlock()
-		if last.Sub(first) < window || last.Sub(first) > window+100*time.Millisecond {
+		// The writer's window starts when its first attempt began, a moment before this fake write
+		// recorded it, so the recorded gap may fall short of the window by that offset (1 ms allowed).
+		if last.Sub(first) < window-time.Millisecond || last.Sub(first) > window+100*time.Millisecond {
 			t.Fatalf("the final attempt started %v after the first failure, want at or just past %v", last.Sub(first), window)
 		}
 		// The next group gets its own window, and is written once the disk is back.
