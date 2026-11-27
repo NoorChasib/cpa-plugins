@@ -5,9 +5,11 @@ package plugin_test
 // lognormal with production's 7-day shape (median 390 KiB, p99 2.2 MiB) capped at its largest
 // (5.3 MiB), offered at a stated rate of body bytes per minute (production: 32.8 MiB in the p99
 // active minute, 90.5 MiB in the peak minute). TestStallR1's production_bodies scenario offers 2 x
-// the peak minute through its stall; the opt-in TestStallR1PoolSustain (CA_STALL_POOL_SWEEP=1)
-// stalls at each rate until the first shed and records how long the pool sustained it. Every value
-// is synthetic: the bodies are random letters, and only their sizes follow production's shape.
+// the peak minute through its stall, and fails when this driver is missing or the body bytes or
+// steady envelopes offered while the writer was held fall below the scenario's fixed stated rates; the opt-in TestStallR1PoolSustain
+// (CA_STALL_POOL_SWEEP=1) stalls at each rate until the first shed and records how long the pool
+// sustained it. Every value is synthetic: the bodies are random letters, and only their sizes
+// follow production's shape.
 
 import (
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -48,18 +51,21 @@ var prodText = sync.OnceValue(func() string {
 	return string(b)
 })
 
-// prodLoad records what a production-shaped driver offered.
+// prodLoad records what a production-shaped driver offered. bytes is the running total of sizes, so
+// a reader can take it without the lock (at the writer's release, for example).
 type prodLoad struct {
 	mu    sync.Mutex
 	sizes []int
 	start time.Time
 	end   time.Time
+	bytes atomic.Int64
 }
 
 func (p *prodLoad) add(n int) {
 	p.mu.Lock()
 	p.sizes = append(p.sizes, n)
 	p.mu.Unlock()
+	p.bytes.Add(int64(n))
 }
 
 // summary returns the offered count, total MiB, MiB per minute and the median, p99 and largest body.

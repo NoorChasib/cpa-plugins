@@ -44,6 +44,49 @@ type r1Run struct {
 	hookMax  atomic.Int64
 	bigText  string
 	prod     *prodLoad // the production-shaped body load, when the scenario has one
+	steadyN  *steadyLoad
+}
+
+// steadyLoad counts the envelopes a steady driver offered, at the time it offers them.
+type steadyLoad struct {
+	n atomic.Int64
+}
+
+// r1Offered is the load a scenario states it offers while the writer is held, as fixed figures that
+// match the documented rates and are independent of the drivers' own pacing: a driver that is
+// missing or paced too slowly fails the scenario instead of lowering its expectation.
+type r1Offered struct {
+	envelopesPerSec float64 // steady envelopes a second
+	bodyMiBPerMin   float64 // production-shaped request-body MiB a minute
+}
+
+// r1ProdBodiesOffered is production_bodies' stated load: 90 envelopes a second and 181 MiB of
+// request body a minute (twice production's 90.5 MiB peak minute; REFERENCE.md and the 0.1.6
+// release notes), or 32.8 MiB (the p99 active minute) under -race.
+func r1ProdBodiesOffered() *r1Offered {
+	if raceEnabled {
+		return &r1Offered{envelopesPerSec: 90, bodyMiBPerMin: 32.8}
+	}
+	return &r1Offered{envelopesPerSec: 90, bodyMiBPerMin: 181}
+}
+
+// r1DriverLag is how far behind its schedule a load driver may be at any instant. The drivers keep a
+// schedule and catch up after a slow call, so they lag only by the call in progress: an exchange
+// makes five hook calls, and the scenarios fail a hook call over 250 ms.
+const r1DriverLag = time.Second
+
+// checkOfferedRate fails when the load started at start offered less than perSec a second (less
+// r1DriverLag) by at. A driver counts an exchange when it begins offering it, so on schedule the
+// count at any instant is at least perSec times the time elapsed.
+func checkOfferedRate(t *testing.T, what string, got int64, perSec float64, start, at time.Time) {
+	t.Helper()
+	elapsed := at.Sub(start)
+	want := perSec * (elapsed - r1DriverLag).Seconds()
+	t.Logf("offered while the writer was held: %s=%d in %v (stated %.0f/s, at least %.0f required)", what, got, elapsed.Round(time.Millisecond), perSec, want)
+	if float64(got) < want {
+		t.Fatalf("the load offered %d %s in the %v the writer was held, below the stated %.0f a second (at least %.0f allowing %v of lag)",
+			got, what, elapsed.Round(time.Millisecond), perSec, want, r1DriverLag)
+	}
 }
 
 func newR1Run(t *testing.T) *r1Run {
@@ -162,11 +205,14 @@ func (r *r1Run) stream(rid string, deltas int, gap time.Duration) {
 // steady offers non-stream exchanges at rate envelopes/s for d, in the background.
 func (r *r1Run) steady(rate float64, d time.Duration) {
 	every := time.Duration(float64(5*time.Second) / rate)
+	l := &steadyLoad{}
+	r.steadyN = l
 	r.loads.Add(1)
 	go func() {
 		defer r.loads.Done()
 		next, end := time.Now(), time.Now().Add(d)
 		for time.Now().Before(end) {
+			l.n.Add(5)
 			r.nonStream("synthetic steady request", "synthetic steady answer")
 			next = next.Add(every)
 			time.Sleep(time.Until(next))
@@ -289,14 +335,15 @@ func TestStallR1(t *testing.T) {
 		name   string
 		holder string
 		load   func(r *r1Run)
+		want   *r1Offered // the load offered while the writer is held, when the scenario enforces it
 	}{
-		{"steady", "other", func(r *r1Run) { r.steady(rate, stall+tail) }},
+		{"steady", "other", func(r *r1Run) { r.steady(rate, stall+tail) }, nil},
 		{"bursts", "capture", func(r *r1Run) {
 			r.steady(rate, stall+tail)
 			r.burst(200 * time.Millisecond)
 			r.burst(stall - 3*time.Second)
-		}},
-		{"large_bodies", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.large(stall) }},
+		}, nil},
+		{"large_bodies", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.large(stall) }, nil},
 		{"production_bodies", "other", func(r *r1Run) {
 			r.steady(rate, stall+tail)
 			rate := 2 * prodPeakMinMiB
@@ -306,10 +353,10 @@ func TestStallR1(t *testing.T) {
 				rate = prodP99MinMiB
 			}
 			r.prod = r.bodies(7, rate, stall, nil)
-		}},
-		{"live_streams", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.streams(16, stall+2*time.Second) }},
-		{"write_mutex", "writemu", func(r *r1Run) { r.steady(rate, stall+tail) }},
-		{"failure_run", "fail", func(r *r1Run) { r.steady(rate, stall+tail) }},
+		}, r1ProdBodiesOffered()},
+		{"live_streams", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.streams(16, stall+2*time.Second) }, nil},
+		{"write_mutex", "writemu", func(r *r1Run) { r.steady(rate, stall+tail) }, nil},
+		{"failure_run", "fail", func(r *r1Run) { r.steady(rate, stall+tail) }, nil},
 	} {
 		t.Run(sc.name, func(t *testing.T) {
 			r := newR1Run(t)
@@ -330,17 +377,31 @@ func TestStallR1(t *testing.T) {
 			}
 			base := liveHeap()
 			r.inStall.Store(true)
+			// The load starts before the timers, so the release reads the drivers' counters.
+			loadStart := time.Now()
+			sc.load(r)
+			if sc.want != nil && (r.steadyN == nil || r.prod == nil) {
+				t.Fatalf("scenario %s states its offered load but is missing a driver (steady %t, production-shaped bodies %t)", sc.name, r.steadyN != nil, r.prod != nil)
+			}
 			var alerted atomic.Bool
 			time.AfterFunc(stall-time.Second, func() { alerted.Store(e.Stats.HasFault("write_unavailable")) })
 			released := make(chan struct{})
 			var poolAtRelease int64
+			var releasedAt time.Time
+			var steadyAtRelease, prodAtRelease int64
 			time.AfterFunc(stall, func() {
 				poolAtRelease = e.Pool.Used()
+				releasedAt = time.Now()
+				if r.steadyN != nil {
+					steadyAtRelease = r.steadyN.n.Load()
+				}
+				if r.prod != nil {
+					prodAtRelease = r.prod.bytes.Load()
+				}
 				r.inStall.Store(false)
 				release()
 				close(released)
 			})
-			sc.load(r)
 			<-released
 			stored, offered := r.settleR1()
 			_, _, rt := r.h.Plugin.Runtime()
@@ -352,6 +413,12 @@ func TestStallR1(t *testing.T) {
 				float64(res.PeakPool)/(1<<20), float64(poolAtRelease)/(1<<20), float64(live)/(1<<20), res.Rule.Affected, res.Rule.MaxWait.Round(time.Millisecond))
 			if r.prod != nil {
 				t.Logf("scenario=%s production-shaped load: %s", sc.name, r.prod.summary())
+			}
+			if w := sc.want; w != nil {
+				// Zero loss proves something only at the load the scenario states: the envelopes
+				// and body bytes offered while the writer was held meet its fixed rates.
+				checkOfferedRate(t, "envelopes", steadyAtRelease, w.envelopesPerSec, loadStart, releasedAt)
+				checkOfferedRate(t, "request-body bytes", prodAtRelease, w.bodyMiBPerMin*(1<<20)/60, loadStart, releasedAt)
 			}
 			if stored != offered || len(res.Dropped) != 0 {
 				t.Fatalf("lost %d of %d envelopes, dropped %v", offered-stored, offered, res.Dropped)
