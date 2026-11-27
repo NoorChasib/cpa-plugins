@@ -1,6 +1,6 @@
 package plugin_test
 
-// K10 R1 scenarios (plugin 0.1.6, design revision 7 §6.1): the whole plugin on a gated outbox,
+// Outbox write-stall scenarios (plugin 0.1.6; see docs/release-notes-0.1.6.md): the whole plugin on a gated outbox,
 // production load with headroom (steady about 90 envelopes/s, bursts of 640 envelopes, bodies up to
 // 4 MiB, production-shaped request bodies at 2 x the peak minute's body bytes (stall_r1_prod_test.go),
 // live streams) through a disk stall or a failure run. Each run settles on an offered-key
