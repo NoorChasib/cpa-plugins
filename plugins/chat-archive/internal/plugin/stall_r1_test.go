@@ -2,7 +2,8 @@ package plugin_test
 
 // K10 R1 scenarios (plugin 0.1.6, design revision 7 §6.1): the whole plugin on a gated outbox,
 // production load with headroom (steady about 90 envelopes/s, bursts of 640 envelopes, bodies up to
-// 4 MiB, live streams) through a disk stall or a failure run. Each run settles on an offered-key
+// 4 MiB, production-shaped request bodies at 2 x the peak minute's body bytes (stall_r1_prod_test.go),
+// live streams) through a disk stall or a failure run. Each run settles on an offered-key
 // manifest: every key the driver offered is stored, no key outside it is, and every dropped counter
 // stays 0. CI stalls 12 s (past 0.1.5's 10 s write timeout); CA_STALL_LONG=1 stalls 60 s. Every
 // value is synthetic; results are counts, sizes and durations.
@@ -42,6 +43,7 @@ type r1Run struct {
 	inStall  atomic.Bool
 	hookMax  atomic.Int64
 	bigText  string
+	prod     *prodLoad // the production-shaped body load, when the scenario has one
 }
 
 func newR1Run(t *testing.T) *r1Run {
@@ -295,6 +297,10 @@ func TestStallR1(t *testing.T) {
 			r.burst(stall - 3*time.Second)
 		}},
 		{"large_bodies", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.large(stall) }},
+		{"production_bodies", "other", func(r *r1Run) {
+			r.steady(rate, stall+tail)
+			r.prod = r.bodies(7, 2*prodPeakMinMiB, stall, nil)
+		}},
 		{"live_streams", "other", func(r *r1Run) { r.steady(rate, stall+tail); r.streams(16, stall+2*time.Second) }},
 		{"write_mutex", "writemu", func(r *r1Run) { r.steady(rate, stall+tail) }},
 		{"failure_run", "fail", func(r *r1Run) { r.steady(rate, stall+tail) }},
@@ -338,6 +344,9 @@ func TestStallR1(t *testing.T) {
 			t.Logf("scenario=%s holder=%s stall=%v offered=%d stored=%d dropped=%v hook_max=%v hold_peak_kib=%d queue_peak=%d pool_peak_mib=%.1f pool_at_release_mib=%.1f live_growth_mib=%.1f rule{affected=%d max_wait=%v}",
 				sc.name, sc.holder, stall, offered, stored, res.Dropped, time.Duration(r.hookMax.Load()).Round(time.Microsecond), holdPeak/1024, queuePeak,
 				float64(res.PeakPool)/(1<<20), float64(poolAtRelease)/(1<<20), float64(live)/(1<<20), res.Rule.Affected, res.Rule.MaxWait.Round(time.Millisecond))
+			if r.prod != nil {
+				t.Logf("scenario=%s production-shaped load: %s", sc.name, r.prod.summary())
+			}
 			if stored != offered || len(res.Dropped) != 0 {
 				t.Fatalf("lost %d of %d envelopes, dropped %v", offered-stored, offered, res.Dropped)
 			}
