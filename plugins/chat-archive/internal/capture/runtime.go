@@ -197,6 +197,7 @@ func (rt *Runtime) drainChannels(by time.Time) {
 			}
 			if w.Response != nil {
 				e.Pool.Release(w.Response.Reserved)
+				w.Response.HeaderCharge.Unref()
 				for _, d := range e.WorkDone(w.Response.RequestID, false, false) {
 					rt.completeDeferredBy(d, by)
 				}
@@ -309,7 +310,7 @@ func (rt *Runtime) poolRelease(n int64) func() {
 // trimKept releases a built envelope's content-pool reservation down to the bytes the envelope
 // retains (retainedBytes) and returns what is left, which the writer releases once the envelope is
 // written or dropped. The reservation (BodyReserveFactor times the raw body, plus its decoded
-// headers) covers the raw body, the decoded body and the split while the worker builds; once the
+// headers; a stream response's headers are charged with its segment instead, see handOff) covers the raw body, the decoded body and the split while the worker builds; once the
 // envelope is built only its own bytes stay alive, so a queued begin or response holds about its
 // envelope's size in the pool during a stall instead of four times its body. When the envelope
 // retains more than its reservation, the whole reservation is kept and the hold budget charges the
@@ -379,11 +380,16 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 	written := false
 	reserved := r.Reserved
 	r.Reserved = 0
+	// A stream response's headers are its segment's map, charged once for the segment and every
+	// response handed off from it (hooks.HeaderCharge); this response drops its reference with them.
+	hdr := r.HeaderCharge
+	r.HeaderCharge = nil
 	handed := false // the reservation went to the writer with the envelope
 	defer func() {
 		if !handed {
 			e.Pool.Release(reserved)
 		}
+		hdr.Unref() // nil once dropped with the headers
 		r.Body = nil
 		for _, d := range e.WorkDone(r.RequestID, false, written) {
 			rt.completeDeferred(d)
@@ -413,7 +419,11 @@ func (rt *Runtime) doResponse(r *hooks.Response) {
 	// ContentType and ContentEncoding are the decoded header values themselves (HeaderGet and a
 	// one-line HeaderList return them unchanged), so they go with the headers: the trim returns their
 	// charge, and the worker can wait on a full write queue with r still reachable.
+	// A stream response's header charge is not trimmed: its segment may still hold the same map, and
+	// the last reference returns it.
 	r.Body, r.Headers, r.ContentType, r.ContentEncoding = nil, nil, "", ""
+	hdr.Unref()
+	hdr = nil
 	reserved = rt.trimKept(reserved, env, commit.bytes())
 	handed = true
 	written = rt.write(env, func(inserted bool) {
