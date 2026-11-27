@@ -15,9 +15,9 @@ import (
 	"github.com/NoorChasib/cpa-plugins/plugins/chat-archive/pkg/wire"
 )
 
-// TestStallBeyondPoolShedsCounted: 1.5 MiB requests and responses at 10 exchanges/s through a 12 s
-// stall fill the 256 MiB content pool (about 1.15 × each queued body once its envelope is built,
-// 4 × each body being split). Later bodies are shed at admission
+// TestStallBeyondPoolShedsCounted: 1.5 MiB requests and responses offered back to back through a
+// stall, held until bodies are shed, fill the 256 MiB content pool (about 1.15 × each queued body
+// once its envelope is built, 4 × each body being split). Later bodies are shed at admission
 // (body_budget) and their envelopes kept as metadata: every offered envelope is stored, none is
 // lost whole, and the archived envelopes marked body_budget are exactly the counted sheds.
 func TestStallBeyondPoolShedsCounted(t *testing.T) {
@@ -25,15 +25,17 @@ func TestStallBeyondPoolShedsCounted(t *testing.T) {
 	e := r.h.Plugin.Engine()
 	_, release := r.holdOther()
 	text := strings.Repeat("synthetic heavy body ", (3<<19)/21)
-	time.AfterFunc(12*time.Second, release)
 	r.loads.Add(1)
 	go func() {
 		defer r.loads.Done()
-		next := time.Now()
-		for end := time.Now().Add(14 * time.Second); time.Now().Before(end); {
+		defer release()
+		// The pool fills after about 75 exchanges. They are offered until a few bodies were shed, not
+		// at a fixed rate, so the run fills it however slowly the hooks run (-race).
+		for end := time.Now().Add(120 * time.Second); time.Now().Before(end); {
+			if d := e.Stats.Dropped(); d["body_budget"]+d["handoff_full"] >= 8 {
+				return
+			}
 			r.nonStream(text, text)
-			next = next.Add(100 * time.Millisecond)
-			time.Sleep(time.Until(next))
 		}
 	}()
 	stored, offered := r.settleR1()
